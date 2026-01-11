@@ -173,9 +173,7 @@ See [QuickMD/AppStore-Metadata.md](QuickMD/AppStore-Metadata.md) for detailed su
 
 QuickMD is **free and open source**. If you find it useful, consider supporting development:
 
-<a href="https://buymeacoffee.com/bsroczynskh">
-  <img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=☕&slug=bsroczynskh&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" height="40">
-</a>
+[![Buy Me A Coffee](https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png)](https://buymeacoffee.com/bsroczynskh)
 
 ## Roadmap
 
