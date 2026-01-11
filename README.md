@@ -53,13 +53,19 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 <div align="center">
 
 ### Light Mode
-![Light Mode](Screenshots/screenshot-light.png)
+![Light Mode](QuickMD/Screenshots/screenshot-1.png)
 
 ### Dark Mode
-![Dark Mode](Screenshots/screenshot-dark.png)
+![Dark Mode](QuickMD/Screenshots/screenshot-2.png)
 
 ### Syntax Highlighting
-![Code Highlighting](Screenshots/screenshot-code.png)
+![Code Highlighting](QuickMD/Screenshots/screenshot-3.png)
+
+### Tables & Lists
+![Tables & Lists](QuickMD/Screenshots/screenshot-4.png)
+
+### ASCII Diagrams
+![ASCII Diagrams](QuickMD/Screenshots/screenshot-5.png)
 
 </div>
 
