@@ -173,7 +173,7 @@ See [QuickMD/AppStore-Metadata.md](QuickMD/AppStore-Metadata.md) for detailed su
 
 QuickMD is **free and open source**. If you find it useful, consider supporting development:
 
-[![Buy Me A Coffee](https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png)](https://buymeacoffee.com/bsroczynskh)
+<a href="https://buymeacoffee.com/bsroczynskh" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 40px !important;width: 145px !important;" ></a>
 
 ## Roadmap
 
