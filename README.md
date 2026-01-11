@@ -52,11 +52,11 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 <div align="center">
 
-### Light Mode
-![Light Mode](QuickMD/Screenshots/screenshot-1.png)
-
 ### Dark Mode
-![Dark Mode](QuickMD/Screenshots/screenshot-2.png)
+![Dark Mode](QuickMD/Screenshots/screenshot-1.png)
+
+### Light Mode
+![Light Mode](QuickMD/Screenshots/screenshot-2.png)
 
 ### Syntax Highlighting
 ![Code Highlighting](QuickMD/Screenshots/screenshot-3.png)
@@ -64,8 +64,8 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 ### Tables & Lists
 ![Tables & Lists](QuickMD/Screenshots/screenshot-4.png)
 
-### ASCII Diagrams
-![ASCII Diagrams](QuickMD/Screenshots/screenshot-5.png)
+### File Tree Example
+![File Tree](QuickMD/Screenshots/screenshot-5.png)
 
 </div>
 
