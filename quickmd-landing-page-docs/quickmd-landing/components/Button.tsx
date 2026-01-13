@@ -29,7 +29,7 @@ export function Button({
     primary:
       "bg-accent text-white hover:bg-accent-hover active:scale-[0.98] shadow-sm hover:shadow-md",
     secondary:
-      "bg-transparent text-foreground border border-border hover:border-border-hover hover:bg-surface active:scale-[0.98]",
+      "bg-white text-foreground border border-border hover:border-border-hover hover:shadow-sm active:scale-[0.98]",
     ghost:
       "bg-transparent text-muted hover:text-foreground hover:bg-surface active:scale-[0.98]",
   };

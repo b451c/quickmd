@@ -29,8 +29,10 @@
   --accent-secondary-subtle: #f5f3ff;
 
   /* Code colors - Matching real QuickMD app */
-  --code-bg: #f2f2f2;         /* Color(white: 0.95) from app */
-  --code-border: #d9d9d9;     /* Slightly darker border */
+  --code-bg: #f8f8f8;         /* Slightly lighter for content area */
+  --code-header: #e8e8e8;     /* Darker header for visual hierarchy */
+  --code-border: #c8c8c8;     /* More visible border */
+  --code-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
 
   /* Syntax highlighting - Matching real QuickMD app (MarkdownTheme.swift) */
   --syntax-keyword: #991a99;    /* Purple - matches app */
@@ -90,7 +92,9 @@
   --color-accent-secondary: var(--accent-secondary);
   --color-accent-secondary-subtle: var(--accent-secondary-subtle);
   --color-code-bg: var(--code-bg);
+  --color-code-header: var(--code-header);
   --color-code-border: var(--code-border);
+  --shadow-code: var(--code-shadow);
   --color-border: var(--border);
   --color-border-hover: var(--border-hover);
 

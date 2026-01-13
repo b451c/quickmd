@@ -215,12 +215,12 @@ export function Showcase() {
           {/* Code samples grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {/* Swift */}
-            <div className="rounded-[var(--radius-lg)] bg-code-bg border border-code-border overflow-hidden">
-              <div className="px-4 py-2 border-b border-code-border flex items-center justify-between">
-                <span className="text-[11px] text-muted uppercase tracking-wider">
+            <div className="rounded-[var(--radius-lg)] bg-code-bg border border-code-border overflow-hidden shadow-[var(--code-shadow)]">
+              <div className="px-4 py-2.5 border-b border-code-border flex items-center justify-between bg-code-header">
+                <span className="text-[11px] text-foreground/70 uppercase tracking-wider font-medium">
                   swift
                 </span>
-                <div className="w-2 h-2 rounded-full bg-orange-500" />
+                <div className="w-2.5 h-2.5 rounded-full bg-orange-500" />
               </div>
               <pre className="p-4 text-xs font-mono overflow-x-auto">
                 <code>
@@ -248,12 +248,12 @@ export function Showcase() {
             </div>
 
             {/* JavaScript */}
-            <div className="rounded-[var(--radius-lg)] bg-code-bg border border-code-border overflow-hidden">
-              <div className="px-4 py-2 border-b border-code-border flex items-center justify-between">
-                <span className="text-[11px] text-muted uppercase tracking-wider">
+            <div className="rounded-[var(--radius-lg)] bg-code-bg border border-code-border overflow-hidden shadow-[var(--code-shadow)]">
+              <div className="px-4 py-2.5 border-b border-code-border flex items-center justify-between bg-code-header">
+                <span className="text-[11px] text-foreground/70 uppercase tracking-wider font-medium">
                   javascript
                 </span>
-                <div className="w-2 h-2 rounded-full bg-yellow-400" />
+                <div className="w-2.5 h-2.5 rounded-full bg-yellow-400" />
               </div>
               <pre className="p-4 text-xs font-mono overflow-x-auto">
                 <code>
@@ -276,12 +276,12 @@ export function Showcase() {
             </div>
 
             {/* Go */}
-            <div className="rounded-[var(--radius-lg)] bg-code-bg border border-code-border overflow-hidden">
-              <div className="px-4 py-2 border-b border-code-border flex items-center justify-between">
-                <span className="text-[11px] text-muted uppercase tracking-wider">
+            <div className="rounded-[var(--radius-lg)] bg-code-bg border border-code-border overflow-hidden shadow-[var(--code-shadow)]">
+              <div className="px-4 py-2.5 border-b border-code-border flex items-center justify-between bg-code-header">
+                <span className="text-[11px] text-foreground/70 uppercase tracking-wider font-medium">
                   go
                 </span>
-                <div className="w-2 h-2 rounded-full bg-cyan-500" />
+                <div className="w-2.5 h-2.5 rounded-full bg-cyan-500" />
               </div>
               <pre className="p-4 text-xs font-mono overflow-x-auto">
                 <code>

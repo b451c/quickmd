@@ -18,7 +18,6 @@ export function Footer() {
                 alt="QuickMD icon"
                 width={32}
                 height={32}
-                className="rounded-lg"
               />
               <span className="font-semibold text-lg text-foreground">
                 QuickMD
@@ -29,24 +28,24 @@ export function Footer() {
               <br />
               The lightweight viewer for macOS.
             </p>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-4">
               <a
                 href="https://github.com/b451c/quickmd"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="p-2 rounded-lg bg-surface border border-border text-muted hover:text-foreground hover:border-border-hover transition-all"
+                className="text-muted hover:text-foreground transition-colors"
                 aria-label="GitHub"
               >
-                <Github size={18} />
+                <Github size={20} />
               </a>
               <a
                 href="https://buymeacoffee.com/bsroczynskh"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="p-2 rounded-lg bg-surface border border-border text-muted hover:text-foreground hover:border-border-hover transition-all"
+                className="text-muted hover:text-foreground transition-colors"
                 aria-label="Buy Me a Coffee"
               >
-                <Coffee size={18} />
+                <Coffee size={20} />
               </a>
             </div>
           </div>
