@@ -31,7 +31,7 @@ export function Footer() {
             </p>
             <div className="flex items-center gap-3">
               <a
-                href="https://github.com/AdrianBran/QuickMD"
+                href="https://github.com/b451c/quickmd"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="p-2 rounded-lg bg-surface border border-border text-muted hover:text-foreground hover:border-border-hover transition-all"
@@ -40,7 +40,7 @@ export function Footer() {
                 <Github size={18} />
               </a>
               <a
-                href="https://buymeacoffee.com/falamistudio"
+                href="https://buymeacoffee.com/bsroczynskh"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="p-2 rounded-lg bg-surface border border-border text-muted hover:text-foreground hover:border-border-hover transition-all"
@@ -76,7 +76,7 @@ export function Footer() {
                 Download
               </a>
               <a
-                href="https://github.com/AdrianBran/QuickMD"
+                href="https://github.com/b451c/quickmd"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-muted hover:text-foreground transition-colors text-sm"

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Menu, X } from "lucide-react";
+import { Menu, X, Coffee } from "lucide-react";
 import Image from "next/image";
 import { Button } from "./Button";
 
@@ -38,7 +38,7 @@ export function Header() {
             alt="QuickMD icon"
             width={32}
             height={32}
-            className="rounded-lg shadow-sm group-hover:shadow-md transition-shadow"
+            className="group-hover:scale-105 transition-transform"
           />
           <span className="font-semibold text-lg text-foreground">
             QuickMD
@@ -58,6 +58,15 @@ export function Header() {
             className="text-muted hover:text-foreground transition-colors text-[15px] font-medium"
           >
             Preview
+          </a>
+          <a
+            href="https://buymeacoffee.com/bsroczynskh"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-muted hover:text-foreground transition-colors text-[15px] font-medium flex items-center gap-1.5"
+          >
+            <Coffee size={16} />
+            Support
           </a>
           <Button href="#download" size="sm">
             Download Free
@@ -98,6 +107,16 @@ export function Header() {
                 onClick={() => setMobileMenuOpen(false)}
               >
                 Preview
+              </a>
+              <a
+                href="https://buymeacoffee.com/bsroczynskh"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-muted hover:text-foreground transition-colors text-[15px] font-medium py-2 flex items-center gap-2"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                <Coffee size={16} />
+                Support
               </a>
               <Button
                 href="#download"

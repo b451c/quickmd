@@ -27,7 +27,7 @@ export function Hero() {
           transition={{ duration: 0.5, delay: 0.1 }}
           className="mb-6"
         >
-          <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent-subtle border border-accent/20 text-accent text-sm font-medium">
+          <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent-subtle border border-accent/30 text-accent text-sm font-medium shadow-md">
             <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
             Free on Mac App Store
           </span>
@@ -68,7 +68,7 @@ export function Hero() {
         >
           <AppStoreBadge />
           <Button
-            href="https://github.com/AdrianBran/QuickMD"
+            href="https://github.com/b451c/quickmd"
             variant="secondary"
             external
           >
@@ -90,82 +90,82 @@ export function Hero() {
             {/* Window shadow */}
             <div className="absolute -inset-4 bg-gradient-to-b from-accent/5 to-transparent rounded-3xl blur-2xl" />
 
-            {/* Window container */}
-            <div className="relative screenshot-frame bg-surface overflow-hidden">
+            {/* Window container - matching real QuickMD app */}
+            <div className="relative screenshot-frame bg-[#fafafa] overflow-hidden">
               {/* macOS traffic lights */}
-              <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-surface">
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-[#d4d4d4] bg-[#fafafa]">
                 <div className="w-3 h-3 rounded-full bg-[#FF5F56]" />
                 <div className="w-3 h-3 rounded-full bg-[#FFBD2E]" />
                 <div className="w-3 h-3 rounded-full bg-[#27C93F]" />
-                <span className="ml-4 text-xs text-muted font-mono">README.md</span>
+                <span className="ml-4 text-xs text-[#666666] font-mono">README.md</span>
               </div>
 
-              {/* Screenshot content - mockup of markdown rendering */}
-              <div className="p-8 bg-surface min-h-[400px] font-mono text-left">
+              {/* Screenshot content - matching real app (MarkdownTheme.swift) */}
+              <div className="p-8 bg-[#fafafa] min-h-[400px] font-mono text-left">
                 {/* H1 */}
-                <h1 className="text-2xl font-bold text-foreground mb-4">
+                <h1 className="text-2xl font-bold text-[#000000] mb-4">
                   Welcome to QuickMD
                 </h1>
 
                 {/* Paragraph */}
-                <p className="text-muted mb-6 leading-relaxed font-sans">
+                <p className="text-[#666666] mb-6 leading-relaxed font-sans">
                   The fastest way to preview Markdown on your Mac. Double-click any{" "}
-                  <code className="px-1.5 py-0.5 rounded bg-code-bg text-foreground text-sm">
+                  <code className="px-1.5 py-0.5 rounded bg-[#f2f2f2] text-[#000000] text-sm">
                     .md
                   </code>{" "}
                   file and see it rendered instantly.
                 </p>
 
                 {/* H2 */}
-                <h2 className="text-lg font-semibold text-foreground mb-3">Features</h2>
+                <h2 className="text-lg font-semibold text-[#000000] mb-3">Features</h2>
 
-                {/* List */}
+                {/* List - app uses black bullet points */}
                 <ul className="space-y-2 mb-6 font-sans">
-                  <li className="flex items-center gap-2 text-muted">
-                    <span className="text-accent">•</span>
-                    <strong className="text-foreground font-medium">Instant preview</strong> — No waiting, no loading
+                  <li className="flex items-center gap-2 text-[#666666]">
+                    <span className="text-[#000000]">•</span>
+                    <strong className="text-[#000000] font-medium">Instant preview</strong> — No waiting, no loading
                   </li>
-                  <li className="flex items-center gap-2 text-muted">
-                    <span className="text-accent">•</span>
-                    <strong className="text-foreground font-medium">Syntax highlighting</strong> — Code that pops
+                  <li className="flex items-center gap-2 text-[#666666]">
+                    <span className="text-[#000000]">•</span>
+                    <strong className="text-[#000000] font-medium">Syntax highlighting</strong> — Code that pops
                   </li>
-                  <li className="flex items-center gap-2 text-muted">
-                    <span className="text-accent">•</span>
-                    <strong className="text-foreground font-medium">Dark mode</strong> — Easy on the eyes
+                  <li className="flex items-center gap-2 text-[#666666]">
+                    <span className="text-[#000000]">•</span>
+                    <strong className="text-[#000000] font-medium">Dark mode</strong> — Easy on the eyes
                   </li>
                 </ul>
 
-                {/* Code block */}
-                <div className="rounded-lg bg-code-bg border border-code-border overflow-hidden">
-                  <div className="px-4 py-2 border-b border-code-border">
-                    <span className="text-[11px] text-muted uppercase tracking-wider">
+                {/* Code block - matching app codeBackgroundColor */}
+                <div className="rounded-md bg-[#f2f2f2] overflow-hidden">
+                  <div className="px-4 py-2 border-b border-[#d9d9d9]">
+                    <span className="text-[11px] text-[#666666] uppercase tracking-wider font-mono">
                       python
                     </span>
                   </div>
-                  <pre className="p-4 text-sm overflow-x-auto">
+                  <pre className="p-4 text-sm overflow-x-auto text-[#000000]">
                     <code>
-                      <span style={{ color: "var(--syntax-keyword)" }}>def</span>{" "}
-                      <span style={{ color: "var(--syntax-function)" }}>hello</span>
-                      <span className="text-foreground">(</span>
-                      <span style={{ color: "var(--syntax-type)" }}>name</span>
-                      <span className="text-foreground">):</span>
+                      <span style={{ color: "#991a99" }}>def</span>{" "}
+                      <span style={{ color: "#991a99" }}>hello</span>
+                      <span>(</span>
+                      <span style={{ color: "#1a6699" }}>name</span>
+                      <span>):</span>
                       {"\n"}
                       {"    "}
-                      <span style={{ color: "var(--syntax-keyword)" }}>return</span>{" "}
-                      <span style={{ color: "var(--syntax-string)" }}>f&quot;Hello, </span>
-                      <span className="text-foreground">{"{"}</span>
-                      <span style={{ color: "var(--syntax-type)" }}>name</span>
-                      <span className="text-foreground">{"}"}</span>
-                      <span style={{ color: "var(--syntax-string)" }}>!&quot;</span>
+                      <span style={{ color: "#991a99" }}>return</span>{" "}
+                      <span style={{ color: "#994d1a" }}>f&quot;Hello, </span>
+                      <span>{"{"}</span>
+                      <span style={{ color: "#1a6699" }}>name</span>
+                      <span>{"}"}</span>
+                      <span style={{ color: "#994d1a" }}>!&quot;</span>
                       {"\n\n"}
-                      <span style={{ color: "var(--syntax-comment)" }}># Quick and easy</span>
+                      <span style={{ color: "#666666" }}># Quick and easy</span>
                       {"\n"}
-                      <span style={{ color: "var(--syntax-function)" }}>print</span>
-                      <span className="text-foreground">(</span>
-                      <span style={{ color: "var(--syntax-function)" }}>hello</span>
-                      <span className="text-foreground">(</span>
-                      <span style={{ color: "var(--syntax-string)" }}>&quot;World&quot;</span>
-                      <span className="text-foreground">))</span>
+                      <span style={{ color: "#991a99" }}>print</span>
+                      <span>(</span>
+                      <span style={{ color: "#991a99" }}>hello</span>
+                      <span>(</span>
+                      <span style={{ color: "#994d1a" }}>&quot;World&quot;</span>
+                      <span>))</span>
                     </code>
                   </pre>
                 </div>

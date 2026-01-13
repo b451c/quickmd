@@ -1,47 +1,54 @@
 @import "tailwindcss";
 
 /* ========================================
-   QuickMD Landing Page - Design System
-   Aesthetic: Editorial/Magazine with code-centric feel
+   QuickMD Landing Page - Design System 2026
+   Aesthetic: Cloud Dancer + Transformative Teal
+   Trends: Soft neons, Mermaidcore, Kinematic gradients
    ======================================== */
 
 :root {
-  /* Background & Surface */
-  --background: #fafbfc;
+  /* Background & Surface - Cloud Dancer inspired */
+  /* Airy, soft whites signaling "reset", clarity, calm */
+  --background: #fcfdff;
   --surface: #ffffff;
   --surface-elevated: #ffffff;
 
-  /* Typography */
+  /* Typography - Deep slate for contrast on airy whites */
   --foreground: #0f172a;
   --muted: #64748b;
   --subtle: #94a3b8;
 
-  /* Accents - Electric Cyan + Deep Slate */
-  --accent: #06b6d4;
-  --accent-hover: #0891b2;
-  --accent-subtle: #ecfeff;
+  /* Primary Accent - Transformative Teal (WGSN/Coloro 2026) */
+  /* Symbolizing change, resilience, Earth-first thinking */
+  --accent: #14b8a6;
+  --accent-hover: #0d9488;
+  --accent-subtle: #f0fdfa;
 
-  /* Code colors */
-  --code-bg: #f1f5f9;
-  --code-border: #e2e8f0;
+  /* Secondary Accent - Soft Neon Lavender (Mermaidcore) */
+  --accent-secondary: #a78bfa;
+  --accent-secondary-subtle: #f5f3ff;
 
-  /* Syntax highlighting - Light */
-  --syntax-keyword: #7c3aed;
-  --syntax-string: #ea580c;
-  --syntax-comment: #64748b;
-  --syntax-number: #059669;
-  --syntax-type: #0284c7;
-  --syntax-function: #db2777;
+  /* Code colors - Matching real QuickMD app */
+  --code-bg: #f2f2f2;         /* Color(white: 0.95) from app */
+  --code-border: #d9d9d9;     /* Slightly darker border */
 
-  /* Borders & Dividers */
-  --border: #e2e8f0;
-  --border-hover: #cbd5e1;
+  /* Syntax highlighting - Matching real QuickMD app (MarkdownTheme.swift) */
+  --syntax-keyword: #991a99;    /* Purple - matches app */
+  --syntax-string: #994d1a;     /* Brown/orange - matches app */
+  --syntax-comment: #666666;    /* Gray - matches app */
+  --syntax-number: #338033;     /* Green - matches app */
+  --syntax-type: #1a6699;       /* Blue - matches app */
+  --syntax-function: #991a99;   /* Purple (same as keyword) */
 
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
-  --shadow-lg: 0 12px 40px rgba(15, 23, 42, 0.12);
-  --shadow-screenshot: 0 32px 64px rgba(15, 23, 42, 0.16);
+  /* Borders & Dividers - Lighter, more airy */
+  --border: #e5e7eb;
+  --border-hover: #d1d5db;
+
+  /* Shadows - Softer, more diffused for Cloud Dancer feel */
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.03);
+  --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 16px 48px rgba(15, 23, 42, 0.08);
+  --shadow-screenshot: 0 32px 80px rgba(15, 23, 42, 0.12);
 
   /* Spacing */
   --space-1: 4px;
@@ -54,11 +61,11 @@
   --space-16: 64px;
   --space-24: 96px;
 
-  /* Radius */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
-  --radius-xl: 24px;
+  /* Radius - Slightly softer */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 28px;
 
   /* Transitions */
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -66,41 +73,8 @@
   --transition-slow: 300ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Dark Mode */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0c0f14;
-    --surface: #151921;
-    --surface-elevated: #1c2029;
-
-    --foreground: #f1f5f9;
-    --muted: #94a3b8;
-    --subtle: #64748b;
-
-    --accent: #22d3ee;
-    --accent-hover: #67e8f9;
-    --accent-subtle: rgba(34, 211, 238, 0.1);
-
-    --code-bg: #1e2330;
-    --code-border: #2d3548;
-
-    /* Syntax highlighting - Dark */
-    --syntax-keyword: #a78bfa;
-    --syntax-string: #fb923c;
-    --syntax-comment: #64748b;
-    --syntax-number: #34d399;
-    --syntax-type: #38bdf8;
-    --syntax-function: #f472b6;
-
-    --border: #2d3548;
-    --border-hover: #3d4760;
-
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
-    --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.4);
-    --shadow-screenshot: 0 32px 64px rgba(0, 0, 0, 0.5);
-  }
-}
+/* Dark Mode - Disabled for Cloud Dancer 2026 aesthetic */
+/* Landing page stays light-only for "reset" and clarity feel */
 
 /* Tailwind Theme Extension */
 @theme inline {
@@ -113,6 +87,8 @@
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
   --color-accent-subtle: var(--accent-subtle);
+  --color-accent-secondary: var(--accent-secondary);
+  --color-accent-secondary-subtle: var(--accent-secondary-subtle);
   --color-code-bg: var(--code-bg);
   --color-code-border: var(--code-border);
   --color-border: var(--border);
@@ -186,12 +162,18 @@ code, pre, .font-mono {
   background-size: 64px 64px;
 }
 
-/* Gradient mesh background */
+/* Gradient mesh background - Kinematic 2026 */
+/* Mermaidcore: soft glow, mesh, ambient lighting */
 .bg-gradient-mesh {
   background:
-    radial-gradient(ellipse at 20% 0%, var(--accent-subtle) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 100%, rgba(124, 58, 237, 0.05) 0%, transparent 50%);
+    /* Primary teal glow - top left */
+    radial-gradient(ellipse 80% 60% at 15% 10%, var(--accent-subtle) 0%, transparent 60%),
+    /* Secondary lavender glow - bottom right */
+    radial-gradient(ellipse 70% 50% at 85% 90%, var(--accent-secondary-subtle) 0%, transparent 55%),
+    /* Subtle center warmth */
+    radial-gradient(ellipse 100% 80% at 50% 50%, rgba(255, 255, 255, 0.3) 0%, transparent 70%);
 }
+
 
 /* Text gradient */
 .text-gradient {
@@ -201,22 +183,30 @@ code, pre, .font-mono {
   background-clip: text;
 }
 
-/* Accent gradient for highlights */
+/* Accent gradient for highlights - Teal to Lavender (Mermaidcore) */
 .bg-accent-gradient {
-  background: linear-gradient(135deg, var(--accent) 0%, #8b5cf6 100%);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-secondary) 100%);
 }
 
-/* Glass effect */
+/* Iridescent shimmer effect - Mermaidcore */
+.bg-iridescent {
+  background: linear-gradient(
+    135deg,
+    var(--accent-subtle) 0%,
+    var(--accent-secondary-subtle) 25%,
+    rgba(255, 255, 255, 0.9) 50%,
+    var(--accent-subtle) 75%,
+    var(--accent-secondary-subtle) 100%
+  );
+  background-size: 200% 200%;
+}
+
+
+/* Glass effect - Light only */
 .glass {
   background: rgba(255, 255, 255, 0.7);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-}
-
-@media (prefers-color-scheme: dark) {
-  .glass {
-    background: rgba(21, 25, 33, 0.8);
-  }
 }
 
 /* Screenshot frame styling */

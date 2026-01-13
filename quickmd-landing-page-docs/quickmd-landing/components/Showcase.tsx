@@ -39,68 +39,70 @@ export function Showcase() {
               <Sun size={18} className="text-amber-500" />
               <span className="text-sm font-medium text-muted">Light Mode</span>
             </div>
-            <div className="screenshot-frame bg-[#fafbfc] overflow-hidden">
+            {/* Matching real QuickMD app - MarkdownTheme.swift light mode */}
+            <div className="screenshot-frame bg-[#fafafa] overflow-hidden">
               {/* Window chrome */}
-              <div className="flex items-center gap-2 px-4 py-3 border-b border-[#e2e8f0] bg-[#ffffff]">
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-[#d4d4d4] bg-[#fafafa]">
                 <div className="w-3 h-3 rounded-full bg-[#FF5F56]" />
                 <div className="w-3 h-3 rounded-full bg-[#FFBD2E]" />
                 <div className="w-3 h-3 rounded-full bg-[#27C93F]" />
-                <span className="ml-4 text-xs text-[#64748b] font-mono">CHANGELOG.md</span>
+                <span className="ml-4 text-xs text-[#666666] font-mono">CHANGELOG.md</span>
               </div>
 
-              {/* Content - Light theme */}
+              {/* Content - Light theme matching app */}
               <div className="p-6 min-h-[320px] text-left font-sans">
-                <h1 className="text-xl font-bold text-[#0f172a] mb-3">
+                <h1 className="text-xl font-bold text-[#000000] mb-3">
                   Changelog
                 </h1>
 
-                <h2 className="text-base font-semibold text-[#0f172a] mb-2">
+                <h2 className="text-base font-semibold text-[#000000] mb-2">
                   v1.0.0{" "}
-                  <span className="text-[#64748b] font-normal text-sm">
+                  <span className="text-[#666666] font-normal text-sm">
                     — January 2024
                   </span>
                 </h2>
 
-                <ul className="space-y-1.5 mb-4 text-[#64748b] text-sm">
+                {/* Bullet points - app uses black • */}
+                <ul className="space-y-1.5 mb-4 text-[#666666] text-sm">
                   <li className="flex items-start gap-2">
-                    <span className="text-[#06b6d4] mt-1">•</span>
+                    <span className="text-[#000000]">•</span>
                     Initial release on Mac App Store
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="text-[#06b6d4] mt-1">•</span>
+                    <span className="text-[#000000]">•</span>
                     Syntax highlighting for 20+ languages
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="text-[#06b6d4] mt-1">•</span>
+                    <span className="text-[#000000]">•</span>
                     Full GFM support (tables, task lists)
                   </li>
                 </ul>
 
-                {/* Table */}
-                <div className="rounded-lg border border-[#e2e8f0] overflow-hidden text-sm">
+                {/* Table - matching app: headerBackgroundColor = 90% white */}
+                <div className="rounded border border-[#c0c0c0]/30 overflow-hidden text-sm">
                   <table className="w-full">
-                    <thead className="bg-[#f1f5f9]">
+                    <thead className="bg-[#e6e6e6]">
                       <tr>
-                        <th className="px-3 py-2 text-left font-semibold text-[#0f172a]">
+                        <th className="px-3 py-2 text-left font-semibold text-[#000000]">
                           Feature
                         </th>
-                        <th className="px-3 py-2 text-left font-semibold text-[#0f172a]">
+                        <th className="px-3 py-2 text-left font-semibold text-[#000000]">
                           Status
                         </th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-[#e2e8f0]">
+                    <tbody className="divide-y divide-[#c0c0c0]/30 bg-[#fafafa]">
                       <tr>
-                        <td className="px-3 py-2 text-[#64748b]">Tables</td>
-                        <td className="px-3 py-2 text-[#059669]">✓</td>
+                        <td className="px-3 py-2 text-[#000000]">Tables</td>
+                        <td className="px-3 py-2 text-[#000000]">Done</td>
                       </tr>
                       <tr>
-                        <td className="px-3 py-2 text-[#64748b]">Code Blocks</td>
-                        <td className="px-3 py-2 text-[#059669]">✓</td>
+                        <td className="px-3 py-2 text-[#000000]">Code Blocks</td>
+                        <td className="px-3 py-2 text-[#000000]">Done</td>
                       </tr>
                       <tr>
-                        <td className="px-3 py-2 text-[#64748b]">Images</td>
-                        <td className="px-3 py-2 text-[#059669]">✓</td>
+                        <td className="px-3 py-2 text-[#000000]">Images</td>
+                        <td className="px-3 py-2 text-[#000000]">Done</td>
                       </tr>
                     </tbody>
                   </table>
@@ -120,68 +122,70 @@ export function Showcase() {
               <Moon size={18} className="text-indigo-400" />
               <span className="text-sm font-medium text-muted">Dark Mode</span>
             </div>
-            <div className="screenshot-frame bg-[#0c0f14] overflow-hidden">
+            {/* Matching real QuickMD app - MarkdownTheme.swift dark mode */}
+            <div className="screenshot-frame bg-[#1f1f1f] overflow-hidden">
               {/* Window chrome */}
-              <div className="flex items-center gap-2 px-4 py-3 border-b border-[#2d3548] bg-[#151921]">
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-[#808080]/50 bg-[#1f1f1f]">
                 <div className="w-3 h-3 rounded-full bg-[#FF5F56]" />
                 <div className="w-3 h-3 rounded-full bg-[#FFBD2E]" />
                 <div className="w-3 h-3 rounded-full bg-[#27C93F]" />
-                <span className="ml-4 text-xs text-[#64748b] font-mono">CHANGELOG.md</span>
+                <span className="ml-4 text-xs text-[#808080] font-mono">CHANGELOG.md</span>
               </div>
 
-              {/* Content - Dark theme */}
+              {/* Content - Dark theme matching app */}
               <div className="p-6 min-h-[320px] text-left font-sans">
-                <h1 className="text-xl font-bold text-[#f1f5f9] mb-3">
+                <h1 className="text-xl font-bold text-[#ffffff] mb-3">
                   Changelog
                 </h1>
 
-                <h2 className="text-base font-semibold text-[#f1f5f9] mb-2">
+                <h2 className="text-base font-semibold text-[#ffffff] mb-2">
                   v1.0.0{" "}
-                  <span className="text-[#94a3b8] font-normal text-sm">
+                  <span className="text-[#808080] font-normal text-sm">
                     — January 2024
                   </span>
                 </h2>
 
-                <ul className="space-y-1.5 mb-4 text-[#94a3b8] text-sm">
+                {/* Bullet points - app uses white • */}
+                <ul className="space-y-1.5 mb-4 text-[#808080] text-sm">
                   <li className="flex items-start gap-2">
-                    <span className="text-[#22d3ee] mt-1">•</span>
+                    <span className="text-[#ffffff]">•</span>
                     Initial release on Mac App Store
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="text-[#22d3ee] mt-1">•</span>
+                    <span className="text-[#ffffff]">•</span>
                     Syntax highlighting for 20+ languages
                   </li>
                   <li className="flex items-start gap-2">
-                    <span className="text-[#22d3ee] mt-1">•</span>
+                    <span className="text-[#ffffff]">•</span>
                     Full GFM support (tables, task lists)
                   </li>
                 </ul>
 
-                {/* Table */}
-                <div className="rounded-lg border border-[#2d3548] overflow-hidden text-sm">
+                {/* Table - matching app: headerBackgroundColor = 20% white */}
+                <div className="rounded border border-[#808080]/50 overflow-hidden text-sm">
                   <table className="w-full">
-                    <thead className="bg-[#1e2330]">
+                    <thead className="bg-[#333333]">
                       <tr>
-                        <th className="px-3 py-2 text-left font-semibold text-[#f1f5f9]">
+                        <th className="px-3 py-2 text-left font-semibold text-[#ffffff]">
                           Feature
                         </th>
-                        <th className="px-3 py-2 text-left font-semibold text-[#f1f5f9]">
+                        <th className="px-3 py-2 text-left font-semibold text-[#ffffff]">
                           Status
                         </th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-[#2d3548]">
+                    <tbody className="divide-y divide-[#808080]/50 bg-[#1f1f1f]">
                       <tr>
-                        <td className="px-3 py-2 text-[#94a3b8]">Tables</td>
-                        <td className="px-3 py-2 text-[#34d399]">✓</td>
+                        <td className="px-3 py-2 text-[#ffffff]">Tables</td>
+                        <td className="px-3 py-2 text-[#ffffff]">Done</td>
                       </tr>
                       <tr>
-                        <td className="px-3 py-2 text-[#94a3b8]">Code Blocks</td>
-                        <td className="px-3 py-2 text-[#34d399]">✓</td>
+                        <td className="px-3 py-2 text-[#ffffff]">Code Blocks</td>
+                        <td className="px-3 py-2 text-[#ffffff]">Done</td>
                       </tr>
                       <tr>
-                        <td className="px-3 py-2 text-[#94a3b8]">Images</td>
-                        <td className="px-3 py-2 text-[#34d399]">✓</td>
+                        <td className="px-3 py-2 text-[#ffffff]">Images</td>
+                        <td className="px-3 py-2 text-[#ffffff]">Done</td>
                       </tr>
                     </tbody>
                   </table>
