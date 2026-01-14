@@ -3,8 +3,6 @@ import UniformTypeIdentifiers
 
 @main
 struct QuickMDApp: App {
-    private let donationURL = URL(string: "https://buymeacoffee.com/bsroczynskh")!
-
     var body: some Scene {
         DocumentGroup(viewing: MarkdownDocument.self) { file in
             MarkdownView(document: file.document)
@@ -17,10 +15,14 @@ struct QuickMDApp: App {
                     NSWorkspace.shared.open(URL(string: "https://github.com/b451c/quickmd")!)
                 }
                 Divider()
-                Button("Support QuickMD ☕") {
-                    NSWorkspace.shared.open(donationURL)
+                Menu("Support QuickMD ☕") {
+                    Button("Buy Me a Coffee") {
+                        NSWorkspace.shared.open(URL(string: "https://buymeacoffee.com/bsroczynskh")!)
+                    }
+                    Button("Ko-fi") {
+                        NSWorkspace.shared.open(URL(string: "https://ko-fi.com/quickmd")!)
+                    }
                 }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
             }
         }
         .defaultSize(width: 800, height: 600)

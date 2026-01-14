@@ -77,9 +77,19 @@ struct SupportButton: View {
     @State private var isHovered = false
 
     var body: some View {
-        Button(action: {
-            NSWorkspace.shared.open(URL(string: "https://buymeacoffee.com/bsroczynskh")!)
-        }) {
+        Menu {
+            Button {
+                NSWorkspace.shared.open(URL(string: "https://buymeacoffee.com/bsroczynskh")!)
+            } label: {
+                Label("Buy Me a Coffee", systemImage: "cup.and.saucer.fill")
+            }
+
+            Button {
+                NSWorkspace.shared.open(URL(string: "https://ko-fi.com/quickmd")!)
+            } label: {
+                Label("Ko-fi", systemImage: "heart.fill")
+            }
+        } label: {
             HStack(spacing: 4) {
                 Text("☕")
                     .font(.system(size: 12))
@@ -93,7 +103,7 @@ struct SupportButton: View {
             .background(theme.codeBackgroundColor.opacity(isHovered ? 0.9 : 0.6))
             .clipShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .menuStyle(.borderlessButton)
         .opacity(isHovered ? 1.0 : 0.5)
         .animation(.easeInOut(duration: 0.2), value: isHovered)
         .onHover { hovering in

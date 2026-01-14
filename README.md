@@ -110,7 +110,6 @@ Now all your Markdown files will open instantly with QuickMD!
 |----------|--------|
 | `⌘O` | Open file |
 | `⌘W` | Close window |
-| `⌘⇧D` | Support QuickMD (donation link) |
 
 ## Tech Stack
 
@@ -174,6 +173,7 @@ See [QuickMD/AppStore-Metadata.md](QuickMD/AppStore-Metadata.md) for detailed su
 QuickMD is **free and open source**. If you find it useful, consider supporting development:
 
 <a href="https://buymeacoffee.com/bsroczynskh" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 40px !important;width: 145px !important;" ></a>
+<a href="https://ko-fi.com/quickmd" target="_blank"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=6" alt="Support on Ko-fi" style="height: 40px !important;width: 145px !important;" ></a>
 
 ## Roadmap
 
