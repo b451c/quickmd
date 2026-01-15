@@ -15,6 +15,15 @@ struct QuickMDApp: App {
                     NSWorkspace.shared.open(URL(string: "https://github.com/b451c/quickmd")!)
                 }
                 Divider()
+                #if APPSTORE
+                Button("Visit qmd.app") {
+                    NSWorkspace.shared.open(URL(string: "https://qmd.app/")!)
+                }
+                #else
+                Button("Visit qmd.app") {
+                    NSWorkspace.shared.open(URL(string: "https://qmd.app/")!)
+                }
+                Divider()
                 Menu("Support QuickMD ☕") {
                     Button("Buy Me a Coffee") {
                         NSWorkspace.shared.open(URL(string: "https://buymeacoffee.com/bsroczynskh")!)
@@ -23,6 +32,7 @@ struct QuickMDApp: App {
                         NSWorkspace.shared.open(URL(string: "https://ko-fi.com/quickmd")!)
                     }
                 }
+                #endif
             }
         }
         .defaultSize(width: 800, height: 600)

@@ -61,17 +61,59 @@ struct MarkdownView: View {
                 .padding(.vertical, 24)
             }
 
-            // Subtle donation button
+            #if APPSTORE
+            // Website link button (App Store version)
+            WebsiteButton(theme: theme)
+                .padding(16)
+            #else
+            // Donation button (GitHub version)
             SupportButton(theme: theme)
                 .padding(16)
+            #endif
         }
         .background(theme.backgroundColor)
         .frame(minWidth: 400, minHeight: 300)
     }
 }
 
-// MARK: - Support Button
+// MARK: - Website Button (App Store version)
 
+#if APPSTORE
+struct WebsiteButton: View {
+    let theme: MarkdownTheme
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            NSWorkspace.shared.open(URL(string: "https://qmd.app/")!)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "globe")
+                    .font(.system(size: 11))
+                if isHovered {
+                    Text("qmd.app")
+                        .font(.system(size: 11, weight: .medium))
+                }
+            }
+            .padding(.horizontal, isHovered ? 10 : 6)
+            .padding(.vertical, 4)
+            .background(theme.codeBackgroundColor.opacity(isHovered ? 0.9 : 0.6))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .opacity(isHovered ? 1.0 : 0.5)
+        .animation(.easeInOut(duration: 0.2), value: isHovered)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .help("Visit qmd.app")
+    }
+}
+#endif
+
+// MARK: - Support Button (GitHub version)
+
+#if !APPSTORE
 struct SupportButton: View {
     let theme: MarkdownTheme
     @State private var isHovered = false
@@ -79,11 +121,16 @@ struct SupportButton: View {
     var body: some View {
         Menu {
             Button {
+                NSWorkspace.shared.open(URL(string: "https://qmd.app/")!)
+            } label: {
+                Label("Visit qmd.app", systemImage: "globe")
+            }
+            Divider()
+            Button {
                 NSWorkspace.shared.open(URL(string: "https://buymeacoffee.com/bsroczynskh")!)
             } label: {
                 Label("Buy Me a Coffee", systemImage: "cup.and.saucer.fill")
             }
-
             Button {
                 NSWorkspace.shared.open(URL(string: "https://ko-fi.com/quickmd")!)
             } label: {
@@ -112,6 +159,7 @@ struct SupportButton: View {
         .help("Support QuickMD development")
     }
 }
+#endif
 
 // MARK: - Table View
 
