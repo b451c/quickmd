@@ -23,20 +23,17 @@ enum MarkdownBlock: Identifiable {
 struct MarkdownView: View {
     let document: MarkdownDocument
     @Environment(\.colorScheme) var colorScheme
+    @State private var cachedBlocks: [MarkdownBlock] = []
 
     private var theme: MarkdownTheme {
         MarkdownTheme(colorScheme: colorScheme)
-    }
-
-    private var blocks: [MarkdownBlock] {
-        MarkdownBlockParser(colorScheme: colorScheme).parse(document.text)
     }
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(blocks) { block in
+                    ForEach(cachedBlocks) { block in
                         switch block {
                         case .text(let attributedString):
                             Text(attributedString)
@@ -62,8 +59,8 @@ struct MarkdownView: View {
             }
 
             #if APPSTORE
-            // Website link button (App Store version)
-            WebsiteButton(theme: theme)
+            // Tip Jar button (App Store version)
+            TipJarButton(theme: theme)
                 .padding(16)
             #else
             // Donation button (GitHub version)
@@ -73,25 +70,29 @@ struct MarkdownView: View {
         }
         .background(theme.backgroundColor)
         .frame(minWidth: 400, minHeight: 300)
+        .task(id: document.text + "\(colorScheme)") {
+            cachedBlocks = MarkdownBlockParser(colorScheme: colorScheme).parse(document.text)
+        }
     }
 }
 
-// MARK: - Website Button (App Store version)
+// MARK: - Tip Jar Button (App Store version)
 
 #if APPSTORE
-struct WebsiteButton: View {
+struct TipJarButton: View {
     let theme: MarkdownTheme
+    @Environment(\.openWindow) private var openWindow
     @State private var isHovered = false
 
     var body: some View {
         Button {
-            NSWorkspace.shared.open(URL(string: "https://qmd.app/")!)
+            openWindow(id: "tip-jar")
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: "globe")
+                Image(systemName: "heart.fill")
                     .font(.system(size: 11))
                 if isHovered {
-                    Text("qmd.app")
+                    Text("Tip Jar")
                         .font(.system(size: 11, weight: .medium))
                 }
             }
@@ -101,12 +102,13 @@ struct WebsiteButton: View {
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+        .foregroundColor(.pink)
         .opacity(isHovered ? 1.0 : 0.5)
         .animation(.easeInOut(duration: 0.2), value: isHovered)
         .onHover { hovering in
             isHovered = hovering
         }
-        .help("Visit qmd.app")
+        .help("Support QuickMD")
     }
 }
 #endif

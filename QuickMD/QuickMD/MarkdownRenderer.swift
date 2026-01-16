@@ -146,8 +146,9 @@ struct MarkdownRenderer {
         var remaining = text[...]
 
         while !remaining.isEmpty {
-            // Try each inline format in order
+            // Try each inline format in order (bold+italic first to catch ***)
             if let (attr, newRemaining) = tryParseInlineCode(&remaining) ??
+                                          tryParseBoldItalic(&remaining) ??
                                           tryParseBold(&remaining) ??
                                           tryParseItalic(&remaining) ??
                                           tryParseStrikethrough(&remaining) ??
@@ -179,8 +180,23 @@ struct MarkdownRenderer {
         return (attr, remaining[remaining.index(after: endIndex)...])
     }
 
+    private func tryParseBoldItalic(_ remaining: inout Substring) -> (AttributedString, Substring)? {
+        guard remaining.hasPrefix("***") || remaining.hasPrefix("___") else { return nil }
+
+        let marker = String(remaining.prefix(3))
+        let afterMarker = remaining.dropFirst(3)
+        guard let endRange = afterMarker.range(of: marker) else { return nil }
+
+        let text = String(afterMarker[..<endRange.lowerBound])
+        var attr = AttributedString(text)
+        attr.font = .system(size: 14, weight: .bold).italic()
+        attr.foregroundColor = theme.textColor
+        return (attr, afterMarker[endRange.upperBound...])
+    }
+
     private func tryParseBold(_ remaining: inout Substring) -> (AttributedString, Substring)? {
-        guard remaining.hasPrefix("**") || remaining.hasPrefix("__") else { return nil }
+        guard (remaining.hasPrefix("**") && !remaining.hasPrefix("***")) ||
+              (remaining.hasPrefix("__") && !remaining.hasPrefix("___")) else { return nil }
 
         let marker = String(remaining.prefix(2))
         let afterMarker = remaining.dropFirst(2)

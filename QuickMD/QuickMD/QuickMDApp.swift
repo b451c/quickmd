@@ -16,9 +16,7 @@ struct QuickMDApp: App {
                 }
                 Divider()
                 #if APPSTORE
-                Button("Visit qmd.app") {
-                    NSWorkspace.shared.open(URL(string: "https://qmd.app/")!)
-                }
+                TipJarMenuButton()
                 #else
                 Button("Visit qmd.app") {
                     NSWorkspace.shared.open(URL(string: "https://qmd.app/")!)
@@ -36,5 +34,24 @@ struct QuickMDApp: App {
             }
         }
         .defaultSize(width: 800, height: 600)
+
+        #if APPSTORE
+        Window("Tip Jar", id: "tip-jar") {
+            TipJarView()
+        }
+        .windowResizability(.contentSize)
+        #endif
     }
 }
+
+#if APPSTORE
+struct TipJarMenuButton: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Tip Jar 💝") {
+            openWindow(id: "tip-jar")
+        }
+    }
+}
+#endif
