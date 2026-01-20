@@ -26,7 +26,9 @@ struct MarkdownDocument: FileDocument {
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let data = text.data(using: .utf8)!
+        guard let data = text.data(using: .utf8) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
         return .init(regularFileWithContents: data)
     }
 }

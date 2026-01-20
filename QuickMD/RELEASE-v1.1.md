@@ -86,12 +86,32 @@ Tables with inconsistent column counts are automatically corrected:
 
 ## Technical Changes
 
-### Files Modified
-- `MarkdownTheme.swift` - Added patterns for escape chars, autolinks, setext headers
+### Code Architecture Refactoring
+Major code organization improvements for maintainability:
+
+**New Files Created:**
+- `MarkdownBlock.swift` - Enum for content block types
+- `MarkdownBlockParser.swift` - Block-level markdown parsing
+- `Views/TableBlockView.swift` - Table rendering with TableAlignmentProvider protocol
+- `Views/CodeBlockView.swift` - Syntax highlighted code blocks
+- `Views/ImageBlockView.swift` - Image loading with relative path support
+
+**Files Modified:**
+- `MarkdownTheme.swift` - Added documented regex patterns for escape chars, autolinks, setext headers
 - `MarkdownRenderer.swift` - New parsing methods for escape, autolink; public renderInline API
-- `MarkdownView.swift` - Table alignment support, GeometryReader borders, normalization
-- `MarkdownExport.swift` - Updated PrintableTableView with alignment support
+- `MarkdownView.swift` - Reduced from 641 to 196 lines; extracted components to separate files
+- `MarkdownExport.swift` - Uses shared TableAlignmentProvider protocol
+- `MarkdownDocument.swift` - Fixed force unwrap with proper error handling
 - `QuickMDApp.swift` - Pass document URL for relative path resolution
+
+**Code Quality Improvements:**
+- DRY: Shared `TableAlignmentProvider` protocol eliminates duplicate alignment logic
+- Documentation: All regex patterns now have descriptive comments
+- Safety: Removed force unwrap operators where possible
+- Organization: Views folder for UI components
+
+**Bug Fixes:**
+- Fixed table column alignment parsing (`:---`, `---:`, `:---:` now work correctly)
 
 ### Compatibility
 - macOS 14.0 (Sonoma) or later

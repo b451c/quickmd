@@ -61,28 +61,15 @@ struct MarkdownPrintableView: View {
 
 // MARK: - Printable Table View
 
-struct PrintableTableView: View {
+/// Table view optimized for PDF export and printing
+/// Uses simple HStack layout (no GeometryReader) for ImageRenderer compatibility
+struct PrintableTableView: View, TableAlignmentProvider {
     let headers: [String]
     let rows: [[String]]
     let alignments: [TextAlignment]
 
     private var renderer: MarkdownRenderer {
         MarkdownRenderer(colorScheme: .light)
-    }
-
-    private func alignmentFor(_ index: Int) -> Alignment {
-        guard index < alignments.count else { return .leading }
-        switch alignments[index] {
-        case .leading: return .leading
-        case .center: return .center
-        case .trailing: return .trailing
-        @unknown default: return .leading
-        }
-    }
-
-    private func textAlignmentFor(_ index: Int) -> TextAlignment {
-        guard index < alignments.count else { return .leading }
-        return alignments[index]
     }
 
     private var columnCount: Int { headers.count }

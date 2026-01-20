@@ -70,22 +70,45 @@ struct MarkdownTheme {
 
     // MARK: - Regex Patterns (shared constants)
 
+    /// Matches table separator row: |---|---|---| or variants with alignment colons
+    /// Examples: |:---|:---:|---:|, |---|---|
     static let tableSeparatorPattern = #"^\|?[\s\-:|]+\|?$"#
+
+    /// Matches ATX-style headers: # H1, ## H2, ... ###### H6
+    /// Captures: (1) hash marks, (2) header text
     static let headerPattern = #"^(#{1,6})\s+(.*)$"#
+
+    /// Matches horizontal rules: ***, ---, ___ (3 or more)
     static let horizontalRulePattern = #"^(\*{3,}|-{3,}|_{3,})\s*$"#
+
+    /// Matches standalone image on its own line: ![alt](url)
+    /// Captures: (1) alt text, (2) URL
     static let imagePattern = #"^!\[(.*?)\]\((.*?)\)\s*$"#
+
+    /// Matches task list items: - [ ] or - [x] with optional indentation
+    /// Captures: (1) indent whitespace, (2) check state (space or x), (3) content
     static let taskListPattern = #"^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$"#
 
     // MARK: - Escape Characters
 
+    /// Characters that can be escaped with backslash in markdown
+    /// Example: \* renders as literal asterisk instead of italic marker
     static let escapableChars: Set<Character> = ["\\", "`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", ".", "!", "|"]
 
     // MARK: - URL Autolinking
 
+    /// Matches bare URLs starting with http:// or https://
+    /// Stops at whitespace, brackets, parentheses, or quotes
     static let autolinkPattern = #"https?://[^\s<>\[\]()\"']+"#
 
     // MARK: - Setext Headers
 
+    /// Matches setext H1 underline: one or more = signs
+    /// Example: Title\n=====
     static let setextH1Pattern = #"^=+\s*$"#
+
+    /// Matches setext H2 underline: three or more - signs
+    /// Example: Subtitle\n-------
+    /// Note: Must be 3+ to distinguish from horizontal rule in some contexts
     static let setextH2Pattern = #"^-{3,}\s*$"#
 }
