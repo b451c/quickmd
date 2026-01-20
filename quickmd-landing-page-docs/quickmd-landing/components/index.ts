@@ -1,9 +1,0 @@
-export { Button } from "./Button";
-export { FeatureCard } from "./FeatureCard";
-export { AppStoreBadge } from "./AppStoreBadge";
-export { Header } from "./Header";
-export { Hero } from "./Hero";
-export { Features } from "./Features";
-export { Showcase } from "./Showcase";
-export { CTA } from "./CTA";
-export { Footer } from "./Footer";
