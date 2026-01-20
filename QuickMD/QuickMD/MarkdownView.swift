@@ -110,6 +110,7 @@ struct TipJarButton: View {
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+        .focusable(false)
         .foregroundColor(.pink)
         .opacity(isHovered ? 1.0 : 0.5)
         .animation(.easeInOut(duration: 0.2), value: isHovered)

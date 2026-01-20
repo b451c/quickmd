@@ -88,18 +88,6 @@ struct PrintableTableView: View {
     private var columnCount: Int { headers.count }
     private let borderColor = Color.gray.opacity(0.3)
 
-    private func verticalDividers() -> some View {
-        GeometryReader { geo in
-            let cellWidth = geo.size.width / CGFloat(columnCount)
-            ForEach(1..<columnCount, id: \.self) { i in
-                Rectangle()
-                    .fill(borderColor)
-                    .frame(width: 1, height: geo.size.height)
-                    .position(x: cellWidth * CGFloat(i), y: geo.size.height / 2)
-            }
-        }
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             // Header row
@@ -112,10 +100,13 @@ struct PrintableTableView: View {
                         .frame(maxWidth: .infinity, alignment: alignmentFor(index))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 6)
+
+                    if index < columnCount - 1 {
+                        Rectangle().fill(borderColor).frame(width: 1)
+                    }
                 }
             }
             .background(Color.gray.opacity(0.15))
-            .overlay(verticalDividers())
 
             // Header separator
             Rectangle().fill(borderColor).frame(height: 1)
@@ -132,9 +123,12 @@ struct PrintableTableView: View {
                             .frame(maxWidth: .infinity, alignment: alignmentFor(colIndex))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
+
+                        if colIndex < columnCount - 1 {
+                            Rectangle().fill(borderColor).frame(width: 1)
+                        }
                     }
                 }
-                .overlay(verticalDividers())
 
                 if rowIndex < rows.count - 1 {
                     Rectangle().fill(borderColor).frame(height: 1)
