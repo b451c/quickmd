@@ -75,4 +75,17 @@ struct MarkdownTheme {
     static let horizontalRulePattern = #"^(\*{3,}|-{3,}|_{3,})\s*$"#
     static let imagePattern = #"^!\[(.*?)\]\((.*?)\)\s*$"#
     static let taskListPattern = #"^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$"#
+
+    // MARK: - Escape Characters
+
+    static let escapableChars: Set<Character> = ["\\", "`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", ".", "!", "|"]
+
+    // MARK: - URL Autolinking
+
+    static let autolinkPattern = #"https?://[^\s<>\[\]()\"']+"#
+
+    // MARK: - Setext Headers
+
+    static let setextH1Pattern = #"^=+\s*$"#
+    static let setextH2Pattern = #"^-{3,}\s*$"#
 }

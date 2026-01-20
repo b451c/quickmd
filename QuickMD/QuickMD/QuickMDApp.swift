@@ -5,11 +5,16 @@ import UniformTypeIdentifiers
 struct QuickMDApp: App {
     var body: some Scene {
         DocumentGroup(viewing: MarkdownDocument.self) { file in
-            MarkdownView(document: file.document)
+            MarkdownView(document: file.document, documentURL: file.fileURL)
         }
         .commands {
             CommandGroup(replacing: .newItem) { }
             CommandGroup(replacing: .saveItem) { }
+            CommandGroup(after: .saveItem) {
+                Divider()
+                ExportPDFCommand()
+                PrintCommand()
+            }
             CommandGroup(replacing: .help) {
                 Button("QuickMD Help") {
                     NSWorkspace.shared.open(URL(string: "https://github.com/b451c/quickmd")!)

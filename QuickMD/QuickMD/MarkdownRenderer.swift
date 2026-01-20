@@ -4,6 +4,10 @@ import SwiftUI
 struct MarkdownRenderer {
     let theme: MarkdownTheme
 
+    // Static precompiled regex for task list parsing (avoid recompilation per line)
+    private static let taskListRegex = try! NSRegularExpression(pattern: MarkdownTheme.taskListPattern)
+    private static let autolinkRegex = try! NSRegularExpression(pattern: MarkdownTheme.autolinkPattern)
+
     init(colorScheme: ColorScheme) {
         self.theme = MarkdownTheme(colorScheme: colorScheme)
     }
@@ -117,10 +121,9 @@ struct MarkdownRenderer {
     }
 
     private func parseTaskList(_ line: String) -> (content: String, indent: Int, checked: Bool)? {
-        guard let regex = try? NSRegularExpression(pattern: MarkdownTheme.taskListPattern) else { return nil }
         let nsRange = NSRange(line.startIndex..., in: line)
 
-        guard let match = regex.firstMatch(in: line, range: nsRange),
+        guard let match = Self.taskListRegex.firstMatch(in: line, range: nsRange),
               let indentRange = Range(match.range(at: 1), in: line),
               let checkRange = Range(match.range(at: 2), in: line),
               let contentRange = Range(match.range(at: 3), in: line) else { return nil }
@@ -141,28 +144,51 @@ struct MarkdownRenderer {
 
     // MARK: - Inline Formatting (refactored into smaller methods)
 
+    /// Public method for rendering inline formatting (used by TableBlockView)
+    func renderInline(_ text: String) -> AttributedString {
+        renderInlineFormatting(text)
+    }
+
     private func renderInlineFormatting(_ text: String) -> AttributedString {
         var result = AttributedString()
         var remaining = text[...]
+        var plainTextBuffer = ""
+
+        // Helper to flush buffered plain text
+        func flushPlainText() {
+            guard !plainTextBuffer.isEmpty else { return }
+            var attr = AttributedString(plainTextBuffer)
+            attr.font = .system(size: 14)
+            attr.foregroundColor = theme.textColor
+            result.append(attr)
+            plainTextBuffer = ""
+        }
 
         while !remaining.isEmpty {
-            // Try each inline format in order (bold+italic first to catch ***)
-            if let (attr, newRemaining) = tryParseInlineCode(&remaining) ??
-                                          tryParseBoldItalic(&remaining) ??
-                                          tryParseBold(&remaining) ??
-                                          tryParseItalic(&remaining) ??
-                                          tryParseStrikethrough(&remaining) ??
-                                          tryParseImage(&remaining) ??
-                                          tryParseLink(&remaining) {
+            // Try each inline format in order (escape first, then bold+italic to catch ***)
+            var parsed: (AttributedString, Substring)?
+
+            if parsed == nil { parsed = tryParseEscape(&remaining) }
+            if parsed == nil { parsed = tryParseInlineCode(&remaining) }
+            if parsed == nil { parsed = tryParseBoldItalic(&remaining) }
+            if parsed == nil { parsed = tryParseBold(&remaining) }
+            if parsed == nil { parsed = tryParseItalic(&remaining) }
+            if parsed == nil { parsed = tryParseStrikethrough(&remaining) }
+            if parsed == nil { parsed = tryParseImage(&remaining) }
+            if parsed == nil { parsed = tryParseLink(&remaining) }
+            if parsed == nil { parsed = tryParseAutolink(&remaining) }
+
+            if let (attr, newRemaining) = parsed {
+                flushPlainText()  // Flush buffer before formatted content
                 result.append(attr)
                 remaining = newRemaining
             } else {
-                // Regular character
-                result.append(makeChar(String(remaining.prefix(1))))
-                remaining = remaining.dropFirst()
+                // Buffer plain characters instead of creating AttributedString per char
+                plainTextBuffer.append(remaining.removeFirst())
             }
         }
 
+        flushPlainText()  // Flush any remaining plain text
         return result
     }
 
@@ -276,10 +302,35 @@ struct MarkdownRenderer {
         return (attr, remaining[remaining.index(after: closeParen)...])
     }
 
-    private func makeChar(_ char: String) -> AttributedString {
-        var attr = AttributedString(char)
+    private func tryParseEscape(_ remaining: inout Substring) -> (AttributedString, Substring)? {
+        guard remaining.hasPrefix("\\"), remaining.count >= 2 else { return nil }
+        let escaped = remaining[remaining.index(after: remaining.startIndex)]
+        guard MarkdownTheme.escapableChars.contains(escaped) else { return nil }
+
+        var attr = AttributedString(String(escaped))
         attr.font = .system(size: 14)
         attr.foregroundColor = theme.textColor
-        return attr
+        return (attr, remaining.dropFirst(2))
     }
+
+    private func tryParseAutolink(_ remaining: inout Substring) -> (AttributedString, Substring)? {
+        let str = String(remaining)
+        let nsRange = NSRange(str.startIndex..., in: str)
+
+        guard let match = Self.autolinkRegex.firstMatch(in: str, range: nsRange),
+              match.range.location == 0,
+              let range = Range(match.range, in: str) else { return nil }
+
+        let urlText = String(str[range])
+        var attr = AttributedString(urlText)
+        attr.font = .system(size: 14)
+        attr.foregroundColor = theme.linkColor
+        attr.underlineStyle = .single
+        if let url = URL(string: urlText) {
+            attr.link = url
+        }
+
+        return (attr, remaining.dropFirst(urlText.count))
+    }
+
 }

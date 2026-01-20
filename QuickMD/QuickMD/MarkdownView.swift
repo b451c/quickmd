@@ -4,14 +4,14 @@ import SwiftUI
 
 enum MarkdownBlock: Identifiable {
     case text(AttributedString)
-    case table(headers: [String], rows: [[String]])
+    case table(headers: [String], rows: [[String]], alignments: [TextAlignment])
     case codeBlock(code: String, language: String)
     case image(url: String, alt: String)
 
     var id: String {
         switch self {
         case .text(let str): return "text-\(str.hashValue)"
-        case .table(let h, _): return "table-\(h.joined())"
+        case .table(let h, _, _): return "table-\(h.joined())"
         case .codeBlock(let c, _): return "code-\(c.hashValue)"
         case .image(let url, _): return "image-\(url.hashValue)"
         }
@@ -22,6 +22,7 @@ enum MarkdownBlock: Identifiable {
 
 struct MarkdownView: View {
     let document: MarkdownDocument
+    let documentURL: URL?
     @Environment(\.colorScheme) var colorScheme
     @State private var cachedBlocks: [MarkdownBlock] = []
 
@@ -32,24 +33,28 @@ struct MarkdownView: View {
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
+                LazyVStack(alignment: .leading, spacing: 8) {
                     ForEach(cachedBlocks) { block in
                         switch block {
                         case .text(let attributedString):
                             Text(attributedString)
                                 .textSelection(.enabled)
+                                .id(block.id)
 
-                        case .table(let headers, let rows):
-                            TableBlockView(headers: headers, rows: rows, theme: theme)
+                        case .table(let headers, let rows, let alignments):
+                            TableBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme)
                                 .padding(.vertical, 8)
+                                .id(block.id)
 
                         case .codeBlock(let code, let language):
                             CodeBlockView(code: code, language: language, theme: theme)
                                 .padding(.vertical, 4)
+                                .id(block.id)
 
                         case .image(let url, let alt):
-                            ImageBlockView(url: url, alt: alt, theme: theme)
+                            ImageBlockView(url: url, alt: alt, theme: theme, documentURL: documentURL)
                                 .padding(.vertical, 8)
+                                .id(block.id)
                         }
                     }
                 }
@@ -70,8 +75,11 @@ struct MarkdownView: View {
         }
         .background(theme.backgroundColor)
         .frame(minWidth: 400, minHeight: 300)
-        .task(id: document.text + "\(colorScheme)") {
+        .task(id: document.text.hashValue ^ colorScheme.hashValue) {
             cachedBlocks = MarkdownBlockParser(colorScheme: colorScheme).parse(document.text)
+            // Update shared state for export/print menu commands
+            ExportStateManager.shared.currentBlocks = cachedBlocks
+            ExportStateManager.shared.currentDocumentText = document.text
         }
     }
 }
@@ -168,54 +176,88 @@ struct SupportButton: View {
 struct TableBlockView: View {
     let headers: [String]
     let rows: [[String]]
+    let alignments: [TextAlignment]
     let theme: MarkdownTheme
+
+    private var renderer: MarkdownRenderer {
+        MarkdownRenderer(colorScheme: theme.colorScheme)
+    }
+
+    private func alignmentFor(_ index: Int) -> Alignment {
+        guard index < alignments.count else { return .leading }
+        switch alignments[index] {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        @unknown default: return .leading
+        }
+    }
+
+    private func textAlignmentFor(_ index: Int) -> TextAlignment {
+        guard index < alignments.count else { return .leading }
+        return alignments[index]
+    }
+
+    private var columnCount: Int { headers.count }
+
+    // Overlay for vertical dividers on a row
+    private func verticalDividers() -> some View {
+        GeometryReader { geo in
+            let cellWidth = geo.size.width / CGFloat(columnCount)
+            ForEach(1..<columnCount, id: \.self) { i in
+                Rectangle()
+                    .fill(theme.borderColor)
+                    .frame(width: 1, height: geo.size.height)
+                    .position(x: cellWidth * CGFloat(i), y: geo.size.height / 2)
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             // Header row
             HStack(spacing: 0) {
-                ForEach(Array(headers.enumerated()), id: \.offset) { index, header in
-                    Text(header)
+                ForEach(0..<columnCount, id: \.self) { index in
+                    Text(renderer.renderInline(headers[index]))
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(theme.textColor)
-                        .frame(minWidth: 80, maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(textAlignmentFor(index))
+                        .frame(maxWidth: .infinity, alignment: alignmentFor(index))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(theme.headerBackgroundColor)
-
-                    if index < headers.count - 1 {
-                        Rectangle().fill(theme.borderColor).frame(width: 1)
-                    }
                 }
             }
             .background(theme.headerBackgroundColor)
+            .overlay(verticalDividers())
 
+            // Header separator
             Rectangle().fill(theme.borderColor).frame(height: 1)
 
             // Data rows
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
                 HStack(spacing: 0) {
-                    ForEach(Array(row.enumerated()), id: \.offset) { colIndex, cell in
-                        Text(cell)
+                    ForEach(0..<columnCount, id: \.self) { colIndex in
+                        let cell = colIndex < row.count ? row[colIndex] : ""
+                        Text(renderer.renderInline(cell))
                             .font(.system(size: 13))
                             .foregroundColor(theme.textColor)
-                            .frame(minWidth: 80, maxWidth: .infinity, alignment: .leading)
+                            .multilineTextAlignment(textAlignmentFor(colIndex))
+                            .frame(maxWidth: .infinity, alignment: alignmentFor(colIndex))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-
-                        if colIndex < row.count - 1 {
-                            Rectangle().fill(theme.borderColor).frame(width: 1)
-                        }
                     }
                 }
+                .overlay(verticalDividers())
 
+                // Row separator (except for last row)
                 if rowIndex < rows.count - 1 {
                     Rectangle().fill(theme.borderColor).frame(height: 1)
                 }
             }
         }
-        .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.borderColor, lineWidth: 1))
+        .background(theme.backgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.borderColor, lineWidth: 1))
     }
 }
 
@@ -225,6 +267,13 @@ struct CodeBlockView: View {
     let code: String
     let language: String
     let theme: MarkdownTheme
+
+    // Static precompiled regex patterns (compiled once, reused for all lines)
+    private static let commentRegex = try! NSRegularExpression(pattern: #"(//.*|#.*|--.*)"#)
+    private static let stringRegex = try! NSRegularExpression(pattern: #"\"[^\"]*\"|'[^']*'"#)
+    private static let numberRegex = try! NSRegularExpression(pattern: #"\b\d+\.?\d*\b"#)
+    private static let keywordRegex = try! NSRegularExpression(pattern: #"\b(func|function|def|class|struct|enum|let|var|const|if|else|for|while|return|import|from|pub|fn|async|await|try|catch|throw|new|self|this|nil|null|true|false|None|True|False)\b"#)
+    private static let typeRegex = try! NSRegularExpression(pattern: #"\b[A-Z][a-zA-Z0-9]*\b"#)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -264,37 +313,31 @@ struct CodeBlockView: View {
     private func highlightLine(_ line: String) -> AttributedString {
         var result = AttributedString(line)
         result.foregroundColor = theme.textColor
+        let nsRange = NSRange(line.startIndex..., in: line)
 
-        // Comments
-        if let commentRange = findPattern(in: line, pattern: #"(//.*|#.*|--.*)"#) {
-            applyColor(to: &result, range: commentRange, in: line, color: theme.commentColor)
+        // Comments - if found, return early (entire line is comment-colored)
+        if let match = Self.commentRegex.firstMatch(in: line, range: nsRange),
+           let range = Range(match.range, in: line) {
+            applyColor(to: &result, range: range, in: line, color: theme.commentColor)
             return result
         }
 
         // Strings
-        applyPatternColor(to: &result, in: line, pattern: #"\"[^\"]*\"|'[^']*'"#, color: theme.stringColor)
+        applyRegexColor(to: &result, in: line, regex: Self.stringRegex, nsRange: nsRange, color: theme.stringColor)
 
         // Numbers
-        applyPatternColor(to: &result, in: line, pattern: #"\b\d+\.?\d*\b"#, color: theme.numberColor)
+        applyRegexColor(to: &result, in: line, regex: Self.numberRegex, nsRange: nsRange, color: theme.numberColor)
 
-        // Keywords (common across languages)
-        let keywords = #"\b(func|function|def|class|struct|enum|let|var|const|if|else|for|while|return|import|from|pub|fn|async|await|try|catch|throw|new|self|this|nil|null|true|false|None|True|False)\b"#
-        applyPatternColor(to: &result, in: line, pattern: keywords, color: theme.keywordColor)
+        // Keywords
+        applyRegexColor(to: &result, in: line, regex: Self.keywordRegex, nsRange: nsRange, color: theme.keywordColor)
 
         // Types (capitalized words)
-        applyPatternColor(to: &result, in: line, pattern: #"\b[A-Z][a-zA-Z0-9]*\b"#, color: theme.typeColor)
+        applyRegexColor(to: &result, in: line, regex: Self.typeRegex, nsRange: nsRange, color: theme.typeColor)
 
         return result
     }
 
-    private func findPattern(in text: String, pattern: String) -> Range<String.Index>? {
-        text.range(of: pattern, options: .regularExpression)
-    }
-
-    private func applyPatternColor(to result: inout AttributedString, in line: String, pattern: String, color: Color) {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
-        let nsRange = NSRange(line.startIndex..., in: line)
-
+    private func applyRegexColor(to result: inout AttributedString, in line: String, regex: NSRegularExpression, nsRange: NSRange, color: Color) {
         for match in regex.matches(in: line, range: nsRange) {
             if let range = Range(match.range, in: line) {
                 applyColor(to: &result, range: range, in: line, color: color)
@@ -303,23 +346,18 @@ struct CodeBlockView: View {
     }
 
     private func applyColor(to result: inout AttributedString, range: Range<String.Index>, in line: String, color: Color) {
-        let start = line.distance(from: line.startIndex, to: range.lowerBound)
-        let length = line.distance(from: range.lowerBound, to: range.upperBound)
+        // O(1) index calculation using direct offset computation
+        let startOffset = line.distance(from: line.startIndex, to: range.lowerBound)
+        let endOffset = line.distance(from: line.startIndex, to: range.upperBound)
 
-        var currentIndex = result.startIndex
-        for _ in 0..<start {
-            guard currentIndex < result.endIndex else { return }
-            currentIndex = result.index(afterCharacter: currentIndex)
-        }
+        let characters = result.characters
+        guard startOffset < characters.count, endOffset <= characters.count else { return }
 
-        var endIndex = currentIndex
-        for _ in 0..<length {
-            guard endIndex < result.endIndex else { break }
-            endIndex = result.index(afterCharacter: endIndex)
-        }
+        let attrStart = characters.index(characters.startIndex, offsetBy: startOffset)
+        let attrEnd = characters.index(characters.startIndex, offsetBy: endOffset)
 
-        if currentIndex < endIndex {
-            result[currentIndex..<endIndex].foregroundColor = color
+        if attrStart < attrEnd {
+            result[attrStart..<attrEnd].foregroundColor = color
         }
     }
 }
@@ -330,6 +368,7 @@ struct ImageBlockView: View {
     let url: String
     let alt: String
     let theme: MarkdownTheme
+    let documentURL: URL?
 
     var body: some View {
         Group {
@@ -371,8 +410,10 @@ struct ImageBlockView: View {
             return URL(string: url)
         } else if url.hasPrefix("/") {
             return URL(fileURLWithPath: url)
+        } else if let docURL = documentURL {
+            // Relative path - resolve relative to document directory
+            return docURL.deletingLastPathComponent().appendingPathComponent(url)
         } else {
-            // Relative path - could be expanded with document URL context
             return URL(string: url)
         }
     }
@@ -429,14 +470,35 @@ struct MarkdownBlockParser {
                 continue
             }
 
-            // Table detection
-            if line.contains("|") && !line.trimmingCharacters(in: .whitespaces).isEmpty {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
+            // Setext headers (underlined headers)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if i + 1 < lines.count && !trimmed.isEmpty && !trimmed.contains("|") {
+                let nextLine = lines[i + 1].trimmingCharacters(in: .whitespaces)
 
+                if nextLine.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil {
+                    flushTextBuffer(&textBuffer, to: &blocks)
+                    blocks.append(.text(renderSetextHeader(trimmed, level: 1)))
+                    i += 2
+                    continue
+                }
+
+                if nextLine.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil &&
+                   !isTableSeparator(nextLine) {
+                    flushTextBuffer(&textBuffer, to: &blocks)
+                    blocks.append(.text(renderSetextHeader(trimmed, level: 2)))
+                    i += 2
+                    continue
+                }
+            }
+
+            // Table detection
+            if line.contains("|") && !trimmed.isEmpty {
                 if !isTableSeparator(trimmed) && i + 1 < lines.count && isTableSeparator(lines[i + 1]) {
                     flushTextBuffer(&textBuffer, to: &blocks)
 
                     let headers = parseTableRow(line)
+                    let columnCount = headers.count
+                    var alignments = parseTableAlignments(lines[i + 1])
                     var rows: [[String]] = []
                     i += 2 // Skip header and separator
 
@@ -445,7 +507,11 @@ struct MarkdownBlockParser {
                         i += 1
                     }
 
-                    blocks.append(.table(headers: headers, rows: rows))
+                    // Normalize: ensure all rows and alignments match column count
+                    alignments = normalizeArray(alignments, to: columnCount, default: .leading)
+                    rows = rows.map { normalizeArray($0, to: columnCount, default: "") }
+
+                    blocks.append(.table(headers: headers, rows: rows, alignments: alignments))
                     continue
                 }
             }
@@ -484,11 +550,38 @@ struct MarkdownBlockParser {
         return trimmed.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
+    private func parseTableAlignments(_ separatorLine: String) -> [TextAlignment] {
+        let cells = parseTableRow(separatorLine)
+        return cells.map { cell in
+            let t = cell.trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            let hasLeft = t.hasPrefix(":")
+            let hasRight = t.hasSuffix(":")
+            if hasLeft && hasRight { return .center }
+            if hasRight { return .trailing }
+            return .leading
+        }
+    }
+
+    /// Normalize array to exact count - pad with default or trim excess
+    private func normalizeArray<T>(_ array: [T], to count: Int, default defaultValue: T) -> [T] {
+        if array.count == count { return array }
+        if array.count > count { return Array(array.prefix(count)) }
+        return array + Array(repeating: defaultValue, count: count - array.count)
+    }
+
     private func flushTextBuffer(_ buffer: inout [String], to blocks: inout [MarkdownBlock]) {
         guard !buffer.isEmpty else { return }
         let renderer = MarkdownRenderer(colorScheme: colorScheme)
         blocks.append(.text(renderer.render(buffer.joined(separator: "\n"))))
         buffer = []
+    }
+
+    private func renderSetextHeader(_ text: String, level: Int) -> AttributedString {
+        let renderer = MarkdownRenderer(colorScheme: colorScheme)
+        var attr = renderer.renderInline(text)
+        attr.font = .system(size: level == 1 ? 32 : 26, weight: .bold)
+        return attr
     }
 }
 
@@ -543,5 +636,5 @@ struct MarkdownBlockParser {
     ![SwiftUI Logo](https://developer.apple.com/assets/elements/icons/swiftui/swiftui-96x96_2x.png)
 
     [Visit Apple](https://apple.com)
-    """))
+    """), documentURL: nil)
 }
