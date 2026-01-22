@@ -1,8 +1,23 @@
 import SwiftUI
 
 /// Shared theme for consistent colors across all markdown views
+/// Use `MarkdownTheme.cached(for:)` to get a cached instance instead of creating new ones
 struct MarkdownTheme {
     let colorScheme: ColorScheme
+
+    // MARK: - Cached Instances
+
+    /// Cached light theme instance - avoids repeated allocations
+    private static let lightTheme = MarkdownTheme(colorScheme: .light)
+
+    /// Cached dark theme instance - avoids repeated allocations
+    private static let darkTheme = MarkdownTheme(colorScheme: .dark)
+
+    /// Returns cached theme instance for the given color scheme
+    /// Prefer this over creating new MarkdownTheme instances directly
+    static func cached(for colorScheme: ColorScheme) -> MarkdownTheme {
+        colorScheme == .dark ? darkTheme : lightTheme
+    }
 
     // MARK: - Text Colors
 

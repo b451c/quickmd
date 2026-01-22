@@ -12,6 +12,7 @@ struct MarkdownBlockParser {
     /// - Returns: Array of parsed blocks ready for rendering
     func parse(_ markdown: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
+        var blockIndex = 0  // Stable index for block identity
         let lines = markdown.components(separatedBy: "\n")
         var i = 0
         var textBuffer: [String] = []
@@ -21,7 +22,7 @@ struct MarkdownBlockParser {
 
             // Fenced code block
             if line.hasPrefix("```") {
-                flushTextBuffer(&textBuffer, to: &blocks)
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
                 let language = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                 var codeLines: [String] = []
                 i += 1
@@ -31,15 +32,17 @@ struct MarkdownBlockParser {
                     i += 1
                 }
 
-                blocks.append(.codeBlock(code: codeLines.joined(separator: "\n"), language: language))
+                blocks.append(.codeBlock(index: blockIndex, code: codeLines.joined(separator: "\n"), language: language))
+                blockIndex += 1
                 i += 1
                 continue
             }
 
             // Standalone image (on its own line)
             if let imageMatch = parseStandaloneImage(line) {
-                flushTextBuffer(&textBuffer, to: &blocks)
-                blocks.append(.image(url: imageMatch.url, alt: imageMatch.alt))
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
+                blocks.append(.image(index: blockIndex, url: imageMatch.url, alt: imageMatch.alt))
+                blockIndex += 1
                 i += 1
                 continue
             }
@@ -50,16 +53,18 @@ struct MarkdownBlockParser {
                 let nextLine = lines[i + 1].trimmingCharacters(in: .whitespaces)
 
                 if nextLine.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil {
-                    flushTextBuffer(&textBuffer, to: &blocks)
-                    blocks.append(.text(renderSetextHeader(trimmed, level: 1)))
+                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
+                    blocks.append(.text(index: blockIndex, renderSetextHeader(trimmed, level: 1)))
+                    blockIndex += 1
                     i += 2
                     continue
                 }
 
                 if nextLine.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil &&
                    !isTableSeparator(nextLine) {
-                    flushTextBuffer(&textBuffer, to: &blocks)
-                    blocks.append(.text(renderSetextHeader(trimmed, level: 2)))
+                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
+                    blocks.append(.text(index: blockIndex, renderSetextHeader(trimmed, level: 2)))
+                    blockIndex += 1
                     i += 2
                     continue
                 }
@@ -68,7 +73,7 @@ struct MarkdownBlockParser {
             // Table detection
             if line.contains("|") && !trimmed.isEmpty {
                 if !isTableSeparator(trimmed) && i + 1 < lines.count && isTableSeparator(lines[i + 1]) {
-                    flushTextBuffer(&textBuffer, to: &blocks)
+                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
 
                     let headers = parseTableRow(line)
                     let columnCount = headers.count
@@ -85,7 +90,8 @@ struct MarkdownBlockParser {
                     alignments = normalizeArray(alignments, to: columnCount, default: .leading)
                     rows = rows.map { normalizeArray($0, to: columnCount, default: "") }
 
-                    blocks.append(.table(headers: headers, rows: rows, alignments: alignments))
+                    blocks.append(.table(index: blockIndex, headers: headers, rows: rows, alignments: alignments))
+                    blockIndex += 1
                     continue
                 }
             }
@@ -94,7 +100,7 @@ struct MarkdownBlockParser {
             i += 1
         }
 
-        flushTextBuffer(&textBuffer, to: &blocks)
+        flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
         return blocks
     }
 
@@ -152,10 +158,11 @@ struct MarkdownBlockParser {
 
     // MARK: - Text Buffer
 
-    private func flushTextBuffer(_ buffer: inout [String], to blocks: inout [MarkdownBlock]) {
+    private func flushTextBuffer(_ buffer: inout [String], to blocks: inout [MarkdownBlock], index: inout Int) {
         guard !buffer.isEmpty else { return }
         let renderer = MarkdownRenderer(colorScheme: colorScheme)
-        blocks.append(.text(renderer.render(buffer.joined(separator: "\n"))))
+        blocks.append(.text(index: index, renderer.render(buffer.joined(separator: "\n"))))
+        index += 1
         buffer = []
     }
 

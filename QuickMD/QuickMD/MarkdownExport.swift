@@ -34,20 +34,20 @@ struct MarkdownPrintableView: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(lightBlocks) { block in
                 switch block {
-                case .text(let attributedString):
+                case .text(_, let attributedString):
                     // Force black text color
                     Text(attributedString)
                         .foregroundColor(.black)
 
-                case .table(let headers, let rows, let alignments):
+                case .table(_, let headers, let rows, let alignments):
                     PrintableTableView(headers: headers, rows: rows, alignments: alignments)
                         .padding(.vertical, 8)
 
-                case .codeBlock(let code, let language):
+                case .codeBlock(_, let code, let language):
                     PrintableCodeBlockView(code: code, language: language)
                         .padding(.vertical, 4)
 
-                case .image(let url, let alt):
+                case .image(_, let url, let alt):
                     PrintableImageView(url: url, alt: alt)
                         .padding(.vertical, 8)
                 }
@@ -68,12 +68,18 @@ struct PrintableTableView: View, TableAlignmentProvider {
     let rows: [[String]]
     let alignments: [TextAlignment]
 
-    private var renderer: MarkdownRenderer {
-        MarkdownRenderer(colorScheme: .light)
-    }
+    /// Cached renderer instance - created once on init
+    private let renderer: MarkdownRenderer
 
     private var columnCount: Int { headers.count }
     private let borderColor = Color.gray.opacity(0.3)
+
+    init(headers: [String], rows: [[String]], alignments: [TextAlignment]) {
+        self.headers = headers
+        self.rows = rows
+        self.alignments = alignments
+        self.renderer = MarkdownRenderer(colorScheme: .light)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
