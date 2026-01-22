@@ -26,6 +26,15 @@ struct CodeBlockView: View {
     /// Matches type names (PascalCase identifiers)
     private static let typeRegex = try! NSRegularExpression(pattern: #"\b[A-Z][a-zA-Z0-9]*\b"#)
 
+    // MARK: - Cached Highlighted Code
+
+    /// Cached highlighted code - computed once on init for typical blocks
+    /// For very large blocks (500+ lines), computed async to avoid blocking
+    @State private var cachedHighlightedCode: AttributedString?
+
+    /// Threshold for async highlighting (line count)
+    private static let asyncThreshold = 500
+
     // MARK: - Body
 
     var body: some View {
@@ -39,7 +48,7 @@ struct CodeBlockView: View {
                     .padding(.bottom, 4)
             }
 
-            Text(highlightedCode)
+            Text(displayedCode)
                 .font(.system(size: 13, design: .monospaced))
                 .textSelection(.enabled)
                 .padding(.horizontal, 12)
@@ -48,11 +57,52 @@ struct CodeBlockView: View {
         }
         .background(theme.codeBackgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: 6))
+        .task(id: cacheKey) {
+            // Only compute async for large blocks that weren't pre-computed
+            if cachedHighlightedCode == nil && isLargeBlock {
+                cachedHighlightedCode = computeHighlightedCode()
+            }
+        }
+        .onAppear {
+            // Pre-compute synchronously for small blocks (no flicker)
+            if cachedHighlightedCode == nil && !isLargeBlock {
+                cachedHighlightedCode = computeHighlightedCode()
+            }
+        }
+    }
+
+    // MARK: - Display Logic
+
+    /// Returns cached code or computes inline for first render (small blocks only)
+    private var displayedCode: AttributedString {
+        if let cached = cachedHighlightedCode {
+            return cached
+        }
+        // For small blocks, compute synchronously to avoid flicker
+        // For large blocks, show plain text until async completes
+        return isLargeBlock ? plainCode : computeHighlightedCode()
+    }
+
+    /// Plain code without highlighting (fallback for large blocks during async load)
+    private var plainCode: AttributedString {
+        var attr = AttributedString(code)
+        attr.foregroundColor = theme.textColor
+        return attr
+    }
+
+    /// Check if block exceeds async threshold
+    private var isLargeBlock: Bool {
+        code.components(separatedBy: "\n").count > Self.asyncThreshold
+    }
+
+    /// Cache key for .task invalidation
+    private var cacheKey: Int {
+        code.hashValue ^ theme.colorScheme.hashValue
     }
 
     // MARK: - Syntax Highlighting
 
-    private var highlightedCode: AttributedString {
+    private func computeHighlightedCode() -> AttributedString {
         var result = AttributedString()
         let lines = code.components(separatedBy: "\n")
 

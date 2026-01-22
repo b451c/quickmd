@@ -2,7 +2,7 @@ import SwiftUI
 import StoreKit
 
 struct TipJarView: View {
-    @StateObject private var tipManager = TipJarManager.shared
+    @ObservedObject private var tipManager = TipJarManager.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
 

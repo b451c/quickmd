@@ -4,12 +4,13 @@ import SwiftUI
 struct MarkdownRenderer {
     let theme: MarkdownTheme
 
-    // Static precompiled regex for task list parsing (avoid recompilation per line)
+    // Static precompiled regex for parsing (avoid recompilation per line)
     private static let taskListRegex = try! NSRegularExpression(pattern: MarkdownTheme.taskListPattern)
     private static let autolinkRegex = try! NSRegularExpression(pattern: MarkdownTheme.autolinkPattern)
+    private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
 
     init(colorScheme: ColorScheme) {
-        self.theme = MarkdownTheme(colorScheme: colorScheme)
+        self.theme = MarkdownTheme.cached(for: colorScheme)
     }
 
     // MARK: - Main Render
@@ -30,12 +31,14 @@ struct MarkdownRenderer {
     private func renderLine(_ line: String) -> AttributedString {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
 
-        // Header (using regex instead of 6 if-else branches)
-        if line.range(of: MarkdownTheme.headerPattern, options: .regularExpression) != nil,
-           let hashEnd = line.firstIndex(of: " ") {
-            let level = line.distance(from: line.startIndex, to: hashEnd)
-            let content = String(line[line.index(after: hashEnd)...]).trimmingCharacters(in: .whitespaces)
-            return renderHeader(content, level: min(level, 6))
+        // Header - extract hash count from regex group, not space position
+        let nsRange = NSRange(line.startIndex..., in: line)
+        if let match = Self.headerRegex.firstMatch(in: line, range: nsRange),
+           let hashRange = Range(match.range(at: 1), in: line),
+           let contentRange = Range(match.range(at: 2), in: line) {
+            let level = line[hashRange].count  // Count actual # characters
+            let content = String(line[contentRange]).trimmingCharacters(in: .whitespaces)
+            return renderHeader(content, level: min(max(level, 1), 6))
         }
 
         // Horizontal rule
@@ -43,9 +46,9 @@ struct MarkdownRenderer {
             return renderHorizontalRule()
         }
 
-        // Blockquote
-        if line.hasPrefix(">") {
-            return renderBlockquote(String(line.dropFirst()).trimmingCharacters(in: .whitespaces))
+        // Blockquote - trim before checking to handle indented blockquotes
+        if trimmed.hasPrefix(">") {
+            return renderBlockquote(String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces))
         }
 
         // Task list (must check before unordered list)
@@ -82,7 +85,9 @@ struct MarkdownRenderer {
     private func renderHeader(_ text: String, level: Int) -> AttributedString {
         var attr = renderInlineFormatting(text)
         let sizes: [CGFloat] = [32, 26, 22, 18, 16, 14]
-        attr.font = .system(size: sizes[level - 1], weight: .bold)
+        // Safety guard: ensure level is within bounds to prevent crash
+        let safeLevel = max(1, min(level, 6))
+        attr.font = .system(size: sizes[safeLevel - 1], weight: .bold)
         attr.foregroundColor = theme.textColor
         return attr
     }
@@ -237,9 +242,9 @@ struct MarkdownRenderer {
 
     private func tryParseItalic(_ remaining: inout Substring) -> (AttributedString, Substring)? {
         guard (remaining.hasPrefix("*") && !remaining.hasPrefix("**")) ||
-              (remaining.hasPrefix("_") && !remaining.hasPrefix("__")) else { return nil }
+              (remaining.hasPrefix("_") && !remaining.hasPrefix("__")),
+              let marker = remaining.first else { return nil }
 
-        let marker = remaining.first!
         let afterMarker = remaining.dropFirst()
         guard let endIndex = afterMarker.firstIndex(of: marker) else { return nil }
 
@@ -267,11 +272,13 @@ struct MarkdownRenderer {
     private func tryParseLink(_ remaining: inout Substring) -> (AttributedString, Substring)? {
         guard remaining.hasPrefix("["),
               let closeBracket = remaining.firstIndex(of: "]"),
-              remaining[remaining.index(after: closeBracket)...].hasPrefix("("),
-              let closeParen = remaining[remaining.index(after: closeBracket)...].firstIndex(of: ")") else { return nil }
+              let afterBracket = remaining.index(closeBracket, offsetBy: 1, limitedBy: remaining.endIndex),
+              remaining[afterBracket...].hasPrefix("("),
+              let closeParen = remaining[afterBracket...].firstIndex(of: ")") else { return nil }
 
         let linkText = String(remaining[remaining.index(after: remaining.startIndex)..<closeBracket])
-        let urlText = String(remaining[remaining.index(closeBracket, offsetBy: 2)..<closeParen])
+        guard let urlStart = remaining.index(closeBracket, offsetBy: 2, limitedBy: remaining.endIndex) else { return nil }
+        let urlText = String(remaining[urlStart..<closeParen])
 
         var attr = AttributedString(linkText)
         attr.font = .system(size: 14)

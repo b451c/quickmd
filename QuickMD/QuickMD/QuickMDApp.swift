@@ -1,6 +1,15 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+// MARK: - App URLs
+
+private enum AppURLs {
+    static let github = URL(string: "https://github.com/b451c/quickmd")!
+    static let website = URL(string: "https://qmd.app/")!
+    static let buyMeCoffee = URL(string: "https://buymeacoffee.com/bsroczynskh")!
+    static let kofi = URL(string: "https://ko-fi.com/quickmd")!
+}
+
 @main
 struct QuickMDApp: App {
     var body: some Scene {
@@ -17,22 +26,22 @@ struct QuickMDApp: App {
             }
             CommandGroup(replacing: .help) {
                 Button("QuickMD Help") {
-                    NSWorkspace.shared.open(URL(string: "https://github.com/b451c/quickmd")!)
+                    NSWorkspace.shared.open(AppURLs.github)
                 }
                 Divider()
                 #if APPSTORE
                 TipJarMenuButton()
                 #else
                 Button("Visit qmd.app") {
-                    NSWorkspace.shared.open(URL(string: "https://qmd.app/")!)
+                    NSWorkspace.shared.open(AppURLs.website)
                 }
                 Divider()
                 Menu("Support QuickMD ☕") {
                     Button("Buy Me a Coffee") {
-                        NSWorkspace.shared.open(URL(string: "https://buymeacoffee.com/bsroczynskh")!)
+                        NSWorkspace.shared.open(AppURLs.buyMeCoffee)
                     }
                     Button("Ko-fi") {
-                        NSWorkspace.shared.open(URL(string: "https://ko-fi.com/quickmd")!)
+                        NSWorkspace.shared.open(AppURLs.kofi)
                     }
                 }
                 #endif

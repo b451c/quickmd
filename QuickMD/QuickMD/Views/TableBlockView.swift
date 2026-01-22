@@ -40,7 +40,8 @@ struct TableBlockView: View, TableAlignmentProvider {
     /// Cached renderer instance - created once on init, not on every body evaluation
     private let renderer: MarkdownRenderer
 
-    private var columnCount: Int { headers.count }
+    /// Stored column count - computed once on init for efficiency
+    private let columnCount: Int
 
     init(headers: [String], rows: [[String]], alignments: [TextAlignment], theme: MarkdownTheme) {
         self.headers = headers
@@ -48,6 +49,7 @@ struct TableBlockView: View, TableAlignmentProvider {
         self.alignments = alignments
         self.theme = theme
         self.renderer = MarkdownRenderer(colorScheme: theme.colorScheme)
+        self.columnCount = headers.count
     }
 
     // MARK: - Body

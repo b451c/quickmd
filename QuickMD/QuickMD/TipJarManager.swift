@@ -1,4 +1,5 @@
 import StoreKit
+import os
 
 @MainActor
 class TipJarManager: ObservableObject {
@@ -21,6 +22,8 @@ class TipJarManager: ObservableObject {
         "pl.falami.studio.QuickMD.tip.large"
     ]
 
+    private let logger = Logger(subsystem: "pl.falami.studio.QuickMD", category: "TipJar")
+
     private init() {}
 
     func loadProducts() async {
@@ -30,7 +33,7 @@ class TipJarManager: ObservableObject {
             let storeProducts = try await Product.products(for: productIDs)
             products = storeProducts.sorted { $0.price < $1.price }
         } catch {
-            print("Failed to load products: \(error)")
+            logger.error("Failed to load products: \(error.localizedDescription)")
             products = []
         }
 

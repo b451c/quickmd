@@ -90,6 +90,40 @@ markdown,viewer,md,reader,developer,code,documentation,readme,preview,syntax,hig
 
 ---
 
+## What's New (Version 1.2.1)
+
+```
+Performance & Quality Release
+
+• Faster document rendering with optimized caching
+• Improved syntax highlighting performance for code blocks
+• Reduced memory usage through smart resource management
+• Enhanced error handling for PDF export
+• Improved reliability across all features
+```
+
+## What's New (Version 1.2)
+
+```
+Export & Printing Update
+
+• Multi-page PDF export with proper pagination
+• Native print functionality
+• Enhanced syntax highlighting for 10+ languages
+• Performance improvements
+```
+
+## What's New (Version 1.1)
+
+```
+Tables & Task Lists Update
+
+• Table support with column alignment (left, center, right)
+• Task lists with interactive checkboxes
+• Setext-style headers support
+• Code quality improvements
+```
+
 ## What's New (Version 1.0)
 
 ```

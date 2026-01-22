@@ -22,12 +22,14 @@ class ExportStateManager: ObservableObject {
 // So we must explicitly set ALL colors, not rely on colorScheme
 
 struct MarkdownPrintableView: View {
-    let blocks: [MarkdownBlock]
     let documentText: String
 
-    // Re-parse with light theme for proper colors
-    private var lightBlocks: [MarkdownBlock] {
-        MarkdownBlockParser(colorScheme: .light).parse(documentText)
+    /// Parsed blocks with light theme - computed once on init
+    private let lightBlocks: [MarkdownBlock]
+
+    init(documentText: String) {
+        self.documentText = documentText
+        self.lightBlocks = MarkdownBlockParser(colorScheme: .light).parse(documentText)
     }
 
     var body: some View {
@@ -71,14 +73,18 @@ struct PrintableTableView: View, TableAlignmentProvider {
     /// Cached renderer instance - created once on init
     private let renderer: MarkdownRenderer
 
-    private var columnCount: Int { headers.count }
-    private let borderColor = Color.gray.opacity(0.3)
+    /// Cached theme instance for consistent colors
+    private let theme = MarkdownTheme.cached(for: .light)
+
+    /// Stored column count - computed once on init for efficiency
+    private let columnCount: Int
 
     init(headers: [String], rows: [[String]], alignments: [TextAlignment]) {
         self.headers = headers
         self.rows = rows
         self.alignments = alignments
         self.renderer = MarkdownRenderer(colorScheme: .light)
+        self.columnCount = headers.count
     }
 
     var body: some View {
@@ -95,14 +101,14 @@ struct PrintableTableView: View, TableAlignmentProvider {
                         .padding(.vertical, 6)
 
                     if index < columnCount - 1 {
-                        Rectangle().fill(borderColor).frame(width: 1)
+                        Rectangle().fill(theme.borderColor).frame(width: 1)
                     }
                 }
             }
-            .background(Color.gray.opacity(0.15))
+            .background(theme.headerBackgroundColor)
 
             // Header separator
-            Rectangle().fill(borderColor).frame(height: 1)
+            Rectangle().fill(theme.borderColor).frame(height: 1)
 
             // Data rows
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
@@ -118,19 +124,19 @@ struct PrintableTableView: View, TableAlignmentProvider {
                             .padding(.vertical, 4)
 
                         if colIndex < columnCount - 1 {
-                            Rectangle().fill(borderColor).frame(width: 1)
+                            Rectangle().fill(theme.borderColor).frame(width: 1)
                         }
                     }
                 }
 
                 if rowIndex < rows.count - 1 {
-                    Rectangle().fill(borderColor).frame(height: 1)
+                    Rectangle().fill(theme.borderColor).frame(height: 1)
                 }
             }
         }
         .background(Color.white)
         .clipShape(RoundedRectangle(cornerRadius: 4))
-        .overlay(RoundedRectangle(cornerRadius: 4).stroke(borderColor, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.borderColor, lineWidth: 1))
     }
 }
 
@@ -211,13 +217,9 @@ struct PrintableImageView: View {
     }
 
     private func loadImage(from url: URL) -> NSImage? {
-        if url.isFileURL {
-            return NSImage(contentsOf: url)
-        }
-        if let data = try? Data(contentsOf: url) {
-            return NSImage(data: data)
-        }
-        return nil
+        // Only load local file images - remote URLs would block main thread
+        guard url.isFileURL else { return nil }
+        return NSImage(contentsOf: url)
     }
 }
 
@@ -249,22 +251,22 @@ class PDFExportManager {
             guard response == .OK, let url = savePanel.url else { return }
 
             Task { @MainActor in
-                if let pdfData = Self.generateMultiPagePDF(documentText: documentText) {
-                    do {
-                        try pdfData.write(to: url)
-                    } catch {
-                        Self.showError("Failed to save PDF: \(error.localizedDescription)")
-                    }
+                guard let pdfData = Self.generateMultiPagePDF(documentText: documentText) else {
+                    Self.showError("Failed to generate PDF")
+                    return
+                }
+                do {
+                    try pdfData.write(to: url)
+                } catch {
+                    Self.showError("Failed to save PDF: \(error.localizedDescription)")
                 }
             }
         }
     }
 
     static func generateMultiPagePDF(documentText: String) -> Data? {
-        let blocks = MarkdownBlockParser(colorScheme: .light).parse(documentText)
-
         // Create view - simple, with explicit size
-        let printableView = MarkdownPrintableView(blocks: blocks, documentText: documentText)
+        let printableView = MarkdownPrintableView(documentText: documentText)
             .frame(width: contentWidth)
             .fixedSize(horizontal: false, vertical: true)
 

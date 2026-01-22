@@ -1,5 +1,15 @@
 import SwiftUI
 
+// MARK: - App URLs
+
+#if !APPSTORE
+private enum AppURLs {
+    static let website = URL(string: "https://qmd.app/")!
+    static let buyMeCoffee = URL(string: "https://buymeacoffee.com/bsroczynskh")!
+    static let kofi = URL(string: "https://ko-fi.com/quickmd")!
+}
+#endif
+
 // MARK: - Main View
 
 /// Main Markdown document view
@@ -113,18 +123,18 @@ struct SupportButton: View {
     var body: some View {
         Menu {
             Button {
-                NSWorkspace.shared.open(URL(string: "https://qmd.app/")!)
+                NSWorkspace.shared.open(AppURLs.website)
             } label: {
                 Label("Visit qmd.app", systemImage: "globe")
             }
             Divider()
             Button {
-                NSWorkspace.shared.open(URL(string: "https://buymeacoffee.com/bsroczynskh")!)
+                NSWorkspace.shared.open(AppURLs.buyMeCoffee)
             } label: {
                 Label("Buy Me a Coffee", systemImage: "cup.and.saucer.fill")
             }
             Button {
-                NSWorkspace.shared.open(URL(string: "https://ko-fi.com/quickmd")!)
+                NSWorkspace.shared.open(AppURLs.kofi)
             } label: {
                 Label("Ko-fi", systemImage: "heart.fill")
             }

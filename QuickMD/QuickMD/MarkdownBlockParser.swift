@@ -7,6 +7,17 @@ import SwiftUI
 struct MarkdownBlockParser {
     let colorScheme: ColorScheme
 
+    // Cached renderer instance - created once per parser, not per flushTextBuffer call
+    private let renderer: MarkdownRenderer
+
+    // Static precompiled regex (avoid recompilation per parse call)
+    private static let imageRegex = try! NSRegularExpression(pattern: MarkdownTheme.imagePattern)
+
+    init(colorScheme: ColorScheme) {
+        self.colorScheme = colorScheme
+        self.renderer = MarkdownRenderer(colorScheme: colorScheme)
+    }
+
     /// Parse markdown text into an array of MarkdownBlock elements
     /// - Parameter markdown: Raw markdown string
     /// - Returns: Array of parsed blocks ready for rendering
@@ -20,21 +31,26 @@ struct MarkdownBlockParser {
         while i < lines.count {
             let line = lines[i]
 
-            // Fenced code block
-            if line.hasPrefix("```") {
+            // Fenced code block - trim whitespace before checking for closing fence
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            if trimmedLine.hasPrefix("```") {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
-                let language = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                let language = String(trimmedLine.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                 var codeLines: [String] = []
                 i += 1
 
-                while i < lines.count && !lines[i].hasPrefix("```") {
+                // Check for closing fence with trimming to handle indented closing ```
+                while i < lines.count && !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
                     codeLines.append(lines[i])
                     i += 1
                 }
 
                 blocks.append(.codeBlock(index: blockIndex, code: codeLines.joined(separator: "\n"), language: language))
                 blockIndex += 1
-                i += 1
+                // Skip closing fence if it exists
+                if i < lines.count {
+                    i += 1
+                }
                 continue
             }
 
@@ -108,10 +124,9 @@ struct MarkdownBlockParser {
 
     private func parseStandaloneImage(_ line: String) -> (url: String, alt: String)? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard let regex = try? NSRegularExpression(pattern: MarkdownTheme.imagePattern) else { return nil }
         let nsRange = NSRange(trimmed.startIndex..., in: trimmed)
 
-        guard let match = regex.firstMatch(in: trimmed, range: nsRange),
+        guard let match = Self.imageRegex.firstMatch(in: trimmed, range: nsRange),
               let altRange = Range(match.range(at: 1), in: trimmed),
               let urlRange = Range(match.range(at: 2), in: trimmed) else { return nil }
 
@@ -127,11 +142,30 @@ struct MarkdownBlockParser {
     }
 
     /// Parse a table row into array of cell strings
+    /// Handles leading/trailing pipes and filters out empty cells from malformed rows
     private func parseTableRow(_ line: String) -> [String] {
-        var trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("|") { trimmed = String(trimmed.dropFirst()) }
-        if trimmed.hasSuffix("|") { trimmed = String(trimmed.dropLast()) }
-        return trimmed.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+        var trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Remove leading pipe if present
+        if trimmed.hasPrefix("|") {
+            trimmed = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
+        }
+
+        // Remove trailing pipe if present
+        if trimmed.hasSuffix("|") {
+            trimmed = String(trimmed.dropLast()).trimmingCharacters(in: .whitespaces)
+        }
+
+        // Split and trim each cell, filter out completely empty cells that result from trailing/leading pipes
+        let cells = trimmed.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+
+        // Only filter trailing empty cells (preserve intentional empty cells in middle)
+        var result = cells
+        while result.last?.isEmpty == true {
+            result.removeLast()
+        }
+
+        return result
     }
 
     /// Parse column alignments from separator row
@@ -160,7 +194,6 @@ struct MarkdownBlockParser {
 
     private func flushTextBuffer(_ buffer: inout [String], to blocks: inout [MarkdownBlock], index: inout Int) {
         guard !buffer.isEmpty else { return }
-        let renderer = MarkdownRenderer(colorScheme: colorScheme)
         blocks.append(.text(index: index, renderer.render(buffer.joined(separator: "\n"))))
         index += 1
         buffer = []
@@ -170,7 +203,6 @@ struct MarkdownBlockParser {
 
     /// Render setext-style header (underlined with === or ---)
     private func renderSetextHeader(_ text: String, level: Int) -> AttributedString {
-        let renderer = MarkdownRenderer(colorScheme: colorScheme)
         var attr = renderer.renderInline(text)
         attr.font = .system(size: level == 1 ? 32 : 26, weight: .bold)
         return attr
