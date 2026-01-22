@@ -4,18 +4,23 @@ import SwiftUI
 
 /// Represents different types of Markdown content blocks
 /// Used by MarkdownBlockParser to structure the document for rendering
+///
+/// Each block carries a stable `index` assigned during parsing to ensure
+/// consistent identity across re-renders and theme changes.
 enum MarkdownBlock: Identifiable {
-    case text(AttributedString)
-    case table(headers: [String], rows: [[String]], alignments: [TextAlignment])
-    case codeBlock(code: String, language: String)
-    case image(url: String, alt: String)
+    case text(index: Int, AttributedString)
+    case table(index: Int, headers: [String], rows: [[String]], alignments: [TextAlignment])
+    case codeBlock(index: Int, code: String, language: String)
+    case image(index: Int, url: String, alt: String)
 
+    /// Stable identifier based on block type and parse-time index
+    /// Using index ensures identity remains constant even when content hash changes
     var id: String {
         switch self {
-        case .text(let str): return "text-\(str.hashValue)"
-        case .table(let h, _, _): return "table-\(h.joined())"
-        case .codeBlock(let c, _): return "code-\(c.hashValue)"
-        case .image(let url, _): return "image-\(url.hashValue)"
+        case .text(let idx, _): return "text-\(idx)"
+        case .table(let idx, _, _, _): return "table-\(idx)"
+        case .codeBlock(let idx, _, _): return "code-\(idx)"
+        case .image(let idx, _, _): return "image-\(idx)"
         }
     }
 }

@@ -37,33 +37,24 @@ struct TableBlockView: View, TableAlignmentProvider {
     let alignments: [TextAlignment]
     let theme: MarkdownTheme
 
-    private var renderer: MarkdownRenderer {
-        MarkdownRenderer(colorScheme: theme.colorScheme)
-    }
+    /// Cached renderer instance - created once on init, not on every body evaluation
+    private let renderer: MarkdownRenderer
 
     private var columnCount: Int { headers.count }
 
-    // MARK: - Vertical Dividers
-
-    /// Overlay for vertical dividers using GeometryReader
-    /// Provides consistent column separators across all rows
-    private func verticalDividers() -> some View {
-        GeometryReader { geo in
-            let cellWidth = geo.size.width / CGFloat(columnCount)
-            ForEach(1..<columnCount, id: \.self) { i in
-                Rectangle()
-                    .fill(theme.borderColor)
-                    .frame(width: 1, height: geo.size.height)
-                    .position(x: cellWidth * CGFloat(i), y: geo.size.height / 2)
-            }
-        }
+    init(headers: [String], rows: [[String]], alignments: [TextAlignment], theme: MarkdownTheme) {
+        self.headers = headers
+        self.rows = rows
+        self.alignments = alignments
+        self.theme = theme
+        self.renderer = MarkdownRenderer(colorScheme: theme.colorScheme)
     }
 
     // MARK: - Body
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header row
+            // Header row with inline dividers (no GeometryReader)
             HStack(spacing: 0) {
                 ForEach(0..<columnCount, id: \.self) { index in
                     Text(renderer.renderInline(headers[index]))
@@ -73,15 +64,21 @@ struct TableBlockView: View, TableAlignmentProvider {
                         .frame(maxWidth: .infinity, alignment: alignmentFor(index))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
+
+                    // Inline vertical divider (except after last column)
+                    if index < columnCount - 1 {
+                        Rectangle()
+                            .fill(theme.borderColor)
+                            .frame(width: 1)
+                    }
                 }
             }
             .background(theme.headerBackgroundColor)
-            .overlay(verticalDividers())
 
             // Header separator
             Rectangle().fill(theme.borderColor).frame(height: 1)
 
-            // Data rows
+            // Data rows with inline dividers
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
                 HStack(spacing: 0) {
                     ForEach(0..<columnCount, id: \.self) { colIndex in
@@ -93,9 +90,15 @@ struct TableBlockView: View, TableAlignmentProvider {
                             .frame(maxWidth: .infinity, alignment: alignmentFor(colIndex))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
+
+                        // Inline vertical divider (except after last column)
+                        if colIndex < columnCount - 1 {
+                            Rectangle()
+                                .fill(theme.borderColor)
+                                .frame(width: 1)
+                        }
                     }
                 }
-                .overlay(verticalDividers())
 
                 // Row separator (except for last row)
                 if rowIndex < rows.count - 1 {

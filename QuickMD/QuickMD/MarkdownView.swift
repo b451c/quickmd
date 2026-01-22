@@ -10,8 +10,9 @@ struct MarkdownView: View {
     @Environment(\.colorScheme) var colorScheme
     @State private var cachedBlocks: [MarkdownBlock] = []
 
+    /// Use cached theme instance to avoid allocations on each body evaluation
     private var theme: MarkdownTheme {
-        MarkdownTheme(colorScheme: colorScheme)
+        MarkdownTheme.cached(for: colorScheme)
     }
 
     var body: some View {
@@ -20,25 +21,21 @@ struct MarkdownView: View {
                 LazyVStack(alignment: .leading, spacing: 8) {
                     ForEach(cachedBlocks) { block in
                         switch block {
-                        case .text(let attributedString):
+                        case .text(_, let attributedString):
                             Text(attributedString)
                                 .textSelection(.enabled)
-                                .id(block.id)
 
-                        case .table(let headers, let rows, let alignments):
+                        case .table(_, let headers, let rows, let alignments):
                             TableBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme)
                                 .padding(.vertical, 8)
-                                .id(block.id)
 
-                        case .codeBlock(let code, let language):
+                        case .codeBlock(_, let code, let language):
                             CodeBlockView(code: code, language: language, theme: theme)
                                 .padding(.vertical, 4)
-                                .id(block.id)
 
-                        case .image(let url, let alt):
+                        case .image(_, let url, let alt):
                             ImageBlockView(url: url, alt: alt, theme: theme, documentURL: documentURL)
                                 .padding(.vertical, 8)
-                                .id(block.id)
                         }
                     }
                 }
