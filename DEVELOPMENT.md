@@ -55,7 +55,7 @@ Realizacja przez 6 równoległych agentów, każdy z przypisanymi plikami (zero 
 - [x] C1: Sendable conformance (MarkdownBlock, Document, Parser, Renderer, Theme)
 - [x] C2: Offload parsing z MainActor (Task.detached)
 - [x] C3: Dynamic Type — świadoma decyzja: nie zmieniamy (viewer = stałe proporcje)
-- [ ] **C4: PDF rendering per-block** — patrz sekcja poniżej
+- [x] C4: PDF rendering per-block — zrealizowane w sprincie (luty 2026)
 - [x] C5: Link/image parser — bracket/paren depth counting
 - [x] C6: Deduplikacja AppURLs (jeden enum w QuickMDApp.swift)
 
@@ -63,61 +63,39 @@ Realizacja przez 6 równoległych agentów, każdy z przypisanymi plikami (zero 
 
 ## Pozostałe prace
 
-### C4: PDF rendering per-block
+### C4: PDF rendering per-block — ZREALIZOWANE
 
-**Status:** Niezrealizowane | **Wysiłek:** Duży | **Priorytet:** Średni
+**Status:** Zrealizowane (luty 2026) | **Wysiłek:** Duży
 
-**Problem:** `generateMultiPagePDF` renderuje cały dokument jako jeden obraz (ImageRenderer), potem tnie na strony. Powoduje:
-- Ryzyko OOM dla dokumentów 50+ stron (obraz ~150MB+ na Retina)
-- Page breaks tnące przez środek tekstu/tabel/obrazów
-- Brak inteligentnej paginacji
+Pełna zamiana renderowania PDF z single-image na per-block:
+- Iteracja po `[MarkdownBlock]`, renderowanie każdego bloku osobno przez `ImageRenderer`
+- Nowy `MarkdownPrintableBlockView` renderuje pojedyncze bloki
+- Śledzenie akumulowanej wysokości, page break tylko między blokami
+- Eliminacja ryzyka OOM dla dużych dokumentów
 
-**Quick fix zrobiony (A2):** Eliminacja podwójnego renderowania + maxHeight na obrazach.
-
-**Docelowe rozwiązanie:** Renderowanie blok-po-bloku z śledzeniem wysokości:
-1. Iteracja po `[MarkdownBlock]`
-2. Renderowanie każdego bloku osobno przez ImageRenderer
-3. Śledzenie akumulowanej wysokości na stronie
-4. Page break między blokami (nigdy w środku)
-5. Opcjonalnie: dzielenie długich code blocks na linie
-
-**Pliki do zmiany:** `MarkdownExport.swift` (sekcja `generateMultiPagePDF`)
-
-**Planowanie agentowe:** Jeden agent, pełna odpowiedzialność za plik. Wymaga testów z dokumentami różnych rozmiarów.
+**Agent:** export-agent (1 agent, 1 plik: `MarkdownExport.swift`)
 
 ---
 
-### Faza D: Rozwój funkcjonalny
+### Faza D: Rozwój funkcjonalny — sprint luty 2026
 
-#### D1: Double-backtick inline code
-**Wysiłek:** Mały | **Priorytet:** Niski
+#### D1: Double-backtick inline code — ZREALIZOWANE
 
-Tilde fences (`~~~`) zostały dodane w ramach audytu. Pozostaje wsparcie dla double-backtick inline code:
-```markdown
-``code with ` backtick``
-```
-Pozwala na umieszczenie backtick'a wewnątrz inline code.
+`tryParseInlineCode()` wspiera `` ``code with ` backtick`` `` — zlicza backticki, szuka pasującego zamknięcia, strip spacji per CommonMark.
 
-**Plik:** `MarkdownRenderer.swift` (tryParseInlineCode)
+**Agent:** renderer-agent (`MarkdownRenderer.swift`)
 
 ---
 
-#### D2: Nested blockquotes i multi-line blockquotes
-**Wysiłek:** Średni | **Priorytet:** Średni
+#### D2: Nested blockquotes i multi-line blockquotes — ZREALIZOWANE
 
-**Obecny stan:** Każda linia `>` jest przetwarzana niezależnie. Brak:
-- Łączenia kolejnych linii `>` w jeden blok
-- Zagnieżdżenia (`>> nested blockquote`)
-- Lazy continuation (linia bez `>` kontynuująca blockquote)
+- Nowy `.blockquote(index, content, level)` case w `MarkdownBlock`
+- Block-level parser akumuluje consecutive `>` linie, liczy nesting depth
+- Nowy `BlockquoteView` z lewą krawędzią per nesting level
+- `PrintableBlockquoteView` dla PDF/print
+- Usunięty stary inline blockquote handler z `MarkdownRenderer`
 
-**Podejście:**
-1. Block-level: `MarkdownBlockParser` rozpoznaje ciągłe bloki `>` i tworzy nowy typ `.blockquote`
-2. Rendering: Nowy `BlockquoteView` z szarą lewą krawędzią i rekursywnym parsowaniem zawartości
-3. Nesting: Stripowanie `>` prefix per level, rendering zagnieżdżony
-
-**Pliki:** `MarkdownBlock.swift` (nowy case), `MarkdownBlockParser.swift`, nowy `Views/BlockquoteView.swift`
-
-**Planowanie agentowe:** 2 agentów — jeden na parser, drugi na view.
+**Agenci:** parser-agent (`MarkdownBlock.swift`, `MarkdownBlockParser.swift`), views-agent (`BlockquoteView.swift`, `MarkdownView.swift`), export-agent (`MarkdownExport.swift`)
 
 ---
 
@@ -159,26 +137,17 @@ Sidebar lub popover z nagłówkami dokumentu, umożliwiający nawigację.
 
 ---
 
-#### D5: Find & Search w dokumencie
-**Wysiłek:** Duży | **Priorytet:** Wysoki
+#### D5: Find & Search w dokumencie — ZREALIZOWANE
 
-Cmd+F — wyszukiwanie tekstu w dokumencie z podświetlaniem wyników.
+Cmd+F wyszukiwanie z podświetlaniem i nawigacją:
+- `SearchBar` z polem tekstowym, licznikiem wyników ("1/5"), prev/next
+- Cmd+F toggle, Cmd+G / Shift+Cmd+G nawigacja, Escape zamknięcie
+- `ScrollViewReader` + `.id(block.id)` do scroll-to-match
+- Żółty highlight na matchach w `AttributedString` (index mapping String→AttributedString)
+- `NSEvent.addLocalMonitorForEvents` dla macOS 13 kompatybilności
+- `MarkdownRenderer` z opcjonalnym `searchTerm` parametrem
 
-**Podejście:**
-1. Toolbar z polem tekstowym (Cmd+F toggle)
-2. Wyszukiwanie w `document.text` (raw markdown)
-3. Podświetlanie wyników w renderowanych blokach (dodanie `.backgroundColor` do AttributedString)
-4. Nawigacja między wynikami (Enter / Shift+Enter)
-5. Integracja z `ScrollViewReader` do scrollowania do wyniku
-
-**Wyzwania:**
-- Mapowanie pozycji w raw text → pozycji w renderowanych blokach
-- Podświetlanie w `AttributedString` wymaga re-renderingu z informacją o wyszukiwaniu
-- Wydajność dla dużych dokumentów
-
-**Pliki:** Nowy `Views/SearchBar.swift`, modyfikacja `MarkdownView.swift`, `MarkdownRenderer.swift`
-
-**Planowanie agentowe:** 3 agentów — search logic, UI, renderer integration.
+**Agenci:** renderer-agent (`MarkdownRenderer.swift`), views-agent (`SearchBar.swift`, `MarkdownView.swift`)
 
 ---
 
@@ -202,12 +171,13 @@ Użytkownik wybiera motyw kolorystyczny (np. Solarized, Dracula, GitHub).
 
 ## Priorytety
 
-| Priorytet | Zadania | Uzasadnienie |
-|-----------|---------|-------------|
-| **Następne** | D5 (Search) | Najczęściej zgłaszana brakująca funkcja w viewerach MD |
-| **Wkrótce** | D2 (Blockquotes), C4 (PDF per-block) | Poprawność renderingu + jakość eksportu |
-| **Później** | D4 (ToC), D1 (double-backtick) | Nawigacja + drobna poprawka parsera |
-| **Kiedyś** | D3 (Reference links), D6 (Themes) | Rzadko używane / kosmetyczne |
+| Priorytet | Zadania | Status |
+|-----------|---------|--------|
+| ~~**Następne**~~ | ~~D5 (Search)~~ | **ZREALIZOWANE** (luty 2026) |
+| ~~**Wkrótce**~~ | ~~D2 (Blockquotes), C4 (PDF per-block)~~ | **ZREALIZOWANE** (luty 2026) |
+| ~~**Później**~~ | ~~D1 (double-backtick)~~ | **ZREALIZOWANE** (luty 2026) |
+| **Następne** | D4 (ToC) | Nawigacja po nagłówkach z sidebar |
+| **Później** | D3 (Reference links), D6 (Themes) | Rzadko używane / kosmetyczne |
 
 ---
 

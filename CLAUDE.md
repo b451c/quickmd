@@ -24,18 +24,20 @@ QuickMD/
 ├── QuickMD/
 │   ├── QuickMDApp.swift            # @main entry, DocumentGroup, menu commands, #if APPSTORE scenes
 │   ├── MarkdownDocument.swift      # FileDocument conformance, UTType.markdown
-│   ├── MarkdownView.swift          # Main document view, support/tip buttons, #if APPSTORE UI
-│   ├── MarkdownBlock.swift         # Block enum: .text, .table, .codeBlock, .image
+│   ├── MarkdownView.swift          # Main document view, search, support/tip buttons, #if APPSTORE UI
+│   ├── MarkdownBlock.swift         # Block enum: .text, .table, .codeBlock, .image, .blockquote
 │   ├── MarkdownBlockParser.swift   # Line-by-line parser → [MarkdownBlock]
-│   ├── MarkdownRenderer.swift      # Inline markdown → AttributedString
+│   ├── MarkdownRenderer.swift      # Inline markdown → AttributedString, search highlighting
 │   ├── MarkdownTheme.swift         # Colors, regex patterns, cached light/dark themes
-│   ├── MarkdownExport.swift        # PDF export, print, FocusedValue keys for multi-window
+│   ├── MarkdownExport.swift        # Per-block PDF export, print, FocusedValue keys for multi-window
 │   ├── TipJarManager.swift         # StoreKit 2 IAP manager (App Store only)
 │   ├── TipJarView.swift            # Tip Jar window UI (App Store only)
 │   ├── Views/
 │   │   ├── CodeBlockView.swift     # Fenced code blocks with syntax highlighting
 │   │   ├── TableBlockView.swift    # Table rendering with column alignment
-│   │   └── ImageBlockView.swift    # Local + remote image rendering
+│   │   ├── ImageBlockView.swift    # Local + remote image rendering
+│   │   ├── BlockquoteView.swift    # Nested blockquotes with left border indicators
+│   │   └── SearchBar.swift         # Cmd+F search bar with match navigation
 │   ├── Assets.xcassets/            # App icon
 │   └── QuickMD.entitlements        # App Sandbox + print/PDF entitlements
 ├── Screenshots/                    # App Store & README screenshots
@@ -113,7 +115,10 @@ The flag controls which monetization UI is compiled:
              .table → TableBlockView
              .codeBlock → CodeBlockView (with syntax highlighting)
              .image → ImageBlockView (local + remote)
+             .blockquote → BlockquoteView (nested, with left border)
+         → SearchBar (Cmd+F) highlights matches, ScrollViewReader navigates
          → FocusedValue publishes document text for PDF/Print commands
+         → PDF export renders block-by-block (no mid-block page breaks)
 ```
 
 ### Key Patterns
@@ -128,6 +133,11 @@ The flag controls which monetization UI is compiled:
 - **Sendable conformance** on all value types for Swift 6 readiness
 - **LazyVStack** for efficient rendering of large documents
 - **DocumentGroup** for standard macOS document lifecycle
+- **ScrollViewReader** for search result navigation (scroll-to-match)
+- **NSEvent local monitor** for keyboard shortcuts (macOS 13 compatible)
+- **Per-block PDF rendering** - each block rendered individually, page breaks between blocks only
+- **Search highlighting** via AttributedString background color with index mapping
+- **Double-backtick inline code** - `` ``code with ` backtick`` `` per CommonMark spec
 
 ## Monetization
 
