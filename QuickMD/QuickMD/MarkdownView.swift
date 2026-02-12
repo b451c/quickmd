@@ -63,7 +63,12 @@ struct MarkdownView: View {
         .focusedSceneValue(\.documentText, document.text)
         .frame(minWidth: 400, minHeight: 300)
         .task(id: DocumentIdentity(text: document.text, colorScheme: colorScheme)) {
-            cachedBlocks = MarkdownBlockParser(colorScheme: colorScheme).parse(document.text)
+            let text = document.text
+            let scheme = colorScheme
+            let blocks = await Task.detached(priority: .userInitiated) {
+                MarkdownBlockParser(colorScheme: scheme).parse(text)
+            }.value
+            cachedBlocks = blocks
         }
     }
 }
