@@ -50,7 +50,8 @@ QuickMD/
 ### Root Files
 
 ```
-CLAUDE.md                           # This file
+CLAUDE.md                           # This file (project overview for agents)
+DEVELOPMENT.md                      # Audit results, roadmap, agent workflow
 README.md                           # GitHub README
 PRIVACY.md                          # Privacy policy
 LICENSE                             # MIT license
@@ -106,7 +107,7 @@ The flag controls which monetization UI is compiled:
 ```
 .md file → MarkdownDocument (FileDocument)
          → MarkdownView (main view)
-         → MarkdownBlockParser.parse() → [MarkdownBlock]
+         → MarkdownBlockParser.parse() → [MarkdownBlock]  (background thread)
          → ForEach renders each block:
              .text → Text(AttributedString)  ← MarkdownRenderer
              .table → TableBlockView
@@ -161,3 +162,5 @@ Product IDs:
 - **App Sandbox** enabled with network client (for remote images) and print entitlements
 - **No tests** - the project has no unit/UI test targets
 - **Regex patterns** are defined as static strings in `MarkdownTheme` and compiled in respective files
+- **Background parsing** - `MarkdownBlockParser.parse()` runs on `Task.detached` to avoid UI freezes
+- **Handoff:** Read `DEVELOPMENT.md` for audit history, roadmap, and agent team methodology
