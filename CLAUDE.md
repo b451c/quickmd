@@ -29,7 +29,7 @@ QuickMD/
 │   ├── MarkdownBlockParser.swift   # Line-by-line parser → [MarkdownBlock]
 │   ├── MarkdownRenderer.swift      # Inline markdown → AttributedString
 │   ├── MarkdownTheme.swift         # Colors, regex patterns, cached light/dark themes
-│   ├── MarkdownExport.swift        # PDF export, print, ExportStateManager singleton
+│   ├── MarkdownExport.swift        # PDF export, print, FocusedValue keys for multi-window
 │   ├── TipJarManager.swift         # StoreKit 2 IAP manager (App Store only)
 │   ├── TipJarView.swift            # Tip Jar window UI (App Store only)
 │   ├── Views/
@@ -93,10 +93,9 @@ The flag controls which monetization UI is compiled:
 | `QuickMDApp.swift` | 32-47 | Menu: Tip Jar button (App Store) vs donation links (GitHub) |
 | `QuickMDApp.swift` | 52-57 | Tip Jar window scene (App Store only) |
 | `QuickMDApp.swift` | 61-71 | `TipJarMenuButton` struct (App Store only) |
-| `MarkdownView.swift` | 5-11 | `AppURLs` enum with donation URLs (GitHub only) |
-| `MarkdownView.swift` | 57-65 | Floating button: `TipJarButton` (App Store) vs `SupportButton` (GitHub) |
-| `MarkdownView.swift` | 80-114 | `TipJarButton` struct (App Store only) |
-| `MarkdownView.swift` | 118+ | `SupportButton` struct (GitHub only) |
+| `MarkdownView.swift` | ~47-55 | Floating button: `TipJarButton` (App Store) vs `SupportButton` (GitHub) |
+| `MarkdownView.swift` | ~68+ | `TipJarButton` struct (App Store only) |
+| `MarkdownView.swift` | ~105+ | `SupportButton` struct (GitHub only) |
 
 **Files only compiled for App Store:** `TipJarManager.swift`, `TipJarView.swift` (referenced only from `#if APPSTORE` blocks)
 
@@ -113,15 +112,19 @@ The flag controls which monetization UI is compiled:
              .table → TableBlockView
              .codeBlock → CodeBlockView (with syntax highlighting)
              .image → ImageBlockView (local + remote)
-         → ExportStateManager holds current blocks for PDF/Print
+         → FocusedValue publishes document text for PDF/Print commands
 ```
 
 ### Key Patterns
 
 - **Custom parser** (not Apple's AttributedString markdown) for full control over rendering
 - **Block-level parsing** (`MarkdownBlockParser`) splits into discrete blocks, then inline rendering (`MarkdownRenderer`) handles formatting within text blocks
+- **Recursive inline parsing** - bold/italic markers recursively parse inner content for nesting
 - **Cached themes** via `MarkdownTheme.cached(for:)` - two static instances (light/dark)
-- **Static regex compilation** - all 9 regex patterns compiled once at type level
+- **Static regex compilation** - all regex patterns compiled once at type level
+- **Syntax highlighting** with range exclusion (strings > comments > keywords priority)
+- **FocusedValue** for multi-window document context (export/print commands)
+- **Sendable conformance** on all value types for Swift 6 readiness
 - **LazyVStack** for efficient rendering of large documents
 - **DocumentGroup** for standard macOS document lifecycle
 
