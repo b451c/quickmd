@@ -50,6 +50,10 @@ struct MarkdownPrintableView: View {
                 case .image(_, let url, let alt):
                     PrintableImageView(url: url, alt: alt)
                         .padding(.vertical, 8)
+
+                case .blockquote(_, let content, let level):
+                    PrintableBlockquoteView(content: content, level: level)
+                        .padding(.vertical, 4)
                 }
             }
         }
@@ -221,6 +225,74 @@ struct PrintableImageView: View {
     }
 }
 
+// MARK: - Single Block Printable View (for per-block PDF rendering)
+
+struct MarkdownPrintableBlockView: View {
+    let block: MarkdownBlock
+    private let theme = MarkdownTheme.cached(for: .light)
+    private let renderer = MarkdownRenderer(colorScheme: .light)
+
+    var body: some View {
+        Group {
+            switch block {
+            case .text(_, let attributedString):
+                Text(attributedString)
+                    .foregroundColor(.black)
+
+            case .table(_, let headers, let rows, let alignments):
+                PrintableTableView(headers: headers, rows: rows, alignments: alignments)
+
+            case .codeBlock(_, let code, let language):
+                PrintableCodeBlockView(code: code, language: language)
+
+            case .image(_, let url, let alt):
+                PrintableImageView(url: url, alt: alt)
+
+            case .blockquote(_, let content, let level):
+                PrintableBlockquoteView(content: content, level: level)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white)
+    }
+}
+
+// MARK: - Printable Blockquote View
+
+struct PrintableBlockquoteView: View {
+    let content: String
+    let level: Int
+    private let renderer = MarkdownRenderer(colorScheme: .light)
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Gray left border bars for each nesting level
+            ForEach(0..<level, id: \.self) { _ in
+                Rectangle()
+                    .fill(Color.gray.opacity(0.4))
+                    .frame(width: 3)
+                    .padding(.trailing, 8)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(content.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
+                    if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Text(" ").font(.system(size: 12))
+                    } else {
+                        Text(renderer.renderInline(line))
+                            .font(.system(size: 12).italic())
+                            .foregroundColor(Color(white: 0.3))
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(white: 0.96))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
 // MARK: - PDF Export Manager
 
 @MainActor
@@ -265,26 +337,37 @@ class PDFExportManager {
     }
 
     static func generateMultiPagePDF(documentText: String) -> Data? {
-        // Create view - simple, with explicit size
-        let printableView = MarkdownPrintableView(documentText: documentText)
-            .frame(width: contentWidth)
-            .fixedSize(horizontal: false, vertical: true)
-
-        let renderer = ImageRenderer(content: printableView)
-        renderer.scale = 1.0
-
-        // Render once, reuse:
-        guard let fullImage = renderer.nsImage else {
-            logger.error("Failed to render document content")
+        let blocks = MarkdownBlockParser(colorScheme: .light).parse(documentText)
+        guard !blocks.isEmpty else {
+            logger.error("No blocks parsed from document")
             return nil
         }
-        let contentSize = fullImage.size
 
-        // Calculate pages
-        let totalHeight = contentSize.height
-        let pageCount = max(1, Int(ceil(totalHeight / contentHeight)))
+        // Render each block to an image
+        var blockImages: [(image: CGImage, size: CGSize)] = []
 
-        // Create PDF data
+        for block in blocks {
+            let blockView = MarkdownPrintableBlockView(block: block)
+                .frame(width: contentWidth)
+                .fixedSize(horizontal: false, vertical: true)
+
+            let renderer = ImageRenderer(content: blockView)
+            renderer.scale = 1.0
+
+            guard let nsImage = renderer.nsImage,
+                  let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+                continue
+            }
+
+            blockImages.append((image: cgImage, size: nsImage.size))
+        }
+
+        guard !blockImages.isEmpty else {
+            logger.error("Failed to render any blocks")
+            return nil
+        }
+
+        // Paginate: distribute blocks across pages
         let pdfData = NSMutableData()
         var mediaBox = CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
 
@@ -294,42 +377,44 @@ class PDFExportManager {
             return nil
         }
 
-        // Get CGImage for drawing
-        guard let cgImage = fullImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-            logger.error("Failed to extract CGImage from rendered content")
-            return nil
-        }
+        var currentY: CGFloat = 0  // Accumulated height on current page (from top)
+        var pageBlocks: [(image: CGImage, size: CGSize, yOffset: CGFloat)] = []
 
-        for pageIndex in 0..<pageCount {
+        func flushPage() {
+            guard !pageBlocks.isEmpty else { return }
             pdfContext.beginPDFPage(nil)
 
             // White background
             pdfContext.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
             pdfContext.fill(CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight))
 
-            pdfContext.saveGState()
+            // Draw each block on this page
+            // PDF Y=0 is at bottom, so we invert
+            for entry in pageBlocks {
+                let pdfY = pageHeight - margin - entry.yOffset - entry.size.height
+                let rect = CGRect(x: margin, y: pdfY, width: entry.size.width, height: entry.size.height)
+                pdfContext.draw(entry.image, in: rect)
+            }
 
-            // Clip to content area
-            pdfContext.clip(to: CGRect(x: margin, y: margin, width: contentWidth, height: contentHeight))
-
-            // Calculate which portion of the image to show
-            let yOffset = CGFloat(pageIndex) * contentHeight
-
-            // Draw the full image, positioned so the correct portion shows in the clip area
-            // In PDF coordinates, Y=0 is at bottom, so we need to position the image
-            // such that the portion we want appears in the content area
-            let imageRect = CGRect(
-                x: margin,
-                y: margin + contentHeight - totalHeight + yOffset,
-                width: contentWidth,
-                height: totalHeight
-            )
-
-            pdfContext.draw(cgImage, in: imageRect)
-
-            pdfContext.restoreGState()
             pdfContext.endPDFPage()
+            pageBlocks = []
+            currentY = 0
         }
+
+        for (image, size) in blockImages {
+            let blockHeight = size.height
+
+            // If block doesn't fit on current page and page isn't empty, start new page
+            if currentY + blockHeight > contentHeight && !pageBlocks.isEmpty {
+                flushPage()
+            }
+
+            pageBlocks.append((image: image, size: size, yOffset: currentY))
+            currentY += blockHeight + 4  // 4pt spacing between blocks (matches LazyVStack spacing)
+        }
+
+        // Flush last page
+        flushPage()
 
         pdfContext.closePDF()
         return pdfData as Data

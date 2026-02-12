@@ -3,14 +3,16 @@ import SwiftUI
 
 struct MarkdownRenderer: Sendable {
     let theme: MarkdownTheme
+    let searchTerm: String?
 
     // Static precompiled regex for parsing (avoid recompilation per line)
     private static let taskListRegex = try! NSRegularExpression(pattern: MarkdownTheme.taskListPattern)
     private static let autolinkRegex = try! NSRegularExpression(pattern: MarkdownTheme.autolinkPattern)
     private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
 
-    init(colorScheme: ColorScheme) {
+    init(colorScheme: ColorScheme, searchTerm: String? = nil) {
         self.theme = MarkdownTheme.cached(for: colorScheme)
+        self.searchTerm = searchTerm
     }
 
     // MARK: - Main Render
@@ -23,6 +25,7 @@ struct MarkdownRenderer: Sendable {
             result.append(AttributedString("\n"))
         }
 
+        applySearchHighlight(to: &result)
         return result
     }
 
@@ -44,11 +47,6 @@ struct MarkdownRenderer: Sendable {
         // Horizontal rule
         if trimmed.range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil {
             return renderHorizontalRule()
-        }
-
-        // Blockquote - trim before checking to handle indented blockquotes
-        if trimmed.hasPrefix(">") {
-            return renderBlockquote(String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces))
         }
 
         // Task list (must check before unordered list)
@@ -89,13 +87,6 @@ struct MarkdownRenderer: Sendable {
         let safeLevel = max(1, min(level, 6))
         attr.font = .system(size: sizes[safeLevel - 1], weight: .bold)
         attr.foregroundColor = theme.textColor
-        return attr
-    }
-
-    private func renderBlockquote(_ text: String) -> AttributedString {
-        var attr = AttributedString("  " + text)
-        attr.font = .system(size: 14).italic()
-        attr.foregroundColor = theme.blockquoteColor
         return attr
     }
 
@@ -154,6 +145,15 @@ struct MarkdownRenderer: Sendable {
         renderInlineFormatting(text)
     }
 
+    /// Public method for rendering inline formatting with search highlighting
+    func renderInline(_ text: String, searchTerm: String?) -> AttributedString {
+        var result = renderInlineFormatting(text)
+        if let term = searchTerm, !term.isEmpty {
+            applySearchHighlight(to: &result, term: term)
+        }
+        return result
+    }
+
     private func renderInlineFormatting(_ text: String) -> AttributedString {
         var result = AttributedString()
         var remaining = text[...]
@@ -197,18 +197,74 @@ struct MarkdownRenderer: Sendable {
         return result
     }
 
+    // MARK: - Search Highlighting
+
+    private func applySearchHighlight(to attributed: inout AttributedString) {
+        guard let term = searchTerm, !term.isEmpty else { return }
+        applySearchHighlight(to: &attributed, term: term)
+    }
+
+    private func applySearchHighlight(to attributed: inout AttributedString, term: String) {
+        let plainText = String(attributed.characters)
+        let searchLower = term.lowercased()
+        let textLower = plainText.lowercased()
+
+        // Build a mapping from String indices to AttributedString indices
+        var stringToAttr: [String.Index: AttributedString.Index] = [:]
+        var sIdx = plainText.startIndex
+        var aIdx = attributed.startIndex
+        while sIdx < plainText.endIndex && aIdx < attributed.endIndex {
+            stringToAttr[sIdx] = aIdx
+            sIdx = plainText.index(after: sIdx)
+            aIdx = attributed.characters.index(after: aIdx)
+        }
+        stringToAttr[plainText.endIndex] = attributed.endIndex
+
+        var searchStart = textLower.startIndex
+        while let range = textLower.range(of: searchLower, range: searchStart..<textLower.endIndex) {
+            if let attrLower = stringToAttr[range.lowerBound],
+               let attrUpper = stringToAttr[range.upperBound] {
+                attributed[attrLower..<attrUpper].backgroundColor = Color.yellow.opacity(0.3)
+            }
+            searchStart = range.upperBound
+        }
+    }
+
     // MARK: - Inline Parsers
 
     private func tryParseInlineCode(_ remaining: inout Substring) -> (AttributedString, Substring)? {
-        guard remaining.hasPrefix("`"),
-              let endIndex = remaining.dropFirst().firstIndex(of: "`") else { return nil }
+        guard remaining.hasPrefix("`") else { return nil }
 
-        let code = String(remaining[remaining.index(after: remaining.startIndex)..<endIndex])
+        // Count opening backticks (support 1 or 2)
+        let backtickCount = remaining.prefix(while: { $0 == "`" }).count
+        guard backtickCount <= 2 else { return nil }  // Only support ` and ``
+
+        let closingMarker = String(repeating: "`", count: backtickCount)
+        let afterOpening = remaining.dropFirst(backtickCount)
+
+        // Find closing backticks of same count
+        guard let closeRange = afterOpening.range(of: closingMarker) else { return nil }
+
+        // For double-backtick, ensure we found exactly 2 closing backticks (not 3+)
+        if backtickCount == 2 {
+            let endIdx = closeRange.upperBound
+            if endIdx < afterOpening.endIndex && afterOpening[endIdx] == "`" {
+                return nil  // Part of a triple-backtick, skip
+            }
+        }
+
+        var code = String(afterOpening[..<closeRange.lowerBound])
+
+        // Strip one leading and one trailing space for double-backtick (CommonMark spec)
+        if backtickCount == 2 && code.hasPrefix(" ") && code.hasSuffix(" ") && code.count > 1 {
+            code = String(code.dropFirst().dropLast())
+        }
+
         var attr = AttributedString(code)
         attr.font = .system(size: 13, design: .monospaced)
         attr.foregroundColor = theme.textColor
         attr.backgroundColor = theme.codeBackgroundColor
-        return (attr, remaining[remaining.index(after: endIndex)...])
+        return (attr, afterOpening[closeRange.upperBound...])
     }
 
     private func tryParseBoldItalic(_ remaining: inout Substring) -> (AttributedString, Substring)? {

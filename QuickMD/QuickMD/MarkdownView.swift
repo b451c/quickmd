@@ -9,6 +9,11 @@ struct MarkdownView: View {
     let documentURL: URL?
     @Environment(\.colorScheme) private var colorScheme
     @State private var cachedBlocks: [MarkdownBlock] = []
+    @State private var searchText: String = ""
+    @State private var isSearchVisible: Bool = false
+    @State private var currentMatchIndex: Int = 0
+    @State private var matchBlockIds: [String] = []
+    @State private var keyMonitor: Any?
 
     /// Use cached theme instance to avoid allocations on each body evaluation
     private var theme: MarkdownTheme {
@@ -22,31 +27,69 @@ struct MarkdownView: View {
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(cachedBlocks) { block in
-                        switch block {
-                        case .text(_, let attributedString):
-                            Text(attributedString)
-                                .textSelection(.enabled)
+            VStack(spacing: 0) {
+                // Search bar at top
+                if isSearchVisible {
+                    SearchBar(
+                        searchText: $searchText,
+                        isVisible: $isSearchVisible,
+                        matchCount: matchBlockIds.count,
+                        currentMatch: currentMatchIndex,
+                        onNext: { navigateMatch(forward: true) },
+                        onPrevious: { navigateMatch(forward: false) }
+                    )
+                }
 
-                        case .table(_, let headers, let rows, let alignments):
-                            TableBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme)
-                                .padding(.vertical, 8)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 8) {
+                            ForEach(cachedBlocks) { block in
+                                switch block {
+                                case .text(_, let attributedString):
+                                    if searchText.isEmpty {
+                                        Text(attributedString)
+                                            .textSelection(.enabled)
+                                            .id(block.id)
+                                    } else {
+                                        Text(highlightSearchInText(attributedString))
+                                            .textSelection(.enabled)
+                                            .id(block.id)
+                                    }
 
-                        case .codeBlock(_, let code, let language):
-                            CodeBlockView(code: code, language: language, theme: theme)
-                                .padding(.vertical, 4)
+                                case .table(_, let headers, let rows, let alignments):
+                                    TableBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme)
+                                        .padding(.vertical, 8)
+                                        .id(block.id)
 
-                        case .image(_, let url, let alt):
-                            ImageBlockView(url: url, alt: alt, theme: theme, documentURL: documentURL)
-                                .padding(.vertical, 8)
+                                case .codeBlock(_, let code, let language):
+                                    CodeBlockView(code: code, language: language, theme: theme)
+                                        .padding(.vertical, 4)
+                                        .id(block.id)
+
+                                case .image(_, let url, let alt):
+                                    ImageBlockView(url: url, alt: alt, theme: theme, documentURL: documentURL)
+                                        .padding(.vertical, 8)
+                                        .id(block.id)
+
+                                case .blockquote(_, let content, let level):
+                                    BlockquoteView(content: content, level: level, theme: theme)
+                                        .padding(.vertical, 4)
+                                        .id(block.id)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 32)
+                        .padding(.vertical, 24)
+                    }
+                    .onChange(of: currentMatchIndex) { newIndex in
+                        if !matchBlockIds.isEmpty && newIndex < matchBlockIds.count {
+                            withAnimation {
+                                proxy.scrollTo(matchBlockIds[newIndex], anchor: .center)
+                            }
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 32)
-                .padding(.vertical, 24)
             }
 
             #if APPSTORE
@@ -70,6 +113,113 @@ struct MarkdownView: View {
             }.value
             cachedBlocks = blocks
         }
+        .onChange(of: searchText) { newValue in
+            updateMatchResults(for: newValue)
+        }
+        .onAppear {
+            keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "f" {
+                    isSearchVisible.toggle()
+                    if !isSearchVisible { searchText = "" }
+                    return nil
+                }
+                if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "g" {
+                    if isSearchVisible {
+                        if event.modifierFlags.contains(.shift) {
+                            navigateMatch(forward: false)
+                        } else {
+                            navigateMatch(forward: true)
+                        }
+                        return nil
+                    }
+                }
+                if event.keyCode == 53 && isSearchVisible {
+                    isSearchVisible = false
+                    searchText = ""
+                    return nil
+                }
+                return event
+            }
+        }
+        .onDisappear {
+            if let monitor = keyMonitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
+    }
+
+    // MARK: - Search Helpers
+
+    private func navigateMatch(forward: Bool) {
+        guard !matchBlockIds.isEmpty else { return }
+        if forward {
+            currentMatchIndex = (currentMatchIndex + 1) % matchBlockIds.count
+        } else {
+            currentMatchIndex = (currentMatchIndex - 1 + matchBlockIds.count) % matchBlockIds.count
+        }
+    }
+
+    private func updateMatchResults(for term: String) {
+        guard !term.isEmpty else {
+            matchBlockIds = []
+            currentMatchIndex = 0
+            return
+        }
+
+        let searchLower = term.lowercased()
+        var matches: [String] = []
+
+        for block in cachedBlocks {
+            let blockText: String
+            switch block {
+            case .text(_, let attr):
+                blockText = String(attr.characters)
+            case .table(_, let headers, let rows, _):
+                blockText = (headers + rows.flatMap { $0 }).joined(separator: " ")
+            case .codeBlock(_, let code, _):
+                blockText = code
+            case .blockquote(_, let content, _):
+                blockText = content
+            case .image(_, _, let alt):
+                blockText = alt
+            }
+
+            if blockText.lowercased().contains(searchLower) {
+                matches.append(block.id)
+            }
+        }
+
+        matchBlockIds = matches
+        currentMatchIndex = 0
+    }
+
+    private func highlightSearchInText(_ attributed: AttributedString) -> AttributedString {
+        guard !searchText.isEmpty else { return attributed }
+        var result = attributed
+        let plainText = String(result.characters)
+        let textLower = plainText.lowercased()
+        let searchLower = searchText.lowercased()
+
+        // Build a mapping from String indices to AttributedString indices
+        var stringToAttr: [String.Index: AttributedString.Index] = [:]
+        var sIdx = plainText.startIndex
+        var aIdx = result.startIndex
+        while sIdx < plainText.endIndex && aIdx < result.endIndex {
+            stringToAttr[sIdx] = aIdx
+            sIdx = plainText.index(after: sIdx)
+            aIdx = result.characters.index(after: aIdx)
+        }
+        stringToAttr[plainText.endIndex] = result.endIndex
+
+        var searchStart = textLower.startIndex
+        while let range = textLower.range(of: searchLower, range: searchStart..<textLower.endIndex) {
+            if let attrLower = stringToAttr[range.lowerBound],
+               let attrUpper = stringToAttr[range.upperBound] {
+                result[attrLower..<attrUpper].backgroundColor = Color.yellow.opacity(0.3)
+            }
+            searchStart = range.upperBound
+        }
+        return result
     }
 }
 

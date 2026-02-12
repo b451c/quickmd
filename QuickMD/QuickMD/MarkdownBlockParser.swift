@@ -123,6 +123,41 @@ struct MarkdownBlockParser: Sendable {
                 }
             }
 
+            // Blockquote detection - accumulate consecutive > lines
+            if trimmed.hasPrefix(">") {
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
+
+                var quoteLines: [String] = []
+                var maxLevel = 1
+
+                while i < lines.count {
+                    let qLine = lines[i].trimmingCharacters(in: .whitespaces)
+                    guard qLine.hasPrefix(">") else { break }
+
+                    // Count nesting level (number of leading > chars)
+                    var level = 0
+                    var scanner = qLine[...]
+                    while scanner.hasPrefix(">") {
+                        level += 1
+                        scanner = scanner.dropFirst()
+                        // Skip optional space after each >
+                        if scanner.hasPrefix(" ") {
+                            scanner = scanner.dropFirst()
+                        }
+                    }
+                    maxLevel = max(maxLevel, level)
+
+                    // Content is everything after the > markers
+                    quoteLines.append(String(scanner))
+                    i += 1
+                }
+
+                let content = quoteLines.joined(separator: "\n")
+                blocks.append(.blockquote(index: blockIndex, content: content, level: maxLevel))
+                blockIndex += 1
+                continue
+            }
+
             textBuffer.append(line)
             i += 1
         }

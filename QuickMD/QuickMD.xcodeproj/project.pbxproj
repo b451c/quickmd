@@ -21,6 +21,8 @@
 		A1B2C3D40100000C /* TableBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000F /* TableBlockView.swift */; };
 		A1B2C3D40100000D /* CodeBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000011 /* CodeBlockView.swift */; };
 		A1B2C3D40100000E /* ImageBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000012 /* ImageBlockView.swift */; };
+		A1B2C3D40100000F /* BlockquoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000013 /* BlockquoteView.swift */; };
+		A1B2C3D401000010 /* SearchBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000014 /* SearchBar.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,6 +44,8 @@
 		A1B2C3D400000010 /* QuickMD.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuickMD.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D400000011 /* CodeBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeBlockView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000012 /* ImageBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageBlockView.swift; sourceTree = "<group>"; };
+		A1B2C3D400000013 /* BlockquoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockquoteView.swift; sourceTree = "<group>"; };
+		A1B2C3D400000014 /* SearchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchBar.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -91,6 +95,8 @@
 				A1B2C3D40000000F /* TableBlockView.swift */,
 				A1B2C3D400000011 /* CodeBlockView.swift */,
 				A1B2C3D400000012 /* ImageBlockView.swift */,
+				A1B2C3D400000013 /* BlockquoteView.swift */,
+				A1B2C3D400000014 /* SearchBar.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -185,6 +191,8 @@
 				A1B2C3D401000007 /* TipJarManager.swift in Sources */,
 				A1B2C3D401000008 /* TipJarView.swift in Sources */,
 				A1B2C3D401000009 /* MarkdownExport.swift in Sources */,
+				A1B2C3D40100000F /* BlockquoteView.swift in Sources */,
+				A1B2C3D401000010 /* SearchBar.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
