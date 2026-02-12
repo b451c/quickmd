@@ -63,12 +63,6 @@ struct CodeBlockView: View {
                 cachedHighlightedCode = computeHighlightedCode()
             }
         }
-        .onAppear {
-            // Pre-compute synchronously for small blocks (no flicker)
-            if cachedHighlightedCode == nil && !isLargeBlock {
-                cachedHighlightedCode = computeHighlightedCode()
-            }
-        }
     }
 
     // MARK: - Display Logic
@@ -92,79 +86,73 @@ struct CodeBlockView: View {
 
     /// Check if block exceeds async threshold
     private var isLargeBlock: Bool {
-        code.components(separatedBy: "\n").count > Self.asyncThreshold
+        var count = 0
+        for char in code where char == "\n" {
+            count += 1
+            if count >= Self.asyncThreshold { return true }
+        }
+        return false
     }
 
     /// Cache key for .task invalidation
     private var cacheKey: Int {
-        code.hashValue ^ theme.colorScheme.hashValue
+        var hasher = Hasher()
+        hasher.combine(code)
+        hasher.combine(theme.colorScheme)
+        return hasher.finalize()
     }
 
     // MARK: - Syntax Highlighting
 
     private func computeHighlightedCode() -> AttributedString {
-        var result = AttributedString()
-        let lines = code.components(separatedBy: "\n")
-
-        for (index, line) in lines.enumerated() {
-            result.append(highlightLine(line))
-            if index < lines.count - 1 {
-                result.append(AttributedString("\n"))
-            }
-        }
-        return result
-    }
-
-    private func highlightLine(_ line: String) -> AttributedString {
-        var result = AttributedString(line)
+        var result = AttributedString(code)
         result.foregroundColor = theme.textColor
-        let nsRange = NSRange(line.startIndex..., in: line)
+        result.font = .system(size: 13, design: .monospaced)
 
-        // Comments - if found, return early (entire line is comment-colored)
-        if let match = Self.commentRegex.firstMatch(in: line, range: nsRange),
-           let range = Range(match.range, in: line) {
-            applyColor(to: &result, range: range, in: line, color: theme.commentColor)
-            return result
+        let nsString = code as NSString
+        let fullRange = NSRange(location: 0, length: nsString.length)
+
+        // Track ranges already colored — later patterns skip these
+        var coloredRanges: [NSRange] = []
+
+        func applyHighlighting(regex: NSRegularExpression, color: Color) {
+            let matches = regex.matches(in: code, range: fullRange)
+            for match in matches {
+                // Skip if this range overlaps with an already-colored range
+                let overlaps = coloredRanges.contains { existingRange in
+                    existingRange.intersection(match.range) != nil
+                }
+                guard !overlaps else { continue }
+
+                if let range = Range(match.range, in: code),
+                   let attrRange = Range(range, in: result) {
+                    result[attrRange].foregroundColor = color
+                }
+                coloredRanges.append(match.range)
+            }
         }
 
-        // Strings
-        applyRegexColor(to: &result, in: line, regex: Self.stringRegex, nsRange: nsRange, color: theme.stringColor)
-
-        // Numbers
-        applyRegexColor(to: &result, in: line, regex: Self.numberRegex, nsRange: nsRange, color: theme.numberColor)
-
-        // Keywords
-        applyRegexColor(to: &result, in: line, regex: Self.keywordRegex, nsRange: nsRange, color: theme.keywordColor)
-
-        // Types (capitalized words)
-        applyRegexColor(to: &result, in: line, regex: Self.typeRegex, nsRange: nsRange, color: theme.typeColor)
+        // Apply in priority order: strings first, then comments, then others
+        // Strings have highest priority (keywords inside strings stay string-colored)
+        applyHighlighting(regex: Self.stringRegex, color: theme.stringColor)
+        applyHighlighting(regex: Self.commentRegex, color: theme.commentColor)
+        applyHighlighting(regex: Self.numberRegex, color: theme.numberColor)
+        applyHighlighting(regex: Self.keywordRegex, color: theme.keywordColor)
+        applyHighlighting(regex: Self.typeRegex, color: theme.typeColor)
 
         return result
     }
+}
 
-    // MARK: - Color Application Helpers
+// MARK: - NSRange Helpers
 
-    private func applyRegexColor(to result: inout AttributedString, in line: String, regex: NSRegularExpression, nsRange: NSRange, color: Color) {
-        for match in regex.matches(in: line, range: nsRange) {
-            if let range = Range(match.range, in: line) {
-                applyColor(to: &result, range: range, in: line, color: color)
-            }
+private extension NSRange {
+    func intersection(_ other: NSRange) -> NSRange? {
+        let start = max(location, other.location)
+        let end = min(location + length, other.location + other.length)
+        if start < end {
+            return NSRange(location: start, length: end - start)
         }
-    }
-
-    private func applyColor(to result: inout AttributedString, range: Range<String.Index>, in line: String, color: Color) {
-        // O(1) index calculation using direct offset computation
-        let startOffset = line.distance(from: line.startIndex, to: range.lowerBound)
-        let endOffset = line.distance(from: line.startIndex, to: range.upperBound)
-
-        let characters = result.characters
-        guard startOffset < characters.count, endOffset <= characters.count else { return }
-
-        let attrStart = characters.index(characters.startIndex, offsetBy: startOffset)
-        let attrEnd = characters.index(characters.startIndex, offsetBy: endOffset)
-
-        if attrStart < attrEnd {
-            result[attrStart..<attrEnd].foregroundColor = color
-        }
+        return nil
     }
 }

@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-struct MarkdownRenderer {
+struct MarkdownRenderer: Sendable {
     let theme: MarkdownTheme
 
     // Static precompiled regex for parsing (avoid recompilation per line)
@@ -234,7 +234,8 @@ struct MarkdownRenderer {
         guard let endRange = afterMarker.range(of: marker) else { return nil }
 
         let boldText = String(afterMarker[..<endRange.lowerBound])
-        var attr = AttributedString(boldText)
+        // Recursively parse inner text for nested emphasis (e.g., **bold *and italic* text**)
+        var attr = renderInlineFormatting(boldText)
         attr.font = .system(size: 14, weight: .bold)
         attr.foregroundColor = theme.textColor
         return (attr, afterMarker[endRange.upperBound...])
@@ -245,11 +246,35 @@ struct MarkdownRenderer {
               (remaining.hasPrefix("_") && !remaining.hasPrefix("__")),
               let marker = remaining.first else { return nil }
 
+        // Word boundary check for underscore delimiter
+        if marker == "_" {
+            let fullText = remaining.base
+            let indexInFull = fullText.distance(from: fullText.startIndex, to: remaining.startIndex)
+            if indexInFull > 0 {
+                let prevChar = fullText[fullText.index(fullText.startIndex, offsetBy: indexInFull - 1)]
+                if prevChar.isLetter || prevChar.isNumber {
+                    return nil  // Mid-word underscore, skip
+                }
+            }
+        }
+
         let afterMarker = remaining.dropFirst()
         guard let endIndex = afterMarker.firstIndex(of: marker) else { return nil }
 
+        // Word boundary check for closing underscore
+        if marker == "_" {
+            let closeIdx = afterMarker.index(after: endIndex)
+            if closeIdx < remaining.endIndex {
+                let afterClose = remaining[closeIdx]
+                if afterClose.isLetter || afterClose.isNumber {
+                    return nil  // Mid-word closing underscore, skip
+                }
+            }
+        }
+
         let italicText = String(afterMarker[..<endIndex])
-        var attr = AttributedString(italicText)
+        // Recursively parse inner text for nested emphasis (e.g., *italic **and bold** text*)
+        var attr = renderInlineFormatting(italicText)
         attr.font = .system(size: 14).italic()
         attr.foregroundColor = theme.textColor
         return (attr, afterMarker[afterMarker.index(after: endIndex)...])
@@ -273,12 +298,25 @@ struct MarkdownRenderer {
         guard remaining.hasPrefix("["),
               let closeBracket = remaining.firstIndex(of: "]"),
               let afterBracket = remaining.index(closeBracket, offsetBy: 1, limitedBy: remaining.endIndex),
-              remaining[afterBracket...].hasPrefix("("),
-              let closeParen = remaining[afterBracket...].firstIndex(of: ")") else { return nil }
+              remaining[afterBracket...].hasPrefix("(") else { return nil }
+
+        guard let urlStart = remaining.index(closeBracket, offsetBy: 2, limitedBy: remaining.endIndex) else { return nil }
+
+        // Scan for closing ')' with parenthesis depth tracking
+        var depth = 1
+        var urlEndIdx = urlStart
+        while urlEndIdx < remaining.endIndex {
+            if remaining[urlEndIdx] == "(" { depth += 1 }
+            else if remaining[urlEndIdx] == ")" {
+                depth -= 1
+                if depth == 0 { break }
+            }
+            urlEndIdx = remaining.index(after: urlEndIdx)
+        }
+        guard depth == 0 else { return nil }
 
         let linkText = String(remaining[remaining.index(after: remaining.startIndex)..<closeBracket])
-        guard let urlStart = remaining.index(closeBracket, offsetBy: 2, limitedBy: remaining.endIndex) else { return nil }
-        let urlText = String(remaining[urlStart..<closeParen])
+        let urlText = String(remaining[urlStart..<urlEndIdx])
 
         var attr = AttributedString(linkText)
         attr.font = .system(size: 14)
@@ -287,18 +325,32 @@ struct MarkdownRenderer {
         if let url = URL(string: urlText) {
             attr.link = url
         }
-        return (attr, remaining[remaining.index(after: closeParen)...])
+        return (attr, remaining[remaining.index(after: urlEndIdx)...])
     }
 
     private func tryParseImage(_ remaining: inout Substring) -> (AttributedString, Substring)? {
         guard remaining.hasPrefix("!["),
               let closeBracket = remaining.dropFirst(2).firstIndex(of: "]"),
               let afterBracket = remaining.index(closeBracket, offsetBy: 1, limitedBy: remaining.endIndex),
-              remaining[afterBracket...].hasPrefix("("),
-              let closeParen = remaining[afterBracket...].firstIndex(of: ")") else { return nil }
+              remaining[afterBracket...].hasPrefix("(") else { return nil }
+
+        guard let urlStart = remaining.index(closeBracket, offsetBy: 2, limitedBy: remaining.endIndex) else { return nil }
+
+        // Scan for closing ')' with parenthesis depth tracking
+        var depth = 1
+        var urlEndIdx = urlStart
+        while urlEndIdx < remaining.endIndex {
+            if remaining[urlEndIdx] == "(" { depth += 1 }
+            else if remaining[urlEndIdx] == ")" {
+                depth -= 1
+                if depth == 0 { break }
+            }
+            urlEndIdx = remaining.index(after: urlEndIdx)
+        }
+        guard depth == 0 else { return nil }
 
         let altText = String(remaining[remaining.index(remaining.startIndex, offsetBy: 2)..<closeBracket])
-        let urlText = String(remaining[remaining.index(closeBracket, offsetBy: 2)..<closeParen])
+        let urlText = String(remaining[urlStart..<urlEndIdx])
 
         var attr = AttributedString("[Image: \(altText)]")
         attr.font = .system(size: 14).italic()
@@ -306,7 +358,7 @@ struct MarkdownRenderer {
         if let url = URL(string: urlText) {
             attr.link = url
         }
-        return (attr, remaining[remaining.index(after: closeParen)...])
+        return (attr, remaining[remaining.index(after: urlEndIdx)...])
     }
 
     private func tryParseEscape(_ remaining: inout Substring) -> (AttributedString, Substring)? {
@@ -321,6 +373,10 @@ struct MarkdownRenderer {
     }
 
     private func tryParseAutolink(_ remaining: inout Substring) -> (AttributedString, Substring)? {
+        // Quick prefix check to avoid expensive String conversion
+        guard remaining.hasPrefix("http://") || remaining.hasPrefix("https://") else {
+            return nil
+        }
         let str = String(remaining)
         let nsRange = NSRange(str.startIndex..., in: str)
 

@@ -7,7 +7,7 @@ extension UTType {
     }
 }
 
-struct MarkdownDocument: FileDocument {
+struct MarkdownDocument: FileDocument, Sendable {
     var text: String
 
     static var readableContentTypes: [UTType] { [.markdown, .plainText] }

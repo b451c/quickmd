@@ -2,7 +2,7 @@ import SwiftUI
 import StoreKit
 
 struct TipJarView: View {
-    @ObservedObject private var tipManager = TipJarManager.shared
+    @StateObject private var tipManager = TipJarManager.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
 
@@ -64,10 +64,9 @@ struct TipJarView: View {
                     Text("Thank you for your support!")
                         .fontWeight(.medium)
                 }
-                .onAppear {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        tipManager.resetPurchaseState()
-                    }
+                .task {
+                    try? await Task.sleep(for: .seconds(2))
+                    tipManager.resetPurchaseState()
                 }
 
             case .failed(let message):
@@ -77,10 +76,9 @@ struct TipJarView: View {
                     Text(message)
                         .font(.caption)
                 }
-                .onAppear {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        tipManager.resetPurchaseState()
-                    }
+                .task {
+                    try? await Task.sleep(for: .seconds(3))
+                    tipManager.resetPurchaseState()
                 }
 
             case .ready:

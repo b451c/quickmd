@@ -1,15 +1,5 @@
 import SwiftUI
 
-// MARK: - App URLs
-
-#if !APPSTORE
-private enum AppURLs {
-    static let website = URL(string: "https://qmd.app/")!
-    static let buyMeCoffee = URL(string: "https://buymeacoffee.com/bsroczynskh")!
-    static let kofi = URL(string: "https://ko-fi.com/quickmd")!
-}
-#endif
-
 // MARK: - Main View
 
 /// Main Markdown document view
@@ -17,12 +7,17 @@ private enum AppURLs {
 struct MarkdownView: View {
     let document: MarkdownDocument
     let documentURL: URL?
-    @Environment(\.colorScheme) var colorScheme
+    @Environment(\.colorScheme) private var colorScheme
     @State private var cachedBlocks: [MarkdownBlock] = []
 
     /// Use cached theme instance to avoid allocations on each body evaluation
     private var theme: MarkdownTheme {
         MarkdownTheme.cached(for: colorScheme)
+    }
+
+    private struct DocumentIdentity: Equatable {
+        let text: String
+        let colorScheme: ColorScheme
     }
 
     var body: some View {
@@ -65,12 +60,10 @@ struct MarkdownView: View {
             #endif
         }
         .background(theme.backgroundColor)
+        .focusedSceneValue(\.documentText, document.text)
         .frame(minWidth: 400, minHeight: 300)
-        .task(id: document.text.hashValue ^ colorScheme.hashValue) {
+        .task(id: DocumentIdentity(text: document.text, colorScheme: colorScheme)) {
             cachedBlocks = MarkdownBlockParser(colorScheme: colorScheme).parse(document.text)
-            // Update shared state for export/print menu commands
-            ExportStateManager.shared.currentBlocks = cachedBlocks
-            ExportStateManager.shared.currentDocumentText = document.text
         }
     }
 }
@@ -152,7 +145,7 @@ struct SupportButton: View {
             .background(theme.codeBackgroundColor.opacity(isHovered ? 0.9 : 0.6))
             .clipShape(Capsule())
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
         .opacity(isHovered ? 1.0 : 0.5)
         .animation(.easeInOut(duration: 0.2), value: isHovered)
         .onHover { hovering in

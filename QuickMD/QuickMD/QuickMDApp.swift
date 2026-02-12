@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 // MARK: - App URLs
 
-private enum AppURLs {
+enum AppURLs {
     static let github = URL(string: "https://github.com/b451c/quickmd")!
     static let website = URL(string: "https://qmd.app/")!
     static let buyMeCoffee = URL(string: "https://buymeacoffee.com/bsroczynskh")!

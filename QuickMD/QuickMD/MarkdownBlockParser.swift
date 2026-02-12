@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Parses Markdown text into discrete blocks for rendering
 /// Handles: fenced code blocks, tables, images, setext headers, and text paragraphs
-struct MarkdownBlockParser {
+struct MarkdownBlockParser: Sendable {
     let colorScheme: ColorScheme
 
     // Cached renderer instance - created once per parser, not per flushTextBuffer call
@@ -33,24 +33,35 @@ struct MarkdownBlockParser {
 
             // Fenced code block - trim whitespace before checking for closing fence
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-            if trimmedLine.hasPrefix("```") {
+            if trimmedLine.hasPrefix("```") || trimmedLine.hasPrefix("~~~") {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
-                let language = String(trimmedLine.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+
+                // Store the fence characters (just the backticks/tildes prefix)
+                let fenceChar = trimmedLine.first!
+                var fenceLength = 0
+                for ch in trimmedLine {
+                    if ch == fenceChar { fenceLength += 1 } else { break }
+                }
+                let openingFence = String(repeating: fenceChar, count: fenceLength)
+
+                // Extract language after fence
+                let language = String(trimmedLine.dropFirst(fenceLength)).trimmingCharacters(in: .whitespaces)
                 var codeLines: [String] = []
                 i += 1
 
-                // Check for closing fence with trimming to handle indented closing ```
-                while i < lines.count && !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                // Closing fence must be same char, same or greater length, nothing else
+                while i < lines.count {
+                    let closeLine = lines[i].trimmingCharacters(in: .whitespaces)
+                    if closeLine.hasPrefix(openingFence) && closeLine.drop(while: { $0 == fenceChar }).trimmingCharacters(in: .whitespaces).isEmpty {
+                        i += 1
+                        break
+                    }
                     codeLines.append(lines[i])
                     i += 1
                 }
 
                 blocks.append(.codeBlock(index: blockIndex, code: codeLines.joined(separator: "\n"), language: language))
                 blockIndex += 1
-                // Skip closing fence if it exists
-                if i < lines.count {
-                    i += 1
-                }
                 continue
             }
 
@@ -87,7 +98,7 @@ struct MarkdownBlockParser {
             }
 
             // Table detection
-            if line.contains("|") && !trimmed.isEmpty {
+            if line.filter({ $0 == "|" }).count >= 2 && !trimmed.isEmpty {
                 if !isTableSeparator(trimmed) && i + 1 < lines.count && isTableSeparator(lines[i + 1]) {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
 

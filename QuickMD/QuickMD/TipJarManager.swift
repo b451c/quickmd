@@ -23,8 +23,28 @@ class TipJarManager: ObservableObject {
     ]
 
     private let logger = Logger(subsystem: "pl.falami.studio.QuickMD", category: "TipJar")
+    private var transactionListener: Task<Void, Never>?
 
-    private init() {}
+    private init() {
+        transactionListener = listenForTransactions()
+    }
+
+    deinit {
+        transactionListener?.cancel()
+    }
+
+    private func listenForTransactions() -> Task<Void, Never> {
+        Task.detached { [weak self] in
+            for await result in Transaction.updates {
+                if case .verified(let transaction) = result {
+                    await transaction.finish()
+                    await MainActor.run {
+                        self?.purchaseState = .purchased
+                    }
+                }
+            }
+        }
+    }
 
     func loadProducts() async {
         isLoading = true

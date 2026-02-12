@@ -7,7 +7,7 @@ import SwiftUI
 ///
 /// Each block carries a stable `index` assigned during parsing to ensure
 /// consistent identity across re-renders and theme changes.
-enum MarkdownBlock: Identifiable {
+enum MarkdownBlock: Identifiable, Sendable {
     case text(index: Int, AttributedString)
     case table(index: Int, headers: [String], rows: [[String]], alignments: [TextAlignment])
     case codeBlock(index: Int, code: String, language: String)

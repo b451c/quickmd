@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Shared theme for consistent colors across all markdown views
 /// Use `MarkdownTheme.cached(for:)` to get a cached instance instead of creating new ones
-struct MarkdownTheme {
+struct MarkdownTheme: Sendable {
     let colorScheme: ColorScheme
 
     // MARK: - Cached Instances
@@ -87,7 +87,7 @@ struct MarkdownTheme {
 
     /// Matches table separator row: |---|---|---| or variants with alignment colons
     /// Examples: |:---|:---:|---:|, |---|---|
-    static let tableSeparatorPattern = #"^\|?[\s\-:|]+\|?$"#
+    static let tableSeparatorPattern = #"^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$"#
 
     /// Matches ATX-style headers: # H1, ## H2, ... ###### H6
     /// Captures: (1) hash marks, (2) header text

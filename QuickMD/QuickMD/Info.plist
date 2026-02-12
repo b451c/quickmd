@@ -29,7 +29,7 @@
 	<key>NSSupportsAutomaticTermination</key>
 	<true/>
 	<key>NSSupportsSuddenTermination</key>
-	<true/>
+	<false/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2025 Falami Studio. All rights reserved.</string>
 	<key>LSApplicationCategoryType</key>

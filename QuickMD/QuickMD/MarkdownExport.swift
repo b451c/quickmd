@@ -1,19 +1,17 @@
 import SwiftUI
 import AppKit
+import os
 
-// MARK: - Export State Manager (Shared state for menu commands)
+// MARK: - Focused Value Keys (multi-window document context)
 
-@MainActor
-class ExportStateManager: ObservableObject {
-    static let shared = ExportStateManager()
+struct FocusedDocumentTextKey: FocusedValueKey {
+    typealias Value = String
+}
 
-    @Published var currentBlocks: [MarkdownBlock] = []
-    @Published var currentDocumentText: String = ""
-
-    private init() {}
-
-    var hasContent: Bool {
-        !currentBlocks.isEmpty
+extension FocusedValues {
+    var documentText: String? {
+        get { self[FocusedDocumentTextKey.self] }
+        set { self[FocusedDocumentTextKey.self] = newValue }
     }
 }
 
@@ -181,7 +179,7 @@ struct PrintableImageView: View {
                 Image(nsImage: nsImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: 500)
+                    .frame(maxWidth: 500, maxHeight: 700)
             } else {
                 HStack {
                     Image(systemName: "photo")
@@ -228,6 +226,8 @@ struct PrintableImageView: View {
 @MainActor
 class PDFExportManager {
 
+    private static let logger = Logger(subsystem: "pl.falami.studio.QuickMD", category: "PDFExport")
+
     // US Letter dimensions in points
     static let pageWidth: CGFloat = 612
     static let pageHeight: CGFloat = 792
@@ -273,20 +273,16 @@ class PDFExportManager {
         let renderer = ImageRenderer(content: printableView)
         renderer.scale = 1.0
 
-        // Get the rendered size first
-        guard let testImage = renderer.nsImage else {
+        // Render once, reuse:
+        guard let fullImage = renderer.nsImage else {
+            logger.error("Failed to render document content")
             return nil
         }
-        let contentSize = testImage.size
+        let contentSize = fullImage.size
 
         // Calculate pages
         let totalHeight = contentSize.height
         let pageCount = max(1, Int(ceil(totalHeight / contentHeight)))
-
-        // Get NSImage from renderer
-        guard let fullImage = renderer.nsImage else {
-            return nil
-        }
 
         // Create PDF data
         let pdfData = NSMutableData()
@@ -294,11 +290,13 @@ class PDFExportManager {
 
         guard let consumer = CGDataConsumer(data: pdfData),
               let pdfContext = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            logger.error("Failed to create PDF context")
             return nil
         }
 
         // Get CGImage for drawing
         guard let cgImage = fullImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            logger.error("Failed to extract CGImage from rendered content")
             return nil
         }
 
@@ -370,7 +368,7 @@ class PrintManager {
         }
 
         // Use PDFDocument's native print operation
-        let printInfo = NSPrintInfo.shared.copy() as! NSPrintInfo
+        guard let printInfo = NSPrintInfo.shared.copy() as? NSPrintInfo else { return }
         printInfo.horizontalPagination = .fit
         printInfo.verticalPagination = .fit
         printInfo.isHorizontallyCentered = true
@@ -390,7 +388,11 @@ class PrintManager {
 
         printOperation.showsPrintPanel = true
         printOperation.showsProgressPanel = true
-        printOperation.run()
+        if let window = NSApp.keyWindow {
+            printOperation.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
+        } else {
+            printOperation.run()
+        }
     }
 
     private static func showError(_ message: String) {
@@ -406,25 +408,29 @@ class PrintManager {
 // MARK: - Menu Commands
 
 struct ExportPDFCommand: View {
-    @ObservedObject private var exportState = ExportStateManager.shared
+    @FocusedValue(\.documentText) private var documentText
 
     var body: some View {
-        Button("Export as PDF...") {
-            PDFExportManager.exportToPDF(documentText: exportState.currentDocumentText)
+        Button("Export as PDF\u{2026}") {
+            if let text = documentText {
+                PDFExportManager.exportToPDF(documentText: text)
+            }
         }
+        .disabled(documentText == nil || documentText!.isEmpty)
         .keyboardShortcut("e", modifiers: [.command, .shift])
-        .disabled(!exportState.hasContent)
     }
 }
 
 struct PrintCommand: View {
-    @ObservedObject private var exportState = ExportStateManager.shared
+    @FocusedValue(\.documentText) private var documentText
 
     var body: some View {
-        Button("Print...") {
-            PrintManager.printDocument(documentText: exportState.currentDocumentText)
+        Button("Print\u{2026}") {
+            if let text = documentText {
+                PrintManager.printDocument(documentText: text)
+            }
         }
+        .disabled(documentText == nil || documentText!.isEmpty)
         .keyboardShortcut("p", modifiers: .command)
-        .disabled(!exportState.hasContent)
     }
 }
