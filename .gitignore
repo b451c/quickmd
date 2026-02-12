@@ -113,7 +113,22 @@ Network Trash Folder
 Temporary Items
 .apdisk
 
+# Build products & archives
+*.app
+*.app/
+*.xcarchive
+*.xcarchive/
+*.zip
+ExportOptions.plist
+
+# Landing page (separate project)
+quickmd-landing-page-docs/
+
+# Tool configs
+.qlty/
+.tldr/
+.tldrignore
+
 # Claude Code
 .claude/
 thoughts/
-CLAUDE.md
