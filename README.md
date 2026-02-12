@@ -4,7 +4,7 @@
 
 **Lightning-fast native macOS Markdown viewer**
 
-[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-lightgrey.svg)](https://www.apple.com/macos)
+[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey.svg)](https://www.apple.com/macos)
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -73,7 +73,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ### Mac App Store (Recommended)
 
-Available soon on the Mac App Store.
+Available on the [Mac App Store](https://apps.apple.com/app/quickmd/id6740814767).
 
 ### Build from Source
 
@@ -89,7 +89,7 @@ open QuickMD.xcodeproj
 ```
 
 **Requirements:**
-- macOS 14.0 (Sonoma) or later
+- macOS 13.0 (Ventura) or later
 - Xcode 15.0+
 - Swift 5.9+
 
@@ -110,12 +110,14 @@ Now all your Markdown files will open instantly with QuickMD!
 |----------|--------|
 | `⌘O` | Open file |
 | `⌘W` | Close window |
+| `⌘⇧E` | Export to PDF |
+| `⌘P` | Print |
 
 ## Tech Stack
 
 - **Language:** Swift 5.9
 - **Framework:** SwiftUI
-- **Minimum OS:** macOS 14.0 (Sonoma)
+- **Minimum OS:** macOS 13.0 (Ventura)
 - **Architecture:** Native Apple Silicon + Intel
 
 ### Key Components
@@ -130,15 +132,24 @@ Now all your Markdown files will open instantly with QuickMD!
 ```
 QuickMD/
 ├── QuickMD/
-│   ├── QuickMDApp.swift          # App entry point
-│   ├── MarkdownView.swift        # Main view + blocks (tables, code, images)
-│   ├── MarkdownRenderer.swift    # Inline markdown parser
-│   ├── MarkdownTheme.swift       # Color themes + patterns
-│   ├── MarkdownDocument.swift    # Document model
-│   └── Assets.xcassets/          # App icon + assets
-├── demo-screenshot.md            # Demo file for screenshots
-├── AppStore-Metadata.md          # App Store submission guide
-└── README.md                     # This file
+│   ├── QuickMDApp.swift            # App entry point + menu commands
+│   ├── MarkdownDocument.swift      # FileDocument model
+│   ├── MarkdownView.swift          # Main document view + support buttons
+│   ├── MarkdownBlock.swift         # Block type enum
+│   ├── MarkdownBlockParser.swift   # Line-by-line block parser
+│   ├── MarkdownRenderer.swift      # Inline markdown → AttributedString
+│   ├── MarkdownTheme.swift         # Color themes + regex patterns
+│   ├── MarkdownExport.swift        # PDF export + print support
+│   ├── TipJarManager.swift         # StoreKit 2 IAP (App Store only)
+│   ├── TipJarView.swift            # Tip Jar UI (App Store only)
+│   ├── Views/
+│   │   ├── CodeBlockView.swift     # Syntax-highlighted code blocks
+│   │   ├── TableBlockView.swift    # Table rendering with alignment
+│   │   └── ImageBlockView.swift    # Local + remote image rendering
+│   └── Assets.xcassets/            # App icon + assets
+├── CHANGELOG.md                    # Version history
+├── AppStore-Metadata.md            # App Store descriptions (EN/PL)
+└── demo-screenshot.md              # Demo file for screenshots
 ```
 
 ## Development
@@ -154,9 +165,20 @@ open QuickMD/QuickMD.xcodeproj
 
 ### Building for Release
 
-1. Select **Product → Archive** in Xcode
-2. Choose **Distribute App → App Store Connect**
-3. Upload to App Store
+**GitHub version** (default — donation links, no Tip Jar):
+
+```bash
+xcodebuild -project QuickMD/QuickMD.xcodeproj -scheme QuickMD -configuration Release archive
+```
+
+Or simply build in Xcode with `⌘B`.
+
+**App Store version** (Tip Jar IAP):
+
+```bash
+xcodebuild -project QuickMD/QuickMD.xcodeproj -scheme QuickMD -configuration Release \
+  OTHER_SWIFT_FLAGS="-DAPPSTORE" archive
+```
 
 See [QuickMD/AppStore-Metadata.md](QuickMD/AppStore-Metadata.md) for detailed submission instructions.
 
@@ -177,8 +199,9 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 
 ## Roadmap
 
+- [x] Export to PDF (`⌘⇧E`) and Print (`⌘P`)
+- [x] Syntax highlighting for code blocks
 - [ ] Table of contents navigation
-- [ ] Export to PDF/HTML
 - [ ] Custom themes
 - [ ] LaTeX math support
 - [ ] Mermaid diagram rendering
