@@ -3,7 +3,6 @@ import SwiftUI
 
 struct MarkdownRenderer: Sendable {
     let theme: MarkdownTheme
-    let searchTerm: String?
     let referenceDefinitions: [String: String]
 
     // Static precompiled regex for parsing (avoid recompilation per line)
@@ -11,15 +10,13 @@ struct MarkdownRenderer: Sendable {
     private static let autolinkRegex = try! NSRegularExpression(pattern: MarkdownTheme.autolinkPattern)
     private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
 
-    init(theme: MarkdownTheme, searchTerm: String? = nil, referenceDefinitions: [String: String] = [:]) {
+    init(theme: MarkdownTheme, referenceDefinitions: [String: String] = [:]) {
         self.theme = theme
-        self.searchTerm = searchTerm
         self.referenceDefinitions = referenceDefinitions
     }
 
-    init(colorScheme: ColorScheme, searchTerm: String? = nil, referenceDefinitions: [String: String] = [:]) {
+    init(colorScheme: ColorScheme, referenceDefinitions: [String: String] = [:]) {
         self.theme = MarkdownTheme.cached(for: colorScheme)
-        self.searchTerm = searchTerm
         self.referenceDefinitions = referenceDefinitions
     }
 
@@ -33,7 +30,6 @@ struct MarkdownRenderer: Sendable {
             result.append(AttributedString("\n"))
         }
 
-        applySearchHighlight(to: &result)
         return result
     }
 
@@ -153,15 +149,6 @@ struct MarkdownRenderer: Sendable {
         renderInlineFormatting(text)
     }
 
-    /// Public method for rendering inline formatting with search highlighting
-    func renderInline(_ text: String, searchTerm: String?) -> AttributedString {
-        var result = renderInlineFormatting(text)
-        if let term = searchTerm, !term.isEmpty {
-            applySearchHighlight(to: &result, term: term)
-        }
-        return result
-    }
-
     private func renderInlineFormatting(_ text: String) -> AttributedString {
         var result = AttributedString()
         var remaining = text[...]
@@ -203,39 +190,6 @@ struct MarkdownRenderer: Sendable {
 
         flushPlainText()  // Flush any remaining plain text
         return result
-    }
-
-    // MARK: - Search Highlighting
-
-    private func applySearchHighlight(to attributed: inout AttributedString) {
-        guard let term = searchTerm, !term.isEmpty else { return }
-        applySearchHighlight(to: &attributed, term: term)
-    }
-
-    private func applySearchHighlight(to attributed: inout AttributedString, term: String) {
-        let plainText = String(attributed.characters)
-        let searchLower = term.lowercased()
-        let textLower = plainText.lowercased()
-
-        // Build a mapping from String indices to AttributedString indices
-        var stringToAttr: [String.Index: AttributedString.Index] = [:]
-        var sIdx = plainText.startIndex
-        var aIdx = attributed.startIndex
-        while sIdx < plainText.endIndex && aIdx < attributed.endIndex {
-            stringToAttr[sIdx] = aIdx
-            sIdx = plainText.index(after: sIdx)
-            aIdx = attributed.characters.index(after: aIdx)
-        }
-        stringToAttr[plainText.endIndex] = attributed.endIndex
-
-        var searchStart = textLower.startIndex
-        while let range = textLower.range(of: searchLower, range: searchStart..<textLower.endIndex) {
-            if let attrLower = stringToAttr[range.lowerBound],
-               let attrUpper = stringToAttr[range.upperBound] {
-                attributed[attrLower..<attrUpper].backgroundColor = Color.yellow.opacity(0.6)
-            }
-            searchStart = range.upperBound
-        }
     }
 
     // MARK: - Inline Parsers

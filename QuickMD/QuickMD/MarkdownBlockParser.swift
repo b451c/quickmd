@@ -65,7 +65,7 @@ struct MarkdownBlockParser: Sendable {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
 
                 // Store the fence characters (just the backticks/tildes prefix)
-                let fenceChar = trimmedLine.first!
+                guard let fenceChar = trimmedLine.first else { i += 1; continue }
                 var fenceLength = 0
                 for ch in trimmedLine {
                     if ch == fenceChar { fenceLength += 1 } else { break }

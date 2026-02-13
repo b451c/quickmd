@@ -443,7 +443,7 @@ class PDFExportManager {
             }
 
             pageBlocks.append((image: image, size: size, yOffset: currentY))
-            currentY += blockHeight + 4  // 4pt spacing between blocks (matches LazyVStack spacing)
+            currentY += blockHeight + 8  // 8pt spacing between blocks (matches LazyVStack spacing)
         }
 
         // Flush last page
@@ -534,7 +534,7 @@ struct ExportPDFCommand: View {
                 PDFExportManager.exportToPDF(documentText: text)
             }
         }
-        .disabled(documentText == nil || documentText!.isEmpty)
+        .disabled(documentText?.isEmpty ?? true)
         .keyboardShortcut("e", modifiers: [.command, .shift])
     }
 }
@@ -548,7 +548,7 @@ struct PrintCommand: View {
                 PrintManager.printDocument(documentText: text)
             }
         }
-        .disabled(documentText == nil || documentText!.isEmpty)
+        .disabled(documentText?.isEmpty ?? true)
         .keyboardShortcut("p", modifiers: .command)
     }
 }

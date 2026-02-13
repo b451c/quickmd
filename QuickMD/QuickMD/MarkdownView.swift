@@ -343,12 +343,11 @@ struct MarkdownView: View {
                 let hashes = trimmed[match].trimmingCharacters(in: .whitespaces)
                 let level = hashes.count
 
-                if startLine != nil {
+                if let start = startLine {
                     // We're inside the target section — check if this heading ends it
                     if level <= targetLevel {
                         // Found a same-or-higher level heading — extract up to here
-                        let sectionLines = Array(lines[startLine!..<i])
-                        return trimTrailingBlankLines(sectionLines)
+                        return trimTrailingBlankLines(Array(lines[start..<i]))
                     }
                 } else if headingCount == targetOccurrence {
                     // Check level matches (it should, since we're tracking the same headings list)
@@ -365,18 +364,16 @@ struct MarkdownView: View {
             if i > 0 && !lines[i - 1].trimmingCharacters(in: .whitespaces).isEmpty {
                 if trimmed.allSatisfy({ $0 == "=" }) && trimmed.count >= 3 {
                     let level = 1
-                    if startLine != nil && level <= targetLevel {
-                        let sectionLines = Array(lines[startLine!..<(i - 1)])
-                        return trimTrailingBlankLines(sectionLines)
+                    if let start = startLine, level <= targetLevel {
+                        return trimTrailingBlankLines(Array(lines[start..<(i - 1)]))
                     } else if startLine == nil && headingCount == targetOccurrence && level == targetLevel {
                         startLine = i - 1
                     }
                     headingCount += 1
                 } else if trimmed.allSatisfy({ $0 == "-" }) && trimmed.count >= 3 {
                     let level = 2
-                    if startLine != nil && level <= targetLevel {
-                        let sectionLines = Array(lines[startLine!..<(i - 1)])
-                        return trimTrailingBlankLines(sectionLines)
+                    if let start = startLine, level <= targetLevel {
+                        return trimTrailingBlankLines(Array(lines[start..<(i - 1)]))
                     } else if startLine == nil && headingCount == targetOccurrence && level == targetLevel {
                         startLine = i - 1
                     }
@@ -497,9 +494,6 @@ struct MarkdownView: View {
         }
     }
 
-    private func highlightSearchInText(_ attributed: AttributedString, focusedOccurrence: Int? = nil) -> AttributedString {
-        searchHighlight(attributed, term: searchText, focusedOccurrence: focusedOccurrence)
-    }
 }
 
 // MARK: - Heading Block View (hover-to-copy section)
