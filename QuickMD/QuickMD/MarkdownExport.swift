@@ -8,10 +8,18 @@ struct FocusedDocumentTextKey: FocusedValueKey {
     typealias Value = String
 }
 
+struct FocusedSearchActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var documentText: String? {
         get { self[FocusedDocumentTextKey.self] }
         set { self[FocusedDocumentTextKey.self] = newValue }
+    }
+    var searchAction: (() -> Void)? {
+        get { self[FocusedSearchActionKey.self] }
+        set { self[FocusedSearchActionKey.self] = newValue }
     }
 }
 

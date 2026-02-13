@@ -123,12 +123,9 @@ struct MarkdownBlockParser: Sendable {
                 }
             }
 
-            // Blockquote detection - accumulate consecutive > lines
+            // Blockquote detection - group consecutive > lines by nesting level
             if trimmed.hasPrefix(">") {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
-
-                var quoteLines: [String] = []
-                var maxLevel = 1
 
                 while i < lines.count {
                     let qLine = lines[i].trimmingCharacters(in: .whitespaces)
@@ -140,21 +137,42 @@ struct MarkdownBlockParser: Sendable {
                     while scanner.hasPrefix(">") {
                         level += 1
                         scanner = scanner.dropFirst()
-                        // Skip optional space after each >
                         if scanner.hasPrefix(" ") {
                             scanner = scanner.dropFirst()
                         }
                     }
-                    maxLevel = max(maxLevel, level)
 
-                    // Content is everything after the > markers
-                    quoteLines.append(String(scanner))
+                    // Accumulate consecutive lines at the same nesting level
+                    let groupLevel = level
+                    var groupLines = [String(scanner)]
                     i += 1
-                }
 
-                let content = quoteLines.joined(separator: "\n")
-                blocks.append(.blockquote(index: blockIndex, content: content, level: maxLevel))
-                blockIndex += 1
+                    while i < lines.count {
+                        let nextLine = lines[i].trimmingCharacters(in: .whitespaces)
+                        guard nextLine.hasPrefix(">") else { break }
+
+                        var nextLevel = 0
+                        var nextScanner = nextLine[...]
+                        while nextScanner.hasPrefix(">") {
+                            nextLevel += 1
+                            nextScanner = nextScanner.dropFirst()
+                            if nextScanner.hasPrefix(" ") {
+                                nextScanner = nextScanner.dropFirst()
+                            }
+                        }
+
+                        guard nextLevel == groupLevel else { break }
+                        groupLines.append(String(nextScanner))
+                        i += 1
+                    }
+
+                    let content = groupLines.joined(separator: "\n")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !content.isEmpty {
+                        blocks.append(.blockquote(index: blockIndex, content: content, level: groupLevel))
+                        blockIndex += 1
+                    }
+                }
                 continue
             }
 

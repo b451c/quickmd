@@ -75,7 +75,10 @@ struct SearchBar: View {
         .padding(.vertical, 6)
         .background(.ultraThinMaterial)
         .onAppear {
-            isSearchFieldFocused = true
+            // Delay focus to allow SwiftUI to finish layout
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                isSearchFieldFocused = true
+            }
         }
     }
 }

@@ -24,6 +24,9 @@ struct QuickMDApp: App {
                 ExportPDFCommand()
                 PrintCommand()
             }
+            CommandGroup(replacing: .textEditing) {
+                FindMenuCommand()
+            }
             CommandGroup(replacing: .help) {
                 Button("QuickMD Help") {
                     NSWorkspace.shared.open(AppURLs.github)
@@ -55,6 +58,17 @@ struct QuickMDApp: App {
         }
         .windowResizability(.contentSize)
         #endif
+    }
+}
+
+struct FindMenuCommand: View {
+    @FocusedValue(\.searchAction) var searchAction
+
+    var body: some View {
+        Button("Find...") {
+            searchAction?()
+        }
+        .keyboardShortcut("f", modifiers: .command)
     }
 }
 

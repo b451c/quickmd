@@ -25,7 +25,7 @@ struct BlockquoteView: View {
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(theme.blockquoteColor.opacity(0.5))
                     .frame(width: 3)
-                    .padding(.trailing, 10)
+                    .padding(.trailing, 8)
             }
 
             // Content
@@ -43,10 +43,8 @@ struct BlockquoteView: View {
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.leading, 16)
+        .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.codeBackgroundColor.opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }

@@ -224,7 +224,7 @@ struct MarkdownRenderer: Sendable {
         while let range = textLower.range(of: searchLower, range: searchStart..<textLower.endIndex) {
             if let attrLower = stringToAttr[range.lowerBound],
                let attrUpper = stringToAttr[range.upperBound] {
-                attributed[attrLower..<attrUpper].backgroundColor = Color.yellow.opacity(0.3)
+                attributed[attrLower..<attrUpper].backgroundColor = Color.yellow.opacity(0.6)
             }
             searchStart = range.upperBound
         }
@@ -237,7 +237,14 @@ struct MarkdownRenderer: Sendable {
 
         // Count opening backticks (support 1 or 2)
         let backtickCount = remaining.prefix(while: { $0 == "`" }).count
-        guard backtickCount <= 2 else { return nil }  // Only support ` and ``
+        guard backtickCount <= 2 else {
+            // 3+ backticks in inline context — render as literal backtick characters
+            let backticks = String(repeating: "`", count: backtickCount)
+            var attr = AttributedString(backticks)
+            attr.font = .system(size: 14)
+            attr.foregroundColor = theme.textColor
+            return (attr, remaining.dropFirst(backtickCount))
+        }
 
         let closingMarker = String(repeating: "`", count: backtickCount)
         let afterOpening = remaining.dropFirst(backtickCount)

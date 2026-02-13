@@ -13,6 +13,7 @@ struct MarkdownView: View {
     @State private var isSearchVisible: Bool = false
     @State private var currentMatchIndex: Int = 0
     @State private var matchBlockIds: [String] = []
+    @State private var scrollTrigger: Int = 0
     @State private var keyMonitor: Any?
 
     /// Use cached theme instance to avoid allocations on each body evaluation
@@ -44,50 +45,15 @@ struct MarkdownView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 8) {
                             ForEach(cachedBlocks) { block in
-                                switch block {
-                                case .text(_, let attributedString):
-                                    if searchText.isEmpty {
-                                        Text(attributedString)
-                                            .textSelection(.enabled)
-                                            .id(block.id)
-                                    } else {
-                                        Text(highlightSearchInText(attributedString))
-                                            .textSelection(.enabled)
-                                            .id(block.id)
-                                    }
-
-                                case .table(_, let headers, let rows, let alignments):
-                                    TableBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme)
-                                        .padding(.vertical, 8)
-                                        .id(block.id)
-
-                                case .codeBlock(_, let code, let language):
-                                    CodeBlockView(code: code, language: language, theme: theme)
-                                        .padding(.vertical, 4)
-                                        .id(block.id)
-
-                                case .image(_, let url, let alt):
-                                    ImageBlockView(url: url, alt: alt, theme: theme, documentURL: documentURL)
-                                        .padding(.vertical, 8)
-                                        .id(block.id)
-
-                                case .blockquote(_, let content, let level):
-                                    BlockquoteView(content: content, level: level, theme: theme)
-                                        .padding(.vertical, 4)
-                                        .id(block.id)
-                                }
+                                blockView(for: block)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 32)
                         .padding(.vertical, 24)
                     }
-                    .onChange(of: currentMatchIndex) { newIndex in
-                        if !matchBlockIds.isEmpty && newIndex < matchBlockIds.count {
-                            withAnimation {
-                                proxy.scrollTo(matchBlockIds[newIndex], anchor: .center)
-                            }
-                        }
+                    .onChange(of: scrollTrigger) { _ in
+                        scrollToMatch(proxy: proxy, index: currentMatchIndex)
                     }
                 }
             }
@@ -104,6 +70,7 @@ struct MarkdownView: View {
         }
         .background(theme.backgroundColor)
         .focusedSceneValue(\.documentText, document.text)
+        .focusedSceneValue(\.searchAction, { toggleSearch() })
         .frame(minWidth: 400, minHeight: 300)
         .task(id: DocumentIdentity(text: document.text, colorScheme: colorScheme)) {
             let text = document.text
@@ -118,14 +85,14 @@ struct MarkdownView: View {
         }
         .onAppear {
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "f" {
-                    isSearchVisible.toggle()
-                    if !isSearchVisible { searchText = "" }
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                if flags.contains(.command) && event.charactersIgnoringModifiers == "f" {
+                    toggleSearch()
                     return nil
                 }
-                if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "g" {
+                if flags.contains(.command) && event.charactersIgnoringModifiers == "g" {
                     if isSearchVisible {
-                        if event.modifierFlags.contains(.shift) {
+                        if flags.contains(.shift) {
                             navigateMatch(forward: false)
                         } else {
                             navigateMatch(forward: true)
@@ -148,7 +115,59 @@ struct MarkdownView: View {
         }
     }
 
+    // MARK: - Block Rendering
+
+    @ViewBuilder
+    private func blockView(for block: MarkdownBlock) -> some View {
+        let view = Group {
+            switch block {
+            case .text(_, let attributedString):
+                if searchText.isEmpty {
+                    Text(attributedString)
+                        .textSelection(.enabled)
+                } else {
+                    Text(highlightSearchInText(attributedString))
+                        .textSelection(.enabled)
+                }
+
+            case .table(_, let headers, let rows, let alignments):
+                TableBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme)
+                    .padding(.vertical, 8)
+
+            case .codeBlock(_, let code, let language):
+                CodeBlockView(code: code, language: language, theme: theme)
+                    .padding(.vertical, 4)
+
+            case .image(_, let url, let alt):
+                ImageBlockView(url: url, alt: alt, theme: theme, documentURL: documentURL)
+                    .padding(.vertical, 8)
+
+            case .blockquote(_, let content, let level):
+                BlockquoteView(content: content, level: level, theme: theme)
+                    .padding(.vertical, 4)
+            }
+        }
+
+        view.id(block.id)
+    }
+
     // MARK: - Search Helpers
+
+    private func toggleSearch() {
+        isSearchVisible.toggle()
+        if !isSearchVisible { searchText = "" }
+    }
+
+    private func scrollToMatch(proxy: ScrollViewProxy, index: Int) {
+        guard !matchBlockIds.isEmpty, index >= 0, index < matchBlockIds.count else { return }
+        let targetId = matchBlockIds[index]
+        // Small delay to ensure layout is stable after .id() registration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                proxy.scrollTo(targetId, anchor: .top)
+            }
+        }
+    }
 
     private func navigateMatch(forward: Bool) {
         guard !matchBlockIds.isEmpty else { return }
@@ -157,6 +176,7 @@ struct MarkdownView: View {
         } else {
             currentMatchIndex = (currentMatchIndex - 1 + matchBlockIds.count) % matchBlockIds.count
         }
+        scrollTrigger += 1
     }
 
     private func updateMatchResults(for term: String) {
@@ -191,6 +211,9 @@ struct MarkdownView: View {
 
         matchBlockIds = matches
         currentMatchIndex = 0
+        if !matches.isEmpty {
+            scrollTrigger += 1
+        }
     }
 
     private func highlightSearchInText(_ attributed: AttributedString) -> AttributedString {
@@ -215,7 +238,7 @@ struct MarkdownView: View {
         while let range = textLower.range(of: searchLower, range: searchStart..<textLower.endIndex) {
             if let attrLower = stringToAttr[range.lowerBound],
                let attrUpper = stringToAttr[range.upperBound] {
-                result[attrLower..<attrUpper].backgroundColor = Color.yellow.opacity(0.3)
+                result[attrLower..<attrUpper].backgroundColor = Color.yellow.opacity(0.6)
             }
             searchStart = range.upperBound
         }
