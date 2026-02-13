@@ -8,6 +8,8 @@ struct CodeBlockView: View {
     let code: String
     let language: String
     let theme: MarkdownTheme
+    var searchText: String = ""
+    var focusedOccurrence: Int? = nil
 
     // MARK: - Static Regex Patterns (compiled once, reused)
 
@@ -48,7 +50,7 @@ struct CodeBlockView: View {
                     .padding(.bottom, 4)
             }
 
-            Text(displayedCode)
+            Text(searchText.isEmpty ? displayedCode : searchHighlight(displayedCode, term: searchText, focusedOccurrence: focusedOccurrence))
                 .font(.system(size: 13, design: .monospaced))
                 .textSelection(.enabled)
                 .padding(.horizontal, 12)

@@ -16,6 +16,10 @@ struct FocusedToggleToCKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct FocusedCopyDocumentActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var documentText: String? {
         get { self[FocusedDocumentTextKey.self] }
@@ -28,6 +32,10 @@ extension FocusedValues {
     var toggleToCAction: (() -> Void)? {
         get { self[FocusedToggleToCKey.self] }
         set { self[FocusedToggleToCKey.self] = newValue }
+    }
+    var copyDocumentAction: (() -> Void)? {
+        get { self[FocusedCopyDocumentActionKey.self] }
+        set { self[FocusedCopyDocumentActionKey.self] = newValue }
     }
 }
 
@@ -49,29 +57,29 @@ struct MarkdownPrintableView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(lightBlocks) { block in
-                switch block {
-                case .text(_, let attributedString):
+                switch block.content {
+                case .text(let attributedString):
                     // Force black text color
                     Text(attributedString)
                         .foregroundColor(.black)
 
-                case .table(_, let headers, let rows, let alignments):
+                case .table(let headers, let rows, let alignments):
                     PrintableTableView(headers: headers, rows: rows, alignments: alignments)
                         .padding(.vertical, 8)
 
-                case .codeBlock(_, let code, let language):
+                case .codeBlock(let code, let language):
                     PrintableCodeBlockView(code: code, language: language)
                         .padding(.vertical, 4)
 
-                case .image(_, let url, let alt):
+                case .image(let url, let alt):
                     PrintableImageView(url: url, alt: alt)
                         .padding(.vertical, 8)
 
-                case .blockquote(_, let content, let level):
+                case .blockquote(let content, let level):
                     PrintableBlockquoteView(content: content, level: level)
                         .padding(.vertical, 4)
 
-                case .heading(_, let level, let title):
+                case .heading(let level, let title):
                     let renderer = MarkdownRenderer(colorScheme: .light)
                     Text(renderer.renderHeader(title, level: level))
                         .foregroundColor(.black)
@@ -255,24 +263,24 @@ struct MarkdownPrintableBlockView: View {
 
     var body: some View {
         Group {
-            switch block {
-            case .text(_, let attributedString):
+            switch block.content {
+            case .text(let attributedString):
                 Text(attributedString)
                     .foregroundColor(.black)
 
-            case .table(_, let headers, let rows, let alignments):
+            case .table(let headers, let rows, let alignments):
                 PrintableTableView(headers: headers, rows: rows, alignments: alignments)
 
-            case .codeBlock(_, let code, let language):
+            case .codeBlock(let code, let language):
                 PrintableCodeBlockView(code: code, language: language)
 
-            case .image(_, let url, let alt):
+            case .image(let url, let alt):
                 PrintableImageView(url: url, alt: alt)
 
-            case .blockquote(_, let content, let level):
+            case .blockquote(let content, let level):
                 PrintableBlockquoteView(content: content, level: level)
 
-            case .heading(_, let level, let title):
+            case .heading(let level, let title):
                 Text(renderer.renderHeader(title, level: level))
                     .foregroundColor(.black)
             }

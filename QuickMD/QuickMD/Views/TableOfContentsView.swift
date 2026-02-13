@@ -14,6 +14,7 @@ struct ToCEntry: Identifiable {
 struct TableOfContentsView: View {
     let headings: [ToCEntry]
     let onSelect: (String) -> Void
+    var onCopy: ((ToCEntry) -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("selectedTheme") private var selectedThemeName: String = "Auto"
 
@@ -42,27 +43,66 @@ struct TableOfContentsView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(headings) { entry in
-                        Button {
+                        ToCEntryRow(entry: entry, theme: theme, onSelect: {
                             onSelect(entry.id)
-                        } label: {
-                            Text(entry.title)
-                                .font(.system(size: fontSize(for: entry.level), weight: fontWeight(for: entry.level)))
-                                .foregroundColor(theme.textColor)
-                                .lineLimit(2)
-                                .truncationMode(.tail)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.leading, indentation(for: entry.level))
-                                .padding(.trailing, 8)
-                                .padding(.vertical, 5)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
+                        }, onCopy: onCopy != nil ? {
+                            onCopy?(entry)
+                        } : nil)
                     }
                 }
                 .padding(.vertical, 4)
             }
         }
         .background(theme.backgroundColor.opacity(0.5))
+    }
+}
+
+// MARK: - ToC Entry Row
+
+/// Individual ToC row with hover-to-reveal copy button
+private struct ToCEntryRow: View {
+    let entry: ToCEntry
+    let theme: MarkdownTheme
+    let onSelect: () -> Void
+    let onCopy: (() -> Void)?
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button {
+                onSelect()
+            } label: {
+                Text(entry.title)
+                    .font(.system(size: fontSize(for: entry.level), weight: fontWeight(for: entry.level)))
+                    .foregroundColor(theme.textColor)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, indentation(for: entry.level))
+                    .padding(.vertical, 5)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isHovered, let onCopy = onCopy {
+                Button {
+                    onCopy()
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .padding(4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Copy section")
+                .transition(.opacity)
+            }
+        }
+        .padding(.trailing, 8)
+        .onHover { hovering in
+            isHovered = hovering
+        }
     }
 
     private func fontSize(for level: Int) -> CGFloat {

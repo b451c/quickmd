@@ -39,8 +39,10 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - ✅ Horizontal rules
 
 ### 🔍 **Navigation & Search**
-- Find in document (`⌘F`) with match count and navigation
+- Find in document (`⌘F`) with match count and per-word navigation
+- Word-level highlighting across all block types (text, code, tables, blockquotes)
 - Table of Contents sidebar (`⌘⇧T`) — auto-generated from headings
+- Copy entire document (`⌘⇧C`) or individual sections (hover heading → copy icon)
 - Export to PDF (`⌘⇧E`) and Print (`⌘P`)
 
 ### 🎨 **Custom Themes**
@@ -124,6 +126,7 @@ Now all your Markdown files will open instantly with QuickMD!
 | `⌘W` | Close window |
 | `⌘F` | Find in document |
 | `⌘G` / `⇧⌘G` | Next / previous match |
+| `⌘⇧C` | Copy Markdown source |
 | `⌘⇧T` | Toggle Table of Contents |
 | `⌘⇧E` | Export to PDF |
 | `⌘P` | Print |
@@ -228,6 +231,7 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Table of Contents sidebar (`⌘⇧T`)
 - [x] Reference-style links (`[text][id]`)
 - [x] Custom color themes (7 built-in)
+- [x] Copy to clipboard (whole file + sections)
 - [ ] LaTeX math support
 - [ ] Mermaid diagram rendering
 

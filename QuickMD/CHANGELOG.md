@@ -5,6 +5,25 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-02-13
+
+### Added
+- **Copy to Clipboard:** Copy entire raw markdown with `⌘⇧C` or the "Copy source" button (top-right)
+- **Copy sections:** Hover-to-reveal copy icon next to each heading in the main content and ToC sidebar
+- **Search highlighting in all block types:** Word-level highlighting now works inside code blocks, tables, and blockquotes (not just text and headings)
+- **Per-occurrence search navigation:** Arrow keys navigate between individual word occurrences, not just blocks. Counter shows exact match count (e.g., "5/19" for 19 individual words)
+- **Focused match distinction:** Current match highlighted in orange, all others in yellow
+
+### Fixed
+- **Critical performance fix:** `MarkdownBlock` converted from enum to struct with stored `let id`. SwiftUI's `LazyVStack` called the computed `id` getter thousands of times during layout — each call copied the entire enum (including `AttributedString`) and allocated a new String, causing 100% CPU hangs during scrolling
+- **Search navigation performance:** Pre-computed yellow highlight cache for text blocks + dedicated `@State` for focus tracking. Arrow key clicks now recompute highlighting for only 1 block instead of all visible blocks
+- **Optimized `searchHighlight`:** Replaced dictionary-based index mapping with single-pass parallel iteration — eliminates thousands of hash insertions per call
+
+### Changed
+- `MarkdownBlock` is now a struct wrapping `BlockContent` enum (stored `id` instead of computed)
+- `MarkdownExport` updated for new `block.content` pattern matching
+- Toast "Copied!" feedback for all copy operations (1.5s fade)
+
 ## [1.3] - 2026-02-13
 
 ### Added

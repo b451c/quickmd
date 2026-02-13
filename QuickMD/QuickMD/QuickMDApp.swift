@@ -27,6 +27,8 @@ struct QuickMDApp: App {
             CommandGroup(replacing: .textEditing) {
                 FindMenuCommand()
                 ToggleToCCommand()
+                Divider()
+                CopyMarkdownCommand()
             }
             CommandGroup(replacing: .help) {
                 Button("QuickMD Help") {
@@ -74,6 +76,18 @@ struct ToggleToCCommand: View {
             toggleToCAction?()
         }
         .keyboardShortcut("t", modifiers: [.command, .shift])
+    }
+}
+
+struct CopyMarkdownCommand: View {
+    @FocusedValue(\.copyDocumentAction) var copyDocumentAction
+
+    var body: some View {
+        Button("Copy Markdown") {
+            copyDocumentAction?()
+        }
+        .keyboardShortcut("c", modifiers: [.command, .shift])
+        .disabled(copyDocumentAction == nil)
     }
 }
 
