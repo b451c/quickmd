@@ -179,8 +179,7 @@ QuickMD/
 │   │   └── ThemePickerView.swift   # Theme settings (⌘,)
 │   └── Assets.xcassets/            # App icon + assets
 ├── CHANGELOG.md                    # Version history
-├── AppStore-Metadata.md            # App Store descriptions (EN/PL)
-└── demo-screenshot.md              # Demo file for screenshots
+└── demo.md                         # Demo file for testing
 ```
 
 ## Development

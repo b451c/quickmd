@@ -132,3 +132,10 @@ quickmd-landing-page-docs/
 # Claude Code
 .claude/
 thoughts/
+
+# Internal docs (kept locally, not for public repo)
+CLAUDE.md
+DEVELOPMENT.md
+QuickMD/AppStore-Metadata.md
+QuickMD/SCREENSHOT-PLAN.md
+QuickMD/demo-screenshot-v1.3.md
