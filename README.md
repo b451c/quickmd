@@ -34,13 +34,25 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - ✅ Task lists with checkboxes (`- [ ]` / `- [x]`)
 - ✅ Nested lists (ordered and unordered)
 - ✅ Images (local and remote URLs)
-- ✅ Links, blockquotes, horizontal rules
+- ✅ Links (inline, reference-style, autolinks)
+- ✅ Nested blockquotes with level indicators
+- ✅ Horizontal rules
+
+### 🔍 **Navigation & Search**
+- Find in document (`⌘F`) with match count and navigation
+- Table of Contents sidebar (`⌘⇧T`) — auto-generated from headings
+- Export to PDF (`⌘⇧E`) and Print (`⌘P`)
+
+### 🎨 **Custom Themes**
+- 7 built-in themes: Auto, Solarized Light/Dark, Dracula, GitHub, Gruvbox Dark, Nord
+- Settings panel (`⌘,`) with color previews
+- Theme persists across app restarts
 
 ### 💻 **Developer-Friendly**
 - Syntax highlighting for 10+ languages (Swift, Python, JavaScript, Go, Rust, etc.)
 - Perfect for README files and documentation
 - Handles AI-generated markdown perfectly
-- Dark mode that follows system settings
+- Dark mode that follows system settings (or choose a fixed theme)
 
 ### 🔒 **Privacy Focused**
 - No analytics, no tracking
@@ -110,8 +122,12 @@ Now all your Markdown files will open instantly with QuickMD!
 |----------|--------|
 | `⌘O` | Open file |
 | `⌘W` | Close window |
+| `⌘F` | Find in document |
+| `⌘G` / `⇧⌘G` | Next / previous match |
+| `⌘⇧T` | Toggle Table of Contents |
 | `⌘⇧E` | Export to PDF |
 | `⌘P` | Print |
+| `⌘,` | Settings (theme picker) |
 
 ## Tech Stack
 
@@ -122,9 +138,11 @@ Now all your Markdown files will open instantly with QuickMD!
 
 ### Key Components
 
-- Custom Markdown parser with block-level parsing
+- Custom Markdown parser with block-level parsing and reference link pre-pass
 - Regex-based syntax highlighting for code blocks
+- 7 color themes with `@AppStorage` persistence
 - `AsyncImage` for remote image rendering
+- Per-block PDF export with multi-page pagination
 - Native SwiftUI components for performance
 
 ## Project Structure
@@ -138,14 +156,18 @@ QuickMD/
 │   ├── MarkdownBlock.swift         # Block type enum
 │   ├── MarkdownBlockParser.swift   # Line-by-line block parser
 │   ├── MarkdownRenderer.swift      # Inline markdown → AttributedString
-│   ├── MarkdownTheme.swift         # Color themes + regex patterns
+│   ├── MarkdownTheme.swift         # 7 color themes, regex patterns
 │   ├── MarkdownExport.swift        # PDF export + print support
 │   ├── TipJarManager.swift         # StoreKit 2 IAP (App Store only)
 │   ├── TipJarView.swift            # Tip Jar UI (App Store only)
 │   ├── Views/
 │   │   ├── CodeBlockView.swift     # Syntax-highlighted code blocks
 │   │   ├── TableBlockView.swift    # Table rendering with alignment
-│   │   └── ImageBlockView.swift    # Local + remote image rendering
+│   │   ├── ImageBlockView.swift    # Local + remote image rendering
+│   │   ├── BlockquoteView.swift    # Nested blockquotes
+│   │   ├── SearchBar.swift         # Find in document (⌘F)
+│   │   ├── TableOfContentsView.swift # ToC sidebar (⌘⇧T)
+│   │   └── ThemePickerView.swift   # Theme settings (⌘,)
 │   └── Assets.xcassets/            # App icon + assets
 ├── CHANGELOG.md                    # Version history
 ├── AppStore-Metadata.md            # App Store descriptions (EN/PL)
@@ -201,11 +223,13 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 
 - [x] Export to PDF (`⌘⇧E`) and Print (`⌘P`)
 - [x] Syntax highlighting for code blocks
-- [ ] Table of contents navigation
-- [ ] Custom themes
+- [x] Find & search within document (`⌘F`)
+- [x] Nested blockquotes with level indicators
+- [x] Table of Contents sidebar (`⌘⇧T`)
+- [x] Reference-style links (`[text][id]`)
+- [x] Custom color themes (7 built-in)
 - [ ] LaTeX math support
 - [ ] Mermaid diagram rendering
-- [ ] Find & search within document
 
 Have a feature request? [Open an issue!](https://github.com/b451c/quickmd/issues)
 
