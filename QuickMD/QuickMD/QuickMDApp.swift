@@ -26,6 +26,7 @@ struct QuickMDApp: App {
             }
             CommandGroup(replacing: .textEditing) {
                 FindMenuCommand()
+                ToggleToCCommand()
             }
             CommandGroup(replacing: .help) {
                 Button("QuickMD Help") {
@@ -58,6 +59,17 @@ struct QuickMDApp: App {
         }
         .windowResizability(.contentSize)
         #endif
+    }
+}
+
+struct ToggleToCCommand: View {
+    @FocusedValue(\.toggleToCAction) var toggleToCAction
+
+    var body: some View {
+        Button("Table of Contents") {
+            toggleToCAction?()
+        }
+        .keyboardShortcut("t", modifiers: [.command, .shift])
     }
 }
 

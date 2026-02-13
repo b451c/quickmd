@@ -15,6 +15,9 @@ struct MarkdownView: View {
     @State private var matchBlockIds: [String] = []
     @State private var scrollTrigger: Int = 0
     @State private var keyMonitor: Any?
+    @State private var isToCVisible: Bool = false
+    @State private var headings: [ToCEntry] = []
+    @State private var tocScrollTarget: String?
 
     /// Use cached theme instance to avoid allocations on each body evaluation
     private var theme: MarkdownTheme {
@@ -27,50 +30,70 @@ struct MarkdownView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            VStack(spacing: 0) {
-                // Search bar at top
-                if isSearchVisible {
-                    SearchBar(
-                        searchText: $searchText,
-                        isVisible: $isSearchVisible,
-                        matchCount: matchBlockIds.count,
-                        currentMatch: currentMatchIndex,
-                        onNext: { navigateMatch(forward: true) },
-                        onPrevious: { navigateMatch(forward: false) }
-                    )
+        HStack(spacing: 0) {
+            // Table of Contents sidebar
+            if isToCVisible && !headings.isEmpty {
+                TableOfContentsView(headings: headings) { targetId in
+                    tocScrollTarget = targetId
                 }
-
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 8) {
-                            ForEach(cachedBlocks) { block in
-                                blockView(for: block)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 32)
-                        .padding(.vertical, 24)
-                    }
-                    .onChange(of: scrollTrigger) { _ in
-                        scrollToMatch(proxy: proxy, index: currentMatchIndex)
-                    }
-                }
+                .frame(width: 220)
+                Divider()
             }
 
-            #if APPSTORE
-            // Tip Jar button (App Store version)
-            TipJarButton(theme: theme)
-                .padding(16)
-            #else
-            // Donation button (GitHub version)
-            SupportButton(theme: theme)
-                .padding(16)
-            #endif
+            // Main content
+            ZStack(alignment: .bottomTrailing) {
+                VStack(spacing: 0) {
+                    // Search bar at top
+                    if isSearchVisible {
+                        SearchBar(
+                            searchText: $searchText,
+                            isVisible: $isSearchVisible,
+                            matchCount: matchBlockIds.count,
+                            currentMatch: currentMatchIndex,
+                            onNext: { navigateMatch(forward: true) },
+                            onPrevious: { navigateMatch(forward: false) }
+                        )
+                    }
+
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 8) {
+                                ForEach(cachedBlocks) { block in
+                                    blockView(for: block)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 32)
+                            .padding(.vertical, 24)
+                        }
+                        .onChange(of: scrollTrigger) { _ in
+                            scrollToMatch(proxy: proxy, index: currentMatchIndex)
+                        }
+                        .onChange(of: tocScrollTarget) { target in
+                            guard let target = target else { return }
+                            tocScrollTarget = nil
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                proxy.scrollTo(target, anchor: .top)
+                            }
+                        }
+                    }
+                }
+
+                #if APPSTORE
+                // Tip Jar button (App Store version)
+                TipJarButton(theme: theme)
+                    .padding(16)
+                #else
+                // Donation button (GitHub version)
+                SupportButton(theme: theme)
+                    .padding(16)
+                #endif
+            }
         }
         .background(theme.backgroundColor)
         .focusedSceneValue(\.documentText, document.text)
         .focusedSceneValue(\.searchAction, { toggleSearch() })
+        .focusedSceneValue(\.toggleToCAction, { withAnimation(.easeInOut(duration: 0.2)) { isToCVisible.toggle() } })
         .frame(minWidth: 400, minHeight: 300)
         .task(id: DocumentIdentity(text: document.text, colorScheme: colorScheme)) {
             let text = document.text
@@ -79,6 +102,12 @@ struct MarkdownView: View {
                 MarkdownBlockParser(colorScheme: scheme).parse(text)
             }.value
             cachedBlocks = blocks
+            headings = blocks.compactMap { block in
+                if case .heading(_, let level, let title) = block {
+                    return ToCEntry(id: block.id, level: level, title: title)
+                }
+                return nil
+            }
         }
         .onChange(of: searchText) { newValue in
             updateMatchResults(for: newValue)
@@ -88,6 +117,10 @@ struct MarkdownView: View {
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 if flags.contains(.command) && event.charactersIgnoringModifiers == "f" {
                     toggleSearch()
+                    return nil
+                }
+                if flags.contains(.command) && flags.contains(.shift) && event.charactersIgnoringModifiers == "t" {
+                    withAnimation(.easeInOut(duration: 0.2)) { isToCVisible.toggle() }
                     return nil
                 }
                 if flags.contains(.command) && event.charactersIgnoringModifiers == "g" {
@@ -145,6 +178,10 @@ struct MarkdownView: View {
             case .blockquote(_, let content, let level):
                 BlockquoteView(content: content, level: level, theme: theme)
                     .padding(.vertical, 4)
+
+            case .heading(_, let level, let title):
+                Text(MarkdownRenderer(colorScheme: colorScheme).renderHeader(title, level: level))
+                    .textSelection(.enabled)
             }
         }
 
@@ -202,6 +239,8 @@ struct MarkdownView: View {
                 blockText = content
             case .image(_, _, let alt):
                 blockText = alt
+            case .heading(_, _, let title):
+                blockText = title
             }
 
             if blockText.lowercased().contains(searchLower) {

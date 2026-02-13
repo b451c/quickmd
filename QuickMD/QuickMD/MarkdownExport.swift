@@ -12,6 +12,10 @@ struct FocusedSearchActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct FocusedToggleToCKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var documentText: String? {
         get { self[FocusedDocumentTextKey.self] }
@@ -20,6 +24,10 @@ extension FocusedValues {
     var searchAction: (() -> Void)? {
         get { self[FocusedSearchActionKey.self] }
         set { self[FocusedSearchActionKey.self] = newValue }
+    }
+    var toggleToCAction: (() -> Void)? {
+        get { self[FocusedToggleToCKey.self] }
+        set { self[FocusedToggleToCKey.self] = newValue }
     }
 }
 
@@ -62,6 +70,11 @@ struct MarkdownPrintableView: View {
                 case .blockquote(_, let content, let level):
                     PrintableBlockquoteView(content: content, level: level)
                         .padding(.vertical, 4)
+
+                case .heading(_, let level, let title):
+                    let renderer = MarkdownRenderer(colorScheme: .light)
+                    Text(renderer.renderHeader(title, level: level))
+                        .foregroundColor(.black)
                 }
             }
         }
@@ -258,6 +271,10 @@ struct MarkdownPrintableBlockView: View {
 
             case .blockquote(_, let content, let level):
                 PrintableBlockquoteView(content: content, level: level)
+
+            case .heading(_, let level, let title):
+                Text(renderer.renderHeader(title, level: level))
+                    .foregroundColor(.black)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

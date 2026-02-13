@@ -12,6 +12,7 @@ struct MarkdownBlockParser: Sendable {
 
     // Static precompiled regex (avoid recompilation per parse call)
     private static let imageRegex = try! NSRegularExpression(pattern: MarkdownTheme.imagePattern)
+    private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
 
     init(colorScheme: ColorScheme) {
         self.colorScheme = colorScheme
@@ -65,6 +66,20 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
+            // ATX headers (# H1 ... ###### H6) — detect at block level
+            let nsRange = NSRange(line.startIndex..., in: line)
+            if let match = Self.headerRegex.firstMatch(in: line, range: nsRange),
+               let hashRange = Range(match.range(at: 1), in: line),
+               let contentRange = Range(match.range(at: 2), in: line) {
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
+                let level = min(max(line[hashRange].count, 1), 6)
+                let title = String(line[contentRange]).trimmingCharacters(in: .whitespaces)
+                blocks.append(.heading(index: blockIndex, level: level, title: title))
+                blockIndex += 1
+                i += 1
+                continue
+            }
+
             // Standalone image (on its own line)
             if let imageMatch = parseStandaloneImage(line) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
@@ -81,7 +96,7 @@ struct MarkdownBlockParser: Sendable {
 
                 if nextLine.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
-                    blocks.append(.text(index: blockIndex, renderSetextHeader(trimmed, level: 1)))
+                    blocks.append(.heading(index: blockIndex, level: 1, title: trimmed))
                     blockIndex += 1
                     i += 2
                     continue
@@ -90,7 +105,7 @@ struct MarkdownBlockParser: Sendable {
                 if nextLine.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil &&
                    !isTableSeparator(nextLine) {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
-                    blocks.append(.text(index: blockIndex, renderSetextHeader(trimmed, level: 2)))
+                    blocks.append(.heading(index: blockIndex, level: 2, title: trimmed))
                     blockIndex += 1
                     i += 2
                     continue

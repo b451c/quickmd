@@ -80,7 +80,7 @@ struct MarkdownRenderer: Sendable {
 
     // MARK: - Block Renderers
 
-    private func renderHeader(_ text: String, level: Int) -> AttributedString {
+    func renderHeader(_ text: String, level: Int) -> AttributedString {
         var attr = renderInlineFormatting(text)
         let sizes: [CGFloat] = [32, 26, 22, 18, 16, 14]
         // Safety guard: ensure level is within bounds to prevent crash

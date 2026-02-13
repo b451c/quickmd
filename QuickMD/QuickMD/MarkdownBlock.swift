@@ -13,6 +13,7 @@ enum MarkdownBlock: Identifiable, Sendable {
     case codeBlock(index: Int, code: String, language: String)
     case image(index: Int, url: String, alt: String)
     case blockquote(index: Int, content: String, level: Int)
+    case heading(index: Int, level: Int, title: String)
 
     /// Stable identifier based on block type and parse-time index
     /// Using index ensures identity remains constant even when content hash changes
@@ -23,6 +24,7 @@ enum MarkdownBlock: Identifiable, Sendable {
         case .codeBlock(let idx, _, _): return "code-\(idx)"
         case .image(let idx, _, _): return "image-\(idx)"
         case .blockquote(let idx, _, _): return "blockquote-\(idx)"
+        case .heading(let idx, _, _): return "heading-\(idx)"
         }
     }
 }
