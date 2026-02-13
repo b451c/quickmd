@@ -8,26 +8,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.3] - 2026-02-13
 
 ### Added
-- **Reference-style links (D3):** Full support for `[text][id]`, `[text][]` (collapsed), and `[text]` (shortcut) reference link formats per CommonMark spec
-  - Pre-pass parser collects `[id]: url` definitions from anywhere in document
-  - Reference definitions are hidden from rendered output
+- **Find & Search (D5):** `⌘F` search with match highlighting and navigation
+  - SearchBar with match counter ("1/5"), `⌘G` / `⇧⌘G` next/previous, Escape to close
+  - Yellow highlight on matches via AttributedString index mapping
+  - `ScrollViewReader` scrolls to matched blocks
+  - `NSEvent.addLocalMonitorForEvents` for macOS 13 keyboard shortcut compatibility
+- **Nested blockquotes (D2):** Full blockquote support with nesting levels
+  - New `.blockquote(index, content, level)` block type
+  - `BlockquoteView` with left border indicator per nesting level
+  - `PrintableBlockquoteView` for PDF/print export
+- **Double-backtick inline code (D1):** `` ``code with ` backtick`` `` per CommonMark spec
+  - Backtick count matching, leading/trailing space stripping
+- **Per-block PDF export (C4):** Redesigned multi-page PDF rendering
+  - Each block rendered individually via `ImageRenderer`
+  - Page breaks only between blocks (no mid-block splits)
+  - `MarkdownPrintableBlockView` for single-block rendering
+- **Table of Contents (D4):** Sidebar with document headings (`⌘⇧T`)
+  - Auto-generated from H1-H6 headings
+  - Click-to-navigate with `ScrollViewReader`
+  - Font size/weight scaled by heading level
+  - `TableOfContentsView` with `ToCEntry` model
+- **Reference-style links (D3):** Full CommonMark reference link support
+  - `[text][id]`, `[text][]` (collapsed), `[text]` (shortcut) formats
+  - Pre-pass parser collects `[id]: url` definitions, hides them from output
   - Case-insensitive ID matching
-- **Custom color themes (D6):** 7 selectable themes via Settings (Cmd+,)
-  - Auto (follows system light/dark)
-  - Solarized Light, Solarized Dark
-  - Dracula
-  - GitHub
-  - Gruvbox Dark
-  - Nord
-  - Theme selection persists across app restarts (`@AppStorage`)
-  - Color bar preview for each theme in Settings picker
+- **Custom color themes (D6):** 7 selectable themes via Settings (`⌘,`)
+  - Auto (follows system light/dark), Solarized Light, Solarized Dark, Dracula, GitHub, Gruvbox Dark, Nord
+  - `ThemePickerView` with color bar previews in Settings scene
+  - `@AppStorage` persistence across app restarts
   - PDF/Print always renders in light theme (independent of selection)
 
 ### Changed
-- `MarkdownTheme` refactored from computed properties to stored `let` properties with static theme instances
-- `MarkdownRenderer` and `MarkdownBlockParser` accept `MarkdownTheme` directly (convenience `colorScheme:` init kept for export code)
-- `ThemeName` enum (`CaseIterable`, `Sendable`) drives theme selection
-- Removed unused `renderSetextHeader()` dead code from parser
+- **Background parsing:** `MarkdownBlockParser.parse()` runs on `Task.detached` to avoid UI freezes
+- **MarkdownTheme** refactored from computed properties to stored `let` properties with `ThemeName` enum and static theme instances
+- **MarkdownRenderer** and **MarkdownBlockParser** accept `MarkdownTheme` directly (convenience `colorScheme:` init kept for export code)
+- `Color(hex:)` extension for readable theme color definitions
+- Comprehensive code audit: 35 fixes across 14 files (+222/-152 LOC)
+  - Sendable conformance on all value types (Swift 6 readiness)
+  - FocusedValue for multi-window document context
+  - Recursive inline parsing for nested bold/italic
+  - Link/image parser with bracket/parenthesis depth tracking
+  - Static `AppURLs` enum replacing force-unwrapped URL literals
+
+### Fixed
+- Search highlighting correctly maps String indices to AttributedString indices
+- Triple-backtick in inline context renders as literal characters (not code fence)
+- `⌘F` shortcut works reliably with NSEvent monitor
+- Blockquote nesting level detection handles mixed `>` spacing
+
+### Removed
+- Unused `renderSetextHeader()` dead code from parser
 
 ## [1.2.1] - 2026-01-22
 
