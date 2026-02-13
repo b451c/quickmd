@@ -81,6 +81,12 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 ### File Tree Example
 ![File Tree](QuickMD/Screenshots/screenshot-5.png)
 
+### Theme Picker & Tables (Dracula)
+![Theme Picker](QuickMD/Screenshots/screenshot-6.png)
+
+### Table of Contents & Blockquotes
+![Table of Contents](QuickMD/Screenshots/screenshot-7.png)
+
 </div>
 
 ## Installation
