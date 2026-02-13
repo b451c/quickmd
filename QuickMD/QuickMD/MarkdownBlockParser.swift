@@ -5,7 +5,7 @@ import SwiftUI
 /// Parses Markdown text into discrete blocks for rendering
 /// Handles: fenced code blocks, tables, images, setext headers, and text paragraphs
 struct MarkdownBlockParser: Sendable {
-    let colorScheme: ColorScheme
+    let theme: MarkdownTheme
 
     // Cached renderer instance - created once per parser, not per flushTextBuffer call
     private let renderer: MarkdownRenderer
@@ -13,10 +13,16 @@ struct MarkdownBlockParser: Sendable {
     // Static precompiled regex (avoid recompilation per parse call)
     private static let imageRegex = try! NSRegularExpression(pattern: MarkdownTheme.imagePattern)
     private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
+    private static let refLinkDefRegex = try! NSRegularExpression(pattern: MarkdownTheme.referenceLinkDefinitionPattern)
+
+    init(theme: MarkdownTheme) {
+        self.theme = theme
+        self.renderer = MarkdownRenderer(theme: theme)
+    }
 
     init(colorScheme: ColorScheme) {
-        self.colorScheme = colorScheme
-        self.renderer = MarkdownRenderer(colorScheme: colorScheme)
+        self.theme = MarkdownTheme.cached(for: colorScheme)
+        self.renderer = MarkdownRenderer(theme: self.theme)
     }
 
     /// Parse markdown text into an array of MarkdownBlock elements
@@ -25,7 +31,28 @@ struct MarkdownBlockParser: Sendable {
     func parse(_ markdown: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
         var blockIndex = 0  // Stable index for block identity
-        let lines = markdown.components(separatedBy: "\n")
+        let allLines = markdown.components(separatedBy: "\n")
+
+        // Pre-pass: collect reference link definitions and filter them out
+        var referenceDefinitions: [String: String] = [:]
+        var lines: [String] = []
+        for line in allLines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let nsRange = NSRange(trimmed.startIndex..., in: trimmed)
+            if let match = Self.refLinkDefRegex.firstMatch(in: trimmed, range: nsRange),
+               let idRange = Range(match.range(at: 1), in: trimmed),
+               let urlRange = Range(match.range(at: 2), in: trimmed) {
+                referenceDefinitions[String(trimmed[idRange]).lowercased()] = String(trimmed[urlRange])
+            } else {
+                lines.append(line)
+            }
+        }
+
+        // Use reference-aware renderer if definitions were found
+        let activeRenderer = referenceDefinitions.isEmpty
+            ? self.renderer
+            : MarkdownRenderer(theme: theme, referenceDefinitions: referenceDefinitions)
+
         var i = 0
         var textBuffer: [String] = []
 
@@ -35,7 +62,7 @@ struct MarkdownBlockParser: Sendable {
             // Fenced code block - trim whitespace before checking for closing fence
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
             if trimmedLine.hasPrefix("```") || trimmedLine.hasPrefix("~~~") {
-                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
 
                 // Store the fence characters (just the backticks/tildes prefix)
                 let fenceChar = trimmedLine.first!
@@ -71,7 +98,7 @@ struct MarkdownBlockParser: Sendable {
             if let match = Self.headerRegex.firstMatch(in: line, range: nsRange),
                let hashRange = Range(match.range(at: 1), in: line),
                let contentRange = Range(match.range(at: 2), in: line) {
-                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
                 let level = min(max(line[hashRange].count, 1), 6)
                 let title = String(line[contentRange]).trimmingCharacters(in: .whitespaces)
                 blocks.append(.heading(index: blockIndex, level: level, title: title))
@@ -82,7 +109,7 @@ struct MarkdownBlockParser: Sendable {
 
             // Standalone image (on its own line)
             if let imageMatch = parseStandaloneImage(line) {
-                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
                 blocks.append(.image(index: blockIndex, url: imageMatch.url, alt: imageMatch.alt))
                 blockIndex += 1
                 i += 1
@@ -95,7 +122,7 @@ struct MarkdownBlockParser: Sendable {
                 let nextLine = lines[i + 1].trimmingCharacters(in: .whitespaces)
 
                 if nextLine.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil {
-                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
+                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
                     blocks.append(.heading(index: blockIndex, level: 1, title: trimmed))
                     blockIndex += 1
                     i += 2
@@ -104,7 +131,7 @@ struct MarkdownBlockParser: Sendable {
 
                 if nextLine.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil &&
                    !isTableSeparator(nextLine) {
-                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
+                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
                     blocks.append(.heading(index: blockIndex, level: 2, title: trimmed))
                     blockIndex += 1
                     i += 2
@@ -115,7 +142,7 @@ struct MarkdownBlockParser: Sendable {
             // Table detection
             if line.filter({ $0 == "|" }).count >= 2 && !trimmed.isEmpty {
                 if !isTableSeparator(trimmed) && i + 1 < lines.count && isTableSeparator(lines[i + 1]) {
-                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
+                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
 
                     let headers = parseTableRow(line)
                     let columnCount = headers.count
@@ -140,7 +167,7 @@ struct MarkdownBlockParser: Sendable {
 
             // Blockquote detection - group consecutive > lines by nesting level
             if trimmed.hasPrefix(">") {
-                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
 
                 while i < lines.count {
                     let qLine = lines[i].trimmingCharacters(in: .whitespaces)
@@ -195,7 +222,7 @@ struct MarkdownBlockParser: Sendable {
             i += 1
         }
 
-        flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex)
+        flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
         return blocks
     }
 
@@ -271,19 +298,10 @@ struct MarkdownBlockParser: Sendable {
 
     // MARK: - Text Buffer
 
-    private func flushTextBuffer(_ buffer: inout [String], to blocks: inout [MarkdownBlock], index: inout Int) {
+    private func flushTextBuffer(_ buffer: inout [String], to blocks: inout [MarkdownBlock], index: inout Int, using renderer: MarkdownRenderer) {
         guard !buffer.isEmpty else { return }
         blocks.append(.text(index: index, renderer.render(buffer.joined(separator: "\n"))))
         index += 1
         buffer = []
-    }
-
-    // MARK: - Setext Headers
-
-    /// Render setext-style header (underlined with === or ---)
-    private func renderSetextHeader(_ text: String, level: Int) -> AttributedString {
-        var attr = renderer.renderInline(text)
-        attr.font = .system(size: level == 1 ? 32 : 26, weight: .bold)
-        return attr
     }
 }

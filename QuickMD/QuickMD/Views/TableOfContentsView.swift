@@ -15,9 +15,11 @@ struct TableOfContentsView: View {
     let headings: [ToCEntry]
     let onSelect: (String) -> Void
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("selectedTheme") private var selectedThemeName: String = "Auto"
 
     private var theme: MarkdownTheme {
-        MarkdownTheme.cached(for: colorScheme)
+        let name = ThemeName(rawValue: selectedThemeName) ?? .auto
+        return MarkdownTheme.theme(named: name, colorScheme: colorScheme)
     }
 
     var body: some View {

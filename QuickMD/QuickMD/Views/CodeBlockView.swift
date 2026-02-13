@@ -98,7 +98,7 @@ struct CodeBlockView: View {
     private var cacheKey: Int {
         var hasher = Hasher()
         hasher.combine(code)
-        hasher.combine(theme.colorScheme)
+        hasher.combine(theme.name)
         return hasher.finalize()
     }
 

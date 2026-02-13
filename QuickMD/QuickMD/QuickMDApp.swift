@@ -53,6 +53,10 @@ struct QuickMDApp: App {
         }
         .defaultSize(width: 800, height: 600)
 
+        Settings {
+            ThemePickerView()
+        }
+
         #if APPSTORE
         Window("Tip Jar", id: "tip-jar") {
             TipJarView()

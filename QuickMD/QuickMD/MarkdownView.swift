@@ -18,15 +18,18 @@ struct MarkdownView: View {
     @State private var isToCVisible: Bool = false
     @State private var headings: [ToCEntry] = []
     @State private var tocScrollTarget: String?
+    @AppStorage("selectedTheme") private var selectedThemeName: String = "Auto"
 
-    /// Use cached theme instance to avoid allocations on each body evaluation
+    /// Resolved theme from user selection + system color scheme
     private var theme: MarkdownTheme {
-        MarkdownTheme.cached(for: colorScheme)
+        let name = ThemeName(rawValue: selectedThemeName) ?? .auto
+        return MarkdownTheme.theme(named: name, colorScheme: colorScheme)
     }
 
     private struct DocumentIdentity: Equatable {
         let text: String
         let colorScheme: ColorScheme
+        let themeName: String
     }
 
     var body: some View {
@@ -95,11 +98,11 @@ struct MarkdownView: View {
         .focusedSceneValue(\.searchAction, { toggleSearch() })
         .focusedSceneValue(\.toggleToCAction, { withAnimation(.easeInOut(duration: 0.2)) { isToCVisible.toggle() } })
         .frame(minWidth: 400, minHeight: 300)
-        .task(id: DocumentIdentity(text: document.text, colorScheme: colorScheme)) {
+        .task(id: DocumentIdentity(text: document.text, colorScheme: colorScheme, themeName: selectedThemeName)) {
             let text = document.text
-            let scheme = colorScheme
+            let currentTheme = theme
             let blocks = await Task.detached(priority: .userInitiated) {
-                MarkdownBlockParser(colorScheme: scheme).parse(text)
+                MarkdownBlockParser(theme: currentTheme).parse(text)
             }.value
             cachedBlocks = blocks
             headings = blocks.compactMap { block in
@@ -180,7 +183,7 @@ struct MarkdownView: View {
                     .padding(.vertical, 4)
 
             case .heading(_, let level, let title):
-                Text(MarkdownRenderer(colorScheme: colorScheme).renderHeader(title, level: level))
+                Text(MarkdownRenderer(theme: theme).renderHeader(title, level: level))
                     .textSelection(.enabled)
             }
         }

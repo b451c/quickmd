@@ -5,6 +5,30 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3] - 2026-02-13
+
+### Added
+- **Reference-style links (D3):** Full support for `[text][id]`, `[text][]` (collapsed), and `[text]` (shortcut) reference link formats per CommonMark spec
+  - Pre-pass parser collects `[id]: url` definitions from anywhere in document
+  - Reference definitions are hidden from rendered output
+  - Case-insensitive ID matching
+- **Custom color themes (D6):** 7 selectable themes via Settings (Cmd+,)
+  - Auto (follows system light/dark)
+  - Solarized Light, Solarized Dark
+  - Dracula
+  - GitHub
+  - Gruvbox Dark
+  - Nord
+  - Theme selection persists across app restarts (`@AppStorage`)
+  - Color bar preview for each theme in Settings picker
+  - PDF/Print always renders in light theme (independent of selection)
+
+### Changed
+- `MarkdownTheme` refactored from computed properties to stored `let` properties with static theme instances
+- `MarkdownRenderer` and `MarkdownBlockParser` accept `MarkdownTheme` directly (convenience `colorScheme:` init kept for export code)
+- `ThemeName` enum (`CaseIterable`, `Sendable`) drives theme selection
+- Removed unused `renderSetextHeader()` dead code from parser
+
 ## [1.2.1] - 2026-01-22
 
 ### Changed

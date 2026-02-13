@@ -15,7 +15,7 @@ struct BlockquoteView: View {
         self.content = content
         self.level = level
         self.theme = theme
-        self.renderer = MarkdownRenderer(colorScheme: theme.colorScheme)
+        self.renderer = MarkdownRenderer(theme: theme)
     }
 
     var body: some View {

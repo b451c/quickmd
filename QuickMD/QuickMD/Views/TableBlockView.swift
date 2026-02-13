@@ -48,7 +48,7 @@ struct TableBlockView: View, TableAlignmentProvider {
         self.rows = rows
         self.alignments = alignments
         self.theme = theme
-        self.renderer = MarkdownRenderer(colorScheme: theme.colorScheme)
+        self.renderer = MarkdownRenderer(theme: theme)
         self.columnCount = headers.count
     }
 

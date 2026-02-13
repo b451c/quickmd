@@ -99,24 +99,16 @@ Pełna zamiana renderowania PDF z single-image na per-block:
 
 ---
 
-#### D3: Reference-style links
-**Wysiłek:** Średni | **Priorytet:** Niski
+#### D3: Reference-style links — ZREALIZOWANE
 
-```markdown
-[link text][id]
-...
-[id]: https://example.com "Optional Title"
-```
+Pełne wsparcie dla reference-style links per CommonMark:
+- Pre-pass w `MarkdownBlockParser`: skanowanie wszystkich linii, zbieranie definicji `[id]: url` do słownika
+- Filtracja definicji z renderowanego output (linie z definicjami nie wyświetlają się)
+- `MarkdownRenderer.tryParseLink()` rozszerzony o 3 formaty: `[text][id]`, `[text][]`, `[text]`
+- Case-insensitive matching ID
+- Nowy pattern `referenceLinkDefinitionPattern` w `MarkdownTheme`
 
-**Podejście:**
-1. Pre-pass w `MarkdownBlockParser`: skanowanie pliku w poszukiwaniu definicji `[id]: url`
-2. Budowanie słownika `[String: (url: String, title: String?)]`
-3. Przekazanie słownika do `MarkdownRenderer`
-4. W `tryParseLink`: sprawdzanie formatu `[text][id]` obok `[text](url)`
-
-**Pliki:** `MarkdownBlockParser.swift`, `MarkdownRenderer.swift`
-
-**Planowanie agentowe:** Jeden agent, oba pliki. Parser musi być pierwszy (pre-pass).
+**Pliki:** `MarkdownTheme.swift`, `MarkdownBlockParser.swift`, `MarkdownRenderer.swift`
 
 ---
 
@@ -151,21 +143,18 @@ Cmd+F wyszukiwanie z podświetlaniem i nawigacją:
 
 ---
 
-#### D6: Custom themes
-**Wysiłek:** Duży | **Priorytet:** Niski
+#### D6: Custom themes — ZREALIZOWANE
 
-Użytkownik wybiera motyw kolorystyczny (np. Solarized, Dracula, GitHub).
+7 predefiniowanych tematów kolorystycznych z persystencją wyboru:
+- `ThemeName` enum: Auto, Solarized Light/Dark, Dracula, GitHub, Gruvbox Dark, Nord
+- `MarkdownTheme` refactored: stored `let` properties zamiast computed, statyczne instancje per theme
+- `@AppStorage("selectedTheme")` w `MarkdownView` i `TableOfContentsView`
+- `Settings { ThemePickerView() }` scene — dostępna przez Cmd+,
+- `ThemePreviewBar` — kolorowe paski podglądu w pickerze
+- PDF/Print zawsze w Auto Light (niezależnie od wyboru)
+- `Color(hex:)` extension dla czytelnych definicji kolorów
 
-**Podejście:**
-1. Definicja protokołu `ThemeProtocol` lub rozszerzenie `MarkdownTheme`
-2. Predefiniowane tematy jako statyczne instancje
-3. `@AppStorage` dla persystencji wyboru
-4. Panel preferencji (Settings scene) z podglądem
-5. Integracja z `MarkdownTheme.cached(for:)` — cache per tema + colorScheme
-
-**Pliki:** `MarkdownTheme.swift` (rozszerzenie), nowy `Views/ThemePickerView.swift`, modyfikacja `QuickMDApp.swift`
-
-**Planowanie agentowe:** 2 agentów — model/dane, UI.
+**Pliki:** `MarkdownTheme.swift`, `MarkdownRenderer.swift`, `MarkdownBlockParser.swift`, `MarkdownView.swift`, `TableOfContentsView.swift`, `BlockquoteView.swift`, `TableBlockView.swift`, `CodeBlockView.swift`, `QuickMDApp.swift`, nowy `Views/ThemePickerView.swift`
 
 ---
 
@@ -176,8 +165,10 @@ Użytkownik wybiera motyw kolorystyczny (np. Solarized, Dracula, GitHub).
 | ~~**Następne**~~ | ~~D5 (Search)~~ | **ZREALIZOWANE** (luty 2026) |
 | ~~**Wkrótce**~~ | ~~D2 (Blockquotes), C4 (PDF per-block)~~ | **ZREALIZOWANE** (luty 2026) |
 | ~~**Później**~~ | ~~D1 (double-backtick)~~ | **ZREALIZOWANE** (luty 2026) |
-| **Następne** | D4 (ToC) | Nawigacja po nagłówkach z sidebar |
-| **Później** | D3 (Reference links), D6 (Themes) | Rzadko używane / kosmetyczne |
+| ~~**Następne**~~ | ~~D4 (ToC)~~ | **ZREALIZOWANE** (luty 2026) |
+| ~~**Później**~~ | ~~D3 (Reference links), D6 (Themes)~~ | **ZREALIZOWANE** (luty 2026) |
+
+**Faza D zakończona — wszystkie zadania rozwojowe zrealizowane.**
 
 ---
 

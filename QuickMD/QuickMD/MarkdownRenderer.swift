@@ -4,15 +4,23 @@ import SwiftUI
 struct MarkdownRenderer: Sendable {
     let theme: MarkdownTheme
     let searchTerm: String?
+    let referenceDefinitions: [String: String]
 
     // Static precompiled regex for parsing (avoid recompilation per line)
     private static let taskListRegex = try! NSRegularExpression(pattern: MarkdownTheme.taskListPattern)
     private static let autolinkRegex = try! NSRegularExpression(pattern: MarkdownTheme.autolinkPattern)
     private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
 
-    init(colorScheme: ColorScheme, searchTerm: String? = nil) {
+    init(theme: MarkdownTheme, searchTerm: String? = nil, referenceDefinitions: [String: String] = [:]) {
+        self.theme = theme
+        self.searchTerm = searchTerm
+        self.referenceDefinitions = referenceDefinitions
+    }
+
+    init(colorScheme: ColorScheme, searchTerm: String? = nil, referenceDefinitions: [String: String] = [:]) {
         self.theme = MarkdownTheme.cached(for: colorScheme)
         self.searchTerm = searchTerm
+        self.referenceDefinitions = referenceDefinitions
     }
 
     // MARK: - Main Render
@@ -360,35 +368,62 @@ struct MarkdownRenderer: Sendable {
     private func tryParseLink(_ remaining: inout Substring) -> (AttributedString, Substring)? {
         guard remaining.hasPrefix("["),
               let closeBracket = remaining.firstIndex(of: "]"),
-              let afterBracket = remaining.index(closeBracket, offsetBy: 1, limitedBy: remaining.endIndex),
-              remaining[afterBracket...].hasPrefix("(") else { return nil }
-
-        guard let urlStart = remaining.index(closeBracket, offsetBy: 2, limitedBy: remaining.endIndex) else { return nil }
-
-        // Scan for closing ')' with parenthesis depth tracking
-        var depth = 1
-        var urlEndIdx = urlStart
-        while urlEndIdx < remaining.endIndex {
-            if remaining[urlEndIdx] == "(" { depth += 1 }
-            else if remaining[urlEndIdx] == ")" {
-                depth -= 1
-                if depth == 0 { break }
-            }
-            urlEndIdx = remaining.index(after: urlEndIdx)
-        }
-        guard depth == 0 else { return nil }
+              let afterBracket = remaining.index(closeBracket, offsetBy: 1, limitedBy: remaining.endIndex) else { return nil }
 
         let linkText = String(remaining[remaining.index(after: remaining.startIndex)..<closeBracket])
-        let urlText = String(remaining[urlStart..<urlEndIdx])
 
-        var attr = AttributedString(linkText)
+        // 1. Standard inline link: [text](url)
+        if remaining[afterBracket...].hasPrefix("(") {
+            guard let urlStart = remaining.index(closeBracket, offsetBy: 2, limitedBy: remaining.endIndex) else { return nil }
+
+            // Scan for closing ')' with parenthesis depth tracking
+            var depth = 1
+            var urlEndIdx = urlStart
+            while urlEndIdx < remaining.endIndex {
+                if remaining[urlEndIdx] == "(" { depth += 1 }
+                else if remaining[urlEndIdx] == ")" {
+                    depth -= 1
+                    if depth == 0 { break }
+                }
+                urlEndIdx = remaining.index(after: urlEndIdx)
+            }
+            guard depth == 0 else { return nil }
+
+            let urlText = String(remaining[urlStart..<urlEndIdx])
+            return makeLink(text: linkText, url: urlText, remaining: remaining[remaining.index(after: urlEndIdx)...])
+        }
+
+        // 2. Reference link: [text][id] or [text][] (collapsed)
+        if remaining[afterBracket...].hasPrefix("[") {
+            let afterSecondOpen = remaining.index(after: afterBracket)
+            if afterSecondOpen < remaining.endIndex,
+               let closeSecondBracket = remaining[afterSecondOpen...].firstIndex(of: "]") {
+                let refId = String(remaining[afterSecondOpen..<closeSecondBracket])
+                let effectiveId = (refId.isEmpty ? linkText : refId).lowercased()
+                if let url = referenceDefinitions[effectiveId] {
+                    return makeLink(text: linkText, url: url,
+                                    remaining: remaining[remaining.index(after: closeSecondBracket)...])
+                }
+            }
+        }
+
+        // 3. Shortcut reference: [text] where text matches a definition ID
+        if let url = referenceDefinitions[linkText.lowercased()] {
+            return makeLink(text: linkText, url: url, remaining: remaining[afterBracket...])
+        }
+
+        return nil
+    }
+
+    private func makeLink(text: String, url: String, remaining: Substring) -> (AttributedString, Substring) {
+        var attr = AttributedString(text)
         attr.font = .system(size: 14)
         attr.foregroundColor = theme.linkColor
         attr.underlineStyle = .single
-        if let url = URL(string: urlText) {
-            attr.link = url
+        if let parsedUrl = URL(string: url) {
+            attr.link = parsedUrl
         }
-        return (attr, remaining[remaining.index(after: urlEndIdx)...])
+        return (attr, remaining)
     }
 
     private func tryParseImage(_ remaining: inout Substring) -> (AttributedString, Substring)? {

@@ -24,6 +24,7 @@
 		A1B2C3D40100000F /* BlockquoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000013 /* BlockquoteView.swift */; };
 		A1B2C3D401000010 /* SearchBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000014 /* SearchBar.swift */; };
 		A1B2C3D401000011 /* TableOfContentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000015 /* TableOfContentsView.swift */; };
+		A1B2C3D401000012 /* ThemePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000016 /* ThemePickerView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -48,6 +49,7 @@
 		A1B2C3D400000013 /* BlockquoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockquoteView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000014 /* SearchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchBar.swift; sourceTree = "<group>"; };
 		A1B2C3D400000015 /* TableOfContentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableOfContentsView.swift; sourceTree = "<group>"; };
+		A1B2C3D400000016 /* ThemePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePickerView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -100,6 +102,7 @@
 				A1B2C3D400000013 /* BlockquoteView.swift */,
 				A1B2C3D400000014 /* SearchBar.swift */,
 				A1B2C3D400000015 /* TableOfContentsView.swift */,
+				A1B2C3D400000016 /* ThemePickerView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -197,6 +200,7 @@
 				A1B2C3D40100000F /* BlockquoteView.swift in Sources */,
 				A1B2C3D401000010 /* SearchBar.swift in Sources */,
 				A1B2C3D401000011 /* TableOfContentsView.swift in Sources */,
+				A1B2C3D401000012 /* ThemePickerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

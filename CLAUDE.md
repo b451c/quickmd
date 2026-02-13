@@ -6,7 +6,7 @@
 
 - **Bundle ID:** `pl.falami.studio.QuickMD`
 - **Deployment target:** macOS 13.0 (Ventura)
-- **Current version:** 1.2.1
+- **Current version:** 1.3
 - **Language:** Swift 5.9, SwiftUI
 - **External dependencies:** None (zero third-party packages)
 
@@ -28,7 +28,7 @@ QuickMD/
 │   ├── MarkdownBlock.swift         # Block enum: .text, .table, .codeBlock, .image, .blockquote
 │   ├── MarkdownBlockParser.swift   # Line-by-line parser → [MarkdownBlock]
 │   ├── MarkdownRenderer.swift      # Inline markdown → AttributedString, search highlighting
-│   ├── MarkdownTheme.swift         # Colors, regex patterns, cached light/dark themes
+│   ├── MarkdownTheme.swift         # ThemeName enum, stored color properties, 7 theme definitions, regex patterns
 │   ├── MarkdownExport.swift        # Per-block PDF export, print, FocusedValue keys for multi-window
 │   ├── TipJarManager.swift         # StoreKit 2 IAP manager (App Store only)
 │   ├── TipJarView.swift            # Tip Jar window UI (App Store only)
@@ -37,7 +37,8 @@ QuickMD/
 │   │   ├── TableBlockView.swift    # Table rendering with column alignment
 │   │   ├── ImageBlockView.swift    # Local + remote image rendering
 │   │   ├── BlockquoteView.swift    # Nested blockquotes with left border indicators
-│   │   └── SearchBar.swift         # Cmd+F search bar with match navigation
+│   │   ├── SearchBar.swift         # Cmd+F search bar with match navigation
+│   │   └── ThemePickerView.swift   # Settings UI for theme selection (Cmd+,)
 │   ├── Assets.xcassets/            # App icon
 │   └── QuickMD.entitlements        # App Sandbox + print/PDF entitlements
 ├── Screenshots/                    # App Store & README screenshots
@@ -46,6 +47,7 @@ QuickMD/
 ├── demo-screenshot.md              # Demo file for taking screenshots
 ├── test-tables.md                  # Test file for table rendering
 ├── test-advanced.md                # Test file for advanced markdown features
+├── test-reference-links.md         # Test file for reference-style links
 └── QuickMD.xcodeproj/
 ```
 
@@ -108,8 +110,11 @@ The flag controls which monetization UI is compiled:
 
 ```
 .md file → MarkdownDocument (FileDocument)
-         → MarkdownView (main view)
+         → MarkdownView (main view, @AppStorage theme selection)
+         → MarkdownTheme.theme(named:colorScheme:) resolves active theme
          → MarkdownBlockParser.parse() → [MarkdownBlock]  (background thread)
+             Pre-pass: collects [id]: url reference definitions
+             Main pass: splits into blocks, renders text with reference-aware renderer
          → ForEach renders each block:
              .text → Text(AttributedString)  ← MarkdownRenderer
              .table → TableBlockView
@@ -118,7 +123,8 @@ The flag controls which monetization UI is compiled:
              .blockquote → BlockquoteView (nested, with left border)
          → SearchBar (Cmd+F) highlights matches, ScrollViewReader navigates
          → FocusedValue publishes document text for PDF/Print commands
-         → PDF export renders block-by-block (no mid-block page breaks)
+         → PDF export renders block-by-block (always Auto Light theme)
+         → Settings (Cmd+,) → ThemePickerView for theme selection
 ```
 
 ### Key Patterns
@@ -126,7 +132,8 @@ The flag controls which monetization UI is compiled:
 - **Custom parser** (not Apple's AttributedString markdown) for full control over rendering
 - **Block-level parsing** (`MarkdownBlockParser`) splits into discrete blocks, then inline rendering (`MarkdownRenderer`) handles formatting within text blocks
 - **Recursive inline parsing** - bold/italic markers recursively parse inner content for nesting
-- **Cached themes** via `MarkdownTheme.cached(for:)` - two static instances (light/dark)
+- **Custom themes** via `ThemeName` enum + `MarkdownTheme.theme(named:colorScheme:)` - 7 themes with stored color properties, persisted via `@AppStorage("selectedTheme")`
+- **Reference-style links** - parser pre-pass collects `[id]: url` definitions, renderer resolves `[text][id]`, `[text][]`, `[text]` formats
 - **Static regex compilation** - all regex patterns compiled once at type level
 - **Syntax highlighting** with range exclusion (strings > comments > keywords priority)
 - **FocusedValue** for multi-window document context (export/print commands)
