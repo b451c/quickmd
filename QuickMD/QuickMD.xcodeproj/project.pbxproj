@@ -93,6 +93,14 @@
 			path = QuickMD;
 			sourceTree = "<group>";
 		};
+		A1B2C3D403000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D400000010 /* QuickMD.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
 		A1B2C3D403000004 /* Views */ = {
 			isa = PBXGroup;
 			children = (
@@ -105,14 +113,6 @@
 				A1B2C3D400000016 /* ThemePickerView.swift */,
 			);
 			path = Views;
-			sourceTree = "<group>";
-		};
-		A1B2C3D403000003 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				A1B2C3D400000010 /* QuickMD.app */,
-			);
-			name = Products;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -341,7 +341,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 10;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = VJ92852M32;
+				DEVELOPMENT_TEAM = V7MBYBHJX6;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;
@@ -385,7 +385,7 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 10;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = VJ92852M32;
+				DEVELOPMENT_TEAM = V7MBYBHJX6;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_INCOMING_NETWORK_CONNECTIONS = NO;

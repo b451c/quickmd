@@ -182,6 +182,10 @@ struct MarkdownView: View {
         .focusedSceneValue(\.searchAction, { toggleSearch() })
         .focusedSceneValue(\.toggleToCAction, { withAnimation(.easeInOut(duration: 0.2)) { isToCVisible.toggle() } })
         .focusedSceneValue(\.copyDocumentAction, { copyToClipboard(document.text) })
+        .environment(\.openURL, OpenURLAction { url in
+            handleLinkActivation(url)
+            return .handled
+        })
         .frame(minWidth: 400, minHeight: 300)
         .task(id: DocumentIdentity(text: document.text, colorScheme: colorScheme, themeName: selectedThemeName)) {
             let text = document.text
@@ -491,6 +495,39 @@ struct MarkdownView: View {
         updateFocusState()
         if !matches.isEmpty {
             scrollTrigger += 1
+        }
+    }
+
+    private func handleLinkActivation(_ url: URL) {
+        // If it's a web link, open it normally
+        if url.scheme == "http" || url.scheme == "https" {
+            NSWorkspace.shared.open(url)
+            return
+        }
+        
+        // If it's a relative path or lacks a scheme, resolve it against the current document's directory
+        var finalURL = url
+        if url.scheme == nil || url.scheme == "file", let documentURL = documentURL {
+            let documentDir = documentURL.deletingLastPathComponent()
+            // If the URL has an absolute path but no scheme (rare in this context, but possible)
+            if url.path.hasPrefix("/") {
+                finalURL = URL(fileURLWithPath: url.path)
+            } else {
+                // It's a relative path, resolve it against the document's directory
+                finalURL = documentDir.appendingPathComponent(url.path)
+            }
+        }
+        
+        // Open the resolved file URL
+        let ext = finalURL.pathExtension.lowercased()
+        if ext == "md" || ext == "markdown" || ext == "mdown" || ext == "mkd" {
+            // Force open with our own app
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            NSWorkspace.shared.open([finalURL], withApplicationAt: Bundle.main.bundleURL, configuration: config)
+        } else {
+            // Open in the default application for that file type
+            NSWorkspace.shared.open(finalURL)
         }
     }
 

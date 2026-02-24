@@ -374,7 +374,9 @@ struct MarkdownRenderer: Sendable {
         attr.font = .system(size: 14)
         attr.foregroundColor = theme.linkColor
         attr.underlineStyle = .single
-        if let parsedUrl = URL(string: url) {
+        
+        let safeUrl = url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? url
+        if let parsedUrl = URL(string: safeUrl) {
             attr.link = parsedUrl
         }
         return (attr, remaining)
