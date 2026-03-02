@@ -17,7 +17,6 @@ struct QuickMDApp: App {
             MarkdownView(document: file.document, documentURL: file.fileURL)
         }
         .commands {
-            CommandGroup(replacing: .newItem) { }
             CommandGroup(replacing: .saveItem) { }
             CommandGroup(after: .saveItem) {
                 Divider()
