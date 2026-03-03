@@ -25,6 +25,7 @@
 		A1B2C3D401000010 /* SearchBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000014 /* SearchBar.swift */; };
 		A1B2C3D401000011 /* TableOfContentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000015 /* TableOfContentsView.swift */; };
 		A1B2C3D401000012 /* ThemePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000016 /* ThemePickerView.swift */; };
+		A1B2C3D401000013 /* SandboxAccessManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000017 /* SandboxAccessManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -50,6 +51,7 @@
 		A1B2C3D400000014 /* SearchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchBar.swift; sourceTree = "<group>"; };
 		A1B2C3D400000015 /* TableOfContentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableOfContentsView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000016 /* ThemePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePickerView.swift; sourceTree = "<group>"; };
+		A1B2C3D400000017 /* SandboxAccessManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SandboxAccessManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -85,6 +87,7 @@
 				A1B2C3D400000009 /* TipJarManager.swift */,
 				A1B2C3D40000000A /* TipJarView.swift */,
 				A1B2C3D40000000C /* MarkdownExport.swift */,
+				A1B2C3D400000017 /* SandboxAccessManager.swift */,
 				A1B2C3D40000000B /* TipJarProducts.storekit */,
 				A1B2C3D400000005 /* Assets.xcassets */,
 				A1B2C3D400000006 /* QuickMD.entitlements */,
@@ -201,6 +204,7 @@
 				A1B2C3D401000010 /* SearchBar.swift in Sources */,
 				A1B2C3D401000011 /* TableOfContentsView.swift in Sources */,
 				A1B2C3D401000012 /* ThemePickerView.swift in Sources */,
+				A1B2C3D401000013 /* SandboxAccessManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
