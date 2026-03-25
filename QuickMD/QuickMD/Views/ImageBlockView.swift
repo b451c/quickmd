@@ -24,6 +24,8 @@ struct ImageBlockView: View {
     /// Cached downsampled image for local files
     @State private var localImage: NSImage?
     @State private var isLoadingLocal = false
+    @State private var accessDenied = false
+    @State private var fileNotFound = false
 
     var body: some View {
         Group {
@@ -77,6 +79,10 @@ struct ImageBlockView: View {
         } else if isLoadingLocal {
             ProgressView()
                 .frame(height: 100)
+        } else if accessDenied {
+            accessDeniedView(for: fileURL)
+        } else if fileNotFound {
+            imageErrorView
         } else {
             Color.clear
                 .frame(height: 100)
@@ -86,19 +92,70 @@ struct ImageBlockView: View {
         }
     }
 
-    /// Load and downsample local image off the main thread
+    /// Placeholder shown when the user denied folder access for a local image.
+    private func accessDeniedView(for fileURL: URL) -> some View {
+        VStack(spacing: 8) {
+            Image(systemName: "lock.shield")
+                .font(.system(size: 24))
+                .foregroundColor(.secondary)
+            Text("Can\u{2019}t load \u{201C}\(fileURL.lastPathComponent)\u{201D}")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.secondary)
+            Button("Grant Folder Access") {
+                Task { await retryWithAccess(for: fileURL) }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .frame(maxWidth: Self.maxDisplayWidth)
+        .padding(.vertical, 12)
+    }
+
+    /// Load and downsample local image off the main thread.
+    /// If loading fails (e.g. sandbox denies access), prompts the user
+    /// to grant folder access and retries once.
     private func loadLocalImage(from url: URL) async {
         isLoadingLocal = true
         defer { isLoadingLocal = false }
 
-        // Load on background thread
-        let image = await Task.detached(priority: .userInitiated) {
+        // First attempt — try loading directly
+        let firstAttempt = await Task.detached(priority: .userInitiated) {
+            Self.loadDownsampledImage(from: url, maxPixelSize: Self.maxPixelDimension)
+        }.value
+
+        if let image = firstAttempt {
+            await MainActor.run { self.localImage = image }
+            return
+        }
+
+        // Check if the file actually exists before assuming sandbox denial.
+        // If it simply doesn't exist, there's nothing the user can do.
+        let fileExists = FileManager.default.fileExists(atPath: url.path)
+        guard fileExists else {
+            fileNotFound = true
+            return
+        }
+
+        // File exists but couldn't load — likely sandbox. Request access and retry.
+        let granted = await SandboxAccessManager.shared.ensureAccess(forParentOf: url)
+        guard granted else {
+            accessDenied = true
+            return
+        }
+
+        let retryAttempt = await Task.detached(priority: .userInitiated) {
             Self.loadDownsampledImage(from: url, maxPixelSize: Self.maxPixelDimension)
         }.value
 
         await MainActor.run {
-            self.localImage = image
+            self.localImage = retryAttempt
         }
+    }
+
+    /// Retry loading after the user clicks "Grant Folder Access".
+    private func retryWithAccess(for url: URL) async {
+        accessDenied = false
+        await loadLocalImage(from: url)
     }
 
     /// Efficiently load and downsample image using ImageIO
