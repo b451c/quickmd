@@ -69,7 +69,7 @@ struct MarkdownView: View {
     @State private var matchBlockIds: [String] = []
     @State private var scrollTrigger: Int = 0
     @State private var keyMonitor: Any?
-    @State private var isToCVisible: Bool = false
+    @AppStorage("isToCVisible") private var isToCVisible: Bool = false
     @State private var headings: [ToCEntry] = []
     @State private var tocScrollTarget: String?
     @State private var showCopiedToast: Bool = false
