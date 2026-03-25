@@ -124,7 +124,7 @@ struct MarkdownView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 8) {
                             ForEach(cachedBlocks) { block in
                                 blockView(for: block)
                             }
