@@ -133,8 +133,10 @@ quickmd-landing-page-docs/
 .claude/
 thoughts/
 
-# Internal docs (kept locally, not for public repo)
+# Agent harness (local only — not for public repo)
 CLAUDE.md
+init.sh
+feature_list.json
 DEVELOPMENT.md
 QuickMD/AppStore-Metadata.md
 QuickMD/SCREENSHOT-PLAN.md
