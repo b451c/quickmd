@@ -8,6 +8,7 @@ enum AppURLs {
     static let website = URL(string: "https://qmd.app/")!
     static let buyMeCoffee = URL(string: "https://buymeacoffee.com/bsroczynskh")!
     static let kofi = URL(string: "https://ko-fi.com/quickmd")!
+    static let latestRelease = URL(string: "https://github.com/b451c/quickmd/releases/latest")!
 }
 
 @main
@@ -17,8 +18,11 @@ struct QuickMDApp: App {
             MarkdownView(document: file.document, documentURL: file.fileURL)
         }
         .commands {
-            CommandGroup(replacing: .saveItem) { }
-            CommandGroup(after: .saveItem) {
+            CommandGroup(replacing: .saveItem) {
+                Button("Close") {
+                    NSApp.keyWindow?.close()
+                }
+                .keyboardShortcut("w", modifiers: .command)
                 Divider()
                 ExportPDFCommand()
                 PrintCommand()
@@ -37,6 +41,8 @@ struct QuickMDApp: App {
                 #if APPSTORE
                 TipJarMenuButton()
                 #else
+                UpdateMenuButton()
+                Divider()
                 Button("Visit qmd.app") {
                     NSWorkspace.shared.open(AppURLs.website)
                 }
@@ -108,6 +114,66 @@ struct TipJarMenuButton: View {
     var body: some View {
         Button("Tip Jar 💝") {
             openWindow(id: "tip-jar")
+        }
+    }
+}
+#endif
+
+// MARK: - Update Checker (GitHub version only)
+
+#if !APPSTORE
+struct UpdateMenuButton: View {
+    @State private var latestVersion: String?
+
+    private var currentVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+    }
+
+    private var updateAvailable: Bool {
+        guard let latest = latestVersion else { return false }
+        return latest.compare(currentVersion, options: .numeric) == .orderedDescending
+    }
+
+    var body: some View {
+        if updateAvailable, let latest = latestVersion {
+            Button("Update Available — v\(latest)") {
+                NSWorkspace.shared.open(AppURLs.latestRelease)
+            }
+        } else {
+            Button("Check for Updates…") {
+                Task { await checkForUpdate() }
+            }
+        }
+    }
+
+    private func checkForUpdate() async {
+        latestVersion = await UpdateChecker.fetchLatestVersion()
+        // If already up to date, briefly show confirmation then reset
+        if !updateAvailable {
+            latestVersion = currentVersion
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            latestVersion = nil
+        }
+    }
+}
+
+enum UpdateChecker {
+    private static let releaseURL = URL(string: "https://api.github.com/repos/b451c/quickmd/releases/latest")!
+
+    /// Fetches the latest release tag from GitHub. Returns version string (e.g. "1.3.3") or nil.
+    static func fetchLatestVersion() async -> String? {
+        do {
+            var request = URLRequest(url: releaseURL)
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            request.timeoutInterval = 10
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = json["tag_name"] as? String else { return nil }
+            // Strip leading "v" from tag (e.g. "v1.3.3" → "1.3.3")
+            return tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+        } catch {
+            return nil
         }
     }
 }
