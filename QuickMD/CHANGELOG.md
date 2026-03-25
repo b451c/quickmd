@@ -10,9 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Folder Access for Local Images:** QuickMD now prompts for folder access when a local image can't be loaded due to sandbox restrictions. Access is persisted via Security-Scoped Bookmarks — the prompt only appears once per folder.
 - **Persistent Table of Contents:** The ToC sidebar state now persists across app launches and new documents.
+- **Check for Updates:** GitHub version now shows "Check for Updates" in the Help menu, with a subtle notification when a new version is available.
 
 ### Fixed
 - **Scroll Freeze on Complex Code Blocks:** Fixed a UI freeze caused by SwiftUI's `LazyVStack` repeatedly creating/destroying views containing box-drawing Unicode characters during fast scrolling.
+- **Cmd+W to Close:** Restored the standard macOS Close Window shortcut that was accidentally removed by a CommandGroup override.
 
 ## [1.3.2] - 2026-02-24
 
