@@ -68,29 +68,34 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 ## Screenshots
 
 <div align="center">
-
-### Dark Mode
-![Dark Mode](QuickMD/Screenshots/screenshot-1.png)
-
-### Light Mode
-![Light Mode](QuickMD/Screenshots/screenshot-2.png)
-
-### Syntax Highlighting
-![Code Highlighting](QuickMD/Screenshots/screenshot-3.png)
-
-### Tables & Lists
-![Tables & Lists](QuickMD/Screenshots/screenshot-4.png)
-
-### File Tree Example
-![File Tree](QuickMD/Screenshots/screenshot-5.png)
-
-### Theme Picker & Tables (Dracula)
-![Theme Picker](QuickMD/Screenshots/screenshot-6.png)
-
-### Table of Contents & Blockquotes
-![Table of Contents](QuickMD/Screenshots/screenshot-7.png)
-
+<table>
+<tr>
+<td><img src="QuickMD/Screenshots/screenshot-1.png" width="400" alt="Dark Mode"></td>
+<td><img src="QuickMD/Screenshots/screenshot-2.png" width="400" alt="Light Mode"></td>
+</tr>
+<tr>
+<td align="center"><em>Dark Mode</em></td>
+<td align="center"><em>Light Mode</em></td>
+</tr>
+<tr>
+<td><img src="QuickMD/Screenshots/screenshot-3.png" width="400" alt="Syntax Highlighting"></td>
+<td><img src="QuickMD/Screenshots/screenshot-6.png" width="400" alt="Theme Picker (Dracula)"></td>
+</tr>
+<tr>
+<td align="center"><em>Syntax Highlighting</em></td>
+<td align="center"><em>Theme Picker (Dracula)</em></td>
+</tr>
+</table>
 </div>
+
+<details>
+<summary><strong>More screenshots</strong></summary>
+
+| Tables & Lists | File Tree | Table of Contents |
+|:-:|:-:|:-:|
+| <img src="QuickMD/Screenshots/screenshot-4.png" width="280"> | <img src="QuickMD/Screenshots/screenshot-5.png" width="280"> | <img src="QuickMD/Screenshots/screenshot-7.png" width="280"> |
+
+</details>
 
 ## Installation
 
