@@ -31,8 +31,9 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - ✅ Headers, bold, italic, strikethrough
 - ✅ Tables with proper column alignment
 - ✅ Code blocks with syntax highlighting
-- ✅ **LaTeX math** — display math (`$$...$$`) with TeX-quality rendering
+- ✅ **LaTeX math** — display (`$$...$$`) and inline (`$...$`) with TeX-quality rendering
 - ✅ **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more
+- ✅ **Footnotes** — `[^id]` references with definitions at end of document
 - ✅ Task lists with checkboxes (`- [ ]` / `- [x]`)
 - ✅ Nested lists (ordered and unordered)
 - ✅ Images (local and remote URLs)

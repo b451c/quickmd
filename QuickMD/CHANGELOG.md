@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.4.1] - 2026-04-03
 
 ### Added
-- **Inline Math:** Single-dollar `$...$` expressions now render as styled math notation within paragraph text.
+- **Inline Math:** Single-dollar `$...$` expressions now render as TeX-quality graphics inline with paragraph text — fractions, integrals, superscripts all render within a sentence.
 - **Footnotes:** `[^id]` references render as superscript numbers with definitions listed at the end of the document.
 - **Homebrew Cask:** Added `quickmd.rb` formula for `brew install --cask quickmd`.
 
