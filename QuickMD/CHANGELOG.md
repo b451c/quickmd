@@ -5,6 +5,13 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-04-03
+
+### Added
+- **Inline Math:** Single-dollar `$...$` expressions now render as styled math notation within paragraph text.
+- **Footnotes:** `[^id]` references render as superscript numbers with definitions listed at the end of the document.
+- **Homebrew Cask:** Added `quickmd.rb` formula for `brew install --cask quickmd`.
+
 ## [1.4.0] - 2026-04-03
 
 ### Added

@@ -4,20 +4,23 @@ import SwiftUI
 struct MarkdownRenderer: Sendable {
     let theme: MarkdownTheme
     let referenceDefinitions: [String: String]
+    let footnoteDefinitions: [(id: String, content: String)]
 
     // Static precompiled regex for parsing (avoid recompilation per line)
     private static let taskListRegex = try! NSRegularExpression(pattern: MarkdownTheme.taskListPattern)
     private static let autolinkRegex = try! NSRegularExpression(pattern: MarkdownTheme.autolinkPattern)
     private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
 
-    init(theme: MarkdownTheme, referenceDefinitions: [String: String] = [:]) {
+    init(theme: MarkdownTheme, referenceDefinitions: [String: String] = [:], footnoteDefinitions: [(id: String, content: String)] = []) {
         self.theme = theme
         self.referenceDefinitions = referenceDefinitions
+        self.footnoteDefinitions = footnoteDefinitions
     }
 
     init(colorScheme: ColorScheme, referenceDefinitions: [String: String] = [:]) {
         self.theme = MarkdownTheme.cached(for: colorScheme)
         self.referenceDefinitions = referenceDefinitions
+        self.footnoteDefinitions = []
     }
 
     // MARK: - Main Render
@@ -170,6 +173,7 @@ struct MarkdownRenderer: Sendable {
 
             if parsed == nil { parsed = tryParseEscape(&remaining) }
             if parsed == nil { parsed = tryParseInlineCode(&remaining) }
+            if parsed == nil { parsed = tryParseFootnoteRef(&remaining) }
             if parsed == nil { parsed = tryParseBoldItalic(&remaining) }
             if parsed == nil { parsed = tryParseBold(&remaining) }
             if parsed == nil { parsed = tryParseItalic(&remaining) }
@@ -450,6 +454,61 @@ struct MarkdownRenderer: Sendable {
         }
 
         return (attr, remaining.dropFirst(urlText.count))
+    }
+
+    // MARK: - Inline Math
+
+    private func tryParseInlineMath(_ remaining: inout Substring) -> (AttributedString, Substring)? {
+        guard remaining.hasPrefix("$"), !remaining.hasPrefix("$$") else { return nil }
+
+        let afterDollar = remaining.dropFirst()
+        guard let closeIndex = afterDollar.firstIndex(of: "$") else { return nil }
+
+        let latex = String(afterDollar[..<closeIndex])
+        // Guard against empty math and currency like "$100"
+        guard !latex.isEmpty,
+              latex.first?.isWhitespace != true,
+              latex.last?.isWhitespace != true,
+              !latex.allSatisfy({ $0.isNumber || $0 == "." || $0 == "," }) else { return nil }
+
+        // Render as styled inline text (italic with theme color)
+        var attr = AttributedString(latex)
+        attr.font = .system(size: 14).italic()
+        attr.foregroundColor = theme.textColor
+        return (attr, afterDollar[afterDollar.index(after: closeIndex)...])
+    }
+
+    // MARK: - Footnote References
+
+    private func tryParseFootnoteRef(_ remaining: inout Substring) -> (AttributedString, Substring)? {
+        guard remaining.hasPrefix("[^") else { return nil }
+
+        let afterBracket = remaining.dropFirst(2)
+        guard let closeIndex = afterBracket.firstIndex(of: "]") else { return nil }
+
+        let fnId = String(afterBracket[..<closeIndex])
+        guard !fnId.isEmpty else { return nil }
+
+        // Find the footnote number (1-based index in definitions order)
+        let number: Int
+        if let idx = footnoteDefinitions.firstIndex(where: { $0.id == fnId }) {
+            number = idx + 1
+        } else {
+            return nil // Unknown footnote reference, don't parse
+        }
+
+        // Render as superscript number
+        let superscriptDigits: [Character: Character] = [
+            "0": "\u{2070}", "1": "\u{00B9}", "2": "\u{00B2}", "3": "\u{00B3}",
+            "4": "\u{2074}", "5": "\u{2075}", "6": "\u{2076}", "7": "\u{2077}",
+            "8": "\u{2078}", "9": "\u{2079}"
+        ]
+        let superscript = String(String(number).map { superscriptDigits[$0] ?? $0 })
+
+        var attr = AttributedString(superscript)
+        attr.font = .system(size: 11, weight: .bold)
+        attr.foregroundColor = theme.linkColor
+        return (attr, afterBracket[afterBracket.index(after: closeIndex)...])
     }
 
 }

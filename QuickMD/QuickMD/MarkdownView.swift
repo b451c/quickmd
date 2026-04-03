@@ -252,7 +252,11 @@ struct MarkdownView: View {
         let view = Group {
             switch block.content {
             case .text(let attributedString):
-                if searchText.isEmpty {
+                let plainText = String(attributedString.characters)
+                let hasInlineMath = plainText.contains("$") && plainText.range(of: #"\$[^\s$].*?\$"#, options: .regularExpression) != nil
+                if searchText.isEmpty && hasInlineMath {
+                    InlineMathTextView(attributedString: attributedString, theme: theme)
+                } else if searchText.isEmpty {
                     Text(attributedString)
                         .textSelection(.enabled)
                 } else if focusedOcc != nil {
