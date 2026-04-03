@@ -24,13 +24,15 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ### ⚡ **Blazing Fast**
 - Opens in milliseconds—no loading screens
-- Native SwiftUI app—lightweight (~2MB)
+- Native SwiftUI app—lightweight
 - Instant rendering of even large documents
 
 ### 📝 **Complete Markdown Support**
 - ✅ Headers, bold, italic, strikethrough
 - ✅ Tables with proper column alignment
 - ✅ Code blocks with syntax highlighting
+- ✅ **LaTeX math** — display math (`$$...$$`) with TeX-quality rendering
+- ✅ **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more
 - ✅ Task lists with checkboxes (`- [ ]` / `- [x]`)
 - ✅ Nested lists (ordered and unordered)
 - ✅ Images (local and remote URLs)
@@ -155,10 +157,13 @@ Now all your Markdown files will open instantly with QuickMD!
 
 - Custom Markdown parser with block-level parsing and reference link pre-pass
 - Regex-based syntax highlighting for code blocks
+- LaTeX math rendering via vendored [SwiftMath](https://github.com/mgriebling/SwiftMath) (Core Graphics, no network)
+- Mermaid diagram rendering via bundled [Mermaid.js](https://mermaid.js.org/) (offline, no CDN)
 - 7 color themes with `@AppStorage` persistence
 - `AsyncImage` for remote image rendering
+- Security-Scoped Bookmarks for local image access in sandbox
 - Per-block PDF export with multi-page pagination
-- Native SwiftUI components for performance
+- Zero external package dependencies — everything is vendored or bundled
 
 ## Project Structure
 
