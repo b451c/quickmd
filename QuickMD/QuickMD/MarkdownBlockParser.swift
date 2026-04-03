@@ -14,6 +14,7 @@ struct MarkdownBlockParser: Sendable {
     private static let imageRegex = try! NSRegularExpression(pattern: MarkdownTheme.imagePattern)
     private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
     private static let refLinkDefRegex = try! NSRegularExpression(pattern: MarkdownTheme.referenceLinkDefinitionPattern)
+    private static let footnoteDefRegex = try! NSRegularExpression(pattern: MarkdownTheme.footnoteDefinitionPattern)
 
     init(theme: MarkdownTheme) {
         self.theme = theme
@@ -33,15 +34,26 @@ struct MarkdownBlockParser: Sendable {
         var blockIndex = 0  // Stable index for block identity
         let allLines = markdown.components(separatedBy: "\n")
 
-        // Pre-pass: collect reference link definitions and filter them out
+        // Pre-pass: collect reference link definitions and footnote definitions, filter them out
         var referenceDefinitions: [String: String] = [:]
+        var footnoteDefinitions: [(id: String, content: String)] = []
+        var footnoteIds: [String] = [] // ordered by first appearance
         var lines: [String] = []
         for line in allLines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             let nsRange = NSRange(trimmed.startIndex..., in: trimmed)
-            if let match = Self.refLinkDefRegex.firstMatch(in: trimmed, range: nsRange),
-               let idRange = Range(match.range(at: 1), in: trimmed),
-               let urlRange = Range(match.range(at: 2), in: trimmed) {
+            // Footnote definitions must be checked BEFORE reference links
+            // because [^id]: text also matches the reference link pattern [id]: url
+            if let match = Self.footnoteDefRegex.firstMatch(in: trimmed, range: nsRange),
+                      let idRange = Range(match.range(at: 1), in: trimmed),
+                      let contentRange = Range(match.range(at: 2), in: trimmed) {
+                let fnId = String(trimmed[idRange])
+                let fnContent = String(trimmed[contentRange])
+                footnoteDefinitions.append((id: fnId, content: fnContent))
+                if !footnoteIds.contains(fnId) { footnoteIds.append(fnId) }
+            } else if let match = Self.refLinkDefRegex.firstMatch(in: trimmed, range: nsRange),
+                      let idRange = Range(match.range(at: 1), in: trimmed),
+                      let urlRange = Range(match.range(at: 2), in: trimmed) {
                 referenceDefinitions[String(trimmed[idRange]).lowercased()] = String(trimmed[urlRange])
             } else {
                 lines.append(line)
@@ -49,9 +61,9 @@ struct MarkdownBlockParser: Sendable {
         }
 
         // Use reference-aware renderer if definitions were found
-        let activeRenderer = referenceDefinitions.isEmpty
+        let activeRenderer = referenceDefinitions.isEmpty && footnoteDefinitions.isEmpty
             ? self.renderer
-            : MarkdownRenderer(theme: theme, referenceDefinitions: referenceDefinitions)
+            : MarkdownRenderer(theme: theme, referenceDefinitions: referenceDefinitions, footnoteDefinitions: footnoteDefinitions)
 
         var i = 0
         var textBuffer: [String] = []
@@ -268,6 +280,36 @@ struct MarkdownBlockParser: Sendable {
         }
 
         flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+
+        // Append footnotes block at end of document if any definitions exist
+        if !footnoteDefinitions.isEmpty {
+            var footnoteText = AttributedString("")
+
+            // Horizontal rule separator
+            var rule = AttributedString("────────────────────────────────\n")
+            rule.font = .system(size: 12)
+            rule.foregroundColor = theme.secondaryTextColor
+            footnoteText.append(rule)
+
+            for (index, def) in footnoteDefinitions.enumerated() {
+                let number = index + 1
+                var prefix = AttributedString("\(number). ")
+                prefix.font = .system(size: 12, weight: .bold)
+                prefix.foregroundColor = theme.secondaryTextColor
+
+                var content = activeRenderer.renderInline(def.content)
+                content.font = .system(size: 12)
+                content.foregroundColor = theme.secondaryTextColor
+
+                footnoteText.append(prefix)
+                footnoteText.append(content)
+                footnoteText.append(AttributedString("\n"))
+            }
+
+            blocks.append(.text(index: blockIndex, footnoteText))
+            blockIndex += 1
+        }
+
         return blocks
     }
 

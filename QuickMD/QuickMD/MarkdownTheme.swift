@@ -251,6 +251,10 @@ struct MarkdownTheme: Sendable {
     /// Captures: (1) reference ID, (2) URL
     static let referenceLinkDefinitionPattern = #"^\s*\[([^\]]+)\]:\s+<?([^\s>]+)>?"#
 
+    /// Matches footnote definitions: [^id]: text
+    /// Captures: (1) footnote ID, (2) content
+    static let footnoteDefinitionPattern = #"^\s*\[\^([^\]]+)\]:\s+(.*)"#
+
     // MARK: - URL Autolinking
 
     /// Matches bare URLs starting with http:// or https://
