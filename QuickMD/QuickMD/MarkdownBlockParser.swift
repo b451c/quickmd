@@ -59,8 +59,9 @@ struct MarkdownBlockParser: Sendable {
         while i < lines.count {
             let line = lines[i]
 
-            // Fenced code block - trim whitespace before checking for closing fence
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+
+            // Fenced code block — check BEFORE math to protect $$ inside code blocks
             if trimmedLine.hasPrefix("```") || trimmedLine.hasPrefix("~~~") {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
 
@@ -88,8 +89,52 @@ struct MarkdownBlockParser: Sendable {
                     i += 1
                 }
 
-                blocks.append(.codeBlock(index: blockIndex, code: codeLines.joined(separator: "\n"), language: language))
+                let codeContent = codeLines.joined(separator: "\n")
+                if language.lowercased() == "mermaid" {
+                    blocks.append(.mermaidDiagram(index: blockIndex, source: codeContent))
+                } else {
+                    blocks.append(.codeBlock(index: blockIndex, code: codeContent, language: language))
+                }
                 blockIndex += 1
+                continue
+            }
+
+            // Display math block $$...$$ — after code block check to protect $$ inside code
+            if trimmedLine.hasPrefix("$$") {
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+
+                let afterDollar = String(trimmedLine.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+
+                // Single-line: $$content$$ (must have content between delimiters)
+                if afterDollar.hasSuffix("$$") {
+                    let latex = String(afterDollar.dropLast(2)).trimmingCharacters(in: .whitespaces)
+                    if !latex.isEmpty {
+                        blocks.append(.mathBlock(index: blockIndex, latex: latex))
+                        blockIndex += 1
+                    }
+                    i += 1
+                    continue
+                }
+
+                // Multi-line: accumulate until standalone closing $$
+                var mathLines: [String] = []
+                if !afterDollar.isEmpty { mathLines.append(afterDollar) }
+                i += 1
+                while i < lines.count {
+                    let mLine = lines[i].trimmingCharacters(in: .whitespaces)
+                    if mLine == "$$" {
+                        i += 1
+                        break
+                    }
+                    mathLines.append(lines[i])
+                    i += 1
+                }
+
+                let latex = mathLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !latex.isEmpty {
+                    blocks.append(.mathBlock(index: blockIndex, latex: latex))
+                    blockIndex += 1
+                }
                 continue
             }
 

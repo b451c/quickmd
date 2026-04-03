@@ -83,6 +83,15 @@ struct MarkdownPrintableView: View {
                     let renderer = MarkdownRenderer(colorScheme: .light)
                     Text(renderer.renderHeader(title, level: level))
                         .foregroundColor(.black)
+
+                case .mathBlock(let latex):
+                    MathBlockView(latex: latex, theme: MarkdownTheme.theme(named: .auto, colorScheme: .light))
+                        .padding(.vertical, 4)
+
+                case .mermaidDiagram(let source):
+                    // Graceful degradation: render as styled code block in PDF
+                    PrintableCodeBlockView(code: source, language: "mermaid")
+                        .padding(.vertical, 4)
                 }
             }
         }
@@ -283,6 +292,12 @@ struct MarkdownPrintableBlockView: View {
             case .heading(let level, let title):
                 Text(renderer.renderHeader(title, level: level))
                     .foregroundColor(.black)
+
+            case .mathBlock(let latex):
+                MathBlockView(latex: latex, theme: MarkdownTheme.theme(named: .auto, colorScheme: .light))
+
+            case .mermaidDiagram(let source):
+                PrintableCodeBlockView(code: source, language: "mermaid")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

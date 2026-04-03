@@ -22,6 +22,8 @@ struct MarkdownBlock: Identifiable, Sendable {
         case image(url: String, alt: String)
         case blockquote(content: String, level: Int)
         case heading(level: Int, title: String)
+        case mathBlock(latex: String)
+        case mermaidDiagram(source: String)
     }
 
     static func text(index: Int, _ attributed: AttributedString) -> MarkdownBlock {
@@ -41,5 +43,11 @@ struct MarkdownBlock: Identifiable, Sendable {
     }
     static func heading(index: Int, level: Int, title: String) -> MarkdownBlock {
         MarkdownBlock(id: "heading-\(index)", content: .heading(level: level, title: title))
+    }
+    static func mathBlock(index: Int, latex: String) -> MarkdownBlock {
+        MarkdownBlock(id: "math-\(index)", content: .mathBlock(latex: latex))
+    }
+    static func mermaidDiagram(index: Int, source: String) -> MarkdownBlock {
+        MarkdownBlock(id: "mermaid-\(index)", content: .mermaidDiagram(source: source))
     }
 }

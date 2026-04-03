@@ -26,6 +26,39 @@
 		A1B2C3D401000011 /* TableOfContentsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000015 /* TableOfContentsView.swift */; };
 		A1B2C3D401000012 /* ThemePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000016 /* ThemePickerView.swift */; };
 		A1B2C3D401000013 /* SandboxAccessManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000017 /* SandboxAccessManager.swift */; };
+		A1B2C3D401000014 /* MathBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000018 /* MathBlockView.swift */; };
+		A1B2C3D401000015 /* MermaidBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000019 /* MermaidBlockView.swift */; };
+		A1B2C3D401000016 /* MathFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001A /* MathFont.swift */; };
+		A1B2C3D401000017 /* MathImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001B /* MathImage.swift */; };
+		A1B2C3D401000018 /* MTBezierPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001C /* MTBezierPath.swift */; };
+		A1B2C3D401000019 /* MTColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001D /* MTColor.swift */; };
+		A1B2C3D40100001A /* MTConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001E /* MTConfig.swift */; };
+		A1B2C3D40100001B /* MTFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001F /* MTFont.swift */; };
+		A1B2C3D40100001C /* MTFontManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000020 /* MTFontManager.swift */; };
+		A1B2C3D40100001D /* MTFontMathTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000021 /* MTFontMathTable.swift */; };
+		A1B2C3D40100001E /* MTFontMathTableV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000022 /* MTFontMathTableV2.swift */; };
+		A1B2C3D40100001F /* MTFontV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000023 /* MTFontV2.swift */; };
+		A1B2C3D401000020 /* MTLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000024 /* MTLabel.swift */; };
+		A1B2C3D401000021 /* MTMathAtomFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000025 /* MTMathAtomFactory.swift */; };
+		A1B2C3D401000022 /* MTMathImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000026 /* MTMathImage.swift */; };
+		A1B2C3D401000023 /* MTMathList.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000027 /* MTMathList.swift */; };
+		A1B2C3D401000024 /* MTMathListBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000028 /* MTMathListBuilder.swift */; };
+		A1B2C3D401000025 /* MTMathListDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000029 /* MTMathListDisplay.swift */; };
+		A1B2C3D401000026 /* MTMathListIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000002A /* MTMathListIndex.swift */; };
+		A1B2C3D401000027 /* MTMathUILabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000002B /* MTMathUILabel.swift */; };
+		A1B2C3D401000028 /* MTTypesetter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000002C /* MTTypesetter.swift */; };
+		A1B2C3D401000029 /* MTTypesetter+Tokenization.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000002D /* MTTypesetter+Tokenization.swift */; };
+		A1B2C3D40100002A /* MTUnicode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000002E /* MTUnicode.swift */; };
+		A1B2C3D40100002B /* RWLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000002F /* RWLock.swift */; };
+		A1B2C3D40100002C /* MTAtomTokenizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000030 /* MTAtomTokenizer.swift */; };
+		A1B2C3D40100002D /* MTBreakableElement.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000031 /* MTBreakableElement.swift */; };
+		A1B2C3D40100002E /* MTDisplayGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000032 /* MTDisplayGenerator.swift */; };
+		A1B2C3D40100002F /* MTDisplayPreRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000033 /* MTDisplayPreRenderer.swift */; };
+		A1B2C3D401000030 /* MTElementWidthCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000034 /* MTElementWidthCalculator.swift */; };
+		A1B2C3D401000031 /* MTLineFitter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000035 /* MTLineFitter.swift */; };
+		A1B2C3D401000032 /* mermaid.min.js in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000036 /* mermaid.min.js */; };
+		A1B2C3D401000033 /* mermaid-template.html in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000037 /* mermaid-template.html */; };
+		A1B2C3D401000034 /* mathFonts.bundle in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000038 /* mathFonts.bundle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -52,6 +85,39 @@
 		A1B2C3D400000015 /* TableOfContentsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableOfContentsView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000016 /* ThemePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePickerView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000017 /* SandboxAccessManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SandboxAccessManager.swift; sourceTree = "<group>"; };
+		A1B2C3D400000018 /* MathBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MathBlockView.swift; sourceTree = "<group>"; };
+		A1B2C3D400000019 /* MermaidBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidBlockView.swift; sourceTree = "<group>"; };
+		A1B2C3D40000001A /* MathFont.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MathFont.swift; sourceTree = "<group>"; };
+		A1B2C3D40000001B /* MathImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MathImage.swift; sourceTree = "<group>"; };
+		A1B2C3D40000001C /* MTBezierPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTBezierPath.swift; sourceTree = "<group>"; };
+		A1B2C3D40000001D /* MTColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTColor.swift; sourceTree = "<group>"; };
+		A1B2C3D40000001E /* MTConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTConfig.swift; sourceTree = "<group>"; };
+		A1B2C3D40000001F /* MTFont.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTFont.swift; sourceTree = "<group>"; };
+		A1B2C3D400000020 /* MTFontManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTFontManager.swift; sourceTree = "<group>"; };
+		A1B2C3D400000021 /* MTFontMathTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTFontMathTable.swift; sourceTree = "<group>"; };
+		A1B2C3D400000022 /* MTFontMathTableV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTFontMathTableV2.swift; sourceTree = "<group>"; };
+		A1B2C3D400000023 /* MTFontV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTFontV2.swift; sourceTree = "<group>"; };
+		A1B2C3D400000024 /* MTLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTLabel.swift; sourceTree = "<group>"; };
+		A1B2C3D400000025 /* MTMathAtomFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTMathAtomFactory.swift; sourceTree = "<group>"; };
+		A1B2C3D400000026 /* MTMathImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTMathImage.swift; sourceTree = "<group>"; };
+		A1B2C3D400000027 /* MTMathList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTMathList.swift; sourceTree = "<group>"; };
+		A1B2C3D400000028 /* MTMathListBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTMathListBuilder.swift; sourceTree = "<group>"; };
+		A1B2C3D400000029 /* MTMathListDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTMathListDisplay.swift; sourceTree = "<group>"; };
+		A1B2C3D40000002A /* MTMathListIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTMathListIndex.swift; sourceTree = "<group>"; };
+		A1B2C3D40000002B /* MTMathUILabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTMathUILabel.swift; sourceTree = "<group>"; };
+		A1B2C3D40000002C /* MTTypesetter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTTypesetter.swift; sourceTree = "<group>"; };
+		A1B2C3D40000002D /* MTTypesetter+Tokenization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "MTTypesetter+Tokenization.swift"; sourceTree = "<group>"; };
+		A1B2C3D40000002E /* MTUnicode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTUnicode.swift; sourceTree = "<group>"; };
+		A1B2C3D40000002F /* RWLock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RWLock.swift; sourceTree = "<group>"; };
+		A1B2C3D400000030 /* MTAtomTokenizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTAtomTokenizer.swift; sourceTree = "<group>"; };
+		A1B2C3D400000031 /* MTBreakableElement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTBreakableElement.swift; sourceTree = "<group>"; };
+		A1B2C3D400000032 /* MTDisplayGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTDisplayGenerator.swift; sourceTree = "<group>"; };
+		A1B2C3D400000033 /* MTDisplayPreRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTDisplayPreRenderer.swift; sourceTree = "<group>"; };
+		A1B2C3D400000034 /* MTElementWidthCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTElementWidthCalculator.swift; sourceTree = "<group>"; };
+		A1B2C3D400000035 /* MTLineFitter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTLineFitter.swift; sourceTree = "<group>"; };
+		A1B2C3D400000036 /* mermaid.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = mermaid.min.js; sourceTree = "<group>"; };
+		A1B2C3D400000037 /* mermaid-template.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "mermaid-template.html"; sourceTree = "<group>"; };
+		A1B2C3D400000038 /* mathFonts.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = mathFonts.bundle; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -84,6 +150,8 @@
 				A1B2C3D40000000D /* MarkdownBlock.swift */,
 				A1B2C3D40000000E /* MarkdownBlockParser.swift */,
 				A1B2C3D403000004 /* Views */,
+				A1B2C3D403000005 /* SwiftMath */,
+				A1B2C3D403000007 /* Resources */,
 				A1B2C3D400000009 /* TipJarManager.swift */,
 				A1B2C3D40000000A /* TipJarView.swift */,
 				A1B2C3D40000000C /* MarkdownExport.swift */,
@@ -106,8 +174,63 @@
 				A1B2C3D400000014 /* SearchBar.swift */,
 				A1B2C3D400000015 /* TableOfContentsView.swift */,
 				A1B2C3D400000016 /* ThemePickerView.swift */,
+				A1B2C3D400000018 /* MathBlockView.swift */,
+				A1B2C3D400000019 /* MermaidBlockView.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		A1B2C3D403000005 /* SwiftMath */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D40000001A /* MathFont.swift */,
+				A1B2C3D40000001B /* MathImage.swift */,
+				A1B2C3D40000001C /* MTBezierPath.swift */,
+				A1B2C3D40000001D /* MTColor.swift */,
+				A1B2C3D40000001E /* MTConfig.swift */,
+				A1B2C3D40000001F /* MTFont.swift */,
+				A1B2C3D400000020 /* MTFontManager.swift */,
+				A1B2C3D400000021 /* MTFontMathTable.swift */,
+				A1B2C3D400000022 /* MTFontMathTableV2.swift */,
+				A1B2C3D400000023 /* MTFontV2.swift */,
+				A1B2C3D400000024 /* MTLabel.swift */,
+				A1B2C3D400000025 /* MTMathAtomFactory.swift */,
+				A1B2C3D400000026 /* MTMathImage.swift */,
+				A1B2C3D400000027 /* MTMathList.swift */,
+				A1B2C3D400000028 /* MTMathListBuilder.swift */,
+				A1B2C3D400000029 /* MTMathListDisplay.swift */,
+				A1B2C3D40000002A /* MTMathListIndex.swift */,
+				A1B2C3D40000002B /* MTMathUILabel.swift */,
+				A1B2C3D40000002C /* MTTypesetter.swift */,
+				A1B2C3D40000002D /* MTTypesetter+Tokenization.swift */,
+				A1B2C3D40000002E /* MTUnicode.swift */,
+				A1B2C3D40000002F /* RWLock.swift */,
+				A1B2C3D403000006 /* Tokenization */,
+				A1B2C3D400000038 /* mathFonts.bundle */,
+			);
+			path = SwiftMath;
+			sourceTree = "<group>";
+		};
+		A1B2C3D403000006 /* Tokenization */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D400000030 /* MTAtomTokenizer.swift */,
+				A1B2C3D400000031 /* MTBreakableElement.swift */,
+				A1B2C3D400000032 /* MTDisplayGenerator.swift */,
+				A1B2C3D400000033 /* MTDisplayPreRenderer.swift */,
+				A1B2C3D400000034 /* MTElementWidthCalculator.swift */,
+				A1B2C3D400000035 /* MTLineFitter.swift */,
+			);
+			path = Tokenization;
+			sourceTree = "<group>";
+		};
+		A1B2C3D403000007 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D400000036 /* mermaid.min.js */,
+				A1B2C3D400000037 /* mermaid-template.html */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		A1B2C3D403000003 /* Products */ = {
@@ -177,6 +300,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1B2C3D401000005 /* Assets.xcassets in Resources */,
+				A1B2C3D401000032 /* mermaid.min.js in Resources */,
+				A1B2C3D401000033 /* mermaid-template.html in Resources */,
+				A1B2C3D401000034 /* mathFonts.bundle in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -205,6 +331,36 @@
 				A1B2C3D401000011 /* TableOfContentsView.swift in Sources */,
 				A1B2C3D401000012 /* ThemePickerView.swift in Sources */,
 				A1B2C3D401000013 /* SandboxAccessManager.swift in Sources */,
+				A1B2C3D401000014 /* MathBlockView.swift in Sources */,
+				A1B2C3D401000015 /* MermaidBlockView.swift in Sources */,
+				A1B2C3D401000016 /* MathFont.swift in Sources */,
+				A1B2C3D401000017 /* MathImage.swift in Sources */,
+				A1B2C3D401000018 /* MTBezierPath.swift in Sources */,
+				A1B2C3D401000019 /* MTColor.swift in Sources */,
+				A1B2C3D40100001A /* MTConfig.swift in Sources */,
+				A1B2C3D40100001B /* MTFont.swift in Sources */,
+				A1B2C3D40100001C /* MTFontManager.swift in Sources */,
+				A1B2C3D40100001D /* MTFontMathTable.swift in Sources */,
+				A1B2C3D40100001E /* MTFontMathTableV2.swift in Sources */,
+				A1B2C3D40100001F /* MTFontV2.swift in Sources */,
+				A1B2C3D401000020 /* MTLabel.swift in Sources */,
+				A1B2C3D401000021 /* MTMathAtomFactory.swift in Sources */,
+				A1B2C3D401000022 /* MTMathImage.swift in Sources */,
+				A1B2C3D401000023 /* MTMathList.swift in Sources */,
+				A1B2C3D401000024 /* MTMathListBuilder.swift in Sources */,
+				A1B2C3D401000025 /* MTMathListDisplay.swift in Sources */,
+				A1B2C3D401000026 /* MTMathListIndex.swift in Sources */,
+				A1B2C3D401000027 /* MTMathUILabel.swift in Sources */,
+				A1B2C3D401000028 /* MTTypesetter.swift in Sources */,
+				A1B2C3D401000029 /* MTTypesetter+Tokenization.swift in Sources */,
+				A1B2C3D40100002A /* MTUnicode.swift in Sources */,
+				A1B2C3D40100002B /* RWLock.swift in Sources */,
+				A1B2C3D40100002C /* MTAtomTokenizer.swift in Sources */,
+				A1B2C3D40100002D /* MTBreakableElement.swift in Sources */,
+				A1B2C3D40100002E /* MTDisplayGenerator.swift in Sources */,
+				A1B2C3D40100002F /* MTDisplayPreRenderer.swift in Sources */,
+				A1B2C3D401000030 /* MTElementWidthCalculator.swift in Sources */,
+				A1B2C3D401000031 /* MTLineFitter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

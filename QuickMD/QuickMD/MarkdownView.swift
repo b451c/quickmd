@@ -302,6 +302,14 @@ struct MarkdownView: View {
                         }
                     }
                 )
+
+            case .mathBlock(let latex):
+                MathBlockView(latex: latex, theme: theme)
+                    .padding(.vertical, 4)
+
+            case .mermaidDiagram(let source):
+                MermaidBlockView(source: source, theme: theme)
+                    .padding(.vertical, 4)
             }
         }
 
@@ -476,6 +484,10 @@ struct MarkdownView: View {
                 segments = [alt]
             case .heading(_, let title):
                 segments = [title]
+            case .mathBlock(let latex):
+                segments = [latex]
+            case .mermaidDiagram(let source):
+                segments = [source]
             }
 
             // Count individual occurrences across all segments

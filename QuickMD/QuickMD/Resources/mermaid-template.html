@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: transparent; overflow: hidden; }
+  #output { display: flex; justify-content: center; }
+  #output svg { max-width: 100%; height: auto; }
+</style>
+</head>
+<body>
+<div id="output"></div>
+<script src="mermaid.min.js"></script>
+<script>
+  function renderDiagram(source, isDark) {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: isDark ? 'dark' : 'default',
+      securityLevel: 'strict',
+      fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif'
+    });
+
+    const container = document.getElementById('output');
+    container.innerHTML = '';
+
+    mermaid.render('diagram', source).then(function(result) {
+      container.innerHTML = result.svg;
+      // Report height back to Swift
+      var height = container.getBoundingClientRect().height;
+      window.webkit.messageHandlers.mermaidHeight.postMessage(height);
+    }).catch(function(err) {
+      container.innerHTML = '<pre style="color:#e55;font-size:12px;padding:8px;">' +
+        err.message.replace(/</g, '&lt;') + '</pre>';
+      window.webkit.messageHandlers.mermaidHeight.postMessage(
+        container.getBoundingClientRect().height
+      );
+    });
+  }
+</script>
+</body>
+</html>
