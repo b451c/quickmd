@@ -93,7 +93,13 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ### Mac App Store (Recommended)
 
-Available on the [Mac App Store](https://apps.apple.com/app/quickmd/id6740814767).
+Available on the [Mac App Store](https://apps.apple.com/app/quickmd/id6757681819).
+
+### Homebrew
+
+```bash
+brew install --cask quickmd
+```
 
 ### Build from Source
 
