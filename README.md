@@ -248,8 +248,13 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Reference-style links (`[text][id]`)
 - [x] Custom color themes (7 built-in)
 - [x] Copy to clipboard (whole file + sections)
-- [ ] LaTeX math support
-- [ ] Mermaid diagram rendering
+- [x] LaTeX math rendering (`$$...$$`)
+- [x] Mermaid diagram rendering (flowcharts, sequence, pie, class, etc.)
+- [x] Security-Scoped Bookmarks for local images
+- [x] Persistent Table of Contents state
+- [ ] Inline math (`$...$`)
+- [ ] Homebrew Cask (`brew install --cask quickmd`)
+- [ ] Footnotes support
 
 Have a feature request? [Open an issue!](https://github.com/b451c/quickmd/issues)
 
