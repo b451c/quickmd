@@ -137,6 +137,10 @@ thoughts/
 CLAUDE.md
 init.sh
 feature_list.json
+docs/progress.md
+docs/architecture.md
+docs/constraints.md
+docs/build-and-release.md
 DEVELOPMENT.md
 QuickMD/AppStore-Metadata.md
 QuickMD/SCREENSHOT-PLAN.md
