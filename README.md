@@ -98,7 +98,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 Available on the [Mac App Store](https://apps.apple.com/app/quickmd/id6757681819).
 
-### Homebrew
+### Homebrew (coming soon)
 
 ```bash
 brew install --cask quickmd
@@ -181,8 +181,16 @@ QuickMD/
 │   ├── MarkdownExport.swift        # PDF export + print support
 │   ├── TipJarManager.swift         # StoreKit 2 IAP (App Store only)
 │   ├── TipJarView.swift            # Tip Jar UI (App Store only)
+│   ├── SandboxAccessManager.swift  # Security-scoped bookmarks
+│   ├── SwiftMath/                  # Vendored math rendering (Core Graphics)
+│   ├── Resources/
+│   │   ├── mermaid.min.js          # Bundled Mermaid.js
+│   │   └── mermaid-template.html   # HTML template for diagrams
 │   ├── Views/
 │   │   ├── CodeBlockView.swift     # Syntax-highlighted code blocks
+│   │   ├── MathBlockView.swift     # LaTeX display math ($$...$$)
+│   │   ├── InlineMathTextView.swift # Inline math ($...$)
+│   │   ├── MermaidBlockView.swift  # Mermaid diagrams (WKWebView)
 │   │   ├── TableBlockView.swift    # Table rendering with alignment
 │   │   ├── ImageBlockView.swift    # Local + remote image rendering
 │   │   ├── BlockquoteView.swift    # Nested blockquotes
@@ -222,13 +230,12 @@ xcodebuild -project QuickMD/QuickMD.xcodeproj -scheme QuickMD -configuration Rel
   OTHER_SWIFT_FLAGS="-DAPPSTORE" archive
 ```
 
-See [QuickMD/AppStore-Metadata.md](QuickMD/AppStore-Metadata.md) for detailed submission instructions.
+The `APPSTORE` flag enables Tip Jar IAP and disables the GitHub-only update checker.
 
 ## Support
 
 ### Get Help
 
-- 📖 [Documentation](https://github.com/b451c/quickmd/wiki)
 - 🐛 [Report a Bug](https://github.com/b451c/quickmd/issues)
 - 💡 [Request a Feature](https://github.com/b451c/quickmd/issues)
 
@@ -256,8 +263,9 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Inline math (`$...$`)
 - [x] Footnotes (`[^id]` references with definitions)
 - [x] Homebrew Cask formula
-- [ ] Graphical inline math rendering (TeX-quality in paragraph text)
 - [ ] Mermaid diagram PDF export (full fidelity)
+- [ ] GFM alerts/admonitions (NOTE, WARNING, TIP)
+- [ ] Definition lists
 
 Have a feature request? [Open an issue!](https://github.com/b451c/quickmd/issues)
 
