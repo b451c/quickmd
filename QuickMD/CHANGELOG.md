@@ -5,6 +5,15 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-04-03
+
+### Added
+- **LaTeX Math Rendering:** Display math blocks (`$$...$$`) are now rendered with TeX-quality typography via vendored SwiftMath library. Supports fractions, integrals, matrices, sums, and all standard LaTeX math notation.
+- **Mermaid Diagram Rendering:** Fenced code blocks with `mermaid` language tag are now rendered as interactive diagrams — flowcharts, sequence diagrams, pie charts, class diagrams, and more. Powered by bundled Mermaid.js.
+
+### Fixed
+- **Dead App Store Link:** Updated the Mac App Store link in README to the correct app ID.
+
 ## [1.3.3] - 2026-03-25
 
 ### Added
