@@ -70,6 +70,8 @@ struct MarkdownView: View {
     @State private var scrollTrigger: Int = 0
     @State private var keyMonitor: Any?
     @AppStorage("isToCVisible") private var isToCVisible: Bool = false
+    @AppStorage("isDocumentListVisible") private var isDocumentListVisible: Bool = false
+    @AppStorage("documentListWidth") private var documentListWidth: Double = 220
     @State private var headings: [ToCEntry] = []
     @State private var tocScrollTarget: String?
     @State private var showCopiedToast: Bool = false
@@ -83,8 +85,7 @@ struct MarkdownView: View {
 
     /// Resolved theme from user selection + system color scheme
     private var theme: MarkdownTheme {
-        let name = ThemeName(rawValue: selectedThemeName) ?? .auto
-        return MarkdownTheme.theme(named: name, colorScheme: colorScheme)
+        MarkdownTheme.theme(named: selectedThemeName, colorScheme: colorScheme)
     }
 
     private struct DocumentIdentity: Equatable {
@@ -95,6 +96,14 @@ struct MarkdownView: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            // Recent documents sidebar (leftmost)
+            if isDocumentListVisible {
+                RecentDocumentsSidebar(theme: theme, currentURL: documentURL)
+                    .frame(width: documentListWidth)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                SidebarResizeHandle(width: $documentListWidth, minWidth: 160, maxWidth: 500)
+            }
+
             // Table of Contents sidebar
             if isToCVisible && !headings.isEmpty {
                 TableOfContentsView(headings: headings, onSelect: { targetId in
@@ -145,6 +154,30 @@ struct MarkdownView: View {
                     }
                 }
             }
+            .overlay(alignment: .topLeading) {
+                // Reveal sidebar when hidden (sits at top-leading; out of the way of content)
+                if !isDocumentListVisible {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isDocumentListVisible = true
+                        }
+                    } label: {
+                        Image(systemName: "sidebar.leading")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 4)
+                            .background(theme.codeBackgroundColor.opacity(0.6))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .focusable(false)
+                    .opacity(0.5)
+                    .help("Show recent documents (⇧⌘D)")
+                    .padding(.top, isSearchVisible ? 44 : 8)
+                    .padding(.leading, 8)
+                }
+            }
             .overlay(alignment: .topTrailing) {
                 CopySourceButton(theme: theme) {
                     copyToClipboard(document.text)
@@ -182,6 +215,7 @@ struct MarkdownView: View {
         .focusedSceneValue(\.searchAction, { toggleSearch() })
         .focusedSceneValue(\.toggleToCAction, { withAnimation(.easeInOut(duration: 0.2)) { isToCVisible.toggle() } })
         .focusedSceneValue(\.copyDocumentAction, { copyToClipboard(document.text) })
+        .focusedSceneValue(\.toggleDocumentListAction, { withAnimation(.easeInOut(duration: 0.2)) { isDocumentListVisible.toggle() } })
         .environment(\.openURL, OpenURLAction { url in
             handleLinkActivation(url)
             return .handled
@@ -205,6 +239,9 @@ struct MarkdownView: View {
             updateMatchResults(for: newValue)
         }
         .onAppear {
+            if let url = documentURL {
+                RecentDocumentsStore.shared.register(url)
+            }
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                 if flags.contains(.command) && event.charactersIgnoringModifiers == "f" {
@@ -213,6 +250,10 @@ struct MarkdownView: View {
                 }
                 if flags.contains(.command) && flags.contains(.shift) && event.charactersIgnoringModifiers == "t" {
                     withAnimation(.easeInOut(duration: 0.2)) { isToCVisible.toggle() }
+                    return nil
+                }
+                if flags.contains(.command) && flags.contains(.shift) && event.charactersIgnoringModifiers == "d" {
+                    withAnimation(.easeInOut(duration: 0.2)) { isDocumentListVisible.toggle() }
                     return nil
                 }
                 if flags.contains(.command) && flags.contains(.shift) && event.charactersIgnoringModifiers == "c" {

@@ -30,6 +30,7 @@ struct QuickMDApp: App {
             CommandGroup(replacing: .textEditing) {
                 FindMenuCommand()
                 ToggleToCCommand()
+                ToggleDocumentListCommand()
                 Divider()
                 CopyMarkdownCommand()
             }
@@ -81,6 +82,17 @@ struct ToggleToCCommand: View {
             toggleToCAction?()
         }
         .keyboardShortcut("t", modifiers: [.command, .shift])
+    }
+}
+
+struct ToggleDocumentListCommand: View {
+    @FocusedValue(\.toggleDocumentListAction) var toggleDocumentListAction
+
+    var body: some View {
+        Button("Recent Documents") {
+            toggleDocumentListAction?()
+        }
+        .keyboardShortcut("d", modifiers: [.command, .shift])
     }
 }
 

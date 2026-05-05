@@ -60,6 +60,9 @@
 		A1B2C3D401000033 /* mermaid-template.html in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000037 /* mermaid-template.html */; };
 		A1B2C3D401000034 /* mathFonts.bundle in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000038 /* mathFonts.bundle */; };
 		A1B2C3D401000035 /* InlineMathTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000039 /* InlineMathTextView.swift */; };
+		A1B2C3D401000036 /* CustomThemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003A /* CustomThemeStore.swift */; };
+		A1B2C3D401000037 /* RecentDocumentsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003B /* RecentDocumentsStore.swift */; };
+		A1B2C3D401000038 /* RecentDocumentsSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003C /* RecentDocumentsSidebar.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -120,6 +123,9 @@
 		A1B2C3D400000037 /* mermaid-template.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "mermaid-template.html"; sourceTree = "<group>"; };
 		A1B2C3D400000038 /* mathFonts.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = mathFonts.bundle; sourceTree = "<group>"; };
 		A1B2C3D400000039 /* InlineMathTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineMathTextView.swift; sourceTree = "<group>"; };
+		A1B2C3D40000003A /* CustomThemeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomThemeStore.swift; sourceTree = "<group>"; };
+		A1B2C3D40000003B /* RecentDocumentsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentsStore.swift; sourceTree = "<group>"; };
+		A1B2C3D40000003C /* RecentDocumentsSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentsSidebar.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -158,6 +164,8 @@
 				A1B2C3D40000000A /* TipJarView.swift */,
 				A1B2C3D40000000C /* MarkdownExport.swift */,
 				A1B2C3D400000017 /* SandboxAccessManager.swift */,
+				A1B2C3D40000003A /* CustomThemeStore.swift */,
+				A1B2C3D40000003B /* RecentDocumentsStore.swift */,
 				A1B2C3D40000000B /* TipJarProducts.storekit */,
 				A1B2C3D400000005 /* Assets.xcassets */,
 				A1B2C3D400000006 /* QuickMD.entitlements */,
@@ -179,6 +187,7 @@
 				A1B2C3D400000018 /* MathBlockView.swift */,
 				A1B2C3D400000039 /* InlineMathTextView.swift */,
 				A1B2C3D400000019 /* MermaidBlockView.swift */,
+				A1B2C3D40000003C /* RecentDocumentsSidebar.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -365,6 +374,9 @@
 				A1B2C3D401000030 /* MTElementWidthCalculator.swift in Sources */,
 				A1B2C3D401000031 /* MTLineFitter.swift in Sources */,
 				A1B2C3D401000035 /* InlineMathTextView.swift in Sources */,
+				A1B2C3D401000036 /* CustomThemeStore.swift in Sources */,
+				A1B2C3D401000037 /* RecentDocumentsStore.swift in Sources */,
+				A1B2C3D401000038 /* RecentDocumentsSidebar.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -19,8 +19,7 @@ struct TableOfContentsView: View {
     @AppStorage("selectedTheme") private var selectedThemeName: String = "Auto"
 
     private var theme: MarkdownTheme {
-        let name = ThemeName(rawValue: selectedThemeName) ?? .auto
-        return MarkdownTheme.theme(named: name, colorScheme: colorScheme)
+        MarkdownTheme.theme(named: selectedThemeName, colorScheme: colorScheme)
     }
 
     var body: some View {

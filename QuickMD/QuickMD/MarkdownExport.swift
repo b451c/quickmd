@@ -20,6 +20,10 @@ struct FocusedCopyDocumentActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct FocusedToggleDocumentListKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var documentText: String? {
         get { self[FocusedDocumentTextKey.self] }
@@ -36,6 +40,10 @@ extension FocusedValues {
     var copyDocumentAction: (() -> Void)? {
         get { self[FocusedCopyDocumentActionKey.self] }
         set { self[FocusedCopyDocumentActionKey.self] = newValue }
+    }
+    var toggleDocumentListAction: (() -> Void)? {
+        get { self[FocusedToggleDocumentListKey.self] }
+        set { self[FocusedToggleDocumentListKey.self] = newValue }
     }
 }
 
@@ -85,7 +93,7 @@ struct MarkdownPrintableView: View {
                         .foregroundColor(.black)
 
                 case .mathBlock(let latex):
-                    MathBlockView(latex: latex, theme: MarkdownTheme.theme(named: .auto, colorScheme: .light))
+                    MathBlockView(latex: latex, theme: MarkdownTheme.theme(named: ThemeName.auto, colorScheme: .light))
                         .padding(.vertical, 4)
 
                 case .mermaidDiagram(let source):
@@ -294,7 +302,7 @@ struct MarkdownPrintableBlockView: View {
                     .foregroundColor(.black)
 
             case .mathBlock(let latex):
-                MathBlockView(latex: latex, theme: MarkdownTheme.theme(named: .auto, colorScheme: .light))
+                MathBlockView(latex: latex, theme: MarkdownTheme.theme(named: ThemeName.auto, colorScheme: .light))
 
             case .mermaidDiagram(let source):
                 PrintableCodeBlockView(code: source, language: "mermaid")

@@ -1,24 +1,32 @@
 import SwiftUI
 
-// MARK: - Theme Name
+// MARK: - Theme Name (built-in identifiers)
 
-/// Available color themes for markdown rendering
-enum ThemeName: String, CaseIterable, Sendable {
-    case auto = "Auto"
-    case solarizedLight = "Solarized Light"
-    case solarizedDark = "Solarized Dark"
-    case dracula = "Dracula"
-    case github = "GitHub"
-    case gruvboxDark = "Gruvbox Dark"
-    case nord = "Nord"
+/// String identifiers for built-in themes. Custom themes use arbitrary names.
+enum ThemeName {
+    static let auto = "Auto"
+    static let solarizedLight = "Solarized Light"
+    static let solarizedDark = "Solarized Dark"
+    static let dracula = "Dracula"
+    static let github = "GitHub"
+    static let gruvboxDark = "Gruvbox Dark"
+    static let nord = "Nord"
+
+    /// Display order for the built-in section of the picker
+    static let allBuiltIn: [String] = [
+        auto, solarizedLight, solarizedDark, dracula, github, gruvboxDark, nord
+    ]
 }
 
 // MARK: - Theme
 
-/// Shared theme for consistent colors across all markdown views
-/// Use `MarkdownTheme.theme(named:colorScheme:)` to get a theme instance
-struct MarkdownTheme: Sendable {
-    let name: ThemeName
+/// Shared theme for consistent colors across all markdown views.
+/// Use `MarkdownTheme.theme(named:colorScheme:)` to resolve by name (built-in or custom).
+struct MarkdownTheme: Sendable, Identifiable {
+    let name: String
+    let isDark: Bool
+
+    var id: String { name }
 
     // MARK: - Text Colors
 
@@ -48,28 +56,45 @@ struct MarkdownTheme: Sendable {
 
     // MARK: - Factory
 
-    /// Returns the theme for a given name, resolving Auto to light/dark
-    static func theme(named name: ThemeName, colorScheme: ColorScheme) -> MarkdownTheme {
-        switch name {
-        case .auto: return colorScheme == .dark ? _autoDark : _autoLight
-        case .solarizedLight: return _solarizedLight
-        case .solarizedDark: return _solarizedDark
-        case .dracula: return _dracula
-        case .github: return _github
-        case .gruvboxDark: return _gruvboxDark
-        case .nord: return _nord
+    /// Resolves a theme by name. Order: built-in → custom store → fallback (auto).
+    /// Auto resolves to its light/dark variant based on `colorScheme`.
+    static func theme(named name: String, colorScheme: ColorScheme) -> MarkdownTheme {
+        if name == ThemeName.auto {
+            return colorScheme == .dark ? _autoDark : _autoLight
         }
+        if let builtIn = _builtInByName[name] {
+            return builtIn
+        }
+        if let custom = CustomThemeStore.shared.theme(named: name) {
+            return custom
+        }
+        return colorScheme == .dark ? _autoDark : _autoLight
     }
 
     /// Convenience for export/print code that always uses light theme
     static func cached(for colorScheme: ColorScheme) -> MarkdownTheme {
-        theme(named: .auto, colorScheme: colorScheme)
+        theme(named: ThemeName.auto, colorScheme: colorScheme)
     }
+
+    /// All built-in themes for picker display (Auto resolved to light variant for preview).
+    static var allBuiltInThemes: [MarkdownTheme] {
+        [_autoLight, _solarizedLight, _solarizedDark, _dracula, _github, _gruvboxDark, _nord]
+    }
+
+    private static let _builtInByName: [String: MarkdownTheme] = [
+        ThemeName.solarizedLight: _solarizedLight,
+        ThemeName.solarizedDark: _solarizedDark,
+        ThemeName.dracula: _dracula,
+        ThemeName.github: _github,
+        ThemeName.gruvboxDark: _gruvboxDark,
+        ThemeName.nord: _nord,
+    ]
 
     // MARK: - Static Theme Instances
 
     private static let _autoLight = MarkdownTheme(
-        name: .auto,
+        name: ThemeName.auto,
+        isDark: false,
         textColor: .black,
         secondaryTextColor: Color(white: 0.4),
         linkColor: .blue,
@@ -87,7 +112,8 @@ struct MarkdownTheme: Sendable {
     )
 
     private static let _autoDark = MarkdownTheme(
-        name: .auto,
+        name: ThemeName.auto,
+        isDark: true,
         textColor: .white,
         secondaryTextColor: .gray,
         linkColor: .blue,
@@ -106,7 +132,8 @@ struct MarkdownTheme: Sendable {
 
     // Solarized Light — cream background (#FDF6E3), dark blue-gray text
     private static let _solarizedLight = MarkdownTheme(
-        name: .solarizedLight,
+        name: ThemeName.solarizedLight,
+        isDark: false,
         textColor: Color(hex: "657B83"),
         secondaryTextColor: Color(hex: "93A1A1"),
         linkColor: Color(hex: "268BD2"),
@@ -125,7 +152,8 @@ struct MarkdownTheme: Sendable {
 
     // Solarized Dark — dark blue background (#002B36), light text
     private static let _solarizedDark = MarkdownTheme(
-        name: .solarizedDark,
+        name: ThemeName.solarizedDark,
+        isDark: true,
         textColor: Color(hex: "839496"),
         secondaryTextColor: Color(hex: "586E75"),
         linkColor: Color(hex: "268BD2"),
@@ -144,7 +172,8 @@ struct MarkdownTheme: Sendable {
 
     // Dracula — purple-tinted dark background (#282A36), pastel syntax colors
     private static let _dracula = MarkdownTheme(
-        name: .dracula,
+        name: ThemeName.dracula,
+        isDark: true,
         textColor: Color(hex: "F8F8F2"),
         secondaryTextColor: Color(hex: "6272A4"),
         linkColor: Color(hex: "8BE9FD"),
@@ -163,7 +192,8 @@ struct MarkdownTheme: Sendable {
 
     // GitHub — clean white background, blue links, familiar GitHub style
     private static let _github = MarkdownTheme(
-        name: .github,
+        name: ThemeName.github,
+        isDark: false,
         textColor: Color(hex: "24292F"),
         secondaryTextColor: Color(hex: "57606A"),
         linkColor: Color(hex: "0969DA"),
@@ -182,7 +212,8 @@ struct MarkdownTheme: Sendable {
 
     // Gruvbox Dark — warm earthy tones (#282828), retro feel
     private static let _gruvboxDark = MarkdownTheme(
-        name: .gruvboxDark,
+        name: ThemeName.gruvboxDark,
+        isDark: true,
         textColor: Color(hex: "EBDBB2"),
         secondaryTextColor: Color(hex: "A89984"),
         linkColor: Color(hex: "83A598"),
@@ -201,7 +232,8 @@ struct MarkdownTheme: Sendable {
 
     // Nord — arctic blue palette (#2E3440), cool and calming
     private static let _nord = MarkdownTheme(
-        name: .nord,
+        name: ThemeName.nord,
+        isDark: true,
         textColor: Color(hex: "D8DEE9"),
         secondaryTextColor: Color(hex: "4C566A"),
         linkColor: Color(hex: "88C0D0"),
@@ -276,15 +308,32 @@ struct MarkdownTheme: Sendable {
 // MARK: - Color Hex Extension
 
 extension Color {
-    /// Initialize Color from a hex string (e.g., "FF79C6" or "#FF79C6")
+    /// Initialize Color from a hex string. Supports 6-char (RRGGBB) and 8-char (RRGGBBAA) hex,
+    /// with or without leading "#". Invalid input falls back to black.
     init(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        let trimmed = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#").union(.whitespaces))
         var rgb: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&rgb)
-        self.init(
-            red: Double((rgb >> 16) & 0xFF) / 255.0,
-            green: Double((rgb >> 8) & 0xFF) / 255.0,
-            blue: Double(rgb & 0xFF) / 255.0
-        )
+        let scanned = Scanner(string: trimmed).scanHexInt64(&rgb)
+        guard scanned, trimmed.count == 6 || trimmed.count == 8 else {
+            self.init(red: 0, green: 0, blue: 0)
+            return
+        }
+        if trimmed.count == 8 {
+            self.init(
+                .sRGB,
+                red: Double((rgb >> 24) & 0xFF) / 255.0,
+                green: Double((rgb >> 16) & 0xFF) / 255.0,
+                blue: Double((rgb >> 8) & 0xFF) / 255.0,
+                opacity: Double(rgb & 0xFF) / 255.0
+            )
+        } else {
+            self.init(
+                .sRGB,
+                red: Double((rgb >> 16) & 0xFF) / 255.0,
+                green: Double((rgb >> 8) & 0xFF) / 255.0,
+                blue: Double(rgb & 0xFF) / 255.0,
+                opacity: 1.0
+            )
+        }
     }
 }

@@ -24,11 +24,7 @@ struct MermaidBlockView: View {
     }
 
     private var isDarkTheme: Bool {
-        switch theme.name {
-        case .solarizedDark, .dracula, .gruvboxDark, .nord: return true
-        case .solarizedLight, .github: return false
-        case .auto: return colorScheme == .dark
-        }
+        theme.isDark
     }
 }
 
