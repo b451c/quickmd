@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import os
 
 // MARK: - Code Block View
 //
@@ -14,9 +15,13 @@ import AppKit
 //  2. NSTextView has native line-fragment layout, no Text-AttributedString trap.
 //  3. Native NSTextView selection supports cross-line drag with auto-scroll
 //     (SwiftUI textSelection lacks this in lazy contexts).
+
+// MARK: - Debug instrumentation
 //
-// This refactor (v1.5.0) eliminates the SwiftUI-Text-Unicode bug at the source,
-// allowing the parent VStack to be safely converted to LazyVStack for large docs.
+// Console.app filter: subsystem == "pl.falami.studio.QuickMD" AND category == "CodeBlock"
+// Or: log stream --predicate 'subsystem == "pl.falami.studio.QuickMD"' --level debug
+private let codeLog = Logger(subsystem: "pl.falami.studio.QuickMD", category: "CodeBlock")
+private let codeSignpost = OSSignposter(subsystem: "pl.falami.studio.QuickMD", category: "CodeBlock")
 
 struct CodeBlockView: View {
     let code: String
@@ -26,9 +31,22 @@ struct CodeBlockView: View {
     var focusedOccurrence: Int? = nil
 
     @State private var contentHeight: CGFloat = 20
+    /// Cache of the highlighted NSAttributedString. Keyed by `cacheKey` so we
+    /// only recompute when the code or theme actually changes — not on every
+    /// scroll-induced body re-evaluation.
+    @State private var cachedAttributed: NSAttributedString?
+    @State private var cachedKey: String = ""
+
+    private var cacheKey: String {
+        // theme.name + a content fingerprint. We use code.count + first/last chars
+        // to keep the key cheap; if anyone manages a collision we just recompute.
+        "\(theme.name)|\(code.count)|\(code.prefix(8))…\(code.suffix(8))"
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let attributed = (cacheKey == cachedKey ? cachedAttributed : nil) ?? computeHighlightedAttributedString()
+
+        return VStack(alignment: .leading, spacing: 0) {
             if !language.isEmpty {
                 Text(language)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
@@ -39,7 +57,7 @@ struct CodeBlockView: View {
             }
 
             CodeTextView(
-                attributed: highlightedAttributedString,
+                attributed: attributed,
                 searchTerm: searchText,
                 focusedOccurrence: focusedOccurrence,
                 contentHeight: $contentHeight
@@ -51,6 +69,15 @@ struct CodeBlockView: View {
         }
         .background(theme.codeBackgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: 6))
+        .task(id: cacheKey) {
+            // Compute (or recompute on theme/code change) on the main actor — the
+            // work is cheap for typical blocks but cached so this runs once per
+            // (code, theme) tuple, not per body eval.
+            let key = cacheKey
+            let attr = computeHighlightedAttributedString()
+            cachedAttributed = attr
+            cachedKey = key
+        }
     }
 
     // MARK: - Static Regex Patterns (compiled once, reused)
@@ -63,7 +90,11 @@ struct CodeBlockView: View {
 
     // MARK: - Highlighted NSAttributedString
 
-    private var highlightedAttributedString: NSAttributedString {
+    private func computeHighlightedAttributedString() -> NSAttributedString {
+        let signpostID = codeSignpost.makeSignpostID()
+        let state = codeSignpost.beginInterval("compute", id: signpostID, "lines=\(code.split(separator: "\n").count)")
+        defer { codeSignpost.endInterval("compute", state) }
+
         let result = NSMutableAttributedString(string: code)
         let fullRange = NSRange(location: 0, length: (code as NSString).length)
         let baseFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
@@ -91,6 +122,7 @@ struct CodeBlockView: View {
         apply(regex: Self.keywordRegex, color: theme.keywordColor)
         apply(regex: Self.typeRegex, color: theme.typeColor)
 
+        codeLog.debug("compute: \(code.count) chars, \(coloredRanges.count) ranges, theme=\(theme.name, privacy: .public)")
         return result
     }
 }
@@ -108,6 +140,10 @@ private struct CodeTextView: NSViewRepresentable {
     @Binding var contentHeight: CGFloat
 
     func makeNSView(context: Context) -> SelfSizingTextView {
+        let signpostID = codeSignpost.makeSignpostID()
+        let state = codeSignpost.beginInterval("makeNSView", id: signpostID)
+        defer { codeSignpost.endInterval("makeNSView", state) }
+
         let textView = SelfSizingTextView()
         textView.isEditable = false
         textView.isSelectable = true
@@ -120,19 +156,48 @@ private struct CodeTextView: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.allowsUndo = false
         textView.usesFindBar = false
-        textView.heightCallback = { newHeight in
+        textView.heightCallback = { [weak textView] newHeight in
+            guard textView != nil else { return }
             DispatchQueue.main.async {
                 if abs(self.contentHeight - newHeight) > 0.5 {
                     self.contentHeight = newHeight
                 }
             }
         }
+        codeLog.debug("makeNSView: created NSTextView, attr length=\(attributed.length)")
         return textView
     }
 
     func updateNSView(_ textView: SelfSizingTextView, context: Context) {
-        // Refresh height callback (binding may have changed identity)
-        textView.heightCallback = { newHeight in
+        let signpostID = codeSignpost.makeSignpostID()
+        let state = codeSignpost.beginInterval("updateNSView", id: signpostID, "len=\(attributed.length) search=\(searchTerm.isEmpty ? "no" : "yes")")
+        defer { codeSignpost.endInterval("updateNSView", state) }
+
+        // Identity-equal NSAttributedString instances mean nothing has changed —
+        // skip ALL work (this is the common path during scroll-induced body evals
+        // when the cached attributed string is reused across renders).
+        let storageRef = textView.textStorage
+        let textChanged = (textView.cachedAttributed !== attributed)
+
+        if textChanged {
+            codeLog.debug("updateNSView: text CHANGED — full setAttributedString")
+            storageRef?.setAttributedString(attributed)
+            textView.cachedAttributed = attributed
+        }
+
+        // Search highlight only re-applied when the term or focused-occurrence changed.
+        let searchChanged = (textView.lastSearchTerm != searchTerm) ||
+                            (textView.lastFocusedOccurrence != focusedOccurrence)
+        if textChanged || searchChanged {
+            applySearchHighlight(in: textView)
+            textView.lastSearchTerm = searchTerm
+            textView.lastFocusedOccurrence = focusedOccurrence
+        }
+
+        // Refresh the height callback closure (the binding may capture different
+        // state across renders).
+        textView.heightCallback = { [weak textView] newHeight in
+            guard textView != nil else { return }
             DispatchQueue.main.async {
                 if abs(self.contentHeight - newHeight) > 0.5 {
                     self.contentHeight = newHeight
@@ -140,12 +205,11 @@ private struct CodeTextView: NSViewRepresentable {
             }
         }
 
-        if !(textView.textStorage?.isEqual(to: attributed) ?? false) {
-            textView.textStorage?.setAttributedString(attributed)
+        // Only force a height recompute when text actually changed; otherwise the
+        // text view's own layout() callback handles width changes naturally.
+        if textChanged {
+            textView.recomputeHeightIfNeeded()
         }
-
-        applySearchHighlight(in: textView)
-        textView.recomputeHeightIfNeeded()
     }
 
     private func applySearchHighlight(in textView: NSTextView) {
@@ -170,7 +234,6 @@ private struct CodeTextView: NSViewRepresentable {
             let searchRange = NSRange(location: location, length: lowerHaystack.length - location)
             let found = lowerHaystack.range(of: needle as String, options: [], range: searchRange)
             if found.location == NSNotFound { break }
-            // Clamp to the actual storage range to be safe
             let safeRange = NSIntersectionRange(found, NSRange(location: 0, length: plain.length))
             if safeRange.length > 0 {
                 let color = (focusedOccurrence == occurrenceIndex) ? orange : yellow
@@ -188,11 +251,25 @@ private struct CodeTextView: NSViewRepresentable {
 /// layout completes. Used by `CodeTextView` to drive the SwiftUI `.frame(height:)`.
 final class SelfSizingTextView: NSTextView {
     var heightCallback: ((CGFloat) -> Void)?
+    /// Identity reference to the last-applied attributed string. Lets the wrapper
+    /// short-circuit `updateNSView` work when SwiftUI hands us the same instance.
+    var cachedAttributed: NSAttributedString?
+    /// Last applied search term + focused occurrence. Lets us skip
+    /// `applySearchHighlight` when neither changed.
+    var lastSearchTerm: String = ""
+    var lastFocusedOccurrence: Int?
+
     private var lastReportedHeight: CGFloat = -1
+    private var lastLayoutWidth: CGFloat = -1
 
     override func layout() {
         super.layout()
-        recomputeHeightIfNeeded()
+        // Only recompute if width actually changed — saves work on no-op layout
+        // passes triggered by parent scroll/redraw cycles.
+        if abs(bounds.width - lastLayoutWidth) > 0.5 {
+            lastLayoutWidth = bounds.width
+            recomputeHeightIfNeeded()
+        }
     }
 
     override func resize(withOldSuperviewSize oldSize: NSSize) {
@@ -202,7 +279,6 @@ final class SelfSizingTextView: NSTextView {
 
     func recomputeHeightIfNeeded() {
         guard let lm = layoutManager, let tc = textContainer else { return }
-        // Honor the current width (driven by SwiftUI parent + autoresizingMask)
         let width = bounds.width > 0 ? bounds.width : tc.containerSize.width
         if width > 0 {
             tc.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)

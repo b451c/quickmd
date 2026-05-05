@@ -385,10 +385,43 @@ struct MarkdownBlockParser: Sendable {
 
     // MARK: - Text Buffer
 
+    /// Cap on lines per text block. Large bullet/link lists (e.g. 11K-line bookmark dumps)
+    /// would otherwise coalesce into one ~10000-char Text(AttributedString) per heading
+    /// section — slow to lay out on window resize. We split at blank-line (paragraph)
+    /// boundaries so visual rendering is unaffected, but each individual block stays
+    /// small enough for SwiftUI Text to lay out quickly.
+    private static let textChunkLineLimit = 30
+
     private func flushTextBuffer(_ buffer: inout [String], to blocks: inout [MarkdownBlock], index: inout Int, using renderer: MarkdownRenderer) {
         guard !buffer.isEmpty else { return }
-        blocks.append(.text(index: index, renderer.render(buffer.joined(separator: "\n"))))
-        index += 1
+
+        // Slice the buffer into chunks of ≤ textChunkLineLimit lines, preferring
+        // blank-line boundaries so we never split a paragraph.
+        var chunkStart = 0
+        while chunkStart < buffer.count {
+            let hardEnd = min(chunkStart + Self.textChunkLineLimit, buffer.count)
+            var sliceEnd = hardEnd
+
+            // If we're not at the end of the buffer, try to back up to the last blank
+            // line within this chunk so we don't split a paragraph mid-flow.
+            if hardEnd < buffer.count {
+                var probe = hardEnd - 1
+                while probe > chunkStart {
+                    if buffer[probe].trimmingCharacters(in: .whitespaces).isEmpty {
+                        sliceEnd = probe + 1   // include the blank line in this chunk
+                        break
+                    }
+                    probe -= 1
+                }
+                // If no blank line found inside the window, fall through with hardEnd —
+                // the chunk is one long paragraph and we just have to take the hit.
+            }
+
+            let slice = buffer[chunkStart..<sliceEnd].joined(separator: "\n")
+            blocks.append(.text(index: index, renderer.render(slice)))
+            index += 1
+            chunkStart = sliceEnd
+        }
         buffer = []
     }
 }

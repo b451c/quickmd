@@ -1,4 +1,13 @@
 import SwiftUI
+import os
+
+// MARK: - Debug instrumentation
+//
+// Console.app filter: subsystem == "pl.falami.studio.QuickMD"
+// Or terminal:
+//   log stream --predicate 'subsystem == "pl.falami.studio.QuickMD"' --level debug
+private let viewLog = Logger(subsystem: "pl.falami.studio.QuickMD", category: "MarkdownView")
+private let viewSignpost = OSSignposter(subsystem: "pl.falami.studio.QuickMD", category: "MarkdownView")
 
 // MARK: - Shared Search Highlighting
 
@@ -54,6 +63,21 @@ func countOccurrences(in text: String, of term: String) -> Int {
     return count
 }
 
+// MARK: - Parser Output
+
+/// Per-text-block precomputed metadata. Built on the parser's background thread so
+/// the main thread doesn't have to do `String(attr.characters)` + regex per render.
+struct TextBlockMeta: Sendable {
+    let plain: String
+    let hasInlineMath: Bool
+}
+
+/// Bundle of parser results so the background-detached parse returns one value.
+struct ParsedDocument: Sendable {
+    let blocks: [MarkdownBlock]
+    let textMeta: [String: TextBlockMeta]
+}
+
 // MARK: - Main View
 
 /// Main Markdown document view
@@ -63,6 +87,12 @@ struct MarkdownView: View {
     let documentURL: URL?
     @Environment(\.colorScheme) private var colorScheme
     @State private var cachedBlocks: [MarkdownBlock] = []
+    /// Per-text-block precomputed plain string + inline-math flag. Built once at parse
+    /// time so per-render `blockView(_:)` doesn't repeatedly call
+    /// `String(attributedString.characters)` and an `NSRegularExpression` on every body
+    /// re-evaluation (window resize, focus return, theme switch were thrashing this).
+    @State private var textBlockMeta: [String: TextBlockMeta] = [:]
+    @State private var isParsing: Bool = false
     @State private var searchText: String = ""
     @State private var isSearchVisible: Bool = false
     @State private var currentMatchIndex: Int = 0
@@ -135,11 +165,21 @@ struct MarkdownView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        // LazyVStack restored in v1.5.0 — safe now that CodeBlockView
-                        // uses NSTextView (no more SwiftUI Text(AttributedString) +
-                        // box-drawing Unicode trap that caused 890MB freezes in v1.3.2).
-                        // Lazy materialization is required for large docs (#10).
-                        LazyVStack(alignment: .leading, spacing: 8) {
+                        // VStack (eager) — NOT LazyVStack.
+                        // We tried LazyVStack in Sprint 4.2 (after refactoring
+                        // CodeBlockView to NSTextView, which fixed the original
+                        // 890MB box-drawing-Unicode freeze). It surfaced a SECOND
+                        // SwiftUI bug: rapid scroll instantiates/tears down
+                        // SelectionOverlay (the NSTextField-backed shim that
+                        // implements Text(...).textSelection(.enabled)) for every
+                        // visible block; setFont/invalidateEffectiveFont cascades
+                        // saturate the main thread. Sample showed 99% CPU on
+                        // SelectionOverlay.updateNSView during scroll.
+                        // VStack keeps all views alive — no lifecycle churn.
+                        // Trade-off: opening huge docs (>5K blocks) is slower —
+                        // tracked as Issue #10, target v1.6.0 (full NSTextView
+                        // migration for text blocks too).
+                        VStack(alignment: .leading, spacing: 8) {
                             ForEach(cachedBlocks) { block in
                                 blockView(for: block)
                             }
@@ -201,6 +241,22 @@ struct MarkdownView: View {
                 }
                 .padding(16)
             }
+            .overlay(alignment: .center) {
+                if isParsing && cachedBlocks.isEmpty {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Parsing…")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(theme.codeBackgroundColor.opacity(0.85))
+                    .clipShape(Capsule())
+                    .transition(.opacity)
+                }
+            }
             .overlay(alignment: .bottom) {
                 if showCopiedToast {
                     Text("Copied!")
@@ -217,6 +273,14 @@ struct MarkdownView: View {
             }
         }
         .background(theme.backgroundColor)
+        .background(WindowConfigurator { window in
+            // Make every QuickMD document window prefer to join existing windows
+            // as tabs (rather than as standalone windows), regardless of the
+            // system-wide "Prefer tabs" preference. All windows share one
+            // tabbingIdentifier so AppKit groups them in a single tabbed window.
+            window.tabbingMode = .preferred
+            window.tabbingIdentifier = "pl.falami.studio.QuickMD.Document"
+        })
         .focusedSceneValue(\.documentText, document.text)
         .focusedSceneValue(\.searchAction, { toggleSearch() })
         .focusedSceneValue(\.toggleToCAction, { withAnimation(.easeInOut(duration: 0.2)) { isToCVisible.toggle() } })
@@ -230,16 +294,35 @@ struct MarkdownView: View {
         .task(id: DocumentIdentity(text: document.text, colorScheme: colorScheme, themeName: selectedThemeName)) {
             let text = document.text
             let currentTheme = theme
-            let blocks = await Task.detached(priority: .userInitiated) {
-                MarkdownBlockParser(theme: currentTheme).parse(text)
+            isParsing = true
+            let parsed: ParsedDocument = await Task.detached(priority: .userInitiated) {
+                let blocks = MarkdownBlockParser(theme: currentTheme).parse(text)
+                // Pre-compute per-text-block metadata on the background thread so the
+                // main thread never has to do it later.
+                var meta: [String: TextBlockMeta] = [:]
+                let mathRegex = try? NSRegularExpression(pattern: #"\$[^\s$].*?\$"#)
+                for block in blocks {
+                    if case .text(let attr) = block.content {
+                        let plain = String(attr.characters)
+                        var hasMath = false
+                        if plain.contains("$"), let regex = mathRegex {
+                            let range = NSRange(plain.startIndex..., in: plain)
+                            hasMath = regex.firstMatch(in: plain, range: range) != nil
+                        }
+                        meta[block.id] = TextBlockMeta(plain: plain, hasInlineMath: hasMath)
+                    }
+                }
+                return ParsedDocument(blocks: blocks, textMeta: meta)
             }.value
-            cachedBlocks = blocks
-            headings = blocks.compactMap { block in
+            cachedBlocks = parsed.blocks
+            textBlockMeta = parsed.textMeta
+            headings = parsed.blocks.compactMap { block in
                 if case .heading(let level, let title) = block.content {
                     return ToCEntry(id: block.id, level: level, title: title)
                 }
                 return nil
             }
+            isParsing = false
         }
         .onChange(of: searchText) { newValue in
             searchDebounce?.cancel()
@@ -256,24 +339,20 @@ struct MarkdownView: View {
             if let url = documentURL {
                 RecentDocumentsStore.shared.register(url)
             }
+            // NSEvent.addLocalMonitorForEvents is GLOBAL for the app process —
+            // every visible MarkdownView (one per open tab) registers its own
+            // monitor, and ALL of them fire on every keypress. So we can't
+            // toggle per-view state here for shortcuts that have menu equivalents
+            // (⌘F, ⌘⇧T, ⌘⇧D, ⌘⇧C) — those are routed through `@FocusedValue`
+            // in QuickMDApp.swift, which correctly targets the active tab.
+            //
+            // Only handle the search-bar-specific keys here (⌘G next match,
+            // ⇧⌘G previous, Escape close). These already gate on the per-view
+            // `isSearchVisible` flag, so inactive tabs return the event
+            // unchanged and the active tab consumes it.
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                if flags.contains(.command) && event.charactersIgnoringModifiers == "f" {
-                    toggleSearch()
-                    return nil
-                }
-                if flags.contains(.command) && flags.contains(.shift) && event.charactersIgnoringModifiers == "t" {
-                    withAnimation(.easeInOut(duration: 0.2)) { isToCVisible.toggle() }
-                    return nil
-                }
-                if flags.contains(.command) && flags.contains(.shift) && event.charactersIgnoringModifiers == "d" {
-                    withAnimation(.easeInOut(duration: 0.2)) { isDocumentListVisible.toggle() }
-                    return nil
-                }
-                if flags.contains(.command) && flags.contains(.shift) && event.charactersIgnoringModifiers == "c" {
-                    copyToClipboard(document.text)
-                    return nil
-                }
+
                 if flags.contains(.command) && event.charactersIgnoringModifiers == "g" {
                     if isSearchVisible {
                         if flags.contains(.shift) {
@@ -303,12 +382,14 @@ struct MarkdownView: View {
 
     @ViewBuilder
     private func blockView(for block: MarkdownBlock) -> some View {
+        let _ = viewSignpost.emitEvent("blockView", "id=\(block.id, privacy: .public)")
         let focusedOcc = (block.id == focusedBlockId) ? focusedOccInBlock : nil
         let view = Group {
             switch block.content {
             case .text(let attributedString):
-                let plainText = String(attributedString.characters)
-                let hasInlineMath = plainText.contains("$") && plainText.range(of: #"\$[^\s$].*?\$"#, options: .regularExpression) != nil
+                // hasInlineMath is precomputed at parse time (see textBlockMeta);
+                // avoids per-render String(attr.characters) + regex on every body eval.
+                let hasInlineMath = textBlockMeta[block.id]?.hasInlineMath ?? false
                 if searchText.isEmpty && hasInlineMath {
                     InlineMathTextView(attributedString: attributedString, theme: theme)
                 } else if searchText.isEmpty {
@@ -602,6 +683,63 @@ struct MarkdownView: View {
         }
     }
 
+}
+
+// MARK: - Window Configurator
+
+/// Bridges into AppKit to configure the host NSWindow once it's available.
+/// Used to opt every document window into native macOS tabbing — we set the
+/// shared `tabbingIdentifier` and, if another QuickMD doc window is already
+/// visible, programmatically merge the new window as a tab.
+///
+/// We can't rely on AppKit's auto-tabbing (controlled by the system-wide
+/// "Prefer tabs" pref) because we want consistent tab UX regardless of user
+/// settings. `addTabbedWindow` is the explicit override.
+private struct WindowConfigurator: NSViewRepresentable {
+    let configure: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = TabAwareView()
+        view.onWindowAttached = { window in
+            configure(window)
+            mergeIntoExistingTabIfPossible(window: window)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private func mergeIntoExistingTabIfPossible(window newWindow: NSWindow) {
+        // Find another visible QuickMD document window already on screen and
+        // merge the new window into its tab group.
+        guard let identifier = newWindow.tabbingIdentifier as String?,
+              !identifier.isEmpty else { return }
+
+        let candidates = NSApp.windows.filter { other in
+            other !== newWindow
+                && other.isVisible
+                && other.tabbingIdentifier == newWindow.tabbingIdentifier
+                && other.tabGroup !== newWindow.tabGroup  // not already grouped
+        }
+        guard let host = candidates.first else { return }
+        host.addTabbedWindow(newWindow, ordered: .above)
+        newWindow.makeKeyAndOrderFront(nil)
+    }
+}
+
+/// NSView subclass that fires `onWindowAttached` exactly once, when the host
+/// NSWindow becomes available via `viewDidMoveToWindow`. More reliable than
+/// `DispatchQueue.main.async` polling.
+private final class TabAwareView: NSView {
+    var onWindowAttached: ((NSWindow) -> Void)?
+    private var fired = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard !fired, let window = self.window else { return }
+        fired = true
+        onWindowAttached?(window)
+    }
 }
 
 // MARK: - Heading Block View (hover-to-copy section)

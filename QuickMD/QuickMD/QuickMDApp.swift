@@ -13,6 +13,15 @@ enum AppURLs {
 
 @main
 struct QuickMDApp: App {
+    init() {
+        // Premium UX: every QuickMD document opens as a tab in an existing window
+        // (instead of stacking standalone windows). Overrides the system-wide
+        // "Prefer tabs when opening documents" preference for our app specifically.
+        // The actual tabbingMode + tabbingIdentifier is set per-window via
+        // WindowAccessor in MarkdownView.
+        NSWindow.allowsAutomaticWindowTabbing = true
+    }
+
     var body: some Scene {
         DocumentGroup(viewing: MarkdownDocument.self) { file in
             MarkdownView(document: file.document, documentURL: file.fileURL)

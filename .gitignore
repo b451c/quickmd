@@ -147,3 +147,6 @@ QuickMD/SCREENSHOT-PLAN.md
 QuickMD/demo-screenshot-v1.3.md
 QuickMD/Screenshots/TipJar-*.png
 PENDING-CHANGES.md
+
+# Local test fixtures (not for public repo)
+test-files/
