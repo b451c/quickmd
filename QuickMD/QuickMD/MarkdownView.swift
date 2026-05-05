@@ -81,6 +81,8 @@ struct MarkdownView: View {
     @State private var focusedOccInBlock: Int? = nil
     /// Cache of yellow-highlighted text blocks (keyed by block ID), rebuilt when searchText changes
     @State private var baseHighlightCache: [String: AttributedString] = [:]
+    /// Debounce so that rapid typing in the search bar coalesces into a single recompute
+    @State private var searchDebounce: DispatchWorkItem?
     @AppStorage("selectedTheme") private var selectedThemeName: String = "Auto"
 
     /// Resolved theme from user selection + system color scheme
@@ -133,7 +135,11 @@ struct MarkdownView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 8) {
+                        // LazyVStack restored in v1.5.0 — safe now that CodeBlockView
+                        // uses NSTextView (no more SwiftUI Text(AttributedString) +
+                        // box-drawing Unicode trap that caused 890MB freezes in v1.3.2).
+                        // Lazy materialization is required for large docs (#10).
+                        LazyVStack(alignment: .leading, spacing: 8) {
                             ForEach(cachedBlocks) { block in
                                 blockView(for: block)
                             }
@@ -236,7 +242,15 @@ struct MarkdownView: View {
             }
         }
         .onChange(of: searchText) { newValue in
-            updateMatchResults(for: newValue)
+            searchDebounce?.cancel()
+            // Empty search is cheap and the user expects instant clear
+            if newValue.isEmpty {
+                updateMatchResults(for: newValue)
+                return
+            }
+            let work = DispatchWorkItem { updateMatchResults(for: newValue) }
+            searchDebounce = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
         }
         .onAppear {
             if let url = documentURL {

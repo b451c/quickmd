@@ -1,9 +1,23 @@
 import SwiftUI
+import AppKit
 
 // MARK: - Code Block View
+//
+// Renders a fenced code block with syntax highlighting.
+// Uses NSTextView (via NSViewRepresentable) instead of SwiftUI Text(AttributedString).
+//
+// Why NSTextView:
+//  1. SwiftUI Text(AttributedString) calls NSAttributedString.replacingLineBreakModes,
+//     which is exponentially expensive for box-drawing Unicode (┌│─└) common in
+//     ASCII art / tree diagrams. Combined with LazyVStack create/destroy cycles
+//     this caused 890MB freezes (v1.3.3 incident).
+//  2. NSTextView has native line-fragment layout, no Text-AttributedString trap.
+//  3. Native NSTextView selection supports cross-line drag with auto-scroll
+//     (SwiftUI textSelection lacks this in lazy contexts).
+//
+// This refactor (v1.5.0) eliminates the SwiftUI-Text-Unicode bug at the source,
+// allowing the parent VStack to be safely converted to LazyVStack for large docs.
 
-/// Renders a fenced code block with syntax highlighting
-/// Supports common programming languages: Swift, Python, JavaScript, Rust, Go, etc.
 struct CodeBlockView: View {
     let code: String
     let language: String
@@ -11,33 +25,7 @@ struct CodeBlockView: View {
     var searchText: String = ""
     var focusedOccurrence: Int? = nil
 
-    // MARK: - Static Regex Patterns (compiled once, reused)
-
-    /// Matches single-line comments: //, #, --
-    private static let commentRegex = try! NSRegularExpression(pattern: #"(//.*|#.*|--.*)"#)
-
-    /// Matches string literals: "..." or '...'
-    private static let stringRegex = try! NSRegularExpression(pattern: #"\"[^\"]*\"|'[^']*'"#)
-
-    /// Matches numeric literals: integers and decimals
-    private static let numberRegex = try! NSRegularExpression(pattern: #"\b\d+\.?\d*\b"#)
-
-    /// Matches common programming keywords across multiple languages
-    private static let keywordRegex = try! NSRegularExpression(pattern: #"\b(func|function|def|class|struct|enum|let|var|const|if|else|for|while|return|import|from|pub|fn|async|await|try|catch|throw|new|self|this|nil|null|true|false|None|True|False)\b"#)
-
-    /// Matches type names (PascalCase identifiers)
-    private static let typeRegex = try! NSRegularExpression(pattern: #"\b[A-Z][a-zA-Z0-9]*\b"#)
-
-    // MARK: - Cached Highlighted Code
-
-    /// Cached highlighted code - computed once on init for typical blocks
-    /// For very large blocks (500+ lines), computed async to avoid blocking
-    @State private var cachedHighlightedCode: AttributedString?
-
-    /// Threshold for async highlighting (line count)
-    private static let asyncThreshold = 500
-
-    // MARK: - Body
+    @State private var contentHeight: CGFloat = 20
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -50,99 +38,182 @@ struct CodeBlockView: View {
                     .padding(.bottom, 4)
             }
 
-            Text(searchText.isEmpty ? displayedCode : searchHighlight(displayedCode, term: searchText, focusedOccurrence: focusedOccurrence))
-                .font(.system(size: 13, design: .monospaced))
-                .textSelection(.enabled)
-                .padding(.horizontal, 12)
-                .padding(.vertical, language.isEmpty ? 12 : 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            CodeTextView(
+                attributed: highlightedAttributedString,
+                searchTerm: searchText,
+                focusedOccurrence: focusedOccurrence,
+                contentHeight: $contentHeight
+            )
+            .frame(height: contentHeight)
+            .padding(.horizontal, 12)
+            .padding(.vertical, language.isEmpty ? 12 : 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(theme.codeBackgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: 6))
-        .task(id: cacheKey) {
-            // Only compute async for large blocks that weren't pre-computed
-            if cachedHighlightedCode == nil && isLargeBlock {
-                cachedHighlightedCode = computeHighlightedCode()
-            }
-        }
     }
 
-    // MARK: - Display Logic
+    // MARK: - Static Regex Patterns (compiled once, reused)
 
-    /// Returns cached code or computes inline for first render (small blocks only)
-    private var displayedCode: AttributedString {
-        if let cached = cachedHighlightedCode {
-            return cached
-        }
-        // For small blocks, compute synchronously to avoid flicker
-        // For large blocks, show plain text until async completes
-        return isLargeBlock ? plainCode : computeHighlightedCode()
-    }
+    private static let commentRegex = try! NSRegularExpression(pattern: #"(//.*|#.*|--.*)"#)
+    private static let stringRegex = try! NSRegularExpression(pattern: #"\"[^\"]*\"|'[^']*'"#)
+    private static let numberRegex = try! NSRegularExpression(pattern: #"\b\d+\.?\d*\b"#)
+    private static let keywordRegex = try! NSRegularExpression(pattern: #"\b(func|function|def|class|struct|enum|let|var|const|if|else|for|while|return|import|from|pub|fn|async|await|try|catch|throw|new|self|this|nil|null|true|false|None|True|False)\b"#)
+    private static let typeRegex = try! NSRegularExpression(pattern: #"\b[A-Z][a-zA-Z0-9]*\b"#)
 
-    /// Plain code without highlighting (fallback for large blocks during async load)
-    private var plainCode: AttributedString {
-        var attr = AttributedString(code)
-        attr.foregroundColor = theme.textColor
-        return attr
-    }
+    // MARK: - Highlighted NSAttributedString
 
-    /// Check if block exceeds async threshold
-    private var isLargeBlock: Bool {
-        var count = 0
-        for char in code where char == "\n" {
-            count += 1
-            if count >= Self.asyncThreshold { return true }
-        }
-        return false
-    }
+    private var highlightedAttributedString: NSAttributedString {
+        let result = NSMutableAttributedString(string: code)
+        let fullRange = NSRange(location: 0, length: (code as NSString).length)
+        let baseFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
 
-    /// Cache key for .task invalidation
-    private var cacheKey: Int {
-        var hasher = Hasher()
-        hasher.combine(code)
-        hasher.combine(theme.name)
-        return hasher.finalize()
-    }
+        result.addAttribute(.font, value: baseFont, range: fullRange)
+        result.addAttribute(.foregroundColor, value: NSColor(theme.textColor), range: fullRange)
 
-    // MARK: - Syntax Highlighting
-
-    private func computeHighlightedCode() -> AttributedString {
-        var result = AttributedString(code)
-        result.foregroundColor = theme.textColor
-        result.font = .system(size: 13, design: .monospaced)
-
-        let nsString = code as NSString
-        let fullRange = NSRange(location: 0, length: nsString.length)
-
-        // Track ranges already colored — later patterns skip these
         var coloredRanges: [NSRange] = []
 
-        func applyHighlighting(regex: NSRegularExpression, color: Color) {
-            let matches = regex.matches(in: code, range: fullRange)
-            for match in matches {
-                // Skip if this range overlaps with an already-colored range
-                let overlaps = coloredRanges.contains { existingRange in
-                    existingRange.intersection(match.range) != nil
-                }
+        func apply(regex: NSRegularExpression, color: Color) {
+            let nsColor = NSColor(color)
+            for match in regex.matches(in: code, range: fullRange) {
+                let range = match.range
+                let overlaps = coloredRanges.contains { $0.intersection(range) != nil }
                 guard !overlaps else { continue }
-
-                if let range = Range(match.range, in: code),
-                   let attrRange = Range(range, in: result) {
-                    result[attrRange].foregroundColor = color
-                }
-                coloredRanges.append(match.range)
+                result.addAttribute(.foregroundColor, value: nsColor, range: range)
+                coloredRanges.append(range)
             }
         }
 
-        // Apply in priority order: strings first, then comments, then others
-        // Strings have highest priority (keywords inside strings stay string-colored)
-        applyHighlighting(regex: Self.stringRegex, color: theme.stringColor)
-        applyHighlighting(regex: Self.commentRegex, color: theme.commentColor)
-        applyHighlighting(regex: Self.numberRegex, color: theme.numberColor)
-        applyHighlighting(regex: Self.keywordRegex, color: theme.keywordColor)
-        applyHighlighting(regex: Self.typeRegex, color: theme.typeColor)
+        // Same priority as v1.4: strings > comments > others
+        apply(regex: Self.stringRegex, color: theme.stringColor)
+        apply(regex: Self.commentRegex, color: theme.commentColor)
+        apply(regex: Self.numberRegex, color: theme.numberColor)
+        apply(regex: Self.keywordRegex, color: theme.keywordColor)
+        apply(regex: Self.typeRegex, color: theme.typeColor)
 
         return result
+    }
+}
+
+// MARK: - NSTextView Wrapper
+
+/// Self-sizing, read-only NSTextView wrapper. Reports its computed height to the
+/// parent SwiftUI view via `contentHeight` binding so SwiftUI can give it the
+/// correct frame. Search highlighting is applied via `temporaryAttributes` on the
+/// layout manager (no rebuild of the text storage).
+private struct CodeTextView: NSViewRepresentable {
+    let attributed: NSAttributedString
+    let searchTerm: String
+    let focusedOccurrence: Int?
+    @Binding var contentHeight: CGFloat
+
+    func makeNSView(context: Context) -> SelfSizingTextView {
+        let textView = SelfSizingTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = [.width]
+        textView.allowsUndo = false
+        textView.usesFindBar = false
+        textView.heightCallback = { newHeight in
+            DispatchQueue.main.async {
+                if abs(self.contentHeight - newHeight) > 0.5 {
+                    self.contentHeight = newHeight
+                }
+            }
+        }
+        return textView
+    }
+
+    func updateNSView(_ textView: SelfSizingTextView, context: Context) {
+        // Refresh height callback (binding may have changed identity)
+        textView.heightCallback = { newHeight in
+            DispatchQueue.main.async {
+                if abs(self.contentHeight - newHeight) > 0.5 {
+                    self.contentHeight = newHeight
+                }
+            }
+        }
+
+        if !(textView.textStorage?.isEqual(to: attributed) ?? false) {
+            textView.textStorage?.setAttributedString(attributed)
+        }
+
+        applySearchHighlight(in: textView)
+        textView.recomputeHeightIfNeeded()
+    }
+
+    private func applySearchHighlight(in textView: NSTextView) {
+        guard let layoutManager = textView.layoutManager,
+              let storage = textView.textStorage else { return }
+        let fullRange = NSRange(location: 0, length: storage.length)
+        layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
+
+        guard !searchTerm.isEmpty else { return }
+
+        let plain = storage.string as NSString
+        let needle = searchTerm.lowercased() as NSString
+        let lowerHaystack = (storage.string.lowercased()) as NSString
+        guard needle.length > 0, lowerHaystack.length >= needle.length else { return }
+
+        let yellow = NSColor.systemYellow.withAlphaComponent(0.55)
+        let orange = NSColor.systemOrange
+
+        var location = 0
+        var occurrenceIndex = 0
+        while location < lowerHaystack.length {
+            let searchRange = NSRange(location: location, length: lowerHaystack.length - location)
+            let found = lowerHaystack.range(of: needle as String, options: [], range: searchRange)
+            if found.location == NSNotFound { break }
+            // Clamp to the actual storage range to be safe
+            let safeRange = NSIntersectionRange(found, NSRange(location: 0, length: plain.length))
+            if safeRange.length > 0 {
+                let color = (focusedOccurrence == occurrenceIndex) ? orange : yellow
+                layoutManager.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: safeRange)
+            }
+            location = found.location + max(found.length, 1)
+            occurrenceIndex += 1
+        }
+    }
+}
+
+// MARK: - Self-Sizing NSTextView
+
+/// NSTextView that reports its content height through `heightCallback` whenever
+/// layout completes. Used by `CodeTextView` to drive the SwiftUI `.frame(height:)`.
+final class SelfSizingTextView: NSTextView {
+    var heightCallback: ((CGFloat) -> Void)?
+    private var lastReportedHeight: CGFloat = -1
+
+    override func layout() {
+        super.layout()
+        recomputeHeightIfNeeded()
+    }
+
+    override func resize(withOldSuperviewSize oldSize: NSSize) {
+        super.resize(withOldSuperviewSize: oldSize)
+        recomputeHeightIfNeeded()
+    }
+
+    func recomputeHeightIfNeeded() {
+        guard let lm = layoutManager, let tc = textContainer else { return }
+        // Honor the current width (driven by SwiftUI parent + autoresizingMask)
+        let width = bounds.width > 0 ? bounds.width : tc.containerSize.width
+        if width > 0 {
+            tc.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        }
+        lm.ensureLayout(for: tc)
+        let used = lm.usedRect(for: tc).height
+        let h = ceil(used)
+        if abs(h - lastReportedHeight) > 0.5 {
+            lastReportedHeight = h
+            heightCallback?(h)
+        }
     }
 }
 
