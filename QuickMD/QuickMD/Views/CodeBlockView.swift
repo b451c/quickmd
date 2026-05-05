@@ -1,6 +1,8 @@
 import SwiftUI
 import AppKit
+#if DEBUG
 import os
+#endif
 
 // MARK: - Code Block View
 //
@@ -16,12 +18,14 @@ import os
 //  3. Native NSTextView selection supports cross-line drag with auto-scroll
 //     (SwiftUI textSelection lacks this in lazy contexts).
 
-// MARK: - Debug instrumentation
+#if DEBUG
+// MARK: - Debug instrumentation (DEBUG builds only — stripped from Release)
 //
 // Console.app filter: subsystem == "pl.falami.studio.QuickMD" AND category == "CodeBlock"
 // Or: log stream --predicate 'subsystem == "pl.falami.studio.QuickMD"' --level debug
 private let codeLog = Logger(subsystem: "pl.falami.studio.QuickMD", category: "CodeBlock")
 private let codeSignpost = OSSignposter(subsystem: "pl.falami.studio.QuickMD", category: "CodeBlock")
+#endif
 
 struct CodeBlockView: View {
     let code: String
@@ -91,9 +95,11 @@ struct CodeBlockView: View {
     // MARK: - Highlighted NSAttributedString
 
     private func computeHighlightedAttributedString() -> NSAttributedString {
+        #if DEBUG
         let signpostID = codeSignpost.makeSignpostID()
         let state = codeSignpost.beginInterval("compute", id: signpostID, "lines=\(code.split(separator: "\n").count)")
         defer { codeSignpost.endInterval("compute", state) }
+        #endif
 
         let result = NSMutableAttributedString(string: code)
         let fullRange = NSRange(location: 0, length: (code as NSString).length)
@@ -122,7 +128,9 @@ struct CodeBlockView: View {
         apply(regex: Self.keywordRegex, color: theme.keywordColor)
         apply(regex: Self.typeRegex, color: theme.typeColor)
 
+        #if DEBUG
         codeLog.debug("compute: \(code.count) chars, \(coloredRanges.count) ranges, theme=\(theme.name, privacy: .public)")
+        #endif
         return result
     }
 }
@@ -140,9 +148,11 @@ private struct CodeTextView: NSViewRepresentable {
     @Binding var contentHeight: CGFloat
 
     func makeNSView(context: Context) -> SelfSizingTextView {
+        #if DEBUG
         let signpostID = codeSignpost.makeSignpostID()
         let state = codeSignpost.beginInterval("makeNSView", id: signpostID)
         defer { codeSignpost.endInterval("makeNSView", state) }
+        #endif
 
         let textView = SelfSizingTextView()
         textView.isEditable = false
@@ -164,14 +174,18 @@ private struct CodeTextView: NSViewRepresentable {
                 }
             }
         }
+        #if DEBUG
         codeLog.debug("makeNSView: created NSTextView, attr length=\(attributed.length)")
+        #endif
         return textView
     }
 
     func updateNSView(_ textView: SelfSizingTextView, context: Context) {
+        #if DEBUG
         let signpostID = codeSignpost.makeSignpostID()
         let state = codeSignpost.beginInterval("updateNSView", id: signpostID, "len=\(attributed.length) search=\(searchTerm.isEmpty ? "no" : "yes")")
         defer { codeSignpost.endInterval("updateNSView", state) }
+        #endif
 
         // Identity-equal NSAttributedString instances mean nothing has changed —
         // skip ALL work (this is the common path during scroll-induced body evals
@@ -180,7 +194,9 @@ private struct CodeTextView: NSViewRepresentable {
         let textChanged = (textView.cachedAttributed !== attributed)
 
         if textChanged {
+            #if DEBUG
             codeLog.debug("updateNSView: text CHANGED — full setAttributedString")
+            #endif
             storageRef?.setAttributedString(attributed)
             textView.cachedAttributed = attributed
         }

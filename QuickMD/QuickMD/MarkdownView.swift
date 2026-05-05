@@ -1,13 +1,15 @@
 import SwiftUI
+#if DEBUG
 import os
 
-// MARK: - Debug instrumentation
+// MARK: - Debug instrumentation (DEBUG builds only — stripped from Release)
 //
 // Console.app filter: subsystem == "pl.falami.studio.QuickMD"
 // Or terminal:
 //   log stream --predicate 'subsystem == "pl.falami.studio.QuickMD"' --level debug
 private let viewLog = Logger(subsystem: "pl.falami.studio.QuickMD", category: "MarkdownView")
 private let viewSignpost = OSSignposter(subsystem: "pl.falami.studio.QuickMD", category: "MarkdownView")
+#endif
 
 // MARK: - Shared Search Highlighting
 
@@ -382,7 +384,9 @@ struct MarkdownView: View {
 
     @ViewBuilder
     private func blockView(for block: MarkdownBlock) -> some View {
+        #if DEBUG
         let _ = viewSignpost.emitEvent("blockView", "id=\(block.id, privacy: .public)")
+        #endif
         let focusedOcc = (block.id == focusedBlockId) ? focusedOccInBlock : nil
         let view = Group {
             switch block.content {
