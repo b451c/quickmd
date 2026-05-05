@@ -5,6 +5,20 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-05-05
+
+### Added
+- **Custom Themes from Disk:** Drop your own theme JSON into `~/Library/Application Support/QuickMD/Themes/` and it appears under a **Custom** section in the picker. Live reload — no app restart. Settings panel adds **Import Theme…** (sandbox-safe NSOpenPanel), **Open Themes Folder**, and **Reload** buttons. See `docs/themes/` for the schema and starter palettes (Issue #9, requested by @cameronsjo).
+- **Recent Documents Sidebar:** Optional left sidebar listing every document opened in this session. Click a row to re-open. Drag the right edge to resize (160–500pt, persisted). Hover a row to remove it; **trash** icon clears the list. Toggle via menu **Edit → Recent Documents (⇧⌘D)** or the floating sidebar button. Originally contributed by [@COSMAX-JYP](https://github.com/COSMAX-JYP/quickmd) and refined for QuickMD.
+
+### Changed
+- **Code Block Rendering — NSTextView:** Code blocks now render through `NSTextView` (via `NSViewRepresentable`) instead of SwiftUI `Text(AttributedString)`. Native macOS line layout, native selection with auto-scroll-during-drag, and zero risk of the box-drawing-Unicode SwiftUI bug that previously required eager `VStack` rendering.
+- **Document List Lazy Rendering:** With the SwiftUI Text trap removed at the source, the main document layout switched back to `LazyVStack`. Large documents (10K+ lines) now open instantly instead of pausing on first paint (Issue #10, reported by @cameronsjo).
+- **Search Debounce:** A 150 ms debounce on search input avoids redundant per-keystroke recomputes when typing fast in the find bar; the empty-string clear remains instant.
+
+### Fixed
+- **Theme Switch on Large Documents:** With lazy rendering restored, theme changes only materialize visible blocks instead of all blocks at once — switches feel instant even on long files.
+
 ## [1.4.1] - 2026-04-03
 
 ### Added

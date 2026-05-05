@@ -147,3 +147,68 @@ QuickMD/SCREENSHOT-PLAN.md
 QuickMD/demo-screenshot-v1.3.md
 QuickMD/Screenshots/TipJar-*.png
 PENDING-CHANGES.md
+
+# Local test fixtures (not for public repo)
+test-files/
+
+# ---------------------------------------------------------------------------
+# Defensive patterns — never let these slip in
+# ---------------------------------------------------------------------------
+
+# Editor swap / backup files
+*.swp
+*.swo
+*~
+.*.swp
+.*.swo
+
+# Backup files (created by sed -i.bak, manual saves, etc.)
+*.bak
+*.backup
+*.old
+*.tmp
+
+# Merge / patch artifacts
+*.orig
+*.rej
+
+# IDE workspace configs (per-developer, should not be shared)
+.idea/
+.vscode/
+.cursor/
+.zed/
+.zed_cache/
+*.iml
+
+# Test / coverage / profile output
+coverage/
+*.gcov
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+*.lcov
+.nyc_output/
+
+# Local environment & secrets — defensive (none used in QuickMD today,
+# but in case a future feature ever pulls a key from disk)
+.env
+.env.*
+*.pem
+*.p12
+*.cer
+*.mobileprovision
+secrets/
+credentials/
+api-keys.json
+auth.json
+
+# OS junk we haven't covered above
+Thumbs.db
+desktop.ini
+.directory
+
+# Crash logs
+*.crash
+*.crashlog
+crash-*.txt

@@ -50,6 +50,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ### 🎨 **Custom Themes**
 - 7 built-in themes: Auto, Solarized Light/Dark, Dracula, GitHub, Gruvbox Dark, Nord
+- **User themes from disk** — drop a JSON file into `~/Library/Containers/pl.falami.studio.QuickMD/Data/Library/Application Support/QuickMD/Themes/` (or use the **Import Theme…** button in Settings). Live reload, no restart. See [docs/themes/](docs/themes/) for the schema and examples.
 - Settings panel (`⌘,`) with color previews
 - Theme persists across app restarts
 
@@ -269,6 +270,7 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Inline math (`$...$`)
 - [x] Footnotes (`[^id]` references with definitions)
 - [x] Homebrew Cask formula
+- [x] User-defined themes loaded from disk (JSON drop-in)
 - [ ] Mermaid diagram PDF export (full fidelity)
 - [ ] GFM alerts/admonitions (NOTE, WARNING, TIP)
 - [ ] Definition lists

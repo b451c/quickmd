@@ -1,0 +1,18 @@
+{
+  "name": "Artificer Dark",
+  "isDark": true,
+  "textColor": "#FFFFFF",
+  "secondaryTextColor": "#C5C8C6",
+  "linkColor": "#E0B558",
+  "blockquoteColor": "#C5C8C6",
+  "backgroundColor": "#292C33",
+  "codeBackgroundColor": "#3C4150",
+  "headerBackgroundColor": "#313540",
+  "borderColor": "#4A4F5C",
+  "keywordColor": "#C9B5E8",
+  "stringColor": "#B7BD73",
+  "commentColor": "#9FB6C4",
+  "numberColor": "#E5AFB7",
+  "typeColor": "#9FB6C4",
+  "checkboxColor": "#B7BD73"
+}

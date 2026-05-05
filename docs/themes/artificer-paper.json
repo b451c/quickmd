@@ -1,0 +1,18 @@
+{
+  "name": "Artificer Paper",
+  "isDark": false,
+  "textColor": "#0D1B2A",
+  "secondaryTextColor": "#2E4A5A",
+  "linkColor": "#7A5A10",
+  "blockquoteColor": "#2E4A5A",
+  "backgroundColor": "#F5EAD0",
+  "codeBackgroundColor": "#E4D4B0",
+  "headerBackgroundColor": "#EDE0C0",
+  "borderColor": "#CBB88A",
+  "keywordColor": "#4A25A0",
+  "stringColor": "#4A5A1A",
+  "commentColor": "#8A8070",
+  "numberColor": "#8A6618",
+  "typeColor": "#2E4A5A",
+  "checkboxColor": "#4A5A1A"
+}
