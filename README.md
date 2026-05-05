@@ -145,11 +145,13 @@ Now all your Markdown files will open instantly with QuickMD!
 | Shortcut | Action |
 |----------|--------|
 | `⌘O` | Open file |
-| `⌘W` | Close window |
+| `⌘W` | Close tab (or window if last tab) |
 | `⌘F` | Find in document |
 | `⌘G` / `⇧⌘G` | Next / previous match |
 | `⌘⇧C` | Copy Markdown source |
 | `⌘⇧T` | Toggle Table of Contents |
+| `⌘⇧D` | Toggle Recent Documents sidebar |
+| `⌘⇧→` / `⌘⇧←` | Switch between tabs |
 | `⌘⇧E` | Export to PDF |
 | `⌘P` | Print |
 | `⌘,` | Settings (theme picker) |
@@ -184,8 +186,10 @@ QuickMD/
 │   ├── MarkdownBlock.swift         # Block type enum
 │   ├── MarkdownBlockParser.swift   # Line-by-line block parser
 │   ├── MarkdownRenderer.swift      # Inline markdown → AttributedString
-│   ├── MarkdownTheme.swift         # 7 color themes, regex patterns
+│   ├── MarkdownTheme.swift         # Built-in themes + Codable for JSON loading
 │   ├── MarkdownExport.swift        # PDF export + print support
+│   ├── CustomThemeStore.swift      # User themes from disk (live reload)
+│   ├── RecentDocumentsStore.swift  # Recent documents tracking
 │   ├── TipJarManager.swift         # StoreKit 2 IAP (App Store only)
 │   ├── TipJarView.swift            # Tip Jar UI (App Store only)
 │   ├── SandboxAccessManager.swift  # Security-scoped bookmarks
@@ -194,7 +198,7 @@ QuickMD/
 │   │   ├── mermaid.min.js          # Bundled Mermaid.js
 │   │   └── mermaid-template.html   # HTML template for diagrams
 │   ├── Views/
-│   │   ├── CodeBlockView.swift     # Syntax-highlighted code blocks
+│   │   ├── CodeBlockView.swift     # NSTextView-backed code blocks (native selection)
 │   │   ├── MathBlockView.swift     # LaTeX display math ($$...$$)
 │   │   ├── InlineMathTextView.swift # Inline math ($...$)
 │   │   ├── MermaidBlockView.swift  # Mermaid diagrams (WKWebView)
@@ -203,8 +207,10 @@ QuickMD/
 │   │   ├── BlockquoteView.swift    # Nested blockquotes
 │   │   ├── SearchBar.swift         # Find in document (⌘F)
 │   │   ├── TableOfContentsView.swift # ToC sidebar (⌘⇧T)
-│   │   └── ThemePickerView.swift   # Theme settings (⌘,)
+│   │   ├── RecentDocumentsSidebar.swift # Recent docs sidebar (⌘⇧D)
+│   │   └── ThemePickerView.swift   # Theme settings (⌘,) + import/reload
 │   └── Assets.xcassets/            # App icon + assets
+├── docs/themes/                    # Schema + starter custom themes
 ├── CHANGELOG.md                    # Version history
 └── demo.md                         # Demo file for testing
 ```
@@ -271,6 +277,10 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Footnotes (`[^id]` references with definitions)
 - [x] Homebrew Cask formula
 - [x] User-defined themes loaded from disk (JSON drop-in)
+- [x] Recent Documents sidebar (`⌘⇧D`)
+- [x] Native macOS tabs (every doc opens as a tab in one window)
+- [x] NSTextView-backed code blocks (native selection, no SwiftUI Text trap)
+- [ ] Large-document fast-load — extend NSTextView migration to text blocks ([#10](https://github.com/b451c/quickmd/issues/10))
 - [ ] Mermaid diagram PDF export (full fidelity)
 - [ ] GFM alerts/admonitions (NOTE, WARNING, TIP)
 - [ ] Definition lists
