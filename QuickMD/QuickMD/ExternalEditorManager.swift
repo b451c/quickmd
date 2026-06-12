@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 /// Detection and launch logic for "Open in External Editor" (⌘E).
 /// QuickMD is a viewer by design — editing is delegated to the user's editor,
@@ -46,20 +47,35 @@ enum ExternalEditorManager {
             ?? url.deletingPathExtension().lastPathComponent
     }
 
-    /// Opens the file in the configured editor. Fallback chain:
-    /// selected editor → system default handler for the file → TextEdit.
-    /// Never bounces back into QuickMD (a pointless loop whenever QuickMD is
-    /// the default .md handler). Returns the launched app's display name for
-    /// UI feedback, or nil if nothing could be launched.
+    /// Opens the file in the configured editor.
+    ///
+    /// First use (no preference stored yet): asks ONCE which editor to use —
+    /// the choice is saved and changeable anytime in Settings → Editor.
+    ///
+    /// Resolution chain: selected editor → system default handler → TextEdit.
+    /// QuickMD is excluded by BUNDLE IDENTITY, not by path — the system
+    /// default may be a different copy of QuickMD (e.g. /Applications vs a
+    /// dev build) and handing the file back to ourselves is a pointless loop.
+    ///
+    /// Returns the launched app's display name for UI feedback, or nil if the
+    /// user cancelled / nothing could be launched.
     @MainActor
     @discardableResult
     static func openInEditor(_ fileURL: URL) -> String? {
-        let preferred = UserDefaults.standard.string(forKey: defaultsKey) ?? ""
+        var preferred = UserDefaults.standard.string(forKey: defaultsKey)
 
-        var editorURL: URL? = preferred.isEmpty ? nil : appURL(for: preferred)
+        if preferred == nil {
+            preferred = promptForEditorChoice()
+            guard preferred != nil else { return nil }  // user cancelled the one-time prompt
+        }
+
+        var editorURL: URL?
+        if let preferred, !preferred.isEmpty, preferred != Bundle.main.bundleIdentifier {
+            editorURL = appURL(for: preferred)
+        }
         if editorURL == nil {
             if let systemDefault = NSWorkspace.shared.urlForApplication(toOpen: fileURL),
-               systemDefault != Bundle.main.bundleURL {
+               Bundle(url: systemDefault)?.bundleIdentifier != Bundle.main.bundleIdentifier {
                 editorURL = systemDefault
             }
         }
@@ -74,5 +90,59 @@ enum ExternalEditorManager {
                                 completionHandler: nil)
         return (try? editorURL.resourceValues(forKeys: [.localizedNameKey]).localizedName)
             ?? editorURL.deletingPathExtension().lastPathComponent
+    }
+
+    /// One-time editor chooser shown on the first ⌘E: a popup with all
+    /// detected editors (+ TextEdit + Other…). Stores and returns the chosen
+    /// bundle id, or nil when cancelled.
+    @MainActor
+    static func promptForEditorChoice() -> String? {
+        var options: [(title: String, bundleID: String)] =
+            installedKnownEditors().map { ($0.name, $0.bundleID) }
+        options.append(("TextEdit", "com.apple.TextEdit"))
+
+        let alert = NSAlert()
+        alert.messageText = "Choose Your External Editor"
+        alert.informativeText = "QuickMD will open documents in this app when you press \u{2318}E.\nYou can change it anytime in Settings \u{2192} Editor."
+        alert.addButton(withTitle: "Use This Editor")
+        alert.addButton(withTitle: "Cancel")
+
+        let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 280, height: 25), pullsDown: false)
+        for option in options {
+            popup.addItem(withTitle: option.title)
+        }
+        popup.addItem(withTitle: "Other\u{2026}")
+        alert.accessoryView = popup
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+
+        let chosen: String?
+        if popup.indexOfSelectedItem == options.count {
+            chosen = chooseApplicationBundleID()  // Other…
+        } else {
+            chosen = options[popup.indexOfSelectedItem].bundleID
+        }
+        guard let chosen else { return nil }
+        UserDefaults.standard.set(chosen, forKey: defaultsKey)
+        return chosen
+    }
+
+    /// NSOpenPanel for picking an arbitrary .app; returns its bundle id.
+    /// Shared by the first-run prompt and the Settings "Other…" button.
+    @MainActor
+    static func chooseApplicationBundleID() -> String? {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.message = "Choose the application \u{2318}E should open documents in."
+        panel.prompt = "Select"
+
+        guard panel.runModal() == .OK, let url = panel.url,
+              let bundleID = Bundle(url: url)?.bundleIdentifier,
+              bundleID != Bundle.main.bundleIdentifier else { return nil }
+        return bundleID
     }
 }

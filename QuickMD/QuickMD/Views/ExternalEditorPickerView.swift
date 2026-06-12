@@ -61,17 +61,7 @@ struct ExternalEditorPickerView: View {
     }
 
     private func chooseCustomEditor() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowedContentTypes = [.application]
-        panel.directoryURL = URL(fileURLWithPath: "/Applications")
-        panel.message = "Choose the application ⌘E should open documents in."
-        panel.prompt = "Select"
-
-        guard panel.runModal() == .OK, let url = panel.url,
-              let bundleID = Bundle(url: url)?.bundleIdentifier else { return }
+        guard let bundleID = ExternalEditorManager.chooseApplicationBundleID() else { return }
         selectedBundleID = bundleID
     }
 }
