@@ -1,0 +1,57 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# QuickMD has no remote dependencies — every job is a plain xcodebuild.
+# CODE_SIGNING_ALLOWED=NO because CI runners have no signing identity;
+# signing/notarization happens only in the local release procedure.
+jobs:
+  test:
+    name: Unit tests (Debug)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run tests
+        run: |
+          xcodebuild \
+            -project QuickMD/QuickMD.xcodeproj \
+            -scheme QuickMD \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
+  build-release:
+    name: Build Release (GitHub flavor)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          xcodebuild \
+            -project QuickMD/QuickMD.xcodeproj \
+            -scheme QuickMD \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+  build-appstore:
+    name: Build Release (App Store flavor)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with -DAPPSTORE
+        # The APPSTORE compilation condition is CLI-only (not in the project
+        # file) — this job is the only automated check that the Tip Jar
+        # variant still compiles.
+        run: |
+          xcodebuild \
+            -project QuickMD/QuickMD.xcodeproj \
+            -scheme QuickMD \
+            -configuration Release \
+            OTHER_SWIFT_FLAGS="-DAPPSTORE" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
