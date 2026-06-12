@@ -25,10 +25,16 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 ### ⚡ **Blazing Fast**
 - Opens in milliseconds—no loading screens
 - Native SwiftUI app—lightweight
-- Instant rendering of typical documents; very large files (10K+ lines) open in a couple of seconds — further speedups are in progress ([#10](https://github.com/b451c/quickmd/issues/10))
+- Lazy native rendering—even 10,000+ line documents open without freezing the UI
+
+### 🔁 **Companion to Your Editor**
+- ✅ **Auto-reload** — the document refreshes the moment your editor saves it. Enable auto-save in VS Code/Cursor/Zed and QuickMD becomes a live preview
+- ✅ **Open in External Editor (`⌘E`)** — one-click handoff to VS Code, Cursor, Sublime, Zed, Typora, Obsidian and more (auto-detected; configurable in Settings)
+- ✅ **Copy button on code blocks** — hover and click, like on GitHub
+- ✅ **Mermaid zoom** — open any diagram in a pinch-to-zoom viewer
 
 ### 📝 **Complete Markdown Support**
-- ✅ Headers, bold, italic, strikethrough
+- ✅ Headers, bold, italic, strikethrough (ATX `#` and setext underline styles)
 - ✅ Tables with proper column alignment
 - ✅ Code blocks with syntax highlighting
 - ✅ **LaTeX math** — display (`$$...$$`) and inline (`$...$`) with TeX-quality rendering
@@ -40,6 +46,8 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - ✅ Links (inline, reference-style, autolinks)
 - ✅ Nested blockquotes with level indicators
 - ✅ Horizontal rules
+- ✅ YAML frontmatter (rendered as a neutral code block)
+- ✅ Windows (CRLF) and legacy line endings, UTF-16/Latin-1 fallbacks
 
 ### 🔍 **Navigation & Search**
 - Find in document (`⌘F`) with match count and per-word navigation

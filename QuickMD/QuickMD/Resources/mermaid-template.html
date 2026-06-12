@@ -30,17 +30,25 @@
     const container = document.getElementById('output');
     container.innerHTML = '';
 
+    // Report height back to Swift. The zoom viewer hosts this same template
+    // WITHOUT a mermaidHeight handler -- the report must never break rendering
+    // (an unguarded postMessage throws, and the catch() below would replace a
+    // perfectly good SVG with the error text).
+    function reportHeight() {
+      try {
+        window.webkit.messageHandlers.mermaidHeight.postMessage(
+          container.getBoundingClientRect().height
+        );
+      } catch (e) { /* no handler in this host -- fine */ }
+    }
+
     mermaid.render('diagram', source).then(function(result) {
       container.innerHTML = result.svg;
-      // Report height back to Swift
-      var height = container.getBoundingClientRect().height;
-      window.webkit.messageHandlers.mermaidHeight.postMessage(height);
+      reportHeight();
     }).catch(function(err) {
       container.innerHTML = '<pre style="color:#e55;font-size:12px;padding:8px;">' +
         err.message.replace(/</g, '&lt;') + '</pre>';
-      window.webkit.messageHandlers.mermaidHeight.postMessage(
-        container.getBoundingClientRect().height
-      );
+      reportHeight();
     });
   }
 </script>

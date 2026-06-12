@@ -40,11 +40,15 @@ struct CodeBlockView: View {
     /// scroll-induced body re-evaluation.
     @State private var cachedAttributed: NSAttributedString?
     @State private var cachedKey: String = ""
+    @State private var isHovered = false
+    @State private var justCopied = false
 
     private var cacheKey: String {
-        // theme.name + a content fingerprint. We use code.count + first/last chars
-        // to keep the key cheap; if anyone manages a collision we just recompute.
-        "\(theme.name)|\(code.count)|\(code.prefix(8))…\(code.suffix(8))"
+        // theme.name + isDark + a content fingerprint. isDark matters because
+        // "Auto" keeps its name across light/dark palette flips. We use
+        // code.count + first/last chars to keep the key cheap; if anyone
+        // manages a collision we just recompute.
+        "\(theme.name)|\(theme.isDark)|\(code.count)|\(code.prefix(8))…\(code.suffix(8))"
     }
 
     var body: some View {
@@ -55,29 +59,58 @@ struct CodeBlockView: View {
         // main-thread regex work was a measurable share of large-doc open time.
         let attributed = (cacheKey == cachedKey ? cachedAttributed : nil) ?? Self.plainAttributedString(code: code, theme: theme)
 
-        return VStack(alignment: .leading, spacing: 0) {
-            if !language.isEmpty {
-                Text(language)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundColor(theme.secondaryTextColor)
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
-            }
+        return ZStack(alignment: .topTrailing) {
+            VStack(alignment: .leading, spacing: 0) {
+                if !language.isEmpty {
+                    Text(language)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(theme.secondaryTextColor)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
+                        .padding(.bottom, 4)
+                }
 
-            CodeTextView(
-                attributed: attributed,
-                searchTerm: searchText,
-                focusedOccurrence: focusedOccurrence,
-                contentHeight: $contentHeight
-            )
-            .frame(height: contentHeight)
-            .padding(.horizontal, 12)
-            .padding(.vertical, language.isEmpty ? 12 : 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
+                CodeTextView(
+                    attributed: attributed,
+                    searchTerm: searchText,
+                    focusedOccurrence: focusedOccurrence,
+                    contentHeight: $contentHeight
+                )
+                .frame(height: contentHeight)
+                .padding(.horizontal, 12)
+                .padding(.vertical, language.isEmpty ? 12 : 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(theme.codeBackgroundColor)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            // Hover-to-reveal copy button — the single most common action on a
+            // code block in documentation.
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(code, forType: .string)
+                justCopied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                    justCopied = false
+                }
+            } label: {
+                Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11))
+                    .foregroundColor(justCopied ? .green : .secondary)
+                    .padding(5)
+                    .background(theme.backgroundColor.opacity(0.85))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help("Copy code")
+            .accessibilityLabel("Copy code")
+            .opacity(isHovered || justCopied ? 1 : 0)
+            .padding(6)
         }
-        .background(theme.codeBackgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .onHover { hovering in
+            isHovered = hovering
+        }
         .task(id: cacheKey) {
             // Compute (or recompute on theme/code change) off the main thread,
             // once per (code, theme) tuple — not per body eval.

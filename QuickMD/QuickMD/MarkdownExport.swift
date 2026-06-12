@@ -24,6 +24,10 @@ struct FocusedToggleDocumentListKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct FocusedOpenInExternalEditorKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var documentText: String? {
         get { self[FocusedDocumentTextKey.self] }
@@ -44,6 +48,10 @@ extension FocusedValues {
     var toggleDocumentListAction: (() -> Void)? {
         get { self[FocusedToggleDocumentListKey.self] }
         set { self[FocusedToggleDocumentListKey.self] = newValue }
+    }
+    var openInExternalEditorAction: (() -> Void)? {
+        get { self[FocusedOpenInExternalEditorKey.self] }
+        set { self[FocusedOpenInExternalEditorKey.self] = newValue }
     }
 }
 

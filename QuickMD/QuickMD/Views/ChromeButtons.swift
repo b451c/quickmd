@@ -92,6 +92,43 @@ struct CopySourceButton: View {
     }
 }
 
+// MARK: - Edit In External Editor Button
+
+/// Top-right pencil button — one-click handoff to the user's editor (⌘E).
+struct EditInEditorButton: View {
+    let theme: MarkdownTheme
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            action()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "pencil")
+                    .font(.system(size: 11))
+                if isHovered {
+                    Text("Edit")
+                        .font(.system(size: 11, weight: .medium))
+                }
+            }
+            .padding(.horizontal, isHovered ? 10 : 6)
+            .padding(.vertical, 4)
+            .background(theme.codeBackgroundColor.opacity(isHovered ? 0.9 : 0.6))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .foregroundColor(.secondary)
+        .opacity(isHovered ? 1.0 : 0.5)
+        .animation(.easeInOut(duration: 0.2), value: isHovered)
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .help("Open in external editor (⌘E)")
+    }
+}
+
 // MARK: - Tip Jar Button (App Store version)
 
 #if APPSTORE

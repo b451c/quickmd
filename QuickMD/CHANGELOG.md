@@ -5,9 +5,12 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.6.0] - 2026-06-12
 
 ### Added
+- **File Auto-Reload:** QuickMD now watches every open document and reloads it automatically when the file changes on disk — edit in your editor, save, and the preview is instantly current. Handles atomic saves (VS Code, Zed, Sublime, vim) and debounces rapid writes. If the file is moved or deleted, a banner appears instead of a stale view. **Tip:** enable auto-save in your editor (e.g. VS Code `Files: Auto Save → afterDelay`) and QuickMD becomes a practical live preview.
+- **Open in External Editor (⌘E):** One-click handoff of the current document to your editor — toolbar pencil button or File → Open in External Editor. Settings (⌘,) gains an Editor tab that auto-detects installed editors (VS Code, Cursor, Sublime Text, Zed, Typora, Obsidian, Nova, BBEdit, MacDown, iA Writer), with System Default and any-app fallback. Never bounces back into QuickMD.
+- **Copy Button on Code Blocks:** Hover any code block and click the copy button — the single most common action on documentation code.
 - **Mermaid Diagram Zoom:** Hover a diagram and click the zoom button to open it in a resizable viewer with pinch-to-zoom and zoom buttons (requested in #12).
 
 ### Performance

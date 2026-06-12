@@ -33,6 +33,8 @@ struct QuickMDApp: App {
                 }
                 .keyboardShortcut("w", modifiers: .command)
                 Divider()
+                OpenInExternalEditorCommand()
+                Divider()
                 ExportPDFCommand()
                 PrintCommand()
             }
@@ -71,7 +73,7 @@ struct QuickMDApp: App {
         .defaultSize(width: 800, height: 600)
 
         Settings {
-            ThemePickerView()
+            SettingsView()
         }
 
         #if APPSTORE
@@ -114,6 +116,18 @@ struct CopyMarkdownCommand: View {
         }
         .keyboardShortcut("c", modifiers: [.command, .shift])
         .disabled(copyDocumentAction == nil)
+    }
+}
+
+struct OpenInExternalEditorCommand: View {
+    @FocusedValue(\.openInExternalEditorAction) var openInExternalEditorAction
+
+    var body: some View {
+        Button("Open in External Editor") {
+            openInExternalEditorAction?()
+        }
+        .keyboardShortcut("e", modifiers: .command)
+        .disabled(openInExternalEditorAction == nil)
     }
 }
 

@@ -82,6 +82,13 @@
 		A1B2C3D40100004A /* TextBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000047 /* TextBlockView.swift */; };
 		A1B2C3D40100004B /* InlineMathSegmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000048 /* InlineMathSegmenter.swift */; };
 		A1B2C3D40100004C /* InlineMathSegmenter.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000048 /* InlineMathSegmenter.swift */; };
+		A1B2C3D40100004D /* FileWatchManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000049 /* FileWatchManager.swift */; };
+		A1B2C3D40100004E /* ExternalEditorManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000004A /* ExternalEditorManager.swift */; };
+		A1B2C3D40100004F /* ExternalEditorPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000004B /* ExternalEditorPickerView.swift */; };
+		A1B2C3D401000050 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000004C /* SettingsView.swift */; };
+		A1B2C3D401000051 /* FileWatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000004D /* FileWatcherTests.swift */; };
+		A1B2C3D401000052 /* FileWatchManager.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000049 /* FileWatchManager.swift */; };
+		A1B2C3D401000053 /* ExternalEditorManager.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000004A /* ExternalEditorManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -156,6 +163,11 @@
 		A1B2C3D400000046 /* SearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000047 /* TextBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextBlockView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000048 /* InlineMathSegmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineMathSegmenter.swift; sourceTree = "<group>"; };
+		A1B2C3D400000049 /* FileWatchManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileWatchManager.swift; sourceTree = "<group>"; };
+		A1B2C3D40000004A /* ExternalEditorManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalEditorManager.swift; sourceTree = "<group>"; };
+		A1B2C3D40000004B /* ExternalEditorPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalEditorPickerView.swift; sourceTree = "<group>"; };
+		A1B2C3D40000004C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A1B2C3D40000004D /* FileWatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileWatcherTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -193,6 +205,7 @@
 				A1B2C3D400000044 /* SectionExtractorTests.swift */,
 				A1B2C3D400000045 /* DocumentAndThemeTests.swift */,
 				A1B2C3D400000046 /* SearchTests.swift */,
+				A1B2C3D40000004D /* FileWatcherTests.swift */,
 			);
 			path = QuickMDTests;
 			sourceTree = "<group>";
@@ -211,6 +224,8 @@
 				A1B2C3D40000003E /* DocumentSearch.swift */,
 				A1B2C3D40000003F /* WindowTabbing.swift */,
 				A1B2C3D400000048 /* InlineMathSegmenter.swift */,
+				A1B2C3D400000049 /* FileWatchManager.swift */,
+				A1B2C3D40000004A /* ExternalEditorManager.swift */,
 				A1B2C3D403000004 /* Views */,
 				A1B2C3D403000005 /* SwiftMath */,
 				A1B2C3D403000007 /* Resources */,
@@ -243,6 +258,8 @@
 				A1B2C3D40000003C /* RecentDocumentsSidebar.swift */,
 				A1B2C3D400000040 /* ChromeButtons.swift */,
 				A1B2C3D400000047 /* TextBlockView.swift */,
+				A1B2C3D40000004B /* ExternalEditorPickerView.swift */,
+				A1B2C3D40000004C /* SettingsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -458,6 +475,10 @@
 				A1B2C3D40100003C /* ChromeButtons.swift in Sources */,
 				A1B2C3D40100004A /* TextBlockView.swift in Sources */,
 				A1B2C3D40100004B /* InlineMathSegmenter.swift in Sources */,
+				A1B2C3D40100004D /* FileWatchManager.swift in Sources */,
+				A1B2C3D40100004E /* ExternalEditorManager.swift in Sources */,
+				A1B2C3D40100004F /* ExternalEditorPickerView.swift in Sources */,
+				A1B2C3D401000050 /* SettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -479,6 +500,9 @@
 				A1B2C3D401000048 /* SectionExtractor.swift in Sources (Tests) */,
 				A1B2C3D401000049 /* DocumentSearch.swift in Sources (Tests) */,
 				A1B2C3D40100004C /* InlineMathSegmenter.swift in Sources (Tests) */,
+				A1B2C3D401000051 /* FileWatcherTests.swift in Sources */,
+				A1B2C3D401000052 /* FileWatchManager.swift in Sources (Tests) */,
+				A1B2C3D401000053 /* ExternalEditorManager.swift in Sources (Tests) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -617,7 +641,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = VJ92852M32;
 				ENABLE_APP_SANDBOX = YES;
@@ -642,7 +666,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.5.0;
+				MARKETING_VERSION = 1.6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = pl.falami.studio.QuickMD;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -661,7 +685,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = VJ92852M32;
 				ENABLE_APP_SANDBOX = YES;
@@ -686,7 +710,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.5.0;
+				MARKETING_VERSION = 1.6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = pl.falami.studio.QuickMD;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";

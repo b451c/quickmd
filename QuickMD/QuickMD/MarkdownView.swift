@@ -22,6 +22,14 @@ struct MarkdownView: View {
     let document: MarkdownDocument
     let documentURL: URL?
     @Environment(\.colorScheme) private var colorScheme
+    /// The text currently displayed. Starts as the document's content and is
+    /// refreshed from disk by FileWatcher whenever the file changes (the
+    /// auto-reload half of the edit-in-your-editor roundtrip).
+    @State private var currentText: String
+    /// Per-document file watcher (created in onAppear, torn down in onDisappear).
+    @State private var fileWatcher: FileWatcher?
+    /// The watched file disappeared from its path (moved/deleted).
+    @State private var fileMissing = false
     @State private var cachedBlocks: [MarkdownBlock] = []
     /// Per-text-block precomputed plain string + inline-math flag. Built once at parse
     /// time so per-render `blockView(_:)` doesn't repeatedly call
@@ -40,7 +48,8 @@ struct MarkdownView: View {
     @AppStorage("documentListWidth") private var documentListWidth: Double = 220
     @State private var headings: [ToCEntry] = []
     @State private var tocScrollTarget: String?
-    @State private var showCopiedToast: Bool = false
+    /// Transient bottom toast ("Copied!", "Opened in …"). Nil = hidden.
+    @State private var toastText: String?
     /// Pre-computed focused block ID — updated only in navigateMatch/updateMatchResults
     @State private var focusedBlockId: String? = nil
     /// Pre-computed focused occurrence within the block — updated only in navigateMatch/updateMatchResults
@@ -54,6 +63,12 @@ struct MarkdownView: View {
     /// may have typed again while a previous computation was still running).
     @State private var searchGeneration: Int = 0
     @AppStorage("selectedTheme") private var selectedThemeName: String = "Auto"
+
+    init(document: MarkdownDocument, documentURL: URL?) {
+        self.document = document
+        self.documentURL = documentURL
+        _currentText = State(initialValue: document.text)
+    }
 
     /// Resolved theme from user selection + system color scheme
     private var theme: MarkdownTheme {
@@ -81,7 +96,7 @@ struct MarkdownView: View {
                 TableOfContentsView(headings: headings, onSelect: { targetId in
                     tocScrollTarget = targetId
                 }, onCopy: { entry in
-                    if let section = SectionExtractor.extractSection(from: document.text, entry: entry, headings: headings) {
+                    if let section = SectionExtractor.extractSection(from: currentText, entry: entry, headings: headings) {
                         copyToClipboard(section)
                     }
                 })
@@ -158,11 +173,40 @@ struct MarkdownView: View {
                 }
             }
             .overlay(alignment: .topTrailing) {
-                CopySourceButton(theme: theme) {
-                    copyToClipboard(document.text)
+                HStack(spacing: 8) {
+                    if documentURL != nil {
+                        EditInEditorButton(theme: theme) {
+                            openInExternalEditor()
+                        }
+                    }
+                    CopySourceButton(theme: theme) {
+                        copyToClipboard(currentText)
+                    }
                 }
                 .padding(.top, isSearchVisible ? 44 : 8)
                 .padding(.trailing, 24)
+            }
+            .overlay(alignment: .top) {
+                if fileMissing {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.yellow)
+                        Text("File no longer exists at \(documentURL?.path ?? "this location")")
+                            .font(.system(size: 12))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Button("Close Tab") {
+                            NSApp.keyWindow?.close()
+                        }
+                        .controlSize(.small)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(.regularMaterial)
+                    .clipShape(Capsule())
+                    .padding(.top, isSearchVisible ? 44 : 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
             .overlay(alignment: .bottomTrailing) {
                 Group {
@@ -191,8 +235,8 @@ struct MarkdownView: View {
                 }
             }
             .overlay(alignment: .bottom) {
-                if showCopiedToast {
-                    Text("Copied!")
+                if let toastText {
+                    Text(toastText)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.white)
                         .padding(.horizontal, 16)
@@ -214,18 +258,19 @@ struct MarkdownView: View {
             window.tabbingMode = .preferred
             window.tabbingIdentifier = "pl.falami.studio.QuickMD.Document"
         })
-        .focusedSceneValue(\.documentText, document.text)
+        .focusedSceneValue(\.documentText, currentText)
         .focusedSceneValue(\.searchAction, { toggleSearch() })
         .focusedSceneValue(\.toggleToCAction, { withAnimation(.easeInOut(duration: 0.2)) { isToCVisible.toggle() } })
-        .focusedSceneValue(\.copyDocumentAction, { copyToClipboard(document.text) })
+        .focusedSceneValue(\.copyDocumentAction, { copyToClipboard(currentText) })
+        .focusedSceneValue(\.openInExternalEditorAction, { openInExternalEditor() })
         .focusedSceneValue(\.toggleDocumentListAction, { withAnimation(.easeInOut(duration: 0.2)) { isDocumentListVisible.toggle() } })
         .environment(\.openURL, OpenURLAction { url in
             handleLinkActivation(url)
             return .handled
         })
         .frame(minWidth: 400, minHeight: 300)
-        .task(id: DocumentIdentity(text: document.text, colorScheme: colorScheme, themeName: selectedThemeName)) {
-            let text = document.text
+        .task(id: DocumentIdentity(text: currentText, colorScheme: colorScheme, themeName: selectedThemeName)) {
+            let text = currentText
             let currentTheme = theme
             isParsing = true
             let parsed: ParsedDocument = await Task.detached(priority: .userInitiated) {
@@ -272,6 +317,15 @@ struct MarkdownView: View {
         .onAppear {
             if let url = documentURL {
                 RecentDocumentsStore.shared.register(url)
+                // Auto-reload: watch this document's file and refresh on save.
+                // Silent by default — pro users expect the viewer to be current.
+                let watcher = FileWatcher()
+                watcher.onChange = { reloadFromDisk() }
+                watcher.onFileMissing = {
+                    withAnimation(.easeInOut(duration: 0.2)) { fileMissing = true }
+                }
+                watcher.start(watching: url)
+                fileWatcher = watcher
             }
             // NSEvent.addLocalMonitorForEvents is GLOBAL for the app process —
             // every visible MarkdownView (one per open tab) registers its own
@@ -309,6 +363,33 @@ struct MarkdownView: View {
             if let monitor = keyMonitor {
                 NSEvent.removeMonitor(monitor)
             }
+            fileWatcher?.stop()
+            fileWatcher = nil
+        }
+    }
+
+    // MARK: - Auto-Reload & External Editor
+
+    /// Re-reads the watched file and swaps the displayed text if it changed.
+    /// Same decode + line-ending normalization as the initial document load.
+    private func reloadFromDisk() {
+        guard let url = documentURL else { return }
+        guard let data = try? Data(contentsOf: url),
+              let decoded = MarkdownDocument.decode(data) else { return }
+        let text = MarkdownDocument.normalizeLineEndings(decoded)
+        if text != currentText {
+            currentText = text
+        }
+        if fileMissing {
+            withAnimation(.easeInOut(duration: 0.2)) { fileMissing = false }
+        }
+    }
+
+    /// ⌘E — hand the document off to the user's configured editor.
+    private func openInExternalEditor() {
+        guard let url = documentURL else { return }
+        if let appName = ExternalEditorManager.openInEditor(url) {
+            showToast("Opened in \(appName)")
         }
     }
 
@@ -368,7 +449,7 @@ struct MarkdownView: View {
                     focusedOccurrence: focusedOcc,
                     onCopySection: {
                         if let entry = headings.first(where: { $0.id == block.id }),
-                           let section = SectionExtractor.extractSection(from: document.text, entry: entry, headings: headings) {
+                           let section = SectionExtractor.extractSection(from: currentText, entry: entry, headings: headings) {
                             copyToClipboard(section)
                         }
                     }
@@ -401,9 +482,15 @@ struct MarkdownView: View {
     private func copyToClipboard(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-        withAnimation(.easeIn(duration: 0.15)) { showCopiedToast = true }
+        showToast("Copied!")
+    }
+
+    private func showToast(_ message: String) {
+        withAnimation(.easeIn(duration: 0.15)) { toastText = message }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            withAnimation(.easeOut(duration: 0.3)) { showCopiedToast = false }
+            withAnimation(.easeOut(duration: 0.3)) {
+                if toastText == message { toastText = nil }
+            }
         }
     }
 
