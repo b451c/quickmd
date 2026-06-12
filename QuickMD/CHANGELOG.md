@@ -5,6 +5,29 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **Mermaid Diagram Hardening:** Diagram source now reaches the rendering WebView as JSON-encoded data via `evaluateJavaScript` instead of being concatenated into the page HTML. A crafted code block containing `</script>` could previously inject arbitrary markup into the diagram view; it is now inert data.
+- **Custom URL Scheme Confirmation:** Links using non-web schemes (`shortcuts:`, `ssh:`, `vnc:`, …) now show a confirmation dialog before handing control to another application. Web (`http`/`https`/`mailto`) and file links open as before.
+
+### Fixed
+- **Windows Line Endings (CRLF):** Files saved with CRLF or classic-Mac CR line endings now parse identically to LF files. Previously a stray `\r` broke single-line `$$math$$` detection (swallowing the rest of the document) and silently killed Mermaid rendering.
+- **Setext H2 Headings:** Text underlined with `---` now renders as a level-2 heading per CommonMark. The branch existed but was unreachable due to a redundant table-separator guard.
+- **Section Copy Accuracy:** "Copy section" boundaries now come from parser-assigned source lines. Previously a re-scan of the raw text counted `#` comment lines inside fenced code blocks as headings and could copy the wrong section (or nothing).
+- **PDF Export Clipping:** Blocks taller than one page (long code blocks) are sliced across pages instead of being silently cut off.
+- **Check for Updates Feedback:** The menu item now shows a transient "You're up to date" / "check failed" state instead of appearing to do nothing.
+- **Custom Theme Validation:** Theme JSON with an invalid hex color (or a name colliding with a built-in theme) is rejected with a clear error in Settings instead of silently rendering black.
+
+### Added
+- **YAML Frontmatter:** Documents starting with a `---` fence (Jekyll/Hugo/Obsidian convention) render the frontmatter as a neutral `yaml` code block.
+- **Encoding Fallbacks:** Non-UTF-8 files now fall back to UTF-16 (BOM-detected), then Latin-1, instead of failing to open.
+- **Unit Test Suite & CI:** 65 automated tests covering the parser, renderer, search, section copy, document decoding, and theme validation; GitHub Actions builds (incl. the App Store flavor) and runs tests on every push/PR.
+
+### Changed
+- **Faster Search on Large Documents:** Match computation moved off the main thread (with stale-result dropping), so typing in the find bar no longer hitches on 10K-line documents.
+- **Faster Open for Code-Heavy Documents:** Syntax highlighting is computed in the background per code block; blocks show plain monospaced text for a moment instead of blocking the first paint.
+
 ## [1.5.0] - 2026-05-05
 
 ### Added
@@ -13,11 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Code Block Rendering — NSTextView:** Code blocks now render through `NSTextView` (via `NSViewRepresentable`) instead of SwiftUI `Text(AttributedString)`. Native macOS line layout, native selection with auto-scroll-during-drag, and zero risk of the box-drawing-Unicode SwiftUI bug that previously required eager `VStack` rendering.
-- **Document List Lazy Rendering:** With the SwiftUI Text trap removed at the source, the main document layout switched back to `LazyVStack`. Large documents (10K+ lines) now open instantly instead of pausing on first paint (Issue #10, reported by @cameronsjo).
+- **Large Document Optimizations:** Long bullet/link lists are chunked at blank-line boundaries (≤30 lines per block) and per-text-block metadata is precomputed during background parsing, reducing open and resize cost on large documents (Issue #10, reported by @cameronsjo). *Correction (2026-06-12): this entry previously claimed the layout "switched back to `LazyVStack`" and that 10K-line files "open instantly" — that change was attempted, hit a second SwiftUI issue, and was reverted before release. The layout remains eager pending a full NSTextView migration; Issue #10 stays open.*
 - **Search Debounce:** A 150 ms debounce on search input avoids redundant per-keystroke recomputes when typing fast in the find bar; the empty-string clear remains instant.
 
 ### Fixed
-- **Theme Switch on Large Documents:** With lazy rendering restored, theme changes only materialize visible blocks instead of all blocks at once — switches feel instant even on long files.
+- **Theme Switch Cost on Code-Heavy Documents:** Code block highlighting is cached per (theme, code) pair with identity short-circuiting in `updateNSView`, so switching themes no longer recomputes every code block from scratch.
 
 ## [1.4.1] - 2026-04-03
 

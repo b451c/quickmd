@@ -25,7 +25,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 ### ⚡ **Blazing Fast**
 - Opens in milliseconds—no loading screens
 - Native SwiftUI app—lightweight
-- Instant rendering of even large documents
+- Instant rendering of typical documents; very large files (10K+ lines) open in a couple of seconds — further speedups are in progress ([#10](https://github.com/b451c/quickmd/issues/10))
 
 ### 📝 **Complete Markdown Support**
 - ✅ Headers, bold, italic, strikethrough
