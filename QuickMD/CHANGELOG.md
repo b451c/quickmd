@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Mermaid Diagram Zoom:** Hover a diagram and click the zoom button to open it in a resizable viewer with pinch-to-zoom and zoom buttons (requested in #12).
+
+### Performance
+- **Large Documents Open Instantly (Issues #10, #11):** Text, blockquote and footnote blocks now render through native `NSTextView` (like code blocks since 1.5.0), which removes the last SwiftUI text-selection overlay from the document layout — the main view is lazily rendered again. Verified on an 11,700-line document: no main-thread freeze on open, 0 SelectionOverlay frames during fast scroll, ~92 MB memory after open (the v1.3.3-era pathology peaked at 890 MB). Inline `$...$` math renders via native text attachments; text selection inside paragraphs, quotes and code is native AppKit selection.
+- **No Diagram Flicker While Scrolling:** Rendered Mermaid diagrams are snapshotted; scrolling back to one shows it instantly instead of re-running the web renderer.
+
 ### Security
 - **Mermaid Diagram Hardening:** Diagram source now reaches the rendering WebView as JSON-encoded data via `evaluateJavaScript` instead of being concatenated into the page HTML. A crafted code block containing `</script>` could previously inject arbitrary markup into the diagram view; it is now inert data.
 - **Custom URL Scheme Confirmation:** Links using non-web schemes (`shortcuts:`, `ssh:`, `vnc:`, …) now show a confirmation dialog before handing control to another application. Web (`http`/`https`/`mailto`) and file links open as before.

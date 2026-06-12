@@ -2,31 +2,37 @@ import SwiftUI
 
 // MARK: - Blockquote View
 
-/// Renders a blockquote block with left border indicator and nested level support
+/// Renders a blockquote block with left border indicator and nested level support.
+/// The quote body renders through TextBlockView (NSTextView) — native selection
+/// across the whole quote and LazyVStack-safe (no SwiftUI SelectionOverlay).
 struct BlockquoteView: View {
+    let blockId: String
     let content: String
     let level: Int
     let theme: MarkdownTheme
     var searchText: String = ""
     var focusedOccurrence: Int? = nil
+    let heightCache: BlockHeightCache
+    let onLink: (URL) -> Void
 
     /// Cached renderer - created once per view
     private let renderer: MarkdownRenderer
 
-    init(content: String, level: Int, theme: MarkdownTheme,
-         searchText: String = "", focusedOccurrence: Int? = nil) {
+    init(blockId: String, content: String, level: Int, theme: MarkdownTheme,
+         searchText: String = "", focusedOccurrence: Int? = nil,
+         heightCache: BlockHeightCache, onLink: @escaping (URL) -> Void) {
+        self.blockId = blockId
         self.content = content
         self.level = level
         self.theme = theme
         self.searchText = searchText
         self.focusedOccurrence = focusedOccurrence
+        self.heightCache = heightCache
+        self.onLink = onLink
         self.renderer = MarkdownRenderer(theme: theme)
     }
 
     var body: some View {
-        let lines = content.components(separatedBy: "\n")
-        let lineData = computeLineData(lines: lines)
-
         HStack(alignment: .top, spacing: 0) {
             // Left border bars - one per nesting level
             ForEach(0..<level, id: \.self) { _ in
@@ -36,50 +42,36 @@ struct BlockquoteView: View {
                     .padding(.trailing, 8)
             }
 
-            // Content
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(lineData.enumerated()), id: \.offset) { _, data in
-                    if data.line.trimmingCharacters(in: .whitespaces).isEmpty {
-                        Text(" ")
-                            .font(.system(size: 14))
-                    } else {
-                        let rendered = renderer.renderInline(data.line)
-                        Text(searchText.isEmpty ? rendered : searchHighlight(rendered, term: searchText, focusedOccurrence: data.localFocused))
-                            .font(.system(size: 14).italic())
-                            .foregroundColor(theme.blockquoteColor)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
+            TextBlockView(
+                blockId: blockId,
+                attributed: renderedContent(),
+                theme: theme,
+                searchTerm: searchText,
+                focusedOccurrence: focusedOccurrence,
+                heightCache: heightCache,
+                onLink: onLink
+            )
         }
         .padding(.leading, 16)
         .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: - Per-Line Occurrence Tracking
-
-    private struct LineData {
-        let line: String
-        let localFocused: Int?
-    }
-
-    /// Compute per-line focused occurrence by tracking cumulative offset
-    private func computeLineData(lines: [String]) -> [LineData] {
-        guard !searchText.isEmpty else {
-            return lines.map { LineData(line: $0, localFocused: nil) }
-        }
-        var offset = 0
-        return lines.map { line in
-            let count = countOccurrences(in: line, of: searchText)
-            let local: Int?
-            if let fo = focusedOccurrence, fo >= offset && fo < offset + count {
-                local = fo - offset
+    /// Inline-render each quote line and join with newlines — one attributed
+    /// string for the whole quote body.
+    private func renderedContent() -> AttributedString {
+        var result = AttributedString()
+        let lines = content.components(separatedBy: "\n")
+        for (index, line) in lines.enumerated() {
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                result.append(AttributedString(" "))
             } else {
-                local = nil
+                result.append(renderer.renderInline(line))
             }
-            offset += count
-            return LineData(line: line, localFocused: local)
+            if index < lines.count - 1 {
+                result.append(AttributedString("\n"))
+            }
         }
+        return result
     }
 }

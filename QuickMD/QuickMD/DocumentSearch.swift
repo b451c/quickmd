@@ -79,15 +79,13 @@ enum DocumentSearch {
 
     struct Results: Sendable {
         let matchBlockIds: [String]
-        let baseHighlights: [String: AttributedString]
     }
 
     static func computeMatches(in blocks: [MarkdownBlock], term: String) -> Results {
-        guard !term.isEmpty else { return Results(matchBlockIds: [], baseHighlights: [:]) }
+        guard !term.isEmpty else { return Results(matchBlockIds: []) }
 
         let searchLower = term.lowercased()
         var matches: [String] = []
-        var highlights: [String: AttributedString] = [:]
 
         for block in blocks {
             // Collect all text segments for this block (per-cell for tables, per-line for blockquotes)
@@ -95,8 +93,6 @@ enum DocumentSearch {
             switch block.content {
             case .text(let attr):
                 segments = [String(attr.characters)]
-                // Pre-compute yellow (base) highlight for text blocks
-                highlights[block.id] = searchHighlight(attr, term: term)
             case .table(let headers, let rows, _):
                 segments = headers + rows.flatMap { $0 }
             case .codeBlock(let code, _):
@@ -124,6 +120,6 @@ enum DocumentSearch {
             }
         }
 
-        return Results(matchBlockIds: matches, baseHighlights: highlights)
+        return Results(matchBlockIds: matches)
     }
 }

@@ -45,8 +45,9 @@ struct MarkdownView: View {
     @State private var focusedBlockId: String? = nil
     /// Pre-computed focused occurrence within the block — updated only in navigateMatch/updateMatchResults
     @State private var focusedOccInBlock: Int? = nil
-    /// Cache of yellow-highlighted text blocks (keyed by block ID), rebuilt when searchText changes
-    @State private var baseHighlightCache: [String: AttributedString] = [:]
+    /// Last measured height per block id — lets lazily re-created NSTextView
+    /// blocks start at their real height instead of a placeholder (no scroll jumps)
+    @State private var heightCache = BlockHeightCache()
     /// Debounce so that rapid typing in the search bar coalesces into a single recompute
     @State private var searchDebounce: DispatchWorkItem?
     /// Monotonic token so stale background search results are dropped (the user
@@ -104,21 +105,14 @@ struct MarkdownView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        // VStack (eager) — NOT LazyVStack.
-                        // We tried LazyVStack in Sprint 4.2 (after refactoring
-                        // CodeBlockView to NSTextView, which fixed the original
-                        // 890MB box-drawing-Unicode freeze). It surfaced a SECOND
-                        // SwiftUI bug: rapid scroll instantiates/tears down
-                        // SelectionOverlay (the NSTextField-backed shim that
-                        // implements Text(...).textSelection(.enabled)) for every
-                        // visible block; setFont/invalidateEffectiveFont cascades
-                        // saturate the main thread. Sample showed 99% CPU on
-                        // SelectionOverlay.updateNSView during scroll.
-                        // VStack keeps all views alive — no lifecycle churn.
-                        // Trade-off: opening huge docs (>5K blocks) is slower —
-                        // tracked as Issue #10, target v1.6.0 (full NSTextView
-                        // migration for text blocks too).
-                        VStack(alignment: .leading, spacing: 8) {
+                        // LazyVStack is safe again (Issue #10 / #11): no block
+                        // type uses SwiftUI Text(...).textSelection(.enabled)
+                        // anymore — text, headings and blockquotes render through
+                        // NSTextView (TextBlockView), which has native selection
+                        // and none of the SelectionOverlay churn that froze the
+                        // Sprint 4.2 attempt (constraints.md, bug B). Height
+                        // jumps on re-creation are absorbed by BlockHeightCache.
+                        LazyVStack(alignment: .leading, spacing: 8) {
                             ForEach(cachedBlocks) { block in
                                 blockView(for: block)
                             }
@@ -253,6 +247,7 @@ struct MarkdownView: View {
                 }
                 return ParsedDocument(blocks: blocks, textMeta: meta)
             }.value
+            heightCache.removeAll()  // new content/theme — stale heights would mis-seed blocks
             cachedBlocks = parsed.blocks
             textBlockMeta = parsed.textMeta
             headings = parsed.blocks.compactMap { block in
@@ -328,26 +323,19 @@ struct MarkdownView: View {
         let view = Group {
             switch block.content {
             case .text(let attributedString):
-                // hasInlineMath is precomputed at parse time (see textBlockMeta);
-                // avoids per-render String(attr.characters) + regex on every body eval.
-                let hasInlineMath = textBlockMeta[block.id]?.hasInlineMath ?? false
-                if searchText.isEmpty && hasInlineMath {
-                    InlineMathTextView(attributedString: attributedString, theme: theme)
-                } else if searchText.isEmpty {
-                    Text(attributedString)
-                        .textSelection(.enabled)
-                } else if focusedOcc != nil {
-                    // Focused block — compute orange highlight for specific occurrence
-                    Text(searchHighlight(attributedString, term: searchText, focusedOccurrence: focusedOcc))
-                        .textSelection(.enabled)
-                } else if let cached = baseHighlightCache[block.id] {
-                    // Non-focused block — use pre-computed yellow highlights (no work per render)
-                    Text(cached)
-                        .textSelection(.enabled)
-                } else {
-                    Text(attributedString)
-                        .textSelection(.enabled)
-                }
+                // hasInlineMath is precomputed at parse time (see textBlockMeta).
+                // TextBlockView handles search highlighting (temporaryAttributes)
+                // and inline math (NSTextAttachment) natively.
+                TextBlockView(
+                    blockId: block.id,
+                    attributed: attributedString,
+                    hasInlineMath: textBlockMeta[block.id]?.hasInlineMath ?? false,
+                    theme: theme,
+                    searchTerm: searchText,
+                    focusedOccurrence: focusedOcc,
+                    heightCache: heightCache,
+                    onLink: { handleLinkActivation($0) }
+                )
 
             case .table(let headers, let rows, let alignments):
                 TableBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme,
@@ -364,8 +352,10 @@ struct MarkdownView: View {
                     .padding(.vertical, 8)
 
             case .blockquote(let content, let level):
-                BlockquoteView(content: content, level: level, theme: theme,
-                               searchText: searchText, focusedOccurrence: focusedOcc)
+                BlockquoteView(blockId: block.id, content: content, level: level, theme: theme,
+                               searchText: searchText, focusedOccurrence: focusedOcc,
+                               heightCache: heightCache,
+                               onLink: { handleLinkActivation($0) })
                     .padding(.vertical, 4)
 
             case .heading(let level, let title, _):
@@ -389,7 +379,8 @@ struct MarkdownView: View {
                     .padding(.vertical, 4)
 
             case .mermaidDiagram(let source):
-                MermaidBlockView(source: source, theme: theme)
+                MermaidBlockView(blockId: block.id, source: source, theme: theme,
+                                 heightCache: heightCache)
                     .padding(.vertical, 4)
             }
         }
@@ -463,20 +454,19 @@ struct MarkdownView: View {
             currentMatchIndex = 0
             focusedBlockId = nil
             focusedOccInBlock = nil
-            baseHighlightCache = [:]
             return
         }
 
-        // Match computation walks every block and rebuilds per-block highlight
-        // AttributedStrings — too heavy for the main thread on 10K-line docs.
-        // Run it detached and drop the result if the term changed meanwhile.
+        // Match computation walks every block — too heavy for the main thread
+        // on 10K-line docs. Run it detached and drop the result if the term
+        // changed meanwhile. (Per-block highlight painting happens in the
+        // NSTextView wrappers via temporary attributes.)
         let generation = searchGeneration
         let blocks = cachedBlocks
         Task.detached(priority: .userInitiated) {
             let results = DocumentSearch.computeMatches(in: blocks, term: term)
             await MainActor.run {
                 guard generation == searchGeneration else { return }
-                baseHighlightCache = results.baseHighlights
                 matchBlockIds = results.matchBlockIds
                 currentMatchIndex = 0
                 updateFocusState()

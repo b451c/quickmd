@@ -236,7 +236,7 @@ private struct CodeTextView: NSViewRepresentable {
         let searchChanged = (textView.lastSearchTerm != searchTerm) ||
                             (textView.lastFocusedOccurrence != focusedOccurrence)
         if textChanged || searchChanged {
-            applySearchHighlight(in: textView)
+            applyNSSearchHighlight(in: textView, term: searchTerm, focusedOccurrence: focusedOccurrence)
             textView.lastSearchTerm = searchTerm
             textView.lastFocusedOccurrence = focusedOccurrence
         }
@@ -259,37 +259,8 @@ private struct CodeTextView: NSViewRepresentable {
         }
     }
 
-    private func applySearchHighlight(in textView: NSTextView) {
-        guard let layoutManager = textView.layoutManager,
-              let storage = textView.textStorage else { return }
-        let fullRange = NSRange(location: 0, length: storage.length)
-        layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
-
-        guard !searchTerm.isEmpty else { return }
-
-        let plain = storage.string as NSString
-        let needle = searchTerm.lowercased() as NSString
-        let lowerHaystack = (storage.string.lowercased()) as NSString
-        guard needle.length > 0, lowerHaystack.length >= needle.length else { return }
-
-        let yellow = NSColor.systemYellow.withAlphaComponent(0.55)
-        let orange = NSColor.systemOrange
-
-        var location = 0
-        var occurrenceIndex = 0
-        while location < lowerHaystack.length {
-            let searchRange = NSRange(location: location, length: lowerHaystack.length - location)
-            let found = lowerHaystack.range(of: needle as String, options: [], range: searchRange)
-            if found.location == NSNotFound { break }
-            let safeRange = NSIntersectionRange(found, NSRange(location: 0, length: plain.length))
-            if safeRange.length > 0 {
-                let color = (focusedOccurrence == occurrenceIndex) ? orange : yellow
-                layoutManager.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: safeRange)
-            }
-            location = found.location + max(found.length, 1)
-            occurrenceIndex += 1
-        }
-    }
+    // Search highlighting shared with TextBlockView — see applyNSSearchHighlight
+    // in Views/TextBlockView.swift.
 }
 
 // MARK: - Self-Sizing NSTextView

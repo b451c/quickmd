@@ -12,7 +12,6 @@ final class SearchTests: XCTestCase {
     func testEmptyTermYieldsNoResults() {
         let results = DocumentSearch.computeMatches(in: parse("# Hello"), term: "")
         XCTAssertTrue(results.matchBlockIds.isEmpty)
-        XCTAssertTrue(results.baseHighlights.isEmpty)
     }
 
     func testOneEntryPerOccurrence() {
@@ -45,21 +44,6 @@ final class SearchTests: XCTestCase {
         let results = DocumentSearch.computeMatches(in: parse(md), term: "needle")
         XCTAssertEqual(results.matchBlockIds.count, 6,
             "heading + text + code + blockquote + table header + table cell")
-    }
-
-    func testBaseHighlightsOnlyForTextBlocks() {
-        let md = """
-        # needle
-        needle text
-        """
-        let blocks = parse(md)
-        let results = DocumentSearch.computeMatches(in: blocks, term: "needle")
-        XCTAssertEqual(results.baseHighlights.count, 1)
-        let textBlockIds = blocks.compactMap { block -> String? in
-            if case .text = block.content { return block.id }
-            return nil
-        }
-        XCTAssertEqual(Set(results.baseHighlights.keys), Set(textBlockIds))
     }
 
     func testSearchHighlightSetsBackgroundOnMatches() {

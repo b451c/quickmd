@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import AppKit
 
 /// Inline-formatting tests for MarkdownRenderer: asserts on the rendered
 /// plain text (markers consumed) and on semantic attributes (links).
@@ -103,6 +104,53 @@ final class RendererTests: XCTestCase {
     func testUnknownFootnoteReferenceLeftAsText() {
         let out = rendered("word[^missing]")
         XCTAssertEqual(out, "word[^missing]")
+    }
+
+    // MARK: - Dual-scope attributes (NSTextView pipeline)
+
+    func testRenderedTextCarriesAppKitFontAndColor() throws {
+        // TextBlockView converts via NSAttributedString(_, including: \.appKit).
+        // If the renderer ever stops dual-stamping, the NSTextView pipeline
+        // silently loses all fonts/colors — this pins the contract.
+        let attr = renderer.renderInline("plain **bold** `code`")
+        let ns = try NSAttributedString(attr, including: \.appKit)
+        var fontsSeen = 0
+        ns.enumerateAttribute(.font, in: NSRange(location: 0, length: ns.length)) { value, _, _ in
+            if value is NSFont { fontsSeen += 1 }
+        }
+        XCTAssertGreaterThan(fontsSeen, 0, "AppKit font attribute missing after conversion")
+        var colorsSeen = 0
+        ns.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: ns.length)) { value, _, _ in
+            if value is NSColor { colorsSeen += 1 }
+        }
+        XCTAssertGreaterThan(colorsSeen, 0, "AppKit color attribute missing after conversion")
+    }
+
+    func testLinkSurvivesAppKitConversion() throws {
+        let attr = renderer.renderInline("[text](https://example.com)")
+        let ns = try NSAttributedString(attr, including: \.appKit)
+        var linkFound: URL?
+        ns.enumerateAttribute(.link, in: NSRange(location: 0, length: ns.length)) { value, _, _ in
+            if let url = value as? URL { linkFound = url }
+        }
+        XCTAssertEqual(linkFound?.absoluteString, "https://example.com")
+    }
+
+    // MARK: - Inline math segmentation
+
+    func testInlineMathSegmentation() {
+        let segments = InlineMathSegmenter.split("before $x^2$ after")
+        XCTAssertEqual(segments, [.text("before "), .math("x^2"), .text(" after")])
+    }
+
+    func testCurrencyIsNotMath() {
+        let segments = InlineMathSegmenter.split("costs $100 and $200 total")
+        XCTAssertEqual(segments, [.text("costs $100 and $200 total")])
+    }
+
+    func testDoubleDollarSkipped() {
+        let segments = InlineMathSegmenter.split("a $$display$$ b")
+        XCTAssertEqual(segments, [.text("a $$display$$ b")])
     }
 
     // MARK: - Headers

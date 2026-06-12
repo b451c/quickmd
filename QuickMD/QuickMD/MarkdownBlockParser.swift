@@ -321,19 +321,19 @@ struct MarkdownBlockParser: Sendable {
 
             // Horizontal rule separator
             var rule = AttributedString("────────────────────────────────\n")
-            rule.font = .system(size: 12)
-            rule.foregroundColor = theme.secondaryTextColor
+            rule.setDualFont(size: 12)
+            rule.setDualForeground(theme.secondaryTextColor)
             footnoteText.append(rule)
 
             for (index, def) in footnoteDefinitions.enumerated() {
                 let number = index + 1
                 var prefix = AttributedString("\(number). ")
-                prefix.font = .system(size: 12, weight: .bold)
-                prefix.foregroundColor = theme.secondaryTextColor
+                prefix.setDualFont(size: 12, bold: true)
+                prefix.setDualForeground(theme.secondaryTextColor)
 
                 var content = activeRenderer.renderInline(def.content)
-                content.font = .system(size: 12)
-                content.foregroundColor = theme.secondaryTextColor
+                content.setDualFont(size: 12)
+                content.setDualForeground(theme.secondaryTextColor)
 
                 footnoteText.append(prefix)
                 footnoteText.append(content)

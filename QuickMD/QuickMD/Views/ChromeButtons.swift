@@ -4,8 +4,10 @@ import AppKit
 // MARK: - Heading Block View (hover-to-copy section)
 
 /// Heading with hover-to-reveal copy button that copies the section.
-/// The copy icon is always in the layout (opacity-controlled) to avoid
-/// view insertion/removal churn during fast scrolling in LazyVStack.
+/// NOTE: deliberately NO `.textSelection(.enabled)` — that modifier's internal
+/// SelectionOverlay is what makes LazyVStack freeze (constraints.md, bug B).
+/// Keeping plain Text preserves the inline copy-button layout; copying a
+/// heading is covered by the copy-section button itself.
 struct HeadingBlockView: View {
     let id: String
     let level: Int
@@ -22,10 +24,8 @@ struct HeadingBlockView: View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             if searchText.isEmpty {
                 Text(headingAttr)
-                    .textSelection(.enabled)
             } else {
                 Text(searchHighlight(headingAttr, term: searchText, focusedOccurrence: focusedOccurrence))
-                    .textSelection(.enabled)
             }
 
             Button {

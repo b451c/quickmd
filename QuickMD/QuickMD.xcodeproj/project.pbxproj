@@ -59,7 +59,6 @@
 		A1B2C3D401000032 /* mermaid.min.js in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000036 /* mermaid.min.js */; };
 		A1B2C3D401000033 /* mermaid-template.html in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000037 /* mermaid-template.html */; };
 		A1B2C3D401000034 /* mathFonts.bundle in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000038 /* mathFonts.bundle */; };
-		A1B2C3D401000035 /* InlineMathTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000039 /* InlineMathTextView.swift */; };
 		A1B2C3D401000036 /* CustomThemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003A /* CustomThemeStore.swift */; };
 		A1B2C3D401000037 /* RecentDocumentsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003B /* RecentDocumentsStore.swift */; };
 		A1B2C3D401000038 /* RecentDocumentsSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003C /* RecentDocumentsSidebar.swift */; };
@@ -80,6 +79,9 @@
 		A1B2C3D401000047 /* MarkdownDocument.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000002 /* MarkdownDocument.swift */; };
 		A1B2C3D401000048 /* SectionExtractor.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003D /* SectionExtractor.swift */; };
 		A1B2C3D401000049 /* DocumentSearch.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003E /* DocumentSearch.swift */; };
+		A1B2C3D40100004A /* TextBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000047 /* TextBlockView.swift */; };
+		A1B2C3D40100004B /* InlineMathSegmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000048 /* InlineMathSegmenter.swift */; };
+		A1B2C3D40100004C /* InlineMathSegmenter.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000048 /* InlineMathSegmenter.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -139,7 +141,6 @@
 		A1B2C3D400000036 /* mermaid.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = mermaid.min.js; sourceTree = "<group>"; };
 		A1B2C3D400000037 /* mermaid-template.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "mermaid-template.html"; sourceTree = "<group>"; };
 		A1B2C3D400000038 /* mathFonts.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = mathFonts.bundle; sourceTree = "<group>"; };
-		A1B2C3D400000039 /* InlineMathTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineMathTextView.swift; sourceTree = "<group>"; };
 		A1B2C3D40000003A /* CustomThemeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomThemeStore.swift; sourceTree = "<group>"; };
 		A1B2C3D40000003B /* RecentDocumentsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentsStore.swift; sourceTree = "<group>"; };
 		A1B2C3D40000003C /* RecentDocumentsSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentsSidebar.swift; sourceTree = "<group>"; };
@@ -153,6 +154,8 @@
 		A1B2C3D400000044 /* SectionExtractorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionExtractorTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000045 /* DocumentAndThemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentAndThemeTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000046 /* SearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000047 /* TextBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextBlockView.swift; sourceTree = "<group>"; };
+		A1B2C3D400000048 /* InlineMathSegmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineMathSegmenter.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -207,6 +210,7 @@
 				A1B2C3D40000003D /* SectionExtractor.swift */,
 				A1B2C3D40000003E /* DocumentSearch.swift */,
 				A1B2C3D40000003F /* WindowTabbing.swift */,
+				A1B2C3D400000048 /* InlineMathSegmenter.swift */,
 				A1B2C3D403000004 /* Views */,
 				A1B2C3D403000005 /* SwiftMath */,
 				A1B2C3D403000007 /* Resources */,
@@ -235,10 +239,10 @@
 				A1B2C3D400000015 /* TableOfContentsView.swift */,
 				A1B2C3D400000016 /* ThemePickerView.swift */,
 				A1B2C3D400000018 /* MathBlockView.swift */,
-				A1B2C3D400000039 /* InlineMathTextView.swift */,
 				A1B2C3D400000019 /* MermaidBlockView.swift */,
 				A1B2C3D40000003C /* RecentDocumentsSidebar.swift */,
 				A1B2C3D400000040 /* ChromeButtons.swift */,
+				A1B2C3D400000047 /* TextBlockView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -445,7 +449,6 @@
 				A1B2C3D40100002F /* MTDisplayPreRenderer.swift in Sources */,
 				A1B2C3D401000030 /* MTElementWidthCalculator.swift in Sources */,
 				A1B2C3D401000031 /* MTLineFitter.swift in Sources */,
-				A1B2C3D401000035 /* InlineMathTextView.swift in Sources */,
 				A1B2C3D401000036 /* CustomThemeStore.swift in Sources */,
 				A1B2C3D401000037 /* RecentDocumentsStore.swift in Sources */,
 				A1B2C3D401000038 /* RecentDocumentsSidebar.swift in Sources */,
@@ -453,6 +456,8 @@
 				A1B2C3D40100003A /* DocumentSearch.swift in Sources */,
 				A1B2C3D40100003B /* WindowTabbing.swift in Sources */,
 				A1B2C3D40100003C /* ChromeButtons.swift in Sources */,
+				A1B2C3D40100004A /* TextBlockView.swift in Sources */,
+				A1B2C3D40100004B /* InlineMathSegmenter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -473,6 +478,7 @@
 				A1B2C3D401000047 /* MarkdownDocument.swift in Sources (Tests) */,
 				A1B2C3D401000048 /* SectionExtractor.swift in Sources (Tests) */,
 				A1B2C3D401000049 /* DocumentSearch.swift in Sources (Tests) */,
+				A1B2C3D40100004C /* InlineMathSegmenter.swift in Sources (Tests) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -1,5 +1,63 @@
 import Foundation
 import SwiftUI
+import AppKit
+
+// MARK: - Dual-Scope Styling
+//
+// Rendered AttributedStrings travel down TWO pipelines:
+//  • SwiftUI Text — table cells and the printable/PDF views read the
+//    SwiftUI-scope attributes;
+//  • NSTextView (TextBlockView) — text/heading/blockquote blocks convert via
+//    `NSAttributedString(_, including: \.appKit)`, which only carries
+//    AppKit-scope (+ Foundation) attributes.
+// Every style the renderer sets MUST stamp both scopes, or one pipeline
+// silently loses formatting. Use these helpers — never set `.font` /
+// `.foregroundColor` directly in renderer code.
+extension AttributedString {
+
+    /// Set font in both SwiftUI and AppKit scopes.
+    mutating func setDualFont(size: CGFloat, bold: Bool = false, italic: Bool = false, monospaced: Bool = false) {
+        var swiftUIFont: Font = monospaced
+            ? .system(size: size, weight: bold ? .bold : .regular, design: .monospaced)
+            : .system(size: size, weight: bold ? .bold : .regular)
+        if italic { swiftUIFont = swiftUIFont.italic() }
+        self.font = swiftUIFont
+
+        var nsFont: NSFont = monospaced
+            ? .monospacedSystemFont(ofSize: size, weight: bold ? .bold : .regular)
+            : .systemFont(ofSize: size, weight: bold ? .bold : .regular)
+        if italic {
+            let descriptor = nsFont.fontDescriptor.withSymbolicTraits(
+                nsFont.fontDescriptor.symbolicTraits.union(.italic))
+            nsFont = NSFont(descriptor: descriptor, size: size) ?? nsFont
+        }
+        self[AttributeScopes.AppKitAttributes.FontAttribute.self] = nsFont
+    }
+
+    /// Set foreground color in both scopes.
+    mutating func setDualForeground(_ color: Color) {
+        self.foregroundColor = color
+        self[AttributeScopes.AppKitAttributes.ForegroundColorAttribute.self] = NSColor(color)
+    }
+
+    /// Set background color in both scopes (inline code chips).
+    mutating func setDualBackground(_ color: Color) {
+        self.backgroundColor = color
+        self[AttributeScopes.AppKitAttributes.BackgroundColorAttribute.self] = NSColor(color)
+    }
+
+    /// Set single underline in both scopes (links).
+    mutating func setDualUnderline() {
+        self.underlineStyle = .single
+        self[AttributeScopes.AppKitAttributes.UnderlineStyleAttribute.self] = .single
+    }
+
+    /// Set single strikethrough in both scopes (~~text~~, checked tasks).
+    mutating func setDualStrikethrough() {
+        self.strikethroughStyle = .single
+        self[AttributeScopes.AppKitAttributes.StrikethroughStyleAttribute.self] = .single
+    }
+}
 
 struct MarkdownRenderer: Sendable {
     let theme: MarkdownTheme
@@ -92,8 +150,8 @@ struct MarkdownRenderer: Sendable {
         let sizes: [CGFloat] = [32, 26, 22, 18, 16, 14]
         // Safety guard: ensure level is within bounds to prevent crash
         let safeLevel = max(1, min(level, 6))
-        attr.font = .system(size: sizes[safeLevel - 1], weight: .bold)
-        attr.foregroundColor = theme.textColor
+        attr.setDualFont(size: sizes[safeLevel - 1], bold: true)
+        attr.setDualForeground(theme.textColor)
         return attr
     }
 
@@ -101,8 +159,8 @@ struct MarkdownRenderer: Sendable {
         let indentStr = String(repeating: "    ", count: indent / 4 + (indent % 4 > 0 ? 1 : 0))
         let prefix = indentStr + (ordered ? "\(number). " : "• ")
         var attr = AttributedString(prefix)
-        attr.font = .system(size: 14)
-        attr.foregroundColor = theme.textColor
+        attr.setDualFont(size: 14)
+        attr.setDualForeground(theme.textColor)
         attr.append(renderInlineFormatting(text))
         return attr
     }
@@ -111,13 +169,13 @@ struct MarkdownRenderer: Sendable {
         let indentStr = String(repeating: "    ", count: indent / 4 + (indent % 4 > 0 ? 1 : 0))
         let checkbox = checked ? "☑ " : "☐ "
         var attr = AttributedString(indentStr + checkbox)
-        attr.font = .system(size: 14)
-        attr.foregroundColor = checked ? theme.checkboxColor : theme.textColor
+        attr.setDualFont(size: 14)
+        attr.setDualForeground(checked ? theme.checkboxColor : theme.textColor)
 
         var content = renderInlineFormatting(text)
         if checked {
-            content.strikethroughStyle = .single
-            content.foregroundColor = theme.secondaryTextColor
+            content.setDualStrikethrough()
+            content.setDualForeground(theme.secondaryTextColor)
         }
         attr.append(content)
         return attr
@@ -140,8 +198,8 @@ struct MarkdownRenderer: Sendable {
 
     private func renderHorizontalRule() -> AttributedString {
         var attr = AttributedString("────────────────────────────────")
-        attr.font = .system(size: 14)
-        attr.foregroundColor = theme.secondaryTextColor
+        attr.setDualFont(size: 14)
+        attr.setDualForeground(theme.secondaryTextColor)
         return attr
     }
 
@@ -161,8 +219,8 @@ struct MarkdownRenderer: Sendable {
         func flushPlainText() {
             guard !plainTextBuffer.isEmpty else { return }
             var attr = AttributedString(plainTextBuffer)
-            attr.font = .system(size: 14)
-            attr.foregroundColor = theme.textColor
+            attr.setDualFont(size: 14)
+            attr.setDualForeground(theme.textColor)
             result.append(attr)
             plainTextBuffer = ""
         }
@@ -207,8 +265,8 @@ struct MarkdownRenderer: Sendable {
             // 3+ backticks in inline context — render as literal backtick characters
             let backticks = String(repeating: "`", count: backtickCount)
             var attr = AttributedString(backticks)
-            attr.font = .system(size: 14)
-            attr.foregroundColor = theme.textColor
+            attr.setDualFont(size: 14)
+            attr.setDualForeground(theme.textColor)
             return (attr, remaining.dropFirst(backtickCount))
         }
 
@@ -234,9 +292,9 @@ struct MarkdownRenderer: Sendable {
         }
 
         var attr = AttributedString(code)
-        attr.font = .system(size: 13, design: .monospaced)
-        attr.foregroundColor = theme.textColor
-        attr.backgroundColor = theme.codeBackgroundColor
+        attr.setDualFont(size: 13, monospaced: true)
+        attr.setDualForeground(theme.textColor)
+        attr.setDualBackground(theme.codeBackgroundColor)
         return (attr, afterOpening[closeRange.upperBound...])
     }
 
@@ -249,8 +307,8 @@ struct MarkdownRenderer: Sendable {
 
         let text = String(afterMarker[..<endRange.lowerBound])
         var attr = AttributedString(text)
-        attr.font = .system(size: 14, weight: .bold).italic()
-        attr.foregroundColor = theme.textColor
+        attr.setDualFont(size: 14, bold: true, italic: true)
+        attr.setDualForeground(theme.textColor)
         return (attr, afterMarker[endRange.upperBound...])
     }
 
@@ -265,8 +323,8 @@ struct MarkdownRenderer: Sendable {
         let boldText = String(afterMarker[..<endRange.lowerBound])
         // Recursively parse inner text for nested emphasis (e.g., **bold *and italic* text**)
         var attr = renderInlineFormatting(boldText)
-        attr.font = .system(size: 14, weight: .bold)
-        attr.foregroundColor = theme.textColor
+        attr.setDualFont(size: 14, bold: true)
+        attr.setDualForeground(theme.textColor)
         return (attr, afterMarker[endRange.upperBound...])
     }
 
@@ -304,8 +362,8 @@ struct MarkdownRenderer: Sendable {
         let italicText = String(afterMarker[..<endIndex])
         // Recursively parse inner text for nested emphasis (e.g., *italic **and bold** text*)
         var attr = renderInlineFormatting(italicText)
-        attr.font = .system(size: 14).italic()
-        attr.foregroundColor = theme.textColor
+        attr.setDualFont(size: 14, italic: true)
+        attr.setDualForeground(theme.textColor)
         return (attr, afterMarker[afterMarker.index(after: endIndex)...])
     }
 
@@ -317,9 +375,9 @@ struct MarkdownRenderer: Sendable {
 
         let strikeText = String(afterMarker[..<endRange.lowerBound])
         var attr = AttributedString(strikeText)
-        attr.font = .system(size: 14)
-        attr.foregroundColor = theme.textColor
-        attr.strikethroughStyle = .single
+        attr.setDualFont(size: 14)
+        attr.setDualForeground(theme.textColor)
+        attr.setDualStrikethrough()
         return (attr, afterMarker[endRange.upperBound...])
     }
 
@@ -375,10 +433,10 @@ struct MarkdownRenderer: Sendable {
 
     private func makeLink(text: String, url: String, remaining: Substring) -> (AttributedString, Substring) {
         var attr = AttributedString(text)
-        attr.font = .system(size: 14)
-        attr.foregroundColor = theme.linkColor
-        attr.underlineStyle = .single
-        
+        attr.setDualFont(size: 14)
+        attr.setDualForeground(theme.linkColor)
+        attr.setDualUnderline()
+
         if let parsedUrl = URL(string: url) {
             attr.link = parsedUrl
         } else if let encoded = url.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
@@ -413,8 +471,8 @@ struct MarkdownRenderer: Sendable {
         let urlText = String(remaining[urlStart..<urlEndIdx])
 
         var attr = AttributedString("[Image: \(altText)]")
-        attr.font = .system(size: 14).italic()
-        attr.foregroundColor = theme.secondaryTextColor
+        attr.setDualFont(size: 14, italic: true)
+        attr.setDualForeground(theme.secondaryTextColor)
         if let url = URL(string: urlText) {
             attr.link = url
         }
@@ -427,8 +485,8 @@ struct MarkdownRenderer: Sendable {
         guard MarkdownTheme.escapableChars.contains(escaped) else { return nil }
 
         var attr = AttributedString(String(escaped))
-        attr.font = .system(size: 14)
-        attr.foregroundColor = theme.textColor
+        attr.setDualFont(size: 14)
+        attr.setDualForeground(theme.textColor)
         return (attr, remaining.dropFirst(2))
     }
 
@@ -446,9 +504,9 @@ struct MarkdownRenderer: Sendable {
 
         let urlText = String(str[range])
         var attr = AttributedString(urlText)
-        attr.font = .system(size: 14)
-        attr.foregroundColor = theme.linkColor
-        attr.underlineStyle = .single
+        attr.setDualFont(size: 14)
+        attr.setDualForeground(theme.linkColor)
+        attr.setDualUnderline()
         if let url = URL(string: urlText) {
             attr.link = url
         }
@@ -484,8 +542,8 @@ struct MarkdownRenderer: Sendable {
         let superscript = String(String(number).map { superscriptDigits[$0] ?? $0 })
 
         var attr = AttributedString(superscript)
-        attr.font = .system(size: 11, weight: .bold)
-        attr.foregroundColor = theme.linkColor
+        attr.setDualFont(size: 11, bold: true)
+        attr.setDualForeground(theme.linkColor)
         return (attr, afterBracket[afterBracket.index(after: closeIndex)...])
     }
 
