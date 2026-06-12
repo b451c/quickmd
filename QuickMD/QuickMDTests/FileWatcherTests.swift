@@ -3,7 +3,8 @@ import XCTest
 /// FileWatcher (auto-reload) behavior tests, including the atomic-save case
 /// that real editors (VS Code, Zed, vim) use: write temp file, rename over
 /// the original. ExternalEditorManager detection sanity checks included.
-@MainActor
+/// (FileWatcher is main-thread-by-convention, not @MainActor; XCTest drives
+/// the main run loop during wait(for:) so DispatchQueue.main callbacks fire.)
 final class FileWatcherTests: XCTestCase {
 
     private var tempDir: URL!

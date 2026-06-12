@@ -38,7 +38,10 @@ class TipJarManager: ObservableObject {
             for await result in Transaction.updates {
                 if case .verified(let transaction) = result {
                     await transaction.finish()
-                    await MainActor.run {
+                    // Re-capture weakly: referencing the outer weak `self` var
+                    // directly inside this Sendable closure is rejected by
+                    // older toolchains (CI runner).
+                    await MainActor.run { [weak self] in
                         self?.purchaseState = .purchased
                     }
                 }

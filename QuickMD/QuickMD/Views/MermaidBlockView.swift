@@ -144,7 +144,8 @@ private struct MermaidZoomView: View {
 
 /// Holds a weak reference to the zoom sheet's web view so toolbar buttons can
 /// drive `magnification` directly (pinch gestures work natively alongside).
-@MainActor
+/// Main-thread by convention (button actions); not @MainActor for older-SDK
+/// compatibility — see BlockHeightCache note in TextBlockView.swift.
 final class ZoomWebViewController {
     weak var webView: WKWebView?
 

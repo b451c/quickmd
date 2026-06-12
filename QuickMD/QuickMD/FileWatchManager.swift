@@ -9,10 +9,13 @@ import Foundation
 /// dead inode. On those events the watcher re-opens the path and re-arms;
 /// only when the path itself is gone does it report the file as missing.
 ///
-/// All callbacks fire on the main queue. Changes are debounced 250 ms so an
-/// editor that writes multiple times in quick succession coalesces into one
-/// reload.
-@MainActor
+/// All callbacks fire on the main queue (the DispatchSource and the debounce
+/// both target `.main`). Changes are debounced 250 ms so an editor that
+/// writes multiple times in quick succession coalesces into one reload.
+///
+/// Main-thread by convention, deliberately NOT @MainActor — SwiftUI view
+/// callbacks that create/drive this are nonisolated on older SDKs and an
+/// isolated call there is a hard compile error on the CI toolchain.
 final class FileWatcher {
 
     /// Fired (debounced) when the file's content changed or the file was

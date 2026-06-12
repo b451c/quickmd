@@ -59,7 +59,10 @@ enum ExternalEditorManager {
     ///
     /// Returns the launched app's display name for UI feedback, or nil if the
     /// user cancelled / nothing could be launched.
-    @MainActor
+    ///
+    /// Main-thread by convention (invoked from button/menu actions); these
+    /// helpers are not @MainActor because SwiftUI action closures are
+    /// nonisolated on older SDKs (hard error on the CI toolchain otherwise).
     @discardableResult
     static func openInEditor(_ fileURL: URL) -> String? {
         var preferred = UserDefaults.standard.string(forKey: defaultsKey)
@@ -95,7 +98,6 @@ enum ExternalEditorManager {
     /// One-time editor chooser shown on the first ⌘E: a popup with all
     /// detected editors (+ TextEdit + Other…). Stores and returns the chosen
     /// bundle id, or nil when cancelled.
-    @MainActor
     static func promptForEditorChoice() -> String? {
         var options: [(title: String, bundleID: String)] =
             installedKnownEditors().map { ($0.name, $0.bundleID) }
@@ -129,7 +131,6 @@ enum ExternalEditorManager {
 
     /// NSOpenPanel for picking an arbitrary .app; returns its bundle id.
     /// Shared by the first-run prompt and the Settings "Other…" button.
-    @MainActor
     static func chooseApplicationBundleID() -> String? {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false

@@ -6,9 +6,13 @@ import AppKit
 /// Remembers the last measured height of each block, keyed by block id.
 /// LazyVStack destroys and recreates views during scroll; without this a
 /// recreated NSTextView starts at a placeholder height and "jumps" when its
-/// real height arrives, making upward scrolling stutter. Main-thread only
-/// (all reads/writes happen from SwiftUI body / height callbacks).
-@MainActor
+/// real height arrives, making upward scrolling stutter.
+///
+/// Main-thread only BY CONVENTION (all reads/writes happen from SwiftUI view
+/// inits / height callbacks dispatched to main). Deliberately NOT @MainActor:
+/// view initializers are nonisolated on older SDKs where the SwiftUI View
+/// protocol annotates only `body`, and an isolated init call there is a hard
+/// compile error (caught by CI on the GitHub runner toolchain).
 final class BlockHeightCache {
     private var heights: [String: CGFloat] = [:]
 
@@ -21,8 +25,9 @@ final class BlockHeightCache {
 
 /// Search highlighting for NSTextView-hosted blocks (code + text + headings +
 /// blockquotes). Applied via the layout manager's temporary attributes — no
-/// rebuild of the text storage.
-@MainActor
+/// rebuild of the text storage. Main-thread by convention (called from
+/// updateNSView); not @MainActor for older-SDK compatibility (see
+/// BlockHeightCache note).
 func applyNSSearchHighlight(in textView: NSTextView, term: String, focusedOccurrence: Int?) {
     guard let layoutManager = textView.layoutManager,
           let storage = textView.textStorage else { return }
