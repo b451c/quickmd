@@ -6,6 +6,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey.svg)](https://www.apple.com/macos)
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org)
+[![Build & Test](https://github.com/b451c/quickmd/actions/workflows/build.yml/badge.svg)](https://github.com/b451c/quickmd/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 [Features](#features) • [Installation](#installation) • [Usage](#usage) • [Tech Stack](#tech-stack) • [Support](#support)
@@ -154,15 +155,16 @@ Now all your Markdown files will open instantly with QuickMD!
 |----------|--------|
 | `⌘O` | Open file |
 | `⌘W` | Close tab (or window if last tab) |
+| `⌘E` | Open in External Editor |
 | `⌘F` | Find in document |
 | `⌘G` / `⇧⌘G` | Next / previous match |
 | `⌘⇧C` | Copy Markdown source |
 | `⌘⇧T` | Toggle Table of Contents |
 | `⌘⇧D` | Toggle Recent Documents sidebar |
-| `⌘⇧→` / `⌘⇧←` | Switch between tabs |
+| `⌃⇥` / `⌃⇧⇥` | Switch between tabs |
 | `⌘⇧E` | Export to PDF |
 | `⌘P` | Print |
-| `⌘,` | Settings (theme picker) |
+| `⌘,` | Settings (themes + external editor) |
 
 ## Tech Stack
 
@@ -173,15 +175,18 @@ Now all your Markdown files will open instantly with QuickMD!
 
 ### Key Components
 
-- Custom Markdown parser with block-level parsing and reference link pre-pass
-- Regex-based syntax highlighting for code blocks
-- LaTeX math rendering via vendored [SwiftMath](https://github.com/mgriebling/SwiftMath) (Core Graphics, no network)
-- Mermaid diagram rendering via bundled [Mermaid.js](https://mermaid.js.org/) (offline, no CDN)
-- 7 color themes with `@AppStorage` persistence
+- Custom Markdown parser with block-level parsing, YAML frontmatter and reference link pre-pass
+- Native `NSTextView` text pipeline with lazy layout — native selection, native links, no SwiftUI text bottlenecks on huge documents
+- Per-document file watcher (`DispatchSource`) powering auto-reload, including atomic editor saves
+- Regex-based syntax highlighting for code blocks (computed off the main thread)
+- LaTeX math rendering via vendored [SwiftMath](https://github.com/mgriebling/SwiftMath) (Core Graphics, no network); inline math as native text attachments
+- Mermaid diagram rendering via bundled [Mermaid.js](https://mermaid.js.org/) (offline, no CDN), with snapshot caching and a zoom viewer
+- 7 built-in themes + user themes from disk, with `@AppStorage` persistence
 - `AsyncImage` for remote image rendering
 - Security-Scoped Bookmarks for local image access in sandbox
 - Per-block PDF export with multi-page pagination
 - Zero external package dependencies — everything is vendored or bundled
+- Unit test suite (76 tests) + GitHub Actions CI building every flavor on each push
 
 ## Project Structure
 
@@ -189,14 +194,20 @@ Now all your Markdown files will open instantly with QuickMD!
 QuickMD/
 ├── QuickMD/
 │   ├── QuickMDApp.swift            # App entry point + menu commands
-│   ├── MarkdownDocument.swift      # FileDocument model
-│   ├── MarkdownView.swift          # Main document view + support buttons
+│   ├── MarkdownDocument.swift      # FileDocument model (encoding + line-ending normalization)
+│   ├── MarkdownView.swift          # Main document view (lazy block layout)
 │   ├── MarkdownBlock.swift         # Block type enum
-│   ├── MarkdownBlockParser.swift   # Line-by-line block parser
-│   ├── MarkdownRenderer.swift      # Inline markdown → AttributedString
-│   ├── MarkdownTheme.swift         # Built-in themes + Codable for JSON loading
+│   ├── MarkdownBlockParser.swift   # Line-by-line block parser (+ YAML frontmatter)
+│   ├── MarkdownRenderer.swift      # Inline markdown → AttributedString (SwiftUI + AppKit scopes)
+│   ├── MarkdownTheme.swift         # Built-in themes
 │   ├── MarkdownExport.swift        # PDF export + print support
-│   ├── CustomThemeStore.swift      # User themes from disk (live reload)
+│   ├── DocumentSearch.swift        # Find-in-document match engine
+│   ├── SectionExtractor.swift      # "Copy section" boundaries from parser source lines
+│   ├── InlineMathSegmenter.swift   # $...$ segmentation
+│   ├── FileWatchManager.swift      # Auto-reload file watcher (DispatchSource)
+│   ├── ExternalEditorManager.swift # ⌘E editor detection + launch
+│   ├── WindowTabbing.swift         # Native macOS tab merging
+│   ├── CustomThemeStore.swift      # User themes from disk (live reload + validation)
 │   ├── RecentDocumentsStore.swift  # Recent documents tracking
 │   ├── TipJarManager.swift         # StoreKit 2 IAP (App Store only)
 │   ├── TipJarView.swift            # Tip Jar UI (App Store only)
@@ -206,18 +217,22 @@ QuickMD/
 │   │   ├── mermaid.min.js          # Bundled Mermaid.js
 │   │   └── mermaid-template.html   # HTML template for diagrams
 │   ├── Views/
-│   │   ├── CodeBlockView.swift     # NSTextView-backed code blocks (native selection)
+│   │   ├── TextBlockView.swift     # NSTextView-backed text blocks (native selection, inline math)
+│   │   ├── CodeBlockView.swift     # NSTextView-backed code blocks (+ copy button)
 │   │   ├── MathBlockView.swift     # LaTeX display math ($$...$$)
-│   │   ├── InlineMathTextView.swift # Inline math ($...$)
-│   │   ├── MermaidBlockView.swift  # Mermaid diagrams (WKWebView)
+│   │   ├── MermaidBlockView.swift  # Mermaid diagrams (WKWebView + zoom + snapshot cache)
 │   │   ├── TableBlockView.swift    # Table rendering with alignment
 │   │   ├── ImageBlockView.swift    # Local + remote image rendering
 │   │   ├── BlockquoteView.swift    # Nested blockquotes
+│   │   ├── ChromeButtons.swift     # Heading copy, source copy, edit, support buttons
 │   │   ├── SearchBar.swift         # Find in document (⌘F)
 │   │   ├── TableOfContentsView.swift # ToC sidebar (⌘⇧T)
 │   │   ├── RecentDocumentsSidebar.swift # Recent docs sidebar (⌘⇧D)
-│   │   └── ThemePickerView.swift   # Theme settings (⌘,) + import/reload
+│   │   ├── SettingsView.swift      # Settings window (⌘,): Themes + Editor tabs
+│   │   ├── ExternalEditorPickerView.swift # Editor selection
+│   │   └── ThemePickerView.swift   # Theme picker + import/reload
 │   └── Assets.xcassets/            # App icon + assets
+├── QuickMDTests/                   # Unit tests (parser, renderer, search, watcher, ...)
 ├── docs/themes/                    # Schema + starter custom themes
 ├── CHANGELOG.md                    # Version history
 └── demo.md                         # Demo file for testing
@@ -252,6 +267,15 @@ xcodebuild -project QuickMD/QuickMD.xcodeproj -scheme QuickMD -configuration Rel
 ```
 
 The `APPSTORE` flag enables Tip Jar IAP and disables the GitHub-only update checker.
+
+### Running Tests
+
+```bash
+xcodebuild -project QuickMD/QuickMD.xcodeproj -scheme QuickMD \
+  -destination 'platform=macOS' test
+```
+
+CI runs the test suite plus Release builds of both flavors on every push and pull request.
 
 ## Support
 
@@ -288,7 +312,13 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Recent Documents sidebar (`⌘⇧D`)
 - [x] Native macOS tabs (every doc opens as a tab in one window)
 - [x] NSTextView-backed code blocks (native selection, no SwiftUI Text trap)
-- [ ] Large-document fast-load — extend NSTextView migration to text blocks ([#10](https://github.com/b451c/quickmd/issues/10))
+- [x] Large-document fast-load — NSTextView text blocks + lazy rendering ([#10](https://github.com/b451c/quickmd/issues/10), [#11](https://github.com/b451c/quickmd/issues/11))
+- [x] File auto-reload — live preview with your editor's auto-save
+- [x] Open in External Editor (`⌘E`) with auto-detected editor picker
+- [x] Copy button on code blocks
+- [x] Mermaid diagram zoom ([#12](https://github.com/b451c/quickmd/issues/12))
+- [x] YAML frontmatter + setext headings + CRLF line endings
+- [x] Unit test suite + GitHub Actions CI
 - [ ] Mermaid diagram PDF export (full fidelity)
 - [ ] GFM alerts/admonitions (NOTE, WARNING, TIP)
 - [ ] Definition lists
