@@ -14,6 +14,12 @@
 <script src="mermaid.min.js"></script>
 <script>
   function renderDiagram(source, isDark) {
+    // renderDiagram may run repeatedly on this page (theme switches re-render
+    // in place). mermaid.render can leave its temp element behind after a
+    // failed render — remove it or the next render throws on a duplicate id.
+    var stale = document.getElementById('ddiagram');
+    if (stale) stale.remove();
+
     mermaid.initialize({
       startOnLoad: false,
       theme: isDark ? 'dark' : 'default',

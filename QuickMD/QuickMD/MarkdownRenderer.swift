@@ -456,28 +456,6 @@ struct MarkdownRenderer: Sendable {
         return (attr, remaining.dropFirst(urlText.count))
     }
 
-    // MARK: - Inline Math
-
-    private func tryParseInlineMath(_ remaining: inout Substring) -> (AttributedString, Substring)? {
-        guard remaining.hasPrefix("$"), !remaining.hasPrefix("$$") else { return nil }
-
-        let afterDollar = remaining.dropFirst()
-        guard let closeIndex = afterDollar.firstIndex(of: "$") else { return nil }
-
-        let latex = String(afterDollar[..<closeIndex])
-        // Guard against empty math and currency like "$100"
-        guard !latex.isEmpty,
-              latex.first?.isWhitespace != true,
-              latex.last?.isWhitespace != true,
-              !latex.allSatisfy({ $0.isNumber || $0 == "." || $0 == "," }) else { return nil }
-
-        // Render as styled inline text (italic with theme color)
-        var attr = AttributedString(latex)
-        attr.font = .system(size: 14).italic()
-        attr.foregroundColor = theme.textColor
-        return (attr, afterDollar[afterDollar.index(after: closeIndex)...])
-    }
-
     // MARK: - Footnote References
 
     private func tryParseFootnoteRef(_ remaining: inout Substring) -> (AttributedString, Substring)? {

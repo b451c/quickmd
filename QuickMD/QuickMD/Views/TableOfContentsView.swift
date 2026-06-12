@@ -1,14 +1,7 @@
 import SwiftUI
 
-// MARK: - Table of Contents Entry
-
-struct ToCEntry: Identifiable {
-    let id: String
-    let level: Int
-    let title: String
-}
-
 // MARK: - Table of Contents View
+// (`ToCEntry` lives in SectionExtractor.swift, next to the section-copy logic.)
 
 /// Sidebar showing document headings with click-to-navigate
 struct TableOfContentsView: View {

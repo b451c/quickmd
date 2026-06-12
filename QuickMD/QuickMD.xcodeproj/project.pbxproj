@@ -63,6 +63,23 @@
 		A1B2C3D401000036 /* CustomThemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003A /* CustomThemeStore.swift */; };
 		A1B2C3D401000037 /* RecentDocumentsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003B /* RecentDocumentsStore.swift */; };
 		A1B2C3D401000038 /* RecentDocumentsSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003C /* RecentDocumentsSidebar.swift */; };
+		A1B2C3D401000039 /* SectionExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003D /* SectionExtractor.swift */; };
+		A1B2C3D40100003A /* DocumentSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003E /* DocumentSearch.swift */; };
+		A1B2C3D40100003B /* WindowTabbing.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003F /* WindowTabbing.swift */; };
+		A1B2C3D40100003C /* ChromeButtons.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000040 /* ChromeButtons.swift */; };
+		A1B2C3D40100003D /* ParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000042 /* ParserTests.swift */; };
+		A1B2C3D40100003E /* RendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000043 /* RendererTests.swift */; };
+		A1B2C3D40100003F /* SectionExtractorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000044 /* SectionExtractorTests.swift */; };
+		A1B2C3D401000040 /* DocumentAndThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000045 /* DocumentAndThemeTests.swift */; };
+		A1B2C3D401000041 /* SearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000046 /* SearchTests.swift */; };
+		A1B2C3D401000042 /* MarkdownBlockParser.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000E /* MarkdownBlockParser.swift */; };
+		A1B2C3D401000043 /* MarkdownRenderer.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000004 /* MarkdownRenderer.swift */; };
+		A1B2C3D401000044 /* MarkdownTheme.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000008 /* MarkdownTheme.swift */; };
+		A1B2C3D401000045 /* MarkdownBlock.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000D /* MarkdownBlock.swift */; };
+		A1B2C3D401000046 /* CustomThemeStore.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003A /* CustomThemeStore.swift */; };
+		A1B2C3D401000047 /* MarkdownDocument.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000002 /* MarkdownDocument.swift */; };
+		A1B2C3D401000048 /* SectionExtractor.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003D /* SectionExtractor.swift */; };
+		A1B2C3D401000049 /* DocumentSearch.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003E /* DocumentSearch.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -126,10 +143,27 @@
 		A1B2C3D40000003A /* CustomThemeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomThemeStore.swift; sourceTree = "<group>"; };
 		A1B2C3D40000003B /* RecentDocumentsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentsStore.swift; sourceTree = "<group>"; };
 		A1B2C3D40000003C /* RecentDocumentsSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentsSidebar.swift; sourceTree = "<group>"; };
+		A1B2C3D40000003D /* SectionExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionExtractor.swift; sourceTree = "<group>"; };
+		A1B2C3D40000003E /* DocumentSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentSearch.swift; sourceTree = "<group>"; };
+		A1B2C3D40000003F /* WindowTabbing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowTabbing.swift; sourceTree = "<group>"; };
+		A1B2C3D400000040 /* ChromeButtons.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeButtons.swift; sourceTree = "<group>"; };
+		A1B2C3D400000041 /* QuickMDTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = QuickMDTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D400000042 /* ParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParserTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000043 /* RendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RendererTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000044 /* SectionExtractorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionExtractorTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000045 /* DocumentAndThemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentAndThemeTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000046 /* SearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A1B2C3D402000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1B2C3D402000005 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -143,8 +177,21 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D403000002 /* QuickMD */,
+				A1B2C3D403000008 /* QuickMDTests */,
 				A1B2C3D403000003 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		A1B2C3D403000008 /* QuickMDTests */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D400000042 /* ParserTests.swift */,
+				A1B2C3D400000043 /* RendererTests.swift */,
+				A1B2C3D400000044 /* SectionExtractorTests.swift */,
+				A1B2C3D400000045 /* DocumentAndThemeTests.swift */,
+				A1B2C3D400000046 /* SearchTests.swift */,
+			);
+			path = QuickMDTests;
 			sourceTree = "<group>";
 		};
 		A1B2C3D403000002 /* QuickMD */ = {
@@ -157,6 +204,9 @@
 				A1B2C3D400000008 /* MarkdownTheme.swift */,
 				A1B2C3D40000000D /* MarkdownBlock.swift */,
 				A1B2C3D40000000E /* MarkdownBlockParser.swift */,
+				A1B2C3D40000003D /* SectionExtractor.swift */,
+				A1B2C3D40000003E /* DocumentSearch.swift */,
+				A1B2C3D40000003F /* WindowTabbing.swift */,
 				A1B2C3D403000004 /* Views */,
 				A1B2C3D403000005 /* SwiftMath */,
 				A1B2C3D403000007 /* Resources */,
@@ -188,6 +238,7 @@
 				A1B2C3D400000039 /* InlineMathTextView.swift */,
 				A1B2C3D400000019 /* MermaidBlockView.swift */,
 				A1B2C3D40000003C /* RecentDocumentsSidebar.swift */,
+				A1B2C3D400000040 /* ChromeButtons.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -249,6 +300,7 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D400000010 /* QuickMD.app */,
+				A1B2C3D400000041 /* QuickMDTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -273,6 +325,22 @@
 			productReference = A1B2C3D400000010 /* QuickMD.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A1B2C3D404000002 /* QuickMDTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1B2C3D405000004 /* Build configuration list for PBXNativeTarget "QuickMDTests" */;
+			buildPhases = (
+				A1B2C3D402000004 /* Sources */,
+				A1B2C3D402000005 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = QuickMDTests;
+			productName = QuickMDTests;
+			productReference = A1B2C3D400000041 /* QuickMDTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -284,6 +352,9 @@
 				LastUpgradeCheck = 2600;
 				TargetAttributes = {
 					A1B2C3D404000001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+					A1B2C3D404000002 = {
 						CreatedOnToolsVersion = 15.0;
 					};
 				};
@@ -302,6 +373,7 @@
 			projectRoot = "";
 			targets = (
 				A1B2C3D404000001 /* QuickMD */,
+				A1B2C3D404000002 /* QuickMDTests */,
 			);
 		};
 /* End PBXProject section */
@@ -377,6 +449,30 @@
 				A1B2C3D401000036 /* CustomThemeStore.swift in Sources */,
 				A1B2C3D401000037 /* RecentDocumentsStore.swift in Sources */,
 				A1B2C3D401000038 /* RecentDocumentsSidebar.swift in Sources */,
+				A1B2C3D401000039 /* SectionExtractor.swift in Sources */,
+				A1B2C3D40100003A /* DocumentSearch.swift in Sources */,
+				A1B2C3D40100003B /* WindowTabbing.swift in Sources */,
+				A1B2C3D40100003C /* ChromeButtons.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1B2C3D402000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D40100003D /* ParserTests.swift in Sources */,
+				A1B2C3D40100003E /* RendererTests.swift in Sources */,
+				A1B2C3D40100003F /* SectionExtractorTests.swift in Sources */,
+				A1B2C3D401000040 /* DocumentAndThemeTests.swift in Sources */,
+				A1B2C3D401000041 /* SearchTests.swift in Sources */,
+				A1B2C3D401000042 /* MarkdownBlockParser.swift in Sources (Tests) */,
+				A1B2C3D401000043 /* MarkdownRenderer.swift in Sources (Tests) */,
+				A1B2C3D401000044 /* MarkdownTheme.swift in Sources (Tests) */,
+				A1B2C3D401000045 /* MarkdownBlock.swift in Sources (Tests) */,
+				A1B2C3D401000046 /* CustomThemeStore.swift in Sources (Tests) */,
+				A1B2C3D401000047 /* MarkdownDocument.swift in Sources (Tests) */,
+				A1B2C3D401000048 /* SectionExtractor.swift in Sources (Tests) */,
+				A1B2C3D401000049 /* DocumentSearch.swift in Sources (Tests) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -545,7 +641,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 5.9;
 			};
 			name = Debug;
 		};
@@ -589,7 +685,37 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+		A1B2C3D407000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = pl.falami.studio.QuickMDTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+		A1B2C3D407000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = pl.falami.studio.QuickMDTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.9;
 			};
 			name = Release;
 		};
@@ -610,6 +736,15 @@
 			buildConfigurations = (
 				A1B2C3D407000003 /* Debug */,
 				A1B2C3D407000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1B2C3D405000004 /* Build configuration list for PBXNativeTarget "QuickMDTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D407000005 /* Debug */,
+				A1B2C3D407000006 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -11,74 +11,8 @@ private let viewLog = Logger(subsystem: "pl.falami.studio.QuickMD", category: "M
 private let viewSignpost = OSSignposter(subsystem: "pl.falami.studio.QuickMD", category: "MarkdownView")
 #endif
 
-// MARK: - Shared Search Highlighting
-
-/// Applies search term highlighting to an AttributedString.
-/// `focusedOccurrence` = which occurrence (0-based) in this text gets orange.
-/// `nil` means no occurrence is focused — all matches get yellow.
-func searchHighlight(_ attributed: AttributedString, term: String, focusedOccurrence: Int? = nil) -> AttributedString {
-    guard !term.isEmpty else { return attributed }
-    let plainText = String(attributed.characters)
-    let textLower = plainText.lowercased()
-    let searchLower = term.lowercased()
-
-    // Find all match ranges in the lowercased text
-    var matchRanges: [(lowerBound: String.Index, upperBound: String.Index)] = []
-    var searchStart = textLower.startIndex
-    while let range = textLower.range(of: searchLower, range: searchStart..<textLower.endIndex) {
-        matchRanges.append((range.lowerBound, range.upperBound))
-        searchStart = range.upperBound
-    }
-    guard !matchRanges.isEmpty else { return attributed }
-
-    // Convert String ranges → AttributedString ranges via single-pass parallel iteration
-    var result = attributed
-    var sIdx = plainText.startIndex
-    var aIdx = result.startIndex
-    for (matchIndex, matchRange) in matchRanges.enumerated() {
-        while sIdx < matchRange.lowerBound {
-            sIdx = plainText.index(after: sIdx)
-            aIdx = result.characters.index(after: aIdx)
-        }
-        let attrStart = aIdx
-        while sIdx < matchRange.upperBound {
-            sIdx = plainText.index(after: sIdx)
-            aIdx = result.characters.index(after: aIdx)
-        }
-        let color = (focusedOccurrence == matchIndex) ? Color.orange : Color.yellow.opacity(0.55)
-        result[attrStart..<aIdx].backgroundColor = color
-    }
-    return result
-}
-
-/// Count occurrences of `term` in `text` (case-insensitive)
-func countOccurrences(in text: String, of term: String) -> Int {
-    guard !term.isEmpty else { return 0 }
-    let textLower = text.lowercased()
-    let termLower = term.lowercased()
-    var count = 0
-    var start = textLower.startIndex
-    while let range = textLower.range(of: termLower, range: start..<textLower.endIndex) {
-        count += 1
-        start = range.upperBound
-    }
-    return count
-}
-
-// MARK: - Parser Output
-
-/// Per-text-block precomputed metadata. Built on the parser's background thread so
-/// the main thread doesn't have to do `String(attr.characters)` + regex per render.
-struct TextBlockMeta: Sendable {
-    let plain: String
-    let hasInlineMath: Bool
-}
-
-/// Bundle of parser results so the background-detached parse returns one value.
-struct ParsedDocument: Sendable {
-    let blocks: [MarkdownBlock]
-    let textMeta: [String: TextBlockMeta]
-}
+// Search highlighting helpers + TextBlockMeta/ParsedDocument live in
+// DocumentSearch.swift; section copy logic lives in SectionExtractor.swift.
 
 // MARK: - Main View
 
@@ -115,6 +49,9 @@ struct MarkdownView: View {
     @State private var baseHighlightCache: [String: AttributedString] = [:]
     /// Debounce so that rapid typing in the search bar coalesces into a single recompute
     @State private var searchDebounce: DispatchWorkItem?
+    /// Monotonic token so stale background search results are dropped (the user
+    /// may have typed again while a previous computation was still running).
+    @State private var searchGeneration: Int = 0
     @AppStorage("selectedTheme") private var selectedThemeName: String = "Auto"
 
     /// Resolved theme from user selection + system color scheme
@@ -143,7 +80,7 @@ struct MarkdownView: View {
                 TableOfContentsView(headings: headings, onSelect: { targetId in
                     tocScrollTarget = targetId
                 }, onCopy: { entry in
-                    if let section = extractSection(from: document.text, entry: entry) {
+                    if let section = SectionExtractor.extractSection(from: document.text, entry: entry, headings: headings) {
                         copyToClipboard(section)
                     }
                 })
@@ -319,8 +256,8 @@ struct MarkdownView: View {
             cachedBlocks = parsed.blocks
             textBlockMeta = parsed.textMeta
             headings = parsed.blocks.compactMap { block in
-                if case .heading(let level, let title) = block.content {
-                    return ToCEntry(id: block.id, level: level, title: title)
+                if case .heading(let level, let title, let sourceLine) = block.content {
+                    return ToCEntry(id: block.id, level: level, title: title, sourceLine: sourceLine)
                 }
                 return nil
             }
@@ -431,7 +368,7 @@ struct MarkdownView: View {
                                searchText: searchText, focusedOccurrence: focusedOcc)
                     .padding(.vertical, 4)
 
-            case .heading(let level, let title):
+            case .heading(let level, let title, _):
                 HeadingBlockView(
                     id: block.id,
                     level: level,
@@ -441,7 +378,7 @@ struct MarkdownView: View {
                     focusedOccurrence: focusedOcc,
                     onCopySection: {
                         if let entry = headings.first(where: { $0.id == block.id }),
-                           let section = extractSection(from: document.text, entry: entry) {
+                           let section = SectionExtractor.extractSection(from: document.text, entry: entry, headings: headings) {
                             copyToClipboard(section)
                         }
                     }
@@ -477,82 +414,6 @@ struct MarkdownView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             withAnimation(.easeOut(duration: 0.3)) { showCopiedToast = false }
         }
-    }
-
-    /// Extract a section from raw markdown: from the given heading to the next heading of same or higher level
-    private func extractSection(from text: String, entry: ToCEntry) -> String? {
-        guard let entryIndex = headings.firstIndex(where: { $0.id == entry.id }) else { return nil }
-
-        let lines = text.components(separatedBy: "\n")
-        var headingCount = 0
-        var startLine: Int?
-        let targetLevel = entry.level
-
-        // Occurrence index: how many headings we've seen before this entry
-        let targetOccurrence = entryIndex
-
-        for (i, line) in lines.enumerated() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-
-            // Detect ATX headings: # through ######
-            if let match = trimmed.range(of: #"^#{1,6}\s+"#, options: .regularExpression) {
-                let hashes = trimmed[match].trimmingCharacters(in: .whitespaces)
-                let level = hashes.count
-
-                if let start = startLine {
-                    // We're inside the target section — check if this heading ends it
-                    if level <= targetLevel {
-                        // Found a same-or-higher level heading — extract up to here
-                        return trimTrailingBlankLines(Array(lines[start..<i]))
-                    }
-                } else if headingCount == targetOccurrence {
-                    // Check level matches (it should, since we're tracking the same headings list)
-                    if level == targetLevel {
-                        startLine = i
-                    }
-                }
-
-                headingCount += 1
-                continue
-            }
-
-            // Detect setext headings: === (H1) or --- (H2), only if previous line is non-empty
-            if i > 0 && !lines[i - 1].trimmingCharacters(in: .whitespaces).isEmpty {
-                if trimmed.allSatisfy({ $0 == "=" }) && trimmed.count >= 3 {
-                    let level = 1
-                    if let start = startLine, level <= targetLevel {
-                        return trimTrailingBlankLines(Array(lines[start..<(i - 1)]))
-                    } else if startLine == nil && headingCount == targetOccurrence && level == targetLevel {
-                        startLine = i - 1
-                    }
-                    headingCount += 1
-                } else if trimmed.allSatisfy({ $0 == "-" }) && trimmed.count >= 3 {
-                    let level = 2
-                    if let start = startLine, level <= targetLevel {
-                        return trimTrailingBlankLines(Array(lines[start..<(i - 1)]))
-                    } else if startLine == nil && headingCount == targetOccurrence && level == targetLevel {
-                        startLine = i - 1
-                    }
-                    headingCount += 1
-                }
-            }
-        }
-
-        // If we started but never hit an ending heading, take everything to end of file
-        if let start = startLine {
-            let sectionLines = Array(lines[start...])
-            return trimTrailingBlankLines(Array(sectionLines))
-        }
-
-        return nil
-    }
-
-    private func trimTrailingBlankLines(_ lines: [String]) -> String {
-        var result = lines
-        while let last = result.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
-            result.removeLast()
-        }
-        return result.joined(separator: "\n")
     }
 
     private func scrollToCurrentMatch(proxy: ScrollViewProxy) {
@@ -596,6 +457,7 @@ struct MarkdownView: View {
     }
 
     private func updateMatchResults(for term: String) {
+        searchGeneration += 1
         guard !term.isEmpty else {
             matchBlockIds = []
             currentMatchIndex = 0
@@ -605,65 +467,53 @@ struct MarkdownView: View {
             return
         }
 
-        let searchLower = term.lowercased()
-        var matches: [String] = []
-        var highlights: [String: AttributedString] = [:]
-
-        for block in cachedBlocks {
-            // Collect all text segments for this block (per-cell for tables, per-line for blockquotes)
-            let segments: [String]
-            switch block.content {
-            case .text(let attr):
-                segments = [String(attr.characters)]
-                // Pre-compute yellow (base) highlight for text blocks
-                let highlighted = searchHighlight(attr, term: term)
-                highlights[block.id] = highlighted
-            case .table(let headers, let rows, _):
-                segments = headers + rows.flatMap { $0 }
-            case .codeBlock(let code, _):
-                segments = [code]
-            case .blockquote(let content, _):
-                segments = [content]
-            case .image(_, let alt):
-                segments = [alt]
-            case .heading(_, let title):
-                segments = [title]
-            case .mathBlock(let latex):
-                segments = [latex]
-            case .mermaidDiagram(let source):
-                segments = [source]
-            }
-
-            // Count individual occurrences across all segments
-            for segment in segments {
-                let textLower = segment.lowercased()
-                var searchStart = textLower.startIndex
-                while let range = textLower.range(of: searchLower, range: searchStart..<textLower.endIndex) {
-                    matches.append(block.id)
-                    searchStart = range.upperBound
+        // Match computation walks every block and rebuilds per-block highlight
+        // AttributedStrings — too heavy for the main thread on 10K-line docs.
+        // Run it detached and drop the result if the term changed meanwhile.
+        let generation = searchGeneration
+        let blocks = cachedBlocks
+        Task.detached(priority: .userInitiated) {
+            let results = DocumentSearch.computeMatches(in: blocks, term: term)
+            await MainActor.run {
+                guard generation == searchGeneration else { return }
+                baseHighlightCache = results.baseHighlights
+                matchBlockIds = results.matchBlockIds
+                currentMatchIndex = 0
+                updateFocusState()
+                if !results.matchBlockIds.isEmpty {
+                    scrollTrigger += 1
                 }
             }
-        }
-
-        baseHighlightCache = highlights
-        matchBlockIds = matches
-        currentMatchIndex = 0
-        updateFocusState()
-        if !matches.isEmpty {
-            scrollTrigger += 1
         }
     }
 
     private func handleLinkActivation(_ url: URL) {
-        // If it's a web link, open it normally
-        if url.scheme == "http" || url.scheme == "https" {
+        // Web and mail links open normally
+        switch url.scheme?.lowercased() {
+        case "http", "https", "mailto":
             NSWorkspace.shared.open(url)
             return
+        case nil, "file":
+            break  // resolved against the document directory below
+        case .some(let scheme):
+            // Any other scheme (shortcuts:, ssh:, vnc:, …) launches whatever app
+            // registered it. Documents are untrusted input — confirm before
+            // handing control to another application.
+            let alert = NSAlert()
+            alert.messageText = "Open \u{201C}\(scheme):\u{201D} link?"
+            alert.informativeText = "This link opens another application:\n\(url.absoluteString)"
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Open")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn {
+                NSWorkspace.shared.open(url)
+            }
+            return
         }
-        
+
         // If it's a relative path or lacks a scheme, resolve it against the current document's directory
         var finalURL = url
-        if url.scheme == nil || url.scheme == "file", let documentURL = documentURL {
+        if let documentURL = documentURL {
             let documentDir = documentURL.deletingLastPathComponent()
             // If the URL has an absolute path but no scheme (rare in this context, but possible)
             if url.path.hasPrefix("/") {
@@ -673,7 +523,7 @@ struct MarkdownView: View {
                 finalURL = documentDir.appendingPathComponent(url.path)
             }
         }
-        
+
         // Open the resolved file URL
         let ext = finalURL.pathExtension.lowercased()
         if ext == "md" || ext == "markdown" || ext == "mdown" || ext == "mkd" {
@@ -688,242 +538,6 @@ struct MarkdownView: View {
     }
 
 }
-
-// MARK: - Window Configurator
-
-/// Bridges into AppKit to configure the host NSWindow once it's available.
-/// Used to opt every document window into native macOS tabbing — we set the
-/// shared `tabbingIdentifier` and, if another QuickMD doc window is already
-/// visible, programmatically merge the new window as a tab.
-///
-/// We can't rely on AppKit's auto-tabbing (controlled by the system-wide
-/// "Prefer tabs" pref) because we want consistent tab UX regardless of user
-/// settings. `addTabbedWindow` is the explicit override.
-private struct WindowConfigurator: NSViewRepresentable {
-    let configure: (NSWindow) -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        let view = TabAwareView()
-        view.onWindowAttached = { window in
-            configure(window)
-            mergeIntoExistingTabIfPossible(window: window)
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
-
-    private func mergeIntoExistingTabIfPossible(window newWindow: NSWindow) {
-        // Find another visible QuickMD document window already on screen and
-        // merge the new window into its tab group.
-        guard let identifier = newWindow.tabbingIdentifier as String?,
-              !identifier.isEmpty else { return }
-
-        let candidates = NSApp.windows.filter { other in
-            other !== newWindow
-                && other.isVisible
-                && other.tabbingIdentifier == newWindow.tabbingIdentifier
-                && other.tabGroup !== newWindow.tabGroup  // not already grouped
-        }
-        guard let host = candidates.first else { return }
-        host.addTabbedWindow(newWindow, ordered: .above)
-        newWindow.makeKeyAndOrderFront(nil)
-    }
-}
-
-/// NSView subclass that fires `onWindowAttached` exactly once, when the host
-/// NSWindow becomes available via `viewDidMoveToWindow`. More reliable than
-/// `DispatchQueue.main.async` polling.
-private final class TabAwareView: NSView {
-    var onWindowAttached: ((NSWindow) -> Void)?
-    private var fired = false
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard !fired, let window = self.window else { return }
-        fired = true
-        onWindowAttached?(window)
-    }
-}
-
-// MARK: - Heading Block View (hover-to-copy section)
-
-/// Heading with hover-to-reveal copy button that copies the section.
-/// The copy icon is always in the layout (opacity-controlled) to avoid
-/// view insertion/removal churn during fast scrolling in LazyVStack.
-private struct HeadingBlockView: View {
-    let id: String
-    let level: Int
-    let title: String
-    let theme: MarkdownTheme
-    let searchText: String
-    let focusedOccurrence: Int?
-    let onCopySection: () -> Void
-    @State private var isHovered = false
-    @State private var hideWorkItem: DispatchWorkItem?
-
-    var body: some View {
-        let headingAttr = MarkdownRenderer(theme: theme).renderHeader(title, level: level)
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            if searchText.isEmpty {
-                Text(headingAttr)
-                    .textSelection(.enabled)
-            } else {
-                Text(searchHighlight(headingAttr, term: searchText, focusedOccurrence: focusedOccurrence))
-                    .textSelection(.enabled)
-            }
-
-            Button {
-                onCopySection()
-            } label: {
-                Image(systemName: "doc.on.doc")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary.opacity(0.7))
-                    .padding(4)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Copy section")
-            .opacity(isHovered ? 1 : 0)
-        }
-        .contentShape(Rectangle())
-        .onHover { hovering in
-            hideWorkItem?.cancel()
-            if hovering {
-                isHovered = true
-            } else {
-                let work = DispatchWorkItem { isHovered = false }
-                hideWorkItem = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
-            }
-        }
-    }
-}
-
-// MARK: - Copy Source Button
-
-/// Subtle top-right button to copy the entire raw markdown
-private struct CopySourceButton: View {
-    let theme: MarkdownTheme
-    let action: () -> Void
-    @State private var isHovered = false
-
-    var body: some View {
-        Button {
-            action()
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "doc.on.doc")
-                    .font(.system(size: 11))
-                if isHovered {
-                    Text("Copy source")
-                        .font(.system(size: 11, weight: .medium))
-                }
-            }
-            .padding(.horizontal, isHovered ? 10 : 6)
-            .padding(.vertical, 4)
-            .background(theme.codeBackgroundColor.opacity(isHovered ? 0.9 : 0.6))
-            .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .focusable(false)
-        .foregroundColor(.secondary)
-        .opacity(isHovered ? 1.0 : 0.5)
-        .animation(.easeInOut(duration: 0.2), value: isHovered)
-        .onHover { hovering in
-            isHovered = hovering
-        }
-        .help("Copy source")
-    }
-}
-
-// MARK: - Tip Jar Button (App Store version)
-
-#if APPSTORE
-struct TipJarButton: View {
-    let theme: MarkdownTheme
-    @Environment(\.openWindow) private var openWindow
-    @State private var isHovered = false
-
-    var body: some View {
-        Button {
-            openWindow(id: "tip-jar")
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "heart.fill")
-                    .font(.system(size: 11))
-                if isHovered {
-                    Text("Tip Jar")
-                        .font(.system(size: 11, weight: .medium))
-                }
-            }
-            .padding(.horizontal, isHovered ? 10 : 6)
-            .padding(.vertical, 4)
-            .background(theme.codeBackgroundColor.opacity(isHovered ? 0.9 : 0.6))
-            .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .focusable(false)
-        .foregroundColor(.pink)
-        .opacity(isHovered ? 1.0 : 0.5)
-        .animation(.easeInOut(duration: 0.2), value: isHovered)
-        .onHover { hovering in
-            isHovered = hovering
-        }
-        .help("Support QuickMD")
-    }
-}
-#endif
-
-// MARK: - Support Button (GitHub version)
-
-#if !APPSTORE
-struct SupportButton: View {
-    let theme: MarkdownTheme
-    @State private var isHovered = false
-
-    var body: some View {
-        Menu {
-            Button {
-                NSWorkspace.shared.open(AppURLs.website)
-            } label: {
-                Label("Visit qmd.app", systemImage: "globe")
-            }
-            Divider()
-            Button {
-                NSWorkspace.shared.open(AppURLs.buyMeCoffee)
-            } label: {
-                Label("Buy Me a Coffee", systemImage: "cup.and.saucer.fill")
-            }
-            Button {
-                NSWorkspace.shared.open(AppURLs.kofi)
-            } label: {
-                Label("Ko-fi", systemImage: "heart.fill")
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text("☕")
-                    .font(.system(size: 12))
-                if isHovered {
-                    Text("Support")
-                        .font(.system(size: 11, weight: .medium))
-                }
-            }
-            .padding(.horizontal, isHovered ? 10 : 6)
-            .padding(.vertical, 4)
-            .background(theme.codeBackgroundColor.opacity(isHovered ? 0.9 : 0.6))
-            .clipShape(Capsule())
-        }
-        .menuStyle(.button)
-        .opacity(isHovered ? 1.0 : 0.5)
-        .animation(.easeInOut(duration: 0.2), value: isHovered)
-        .onHover { hovering in
-            isHovered = hovering
-        }
-        .help("Support QuickMD development")
-    }
-}
-#endif
 
 // MARK: - Preview
 

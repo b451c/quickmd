@@ -145,6 +145,10 @@ struct TipJarMenuButton: View {
 #if !APPSTORE
 struct UpdateMenuButton: View {
     @State private var latestVersion: String?
+    /// Transient status shown after a check that found no update (or failed) —
+    /// previously the menu item silently stayed "Check for Updates…" and the
+    /// click looked like it did nothing.
+    @State private var statusText: String?
 
     private var currentVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
@@ -160,6 +164,9 @@ struct UpdateMenuButton: View {
             Button("Update Available — v\(latest)") {
                 NSWorkspace.shared.open(AppURLs.latestRelease)
             }
+        } else if let status = statusText {
+            Button(status) {}
+                .disabled(true)
         } else {
             Button("Check for Updates…") {
                 Task { await checkForUpdate() }
@@ -168,13 +175,17 @@ struct UpdateMenuButton: View {
     }
 
     private func checkForUpdate() async {
-        latestVersion = await UpdateChecker.fetchLatestVersion()
-        // If already up to date, briefly show confirmation then reset
-        if !updateAvailable {
-            latestVersion = currentVersion
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            latestVersion = nil
+        let fetched = await UpdateChecker.fetchLatestVersion()
+        latestVersion = fetched
+        if fetched == nil {
+            statusText = "Update check failed — try again later"
+        } else if !updateAvailable {
+            statusText = "You're up to date (v\(currentVersion))"
+        } else {
+            return
         }
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        statusText = nil
     }
 }
 

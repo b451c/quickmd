@@ -34,12 +34,40 @@ struct MarkdownBlockParser: Sendable {
         var blockIndex = 0  // Stable index for block identity
         let allLines = markdown.components(separatedBy: "\n")
 
+        // YAML frontmatter (Jekyll/Hugo/Obsidian convention): a "---" fence on
+        // the VERY FIRST line, closed by "---" or "...". Rendered as a neutral
+        // yaml code block. Without this, the setext-H2 rule would promote the
+        // first frontmatter key to a giant heading.
+        var firstContentLine = 0
+        if allLines.first?.trimmingCharacters(in: .whitespaces) == "---" {
+            var closingIndex: Int?
+            var j = 1
+            while j < allLines.count {
+                let t = allLines[j].trimmingCharacters(in: .whitespaces)
+                if t == "---" || t == "..." { closingIndex = j; break }
+                j += 1
+            }
+            if let closingIndex {
+                let yaml = allLines[1..<closingIndex].joined(separator: "\n")
+                if !yaml.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    blocks.append(.codeBlock(index: blockIndex, code: yaml, language: "yaml"))
+                    blockIndex += 1
+                }
+                firstContentLine = closingIndex + 1
+            }
+        }
+
         // Pre-pass: collect reference link definitions and footnote definitions, filter them out
         var referenceDefinitions: [String: String] = [:]
         var footnoteDefinitions: [(id: String, content: String)] = []
         var footnoteIds: [String] = [] // ordered by first appearance
         var lines: [String] = []
-        for line in allLines {
+        // Maps index in the filtered `lines` back to the index in `allLines`.
+        // Headings carry the original line number so section copy can slice the
+        // raw text without re-detecting headings itself.
+        var lineMap: [Int] = []
+        for originalIndex in firstContentLine..<allLines.count {
+            let line = allLines[originalIndex]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             let nsRange = NSRange(trimmed.startIndex..., in: trimmed)
             // Footnote definitions must be checked BEFORE reference links
@@ -57,6 +85,7 @@ struct MarkdownBlockParser: Sendable {
                 referenceDefinitions[String(trimmed[idRange]).lowercased()] = String(trimmed[urlRange])
             } else {
                 lines.append(line)
+                lineMap.append(originalIndex)
             }
         }
 
@@ -158,7 +187,7 @@ struct MarkdownBlockParser: Sendable {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
                 let level = min(max(line[hashRange].count, 1), 6)
                 let title = String(line[contentRange]).trimmingCharacters(in: .whitespaces)
-                blocks.append(.heading(index: blockIndex, level: level, title: title))
+                blocks.append(.heading(index: blockIndex, level: level, title: title, sourceLine: lineMap[i]))
                 blockIndex += 1
                 i += 1
                 continue
@@ -180,16 +209,21 @@ struct MarkdownBlockParser: Sendable {
 
                 if nextLine.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
-                    blocks.append(.heading(index: blockIndex, level: 1, title: trimmed))
+                    blocks.append(.heading(index: blockIndex, level: 1, title: trimmed, sourceLine: lineMap[i]))
                     blockIndex += 1
                     i += 2
                     continue
                 }
 
-                if nextLine.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil &&
-                   !isTableSeparator(nextLine) {
+                // NOTE: no `!isTableSeparator(nextLine)` guard here — a line of
+                // pure dashes ALWAYS matches the table-separator pattern (pipes
+                // are optional in it), which made this branch unreachable and
+                // silently disabled setext H2 for years. A pipe-bearing table
+                // separator can't match setextH2Pattern anyway, so the guard
+                // added nothing. (Caught by ParserTests.testSetextHeadings.)
+                if nextLine.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
-                    blocks.append(.heading(index: blockIndex, level: 2, title: trimmed))
+                    blocks.append(.heading(index: blockIndex, level: 2, title: trimmed, sourceLine: lineMap[i]))
                     blockIndex += 1
                     i += 2
                     continue

@@ -48,7 +48,12 @@ struct CodeBlockView: View {
     }
 
     var body: some View {
-        let attributed = (cacheKey == cachedKey ? cachedAttributed : nil) ?? computeHighlightedAttributedString()
+        // Show the cached highlighted string when valid; otherwise fall back to
+        // a cheap plain-attributed version until `.task(id:)` finishes. The
+        // highlight (5 regex passes) is NEVER computed synchronously in body —
+        // the eager VStack renders every block on document open, and per-block
+        // main-thread regex work was a measurable share of large-doc open time.
+        let attributed = (cacheKey == cachedKey ? cachedAttributed : nil) ?? Self.plainAttributedString(code: code, theme: theme)
 
         return VStack(alignment: .leading, spacing: 0) {
             if !language.isEmpty {
@@ -74,27 +79,34 @@ struct CodeBlockView: View {
         .background(theme.codeBackgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .task(id: cacheKey) {
-            // Compute (or recompute on theme/code change) on the main actor — the
-            // work is cheap for typical blocks but cached so this runs once per
-            // (code, theme) tuple, not per body eval.
+            // Compute (or recompute on theme/code change) off the main thread,
+            // once per (code, theme) tuple — not per body eval.
             let key = cacheKey
-            let attr = computeHighlightedAttributedString()
-            cachedAttributed = attr
+            let code = self.code
+            let theme = self.theme
+            let boxed = await Task.detached(priority: .userInitiated) {
+                SendableAttributedString(value: Self.computeHighlightedAttributedString(code: code, theme: theme))
+            }.value
+            cachedAttributed = boxed.value
             cachedKey = key
         }
     }
 
-    // MARK: - Static Regex Patterns (compiled once, reused)
+    // MARK: - Attributed String Construction
 
-    private static let commentRegex = try! NSRegularExpression(pattern: #"(//.*|#.*|--.*)"#)
-    private static let stringRegex = try! NSRegularExpression(pattern: #"\"[^\"]*\"|'[^']*'"#)
-    private static let numberRegex = try! NSRegularExpression(pattern: #"\b\d+\.?\d*\b"#)
-    private static let keywordRegex = try! NSRegularExpression(pattern: #"\b(func|function|def|class|struct|enum|let|var|const|if|else|for|while|return|import|from|pub|fn|async|await|try|catch|throw|new|self|this|nil|null|true|false|None|True|False)\b"#)
-    private static let typeRegex = try! NSRegularExpression(pattern: #"\b[A-Z][a-zA-Z0-9]*\b"#)
+    /// Base font + text color only — cheap enough for body while the real
+    /// highlight is being computed in the background task.
+    nonisolated static func plainAttributedString(code: String, theme: MarkdownTheme) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: code)
+        let fullRange = NSRange(location: 0, length: (code as NSString).length)
+        result.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), range: fullRange)
+        result.addAttribute(.foregroundColor, value: NSColor(theme.textColor), range: fullRange)
+        return result
+    }
 
-    // MARK: - Highlighted NSAttributedString
-
-    private func computeHighlightedAttributedString() -> NSAttributedString {
+    /// Full syntax highlight. Static + nonisolated so the detached task can run
+    /// it off the main actor, capturing plain values (code + theme), not the view.
+    nonisolated static func computeHighlightedAttributedString(code: String, theme: MarkdownTheme) -> NSAttributedString {
         #if DEBUG
         let signpostID = codeSignpost.makeSignpostID()
         let state = codeSignpost.beginInterval("compute", id: signpostID, "lines=\(code.split(separator: "\n").count)")
@@ -108,31 +120,50 @@ struct CodeBlockView: View {
         result.addAttribute(.font, value: baseFont, range: fullRange)
         result.addAttribute(.foregroundColor, value: NSColor(theme.textColor), range: fullRange)
 
-        var coloredRanges: [NSRange] = []
+        // IndexSet keeps overlap checks O(log n) per match; the previous
+        // array-of-ranges scan was quadratic on match-heavy blocks.
+        var colored = IndexSet()
 
         func apply(regex: NSRegularExpression, color: Color) {
             let nsColor = NSColor(color)
             for match in regex.matches(in: code, range: fullRange) {
-                let range = match.range
-                let overlaps = coloredRanges.contains { $0.intersection(range) != nil }
-                guard !overlaps else { continue }
-                result.addAttribute(.foregroundColor, value: nsColor, range: range)
-                coloredRanges.append(range)
+                guard let range = Range(match.range), !range.isEmpty else { continue }
+                guard !colored.intersects(integersIn: range) else { continue }
+                result.addAttribute(.foregroundColor, value: nsColor, range: match.range)
+                colored.insert(integersIn: range)
             }
         }
 
         // Same priority as v1.4: strings > comments > others
-        apply(regex: Self.stringRegex, color: theme.stringColor)
-        apply(regex: Self.commentRegex, color: theme.commentColor)
-        apply(regex: Self.numberRegex, color: theme.numberColor)
-        apply(regex: Self.keywordRegex, color: theme.keywordColor)
-        apply(regex: Self.typeRegex, color: theme.typeColor)
+        apply(regex: CodeHighlightRegex.string, color: theme.stringColor)
+        apply(regex: CodeHighlightRegex.comment, color: theme.commentColor)
+        apply(regex: CodeHighlightRegex.number, color: theme.numberColor)
+        apply(regex: CodeHighlightRegex.keyword, color: theme.keywordColor)
+        apply(regex: CodeHighlightRegex.type, color: theme.typeColor)
 
         #if DEBUG
-        codeLog.debug("compute: \(code.count) chars, \(coloredRanges.count) ranges, theme=\(theme.name, privacy: .public)")
+        codeLog.debug("compute: \(code.count) chars, \(colored.rangeView.count) ranges, theme=\(theme.name, privacy: .public)")
         #endif
         return result
     }
+}
+
+/// Transfer box for a freshly built, no-longer-mutated NSAttributedString
+/// crossing from the highlight task back to the main actor. Single ownership
+/// hand-off — safe despite NSAttributedString not being Sendable.
+private struct SendableAttributedString: @unchecked Sendable {
+    let value: NSAttributedString
+}
+
+// MARK: - Static Regex Patterns (compiled once, reused)
+// File-scope (not members of the View struct) so they are not swept into the
+// View's implicit @MainActor isolation — the highlight runs on a background task.
+private enum CodeHighlightRegex {
+    static let comment = try! NSRegularExpression(pattern: #"(//.*|#.*|--.*)"#)
+    static let string = try! NSRegularExpression(pattern: #"\"[^\"]*\"|'[^']*'"#)
+    static let number = try! NSRegularExpression(pattern: #"\b\d+\.?\d*\b"#)
+    static let keyword = try! NSRegularExpression(pattern: #"\b(func|function|def|class|struct|enum|let|var|const|if|else|for|while|return|import|from|pub|fn|async|await|try|catch|throw|new|self|this|nil|null|true|false|None|True|False)\b"#)
+    static let type = try! NSRegularExpression(pattern: #"\b[A-Z][a-zA-Z0-9]*\b"#)
 }
 
 // MARK: - NSTextView Wrapper
@@ -306,18 +337,5 @@ final class SelfSizingTextView: NSTextView {
             lastReportedHeight = h
             heightCallback?(h)
         }
-    }
-}
-
-// MARK: - NSRange Helpers
-
-private extension NSRange {
-    func intersection(_ other: NSRange) -> NSRange? {
-        let start = max(location, other.location)
-        let end = min(location + length, other.location + other.length)
-        if start < end {
-            return NSRange(location: start, length: end - start)
-        }
-        return nil
     }
 }

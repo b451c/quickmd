@@ -75,7 +75,12 @@ final class CustomThemeStore: ObservableObject {
                 do {
                     let data = try Data(contentsOf: url)
                     let dto = try decoder.decode(CustomThemeDTO.self, from: data)
-                    loaded.append(dto.toTheme())
+                    if let problem = dto.validationError {
+                        errors.append("\(url.lastPathComponent): \(problem)")
+                        logger.warning("Rejected theme \(url.lastPathComponent, privacy: .public): \(problem, privacy: .public)")
+                    } else {
+                        loaded.append(dto.toTheme())
+                    }
                 } catch {
                     let name = url.lastPathComponent
                     errors.append("\(name): \(error.localizedDescription)")
@@ -109,7 +114,18 @@ final class CustomThemeStore: ObservableObject {
 
         do {
             let data = try Data(contentsOf: sourceURL)
-            _ = try JSONDecoder().decode(CustomThemeDTO.self, from: data)
+            let dto = try JSONDecoder().decode(CustomThemeDTO.self, from: data)
+            if let problem = dto.validationError {
+                let message = "Import failed: \(problem)"
+                DispatchQueue.main.async {
+                    self.lock.lock()
+                    self._lastError = message
+                    self.lock.unlock()
+                    self.objectWillChange.send()
+                }
+                logger.error("Theme import rejected: \(problem, privacy: .public)")
+                return false
+            }
 
             if FileManager.default.fileExists(atPath: destination.path) {
                 try FileManager.default.removeItem(at: destination)
@@ -165,7 +181,8 @@ final class CustomThemeStore: ObservableObject {
 // MARK: - JSON DTO
 
 /// Disk format for a custom theme. All colors are hex strings (6 or 8 chars, optional `#`).
-private struct CustomThemeDTO: Decodable {
+/// Internal (not private) so unit tests can exercise decoding + validation.
+struct CustomThemeDTO: Decodable {
     let name: String
     let isDark: Bool
     let textColor: String
@@ -182,6 +199,37 @@ private struct CustomThemeDTO: Decodable {
     let numberColor: String
     let typeColor: String
     let checkboxColor: String
+
+    /// Field-level validation beyond JSON decoding. Without it, a typo'd hex
+    /// value silently became black via `Color(hex:)` (often black-on-black),
+    /// and a name colliding with a built-in theme was silently unselectable
+    /// (built-ins win in `MarkdownTheme.theme(named:)`).
+    var validationError: String? {
+        if name == ThemeName.auto || ThemeName.allBuiltIn.contains(name) {
+            return "theme name \u{201C}\(name)\u{201D} collides with a built-in theme — rename it"
+        }
+        let colors: [(field: String, value: String)] = [
+            ("textColor", textColor), ("secondaryTextColor", secondaryTextColor),
+            ("linkColor", linkColor), ("blockquoteColor", blockquoteColor),
+            ("backgroundColor", backgroundColor), ("codeBackgroundColor", codeBackgroundColor),
+            ("headerBackgroundColor", headerBackgroundColor), ("borderColor", borderColor),
+            ("keywordColor", keywordColor), ("stringColor", stringColor),
+            ("commentColor", commentColor), ("numberColor", numberColor),
+            ("typeColor", typeColor), ("checkboxColor", checkboxColor),
+        ]
+        let bad = colors.filter { !Self.isValidHexColor($0.value) }.map(\.field)
+        guard bad.isEmpty else {
+            return "invalid hex color (expected 6 or 8 hex digits) in: \(bad.joined(separator: ", "))"
+        }
+        return nil
+    }
+
+    /// Same trimming rules as `Color(hex:)`: optional `#`, surrounding whitespace.
+    static func isValidHexColor(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: CharacterSet(charactersIn: "#").union(.whitespaces))
+        guard trimmed.count == 6 || trimmed.count == 8 else { return false }
+        return trimmed.allSatisfy(\.isHexDigit)
+    }
 
     func toTheme() -> MarkdownTheme {
         MarkdownTheme(

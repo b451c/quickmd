@@ -21,7 +21,10 @@ struct MarkdownBlock: Identifiable, Sendable {
         case codeBlock(code: String, language: String)
         case image(url: String, alt: String)
         case blockquote(content: String, level: Int)
-        case heading(level: Int, title: String)
+        /// `sourceLine` = 0-based line index of the heading in the raw document
+        /// text. Section copy uses it as the authoritative boundary, so the view
+        /// layer never has to re-scan the text with its own heading detection.
+        case heading(level: Int, title: String, sourceLine: Int)
         case mathBlock(latex: String)
         case mermaidDiagram(source: String)
     }
@@ -41,8 +44,8 @@ struct MarkdownBlock: Identifiable, Sendable {
     static func blockquote(index: Int, content: String, level: Int) -> MarkdownBlock {
         MarkdownBlock(id: "blockquote-\(index)", content: .blockquote(content: content, level: level))
     }
-    static func heading(index: Int, level: Int, title: String) -> MarkdownBlock {
-        MarkdownBlock(id: "heading-\(index)", content: .heading(level: level, title: title))
+    static func heading(index: Int, level: Int, title: String, sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "heading-\(index)", content: .heading(level: level, title: title, sourceLine: sourceLine))
     }
     static func mathBlock(index: Int, latex: String) -> MarkdownBlock {
         MarkdownBlock(id: "math-\(index)", content: .mathBlock(latex: latex))

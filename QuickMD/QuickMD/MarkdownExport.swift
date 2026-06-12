@@ -87,7 +87,7 @@ struct MarkdownPrintableView: View {
                     PrintableBlockquoteView(content: content, level: level)
                         .padding(.vertical, 4)
 
-                case .heading(let level, let title):
+                case .heading(let level, let title, _):
                     let renderer = MarkdownRenderer(colorScheme: .light)
                     Text(renderer.renderHeader(title, level: level))
                         .foregroundColor(.black)
@@ -297,7 +297,7 @@ struct MarkdownPrintableBlockView: View {
             case .blockquote(let content, let level):
                 PrintableBlockquoteView(content: content, level: level)
 
-            case .heading(let level, let title):
+            case .heading(let level, let title, _):
                 Text(renderer.renderHeader(title, level: level))
                     .foregroundColor(.black)
 
@@ -458,15 +458,20 @@ class PDFExportManager {
         }
 
         for (image, size) in blockImages {
-            let blockHeight = size.height
+            // A single block taller than the content area (e.g. a long code
+            // block) used to be drawn past the media box and silently clipped.
+            // Slice it into page-height segments instead so nothing is lost.
+            for segment in sliceIfOversized(image: image, size: size, maxHeight: contentHeight) {
+                let blockHeight = segment.size.height
 
-            // If block doesn't fit on current page and page isn't empty, start new page
-            if currentY + blockHeight > contentHeight && !pageBlocks.isEmpty {
-                flushPage()
+                // If block doesn't fit on current page and page isn't empty, start new page
+                if currentY + blockHeight > contentHeight && !pageBlocks.isEmpty {
+                    flushPage()
+                }
+
+                pageBlocks.append((image: segment.image, size: segment.size, yOffset: currentY))
+                currentY += blockHeight + 8  // 8pt spacing between blocks (matches block spacing)
             }
-
-            pageBlocks.append((image: image, size: size, yOffset: currentY))
-            currentY += blockHeight + 8  // 8pt spacing between blocks (matches LazyVStack spacing)
         }
 
         // Flush last page
@@ -474,6 +479,32 @@ class PDFExportManager {
 
         pdfContext.closePDF()
         return pdfData as Data
+    }
+
+    /// Splits a rendered block image into vertical segments no taller than
+    /// `maxHeight` points. `CGImage.cropping(to:)` operates in pixel space with
+    /// the origin at the top-left row, so the point offset is scaled by the
+    /// image's pixels-per-point factor.
+    private static func sliceIfOversized(image: CGImage, size: CGSize,
+                                         maxHeight: CGFloat) -> [(image: CGImage, size: CGSize)] {
+        guard size.height > maxHeight, size.height > 0 else {
+            return [(image: image, size: size)]
+        }
+
+        let scaleY = CGFloat(image.height) / size.height
+        var segments: [(image: CGImage, size: CGSize)] = []
+        var offset: CGFloat = 0
+        while offset < size.height {
+            let sliceHeight = min(maxHeight, size.height - offset)
+            let cropRect = CGRect(x: 0,
+                                  y: offset * scaleY,
+                                  width: CGFloat(image.width),
+                                  height: sliceHeight * scaleY)
+            guard let slice = image.cropping(to: cropRect) else { break }
+            segments.append((image: slice, size: CGSize(width: size.width, height: sliceHeight)))
+            offset += sliceHeight
+        }
+        return segments.isEmpty ? [(image: image, size: size)] : segments
     }
 
     private static func showError(_ message: String) {

@@ -56,42 +56,56 @@ private struct MermaidWebView: NSViewRepresentable {
 
         let webView = ScrollPassthroughWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
+        webView.navigationDelegate = context.coordinator
+
+        // Load the static template exactly once. The diagram source is delivered
+        // separately via evaluateJavaScript — NEVER concatenated into the HTML.
+        // Concatenation let a crafted code block break out of the JS string with
+        // "</script>" and inject arbitrary markup; it also missed "\r" escaping,
+        // which is a JS line terminator and silently killed rendering.
+        if let templateURL = Bundle.main.url(forResource: "mermaid-template", withExtension: "html"),
+           let templateHTML = try? String(contentsOf: templateURL, encoding: .utf8) {
+            webView.loadHTMLString(templateHTML, baseURL: Bundle.main.resourceURL)
+        }
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
-        // Avoid reloading if content hasn't changed
+        // Avoid re-rendering if content hasn't changed
         if context.coordinator.lastSource == source && context.coordinator.lastIsDark == isDark {
             return
         }
         context.coordinator.lastSource = source
         context.coordinator.lastIsDark = isDark
-
-        guard let templateURL = Bundle.main.url(forResource: "mermaid-template", withExtension: "html"),
-              let templateHTML = try? String(contentsOf: templateURL, encoding: .utf8) else { return }
-
-        // Load template then call renderDiagram via JavaScript
-        let escapedSource = source
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "'", with: "\\'")
-            .replacingOccurrences(of: "\n", with: "\\n")
-
-        let html = templateHTML + """
-        <script>renderDiagram('\(escapedSource)', \(isDark));</script>
-        """
-
-        let baseURL = Bundle.main.resourceURL
-        webView.loadHTMLString(html, baseURL: baseURL)
+        context.coordinator.renderIfReady(in: webView)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    class Coordinator: NSObject, WKScriptMessageHandler {
+    class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         var parent: MermaidWebView
         var lastSource: String?
         var lastIsDark: Bool?
+        private var templateLoaded = false
 
         init(_ parent: MermaidWebView) { self.parent = parent }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            templateLoaded = true
+            renderIfReady(in: webView)
+        }
+
+        /// Renders the pending diagram once both the template page and a source
+        /// are available. The source travels as a JSON string literal, so quotes,
+        /// backslashes, control characters and "</script>" all arrive in the
+        /// page as inert data.
+        func renderIfReady(in webView: WKWebView) {
+            guard templateLoaded, let source = lastSource, let isDark = lastIsDark else { return }
+            guard let data = try? JSONSerialization.data(withJSONObject: source, options: [.fragmentsAllowed]),
+                  let jsLiteral = String(data: data, encoding: .utf8) else { return }
+            webView.evaluateJavaScript("renderDiagram(\(jsLiteral), \(isDark ? "true" : "false"));",
+                                       completionHandler: nil)
+        }
 
         func userContentController(_ controller: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
