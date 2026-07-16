@@ -400,6 +400,18 @@ class PDFExportManager {
         }
     }
 
+    struct BlockSegment {
+        let block: MarkdownBlock
+        let size: CGSize
+        let sliceOffset: CGFloat
+        let sliceHeight: CGFloat
+    }
+
+    struct PlacedSegment {
+        let segment: BlockSegment
+        let yOffset: CGFloat
+    }
+
     static func generateMultiPagePDF(documentText: String) -> Data? {
         let blocks = MarkdownBlockParser(colorScheme: .light).parse(documentText)
         guard !blocks.isEmpty else {
@@ -407,8 +419,8 @@ class PDFExportManager {
             return nil
         }
 
-        // Render each block to an image
-        var blockImages: [(image: CGImage, size: CGSize)] = []
+        // Measure each block's size in points
+        var measuredBlocks: [(block: MarkdownBlock, size: CGSize)] = []
 
         for block in blocks {
             let blockView = MarkdownPrintableBlockView(block: block)
@@ -418,20 +430,38 @@ class PDFExportManager {
             let renderer = ImageRenderer(content: blockView)
             renderer.scale = 1.0
 
-            guard let nsImage = renderer.nsImage,
-                  let cgImage = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            guard let size = renderer.nsImage?.size else {
                 continue
             }
 
-            blockImages.append((image: cgImage, size: nsImage.size))
+            measuredBlocks.append((block: block, size: size))
         }
 
-        guard !blockImages.isEmpty else {
-            logger.error("Failed to render any blocks")
+        guard !measuredBlocks.isEmpty else {
+            logger.error("Failed to measure any blocks")
             return nil
         }
 
-        // Paginate: distribute blocks across pages
+        // Paginate: distribute blocks/segments across pages
+        var pages: [[PlacedSegment]] = [[]]
+        var currentY: CGFloat = 0
+
+        for (block, size) in measuredBlocks {
+            let segments = sliceBlockIfOversized(block: block, size: size, maxHeight: contentHeight)
+            for segment in segments {
+                let blockHeight = segment.sliceHeight
+
+                // If block doesn't fit on current page and page isn't empty, start new page
+                if currentY + blockHeight > contentHeight && !pages[pages.count - 1].isEmpty {
+                    pages.append([])
+                    currentY = 0
+                }
+
+                pages[pages.count - 1].append(PlacedSegment(segment: segment, yOffset: currentY))
+                currentY += blockHeight + 8  // 8pt spacing between blocks
+            }
+        }
+
         let pdfData = NSMutableData()
         var mediaBox = CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight)
 
@@ -441,78 +471,66 @@ class PDFExportManager {
             return nil
         }
 
-        var currentY: CGFloat = 0  // Accumulated height on current page (from top)
-        var pageBlocks: [(image: CGImage, size: CGSize, yOffset: CGFloat)] = []
-
-        func flushPage() {
-            guard !pageBlocks.isEmpty else { return }
+        // Render each page to the PDF context
+        for pageSegments in pages {
             pdfContext.beginPDFPage(nil)
 
-            // White background
+            // Draw white background
             pdfContext.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
             pdfContext.fill(CGRect(x: 0, y: 0, width: pageWidth, height: pageHeight))
 
-            // Draw each block on this page
-            // PDF Y=0 is at bottom, so we invert
-            for entry in pageBlocks {
-                let pdfY = pageHeight - margin - entry.yOffset - entry.size.height
-                let rect = CGRect(x: margin, y: pdfY, width: entry.size.width, height: entry.size.height)
-                pdfContext.draw(entry.image, in: rect)
+            // Draw each placed segment using the vector renderer
+            for placed in pageSegments {
+                let segment = placed.segment
+                let blockView = MarkdownPrintableBlockView(block: segment.block)
+                    .frame(width: contentWidth)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                let renderer = ImageRenderer(content: blockView)
+                renderer.render { size, renderInContext in
+                    pdfContext.saveGState()
+
+                    // Calculate drawing position and clip bounds in PDF coordinates
+                    let pdfY = pageHeight - margin - placed.yOffset - segment.sliceHeight
+                    let clipRect = CGRect(x: margin, y: pdfY, width: contentWidth, height: segment.sliceHeight)
+                    pdfContext.clip(to: clipRect)
+
+                    // Translate the context so the SwiftUI view draws upright (ImageRenderer handles vertical flip internally)
+                    let translationY = pageHeight - margin - placed.yOffset - size.height + segment.sliceOffset
+                    pdfContext.translateBy(x: margin, y: translationY)
+
+                    // Draw the view vector commands directly into the PDF context
+                    renderInContext(pdfContext)
+
+                    pdfContext.restoreGState()
+                }
             }
 
             pdfContext.endPDFPage()
-            pageBlocks = []
-            currentY = 0
         }
-
-        for (image, size) in blockImages {
-            // A single block taller than the content area (e.g. a long code
-            // block) used to be drawn past the media box and silently clipped.
-            // Slice it into page-height segments instead so nothing is lost.
-            for segment in sliceIfOversized(image: image, size: size, maxHeight: contentHeight) {
-                let blockHeight = segment.size.height
-
-                // If block doesn't fit on current page and page isn't empty, start new page
-                if currentY + blockHeight > contentHeight && !pageBlocks.isEmpty {
-                    flushPage()
-                }
-
-                pageBlocks.append((image: segment.image, size: segment.size, yOffset: currentY))
-                currentY += blockHeight + 8  // 8pt spacing between blocks (matches block spacing)
-            }
-        }
-
-        // Flush last page
-        flushPage()
 
         pdfContext.closePDF()
         return pdfData as Data
     }
 
-    /// Splits a rendered block image into vertical segments no taller than
-    /// `maxHeight` points. `CGImage.cropping(to:)` operates in pixel space with
-    /// the origin at the top-left row, so the point offset is scaled by the
-    /// image's pixels-per-point factor.
-    private static func sliceIfOversized(image: CGImage, size: CGSize,
-                                         maxHeight: CGFloat) -> [(image: CGImage, size: CGSize)] {
+    private static func sliceBlockIfOversized(block: MarkdownBlock, size: CGSize, maxHeight: CGFloat) -> [BlockSegment] {
         guard size.height > maxHeight, size.height > 0 else {
-            return [(image: image, size: size)]
+            return [BlockSegment(block: block, size: size, sliceOffset: 0, sliceHeight: size.height)]
         }
 
-        let scaleY = CGFloat(image.height) / size.height
-        var segments: [(image: CGImage, size: CGSize)] = []
+        var segments: [BlockSegment] = []
         var offset: CGFloat = 0
         while offset < size.height {
             let sliceHeight = min(maxHeight, size.height - offset)
-            let cropRect = CGRect(x: 0,
-                                  y: offset * scaleY,
-                                  width: CGFloat(image.width),
-                                  height: sliceHeight * scaleY)
-            guard let slice = image.cropping(to: cropRect) else { break }
-            segments.append((image: slice, size: CGSize(width: size.width, height: sliceHeight)))
+            segments.append(BlockSegment(
+                block: block,
+                size: size,
+                sliceOffset: offset,
+                sliceHeight: sliceHeight
+            ))
             offset += sliceHeight
         }
-        return segments.isEmpty ? [(image: image, size: size)] : segments
+        return segments
     }
 
     private static func showError(_ message: String) {
