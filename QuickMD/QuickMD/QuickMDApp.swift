@@ -73,7 +73,8 @@ struct QuickMDApp: App {
                 #endif
             }
         }
-        .defaultSize(width: 800, height: 600)
+        .defaultSize(width: WindowSizeMemory.launchDefaultSize.width,
+                     height: WindowSizeMemory.launchDefaultSize.height)
 
         Settings {
             SettingsView()
