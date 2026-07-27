@@ -15,6 +15,27 @@ import WebKit
 ///
 /// Zoom (#12): hover reveals a zoom button that opens the diagram in a sheet
 /// with pinch/button magnification.
+/// Shared store of rendered-diagram snapshots, keyed by (isDark, source).
+/// Written by the inline MermaidBlockView after each successful render; read
+/// back by MermaidBlockView on LazyVStack re-creation AND by the PDF exporter
+/// (MermaidPDFRenderer) as a fast path before spinning up an offscreen
+/// WebView. NSCache evicts under memory pressure.
+enum MermaidSnapshotStore {
+    private static let cache = NSCache<NSString, NSImage>()
+
+    private static func key(source: String, isDark: Bool) -> NSString {
+        "\(isDark)|\(source)" as NSString
+    }
+
+    static func image(source: String, isDark: Bool) -> NSImage? {
+        cache.object(forKey: key(source: source, isDark: isDark))
+    }
+
+    static func set(_ image: NSImage, source: String, isDark: Bool) {
+        cache.setObject(image, forKey: key(source: source, isDark: isDark))
+    }
+}
+
 struct MermaidBlockView: View {
     let blockId: String
     let source: String
@@ -26,21 +47,13 @@ struct MermaidBlockView: View {
     @State private var showZoom = false
     @State private var isHovered = false
 
-    /// Snapshots of already-rendered diagrams, keyed by (isDark, source).
-    /// NSCache evicts under memory pressure.
-    private static let snapshotCache = NSCache<NSString, NSImage>()
-
     init(blockId: String, source: String, theme: MarkdownTheme, heightCache: BlockHeightCache) {
         self.blockId = blockId
         self.source = source
         self.theme = theme
         self.heightCache = heightCache
         _diagramHeight = State(initialValue: heightCache.height(for: blockId) ?? 200)
-        _snapshot = State(initialValue: Self.snapshotCache.object(forKey: Self.cacheKey(source: source, isDark: theme.isDark)))
-    }
-
-    private static func cacheKey(source: String, isDark: Bool) -> NSString {
-        "\(isDark)|\(source)" as NSString
+        _snapshot = State(initialValue: MermaidSnapshotStore.image(source: source, isDark: theme.isDark))
     }
 
     var body: some View {
@@ -63,8 +76,7 @@ struct MermaidBlockView: View {
                             heightCache.set(height, for: blockId)
                         },
                         onSnapshot: { image in
-                            Self.snapshotCache.setObject(
-                                image, forKey: Self.cacheKey(source: source, isDark: theme.isDark))
+                            MermaidSnapshotStore.set(image, source: source, isDark: theme.isDark)
                         }
                     )
                     .frame(height: diagramHeight)

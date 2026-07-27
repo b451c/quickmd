@@ -99,6 +99,8 @@ enum DocumentSearch {
                 segments = [code]
             case .blockquote(let content, _):
                 segments = [content]
+            case .alert(_, let content):
+                segments = [content]
             case .image(_, let alt):
                 segments = [alt]
             case .heading(_, let title, _):

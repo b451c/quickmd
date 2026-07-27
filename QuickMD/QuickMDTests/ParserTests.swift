@@ -342,4 +342,74 @@ final class ParserTests: XCTestCase {
         let again = parse(md)
         XCTAssertEqual(blocks.map(\.id), again.map(\.id), "ids must be deterministic")
     }
+
+    // MARK: - GFM Alerts
+
+    func testAllFiveAlertKindsParse() {
+        for (marker, expected) in [("NOTE", AlertKind.note), ("TIP", .tip), ("IMPORTANT", .important),
+                                   ("WARNING", .warning), ("CAUTION", .caution)] {
+            let blocks = parse("> [!\(marker)]\n> Body line.")
+            guard case .alert(let kind, let content) = blocks.first?.content else {
+                XCTFail("[!\(marker)] should parse as an alert"); continue
+            }
+            XCTAssertEqual(kind, expected)
+            XCTAssertEqual(content, "Body line.")
+        }
+    }
+
+    func testAlertMarkerIsCaseInsensitive() {
+        let blocks = parse("> [!note]\n> body")
+        guard case .alert(let kind, _) = blocks.first?.content else {
+            return XCTFail("lowercase marker should parse as alert (GitHub behavior)")
+        }
+        XCTAssertEqual(kind, .note)
+    }
+
+    func testAlertMarkerWithTrailingTextStaysBlockquote() {
+        let blocks = parse("> [!NOTE] this is not an alert")
+        guard case .blockquote(let content, let level) = blocks.first?.content else {
+            return XCTFail("marker with trailing text must remain a regular blockquote")
+        }
+        XCTAssertEqual(level, 1)
+        XCTAssertTrue(content.contains("[!NOTE] this is not an alert"))
+    }
+
+    func testUnknownAlertKindStaysBlockquote() {
+        let blocks = parse("> [!DANGER]\n> body")
+        guard case .blockquote = blocks.first?.content else {
+            return XCTFail("unknown alert kind must remain a regular blockquote")
+        }
+    }
+
+    func testNestedQuoteIsNotAlert() {
+        let blocks = parse("> > [!NOTE]\n> > body")
+        guard case .blockquote(_, let level) = blocks.first?.content else {
+            return XCTFail("nested quote must not become an alert")
+        }
+        XCTAssertEqual(level, 2)
+    }
+
+    func testAlertWithEmptyBodyParses() {
+        let blocks = parse("> [!WARNING]")
+        guard case .alert(let kind, let content) = blocks.first?.content else {
+            return XCTFail("header-only alert should still parse")
+        }
+        XCTAssertEqual(kind, .warning)
+        XCTAssertTrue(content.isEmpty)
+    }
+
+    func testAlertMultilineBodyPreserved() {
+        let blocks = parse("> [!TIP]\n> First line.\n> Second **bold** line.")
+        guard case .alert(_, let content) = blocks.first?.content else {
+            return XCTFail("expected alert")
+        }
+        XCTAssertEqual(content, "First line.\nSecond **bold** line.")
+    }
+
+    func testAlertContentIsSearchable() {
+        let blocks = parse("> [!NOTE]\n> findme here")
+        let results = DocumentSearch.computeMatches(in: blocks, term: "findme")
+        XCTAssertEqual(results.matchBlockIds.count, 1)
+        XCTAssertTrue(results.matchBlockIds[0].hasPrefix("alert-"))
+    }
 }

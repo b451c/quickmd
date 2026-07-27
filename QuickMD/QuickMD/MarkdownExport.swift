@@ -103,6 +103,10 @@ struct MarkdownPrintableView: View {
                     PrintableBlockquoteView(content: content, level: level)
                         .padding(.vertical, 4)
 
+                case .alert(let kind, let content):
+                    PrintableAlertView(kind: kind, content: content)
+                        .padding(.vertical, 4)
+
                 case .heading(let level, let title, _):
                     let renderer = MarkdownRenderer(colorScheme: .light)
                     Text(renderer.renderHeader(title, level: level))
@@ -291,6 +295,9 @@ struct PrintableImageView: View {
 
 struct MarkdownPrintableBlockView: View {
     let block: MarkdownBlock
+    /// Pre-rendered Mermaid diagrams keyed by source (MermaidPDFRenderer).
+    /// Sources without an entry fall back to the styled-code representation.
+    var mermaidImages: [String: NSImage] = [:]
     private let theme = MarkdownTheme.cached(for: .light)
     private let renderer = MarkdownRenderer(colorScheme: .light)
 
@@ -313,6 +320,9 @@ struct MarkdownPrintableBlockView: View {
             case .blockquote(let content, let level):
                 PrintableBlockquoteView(content: content, level: level)
 
+            case .alert(let kind, let content):
+                PrintableAlertView(kind: kind, content: content)
+
             case .heading(let level, let title, _):
                 Text(renderer.renderHeader(title, level: level))
                     .foregroundColor(.black)
@@ -321,7 +331,16 @@ struct MarkdownPrintableBlockView: View {
                 MathBlockView(latex: latex, theme: MarkdownTheme.theme(named: ThemeName.auto, colorScheme: .light))
 
             case .mermaidDiagram(let source):
-                PrintableCodeBlockView(code: source, language: "mermaid")
+                if let image = mermaidImages[source] {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    // Graceful degradation: styled code block (no snapshot
+                    // available within the render budget, or render failed)
+                    PrintableCodeBlockView(code: source, language: "mermaid")
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -365,6 +384,47 @@ struct PrintableBlockquoteView: View {
     }
 }
 
+// MARK: - Printable Alert View
+
+/// GFM alert for PDF/print — always the light-palette accent, white-page safe.
+struct PrintableAlertView: View {
+    let kind: AlertKind
+    let content: String
+    private let renderer = MarkdownRenderer(colorScheme: .light)
+
+    private var accent: Color { kind.accentColor(isDark: false) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: kind.symbolName)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(kind.title)
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundColor(accent)
+
+            ForEach(Array(content.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
+                if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Text(" ").font(.system(size: 12))
+                } else {
+                    Text(renderer.renderInline(line))
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(white: 0.2))
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(accent.opacity(0.06))
+        .overlay(alignment: .leading) {
+            Rectangle().fill(accent).frame(width: 3)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+    }
+}
+
 // MARK: - PDF Export Manager
 
 @MainActor
@@ -395,7 +455,19 @@ class PDFExportManager {
             guard response == .OK, let url = savePanel.url else { return }
 
             Task { @MainActor in
-                guard let pdfData = Self.generateMultiPagePDF(documentText: documentText) else {
+                // Pre-render Mermaid diagrams (cached inline snapshot or
+                // offscreen WebView). Whatever fails within the time budget
+                // keeps the styled-code fallback — export never stalls on it.
+                let blocks = MarkdownBlockParser(colorScheme: .light).parse(documentText)
+                let mermaidSources = blocks.compactMap { block -> String? in
+                    if case .mermaidDiagram(let source) = block.content { return source }
+                    return nil
+                }
+                let mermaidImages = await MermaidPDFRenderer.renderAll(
+                    sources: mermaidSources, width: contentWidth)
+
+                guard let pdfData = Self.generateMultiPagePDF(blocks: blocks,
+                                                              mermaidImages: mermaidImages) else {
                     Self.showError("Failed to generate PDF")
                     return
                 }
@@ -421,7 +493,11 @@ class PDFExportManager {
     }
 
     static func generateMultiPagePDF(documentText: String) -> Data? {
-        let blocks = MarkdownBlockParser(colorScheme: .light).parse(documentText)
+        generateMultiPagePDF(blocks: MarkdownBlockParser(colorScheme: .light).parse(documentText))
+    }
+
+    static func generateMultiPagePDF(blocks: [MarkdownBlock],
+                                     mermaidImages: [String: NSImage] = [:]) -> Data? {
         guard !blocks.isEmpty else {
             logger.error("No blocks parsed from document")
             return nil
@@ -431,7 +507,7 @@ class PDFExportManager {
         var measuredBlocks: [(block: MarkdownBlock, size: CGSize)] = []
 
         for block in blocks {
-            let blockView = MarkdownPrintableBlockView(block: block)
+            let blockView = MarkdownPrintableBlockView(block: block, mermaidImages: mermaidImages)
                 .frame(width: contentWidth)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -490,7 +566,7 @@ class PDFExportManager {
             // Draw each placed segment using the vector renderer
             for placed in pageSegments {
                 let segment = placed.segment
-                let blockView = MarkdownPrintableBlockView(block: segment.block)
+                let blockView = MarkdownPrintableBlockView(block: segment.block, mermaidImages: mermaidImages)
                     .frame(width: contentWidth)
                     .fixedSize(horizontal: false, vertical: true)
 

@@ -465,6 +465,14 @@ struct MarkdownView: View {
                                searchText: searchText, focusedOccurrence: focusedOcc,
                                heightCache: heightCache,
                                onLink: { handleLinkActivation($0) })
+
+            case .alert(let kind, let content):
+                AlertBlockView(blockId: block.id, kind: kind, content: content, theme: theme,
+                               fontScale: scale, contentVersion: contentVersion,
+                               searchText: searchText, focusedOccurrence: focusedOcc,
+                               heightCache: heightCache,
+                               onLink: { handleLinkActivation($0) })
+                    .padding(.vertical, 4)
                     .padding(.vertical, 4)
 
             case .heading(let level, let title, _):

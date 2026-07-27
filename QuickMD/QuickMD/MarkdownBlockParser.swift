@@ -306,7 +306,16 @@ struct MarkdownBlockParser: Sendable {
                     let content = groupLines.joined(separator: "\n")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     if !content.isEmpty {
-                        blocks.append(.blockquote(index: blockIndex, content: content, level: groupLevel))
+                        // GFM alert: level-1 quote whose first line is exactly
+                        // `[!NOTE]` / `[!TIP]` / `[!IMPORTANT]` / `[!WARNING]` /
+                        // `[!CAUTION]` (marker alone on the line, per GitHub spec).
+                        if groupLevel == 1, let kind = AlertKind(markerLine: groupLines[0]) {
+                            let body = groupLines.dropFirst().joined(separator: "\n")
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            blocks.append(.alert(index: blockIndex, kind: kind, content: body))
+                        } else {
+                            blocks.append(.blockquote(index: blockIndex, content: content, level: groupLevel))
+                        }
                         blockIndex += 1
                     }
                 }

@@ -1,5 +1,48 @@
 import SwiftUI
 
+// MARK: - GFM Alert Kinds
+
+/// GitHub-flavored alert/admonition kinds, per the GitHub spec: a blockquote
+/// whose first line is exactly `[!NOTE]` (or TIP/IMPORTANT/WARNING/CAUTION).
+/// Colors are fixed semantic values from GitHub's palette (light/dark pairs),
+/// deliberately theme-independent so alerts read the same in every theme.
+enum AlertKind: String, Sendable, CaseIterable {
+    case note, tip, important, warning, caution
+
+    /// Parses a marker line (already stripped of `>` prefixes). The marker must
+    /// be the only thing on the line — `[!NOTE] text` is a regular blockquote.
+    /// Case-insensitive, matching GitHub's behavior.
+    init?(markerLine: String) {
+        let trimmed = markerLine.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("[!"), trimmed.hasSuffix("]") else { return nil }
+        let name = trimmed.dropFirst(2).dropLast().lowercased()
+        self.init(rawValue: name)
+    }
+
+    var title: String { rawValue.capitalized }
+
+    var symbolName: String {
+        switch self {
+        case .note: return "info.circle"
+        case .tip: return "lightbulb"
+        case .important: return "exclamationmark.bubble"
+        case .warning: return "exclamationmark.triangle"
+        case .caution: return "exclamationmark.octagon"
+        }
+    }
+
+    /// GitHub's alert accent colors (fgColor-accent light / dark).
+    func accentColor(isDark: Bool) -> Color {
+        switch self {
+        case .note: return Color(hex: isDark ? "4493F8" : "0969DA")
+        case .tip: return Color(hex: isDark ? "3FB950" : "1A7F37")
+        case .important: return Color(hex: isDark ? "AB7DF8" : "8250DF")
+        case .warning: return Color(hex: isDark ? "D29922" : "9A6700")
+        case .caution: return Color(hex: isDark ? "F85149" : "CF222E")
+        }
+    }
+}
+
 // MARK: - Content Block Types
 
 /// Represents different types of Markdown content blocks
@@ -21,6 +64,9 @@ struct MarkdownBlock: Identifiable, Sendable {
         case codeBlock(code: String, language: String)
         case image(url: String, alt: String)
         case blockquote(content: String, level: Int)
+        /// GFM alert: `> [!NOTE]` etc. `content` is the quote body without the
+        /// marker line, still in raw Markdown (inline-rendered by the view).
+        case alert(kind: AlertKind, content: String)
         /// `sourceLine` = 0-based line index of the heading in the raw document
         /// text. Section copy uses it as the authoritative boundary, so the view
         /// layer never has to re-scan the text with its own heading detection.
@@ -43,6 +89,9 @@ struct MarkdownBlock: Identifiable, Sendable {
     }
     static func blockquote(index: Int, content: String, level: Int) -> MarkdownBlock {
         MarkdownBlock(id: "blockquote-\(index)", content: .blockquote(content: content, level: level))
+    }
+    static func alert(index: Int, kind: AlertKind, content: String) -> MarkdownBlock {
+        MarkdownBlock(id: "alert-\(index)", content: .alert(kind: kind, content: content))
     }
     static func heading(index: Int, level: Int, title: String, sourceLine: Int) -> MarkdownBlock {
         MarkdownBlock(id: "heading-\(index)", content: .heading(level: level, title: title, sourceLine: sourceLine))
