@@ -80,20 +80,20 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 <div align="center">
 <table>
 <tr>
-<td><img src="QuickMD/Screenshots/screenshot-1.png" width="400" alt="Dark Mode"></td>
-<td><img src="QuickMD/Screenshots/screenshot-2.png" width="400" alt="Light Mode"></td>
+<td><img src="QuickMD/Screenshots/screenshot-1.png" width="400" alt="Light Mode (GitHub theme)"></td>
+<td><img src="QuickMD/Screenshots/screenshot-2.png" width="400" alt="Dark Mode (Dracula theme)"></td>
 </tr>
 <tr>
-<td align="center"><em>Dark Mode</em></td>
-<td align="center"><em>Light Mode</em></td>
+<td align="center"><em>Light Mode (GitHub theme)</em></td>
+<td align="center"><em>Dark Mode (Dracula theme)</em></td>
 </tr>
 <tr>
-<td><img src="QuickMD/Screenshots/screenshot-3.png" width="400" alt="Syntax Highlighting"></td>
-<td><img src="QuickMD/Screenshots/screenshot-6.png" width="400" alt="Theme Picker (Dracula)"></td>
+<td><img src="QuickMD/Screenshots/screenshot-3.png" width="400" alt="GitHub-flavored alerts"></td>
+<td><img src="QuickMD/Screenshots/screenshot-4.png" width="400" alt="Mermaid diagrams"></td>
 </tr>
 <tr>
-<td align="center"><em>Syntax Highlighting</em></td>
-<td align="center"><em>Theme Picker (Dracula)</em></td>
+<td align="center"><em>GitHub-flavored alerts (new in 1.7)</em></td>
+<td align="center"><em>Mermaid diagrams, rendered natively</em></td>
 </tr>
 </table>
 </div>
@@ -101,9 +101,9 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 <details>
 <summary><strong>More screenshots</strong></summary>
 
-| Tables & Lists | File Tree | Table of Contents |
+| Diagrams in Dark Mode | Theme Picker | Table of Contents |
 |:-:|:-:|:-:|
-| <img src="QuickMD/Screenshots/screenshot-4.png" width="280"> | <img src="QuickMD/Screenshots/screenshot-5.png" width="280"> | <img src="QuickMD/Screenshots/screenshot-7.png" width="280"> |
+| <img src="QuickMD/Screenshots/screenshot-5.png" width="280"> | <img src="QuickMD/Screenshots/screenshot-6.png" width="280"> | <img src="QuickMD/Screenshots/screenshot-7.png" width="280"> |
 
 </details>
 
