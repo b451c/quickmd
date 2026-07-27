@@ -239,9 +239,12 @@ struct MarkdownBlockParser: Sendable {
                 if !isTableSeparator(trimmed) && i + 1 < lines.count && isTableSeparator(lines[i + 1]) {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
 
-                    let headers = parseTableRow(line)
-                    let columnCount = headers.count
                     var alignments = parseTableAlignments(lines[i + 1])
+                    // The separator row is authoritative for column count: a header row
+                    // of entirely empty cells (`| | |`, a headerless table) parses to zero
+                    // cells, which would otherwise collapse the whole table to nothing.
+                    var headers = parseTableRow(line)
+                    let columnCount = max(headers.count, alignments.count)
                     var rows: [[String]] = []
                     i += 2 // Skip header and separator
 
@@ -250,7 +253,8 @@ struct MarkdownBlockParser: Sendable {
                         i += 1
                     }
 
-                    // Normalize: ensure all rows and alignments match column count
+                    // Normalize: ensure headers, rows, and alignments match column count
+                    headers = normalizeArray(headers, to: columnCount, default: "")
                     alignments = normalizeArray(alignments, to: columnCount, default: .leading)
                     rows = rows.map { normalizeArray($0, to: columnCount, default: "") }
 

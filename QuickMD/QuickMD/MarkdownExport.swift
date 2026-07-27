@@ -147,36 +147,42 @@ struct PrintableTableView: View, TableAlignmentProvider {
     /// Stored column count - computed once on init for efficiency
     private let columnCount: Int
 
+    /// Headerless tables (`| | |`) skip the header band entirely
+    private let showsHeader: Bool
+
     init(headers: [String], rows: [[String]], alignments: [TextAlignment]) {
         self.headers = headers
         self.rows = rows
         self.alignments = alignments
         self.renderer = MarkdownRenderer(colorScheme: .light)
-        self.columnCount = headers.count
+        self.columnCount = max(headers.count, alignments.count, rows.map(\.count).max() ?? 0)
+        self.showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header row
-            HStack(spacing: 0) {
-                ForEach(0..<columnCount, id: \.self) { index in
-                    Text(renderer.renderInline(headers[index]))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(.black)
-                        .multilineTextAlignment(textAlignmentFor(index))
-                        .frame(maxWidth: .infinity, alignment: alignmentFor(index))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
+            if showsHeader {
+                // Header row
+                HStack(spacing: 0) {
+                    ForEach(0..<columnCount, id: \.self) { index in
+                        Text(renderer.renderInline(index < headers.count ? headers[index] : ""))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.black)
+                            .multilineTextAlignment(textAlignmentFor(index))
+                            .frame(maxWidth: .infinity, alignment: alignmentFor(index))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
 
-                    if index < columnCount - 1 {
-                        Rectangle().fill(theme.borderColor).frame(width: 1)
+                        if index < columnCount - 1 {
+                            Rectangle().fill(theme.borderColor).frame(width: 1)
+                        }
                     }
                 }
-            }
-            .background(theme.headerBackgroundColor)
+                .background(theme.headerBackgroundColor)
 
-            // Header separator
-            Rectangle().fill(theme.borderColor).frame(height: 1)
+                // Header separator
+                Rectangle().fill(theme.borderColor).frame(height: 1)
+            }
 
             // Data rows
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in

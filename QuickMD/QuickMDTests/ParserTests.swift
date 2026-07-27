@@ -281,6 +281,25 @@ final class ParserTests: XCTestCase {
         XCTAssertTrue(rows.allSatisfy { $0.count == 3 })
     }
 
+    func testHeaderlessTableKeepsColumnsFromSeparator() {
+        let md = """
+        | | |
+        |---|---|
+        | **Kettle** | Boils water in about three minutes |
+        | **Toaster** | Two slots, one crumb tray |
+        """
+        let blocks = parse(md)
+        guard case .table(let headers, let rows, let alignments) = blocks[0].content else {
+            return XCTFail("expected table")
+        }
+        // Empty header row must not collapse the table — separator defines 2 columns
+        XCTAssertEqual(headers, ["", ""])
+        XCTAssertEqual(alignments.count, 2)
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[0], ["**Kettle**", "Boils water in about three minutes"])
+        XCTAssertEqual(rows[1], ["**Toaster**", "Two slots, one crumb tray"])
+    }
+
     // MARK: - Blockquotes
 
     func testBlockquoteNestingLevels() {
