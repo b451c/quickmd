@@ -647,7 +647,6 @@ struct MarkdownView: View {
 
 // MARK: - Preview
 
-#if !STRIP_PREVIEWS
 #Preview {
     MarkdownView(document: MarkdownDocument(text: """
     # Welcome to QuickMD
@@ -683,5 +682,3 @@ struct MarkdownView: View {
     [Visit Apple](https://apple.com)
     """), documentURL: nil)
 }
-#endif
-

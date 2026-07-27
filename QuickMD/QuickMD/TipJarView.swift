@@ -143,9 +143,6 @@ struct TipButton: View {
     }
 }
 
-#if !STRIP_PREVIEWS
 #Preview {
     TipJarView()
 }
-#endif
-

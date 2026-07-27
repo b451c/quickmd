@@ -165,7 +165,7 @@ Now all your Markdown files will open instantly with QuickMD!
 | `⌘⇧E` | Export to PDF |
 | `⌘P` | Print |
 | `⌘,` | Settings (themes + external editor) |
-| `⌘+` / `⌘-` | Zoom in / out |
+| `⌘+` / `⌘-` / `⌘0` | Zoom in / out / actual size |
 
 ## Tech Stack
 
