@@ -5,6 +5,23 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-07-27
+
+A community release: two features and two fixes in this version arrived as pull requests from [@shmuelzon](https://github.com/shmuelzon), and the vector PDF upgrade plus the window-size suggestion came from [@weiykong](https://github.com/weiykong). Thank you both!
+
+### Added
+- **Zoom (⌘+ / ⌘- / ⌘0):** Scale the rendered document per window from the View menu — headings, body text, tables, code blocks, math and footnotes all follow, search highlighting included. Every document opens at 100%; zooming one tab leaves the others alone. Contributed by @shmuelzon (#15).
+- **GitHub-Flavored Alerts:** `> [!NOTE]`, `> [!TIP]`, `> [!IMPORTANT]`, `> [!WARNING]` and `> [!CAUTION]` render as native callouts — icon, accent title, colored bar and tinted background in GitHub's palette — with full text selection, search, zoom and PDF support. Regular blockquotes, unknown markers and nested quotes are untouched.
+- **Mermaid Diagrams in PDF Export:** Exported PDFs now embed rendered diagrams as images instead of falling back to code blocks. Diagrams already shown in the window export instantly; the rest render in the background during export. A diagram that fails to render keeps the readable code-block fallback.
+- **Remember Window Size:** New document windows open at the size you last used instead of a fixed 800×600 (clamped to the screen; tabs keep adopting their host window's frame). Suggested by @weiykong (#13).
+
+### Changed
+- **Vector PDF Export:** PDF export draws real vector text instead of rasterized images — sharp at any zoom, fully selectable and searchable, with embedded font subsets, and smaller files. Pagination and the slicing of blocks taller than one page are preserved. Contributed by @weiykong (#14).
+
+### Fixed
+- **Headerless Tables:** Tables with an all-empty header row (`| | |` — the definition-list idiom) vanished entirely; the separator row now defines the column count and the empty header band is skipped. Contributed by @shmuelzon (#16).
+- **List Indentation:** List items now sit in a proper gutter and wrapped lines hang under the item text instead of falling back to the bullet's margin. Wider markers ("10.") hang correspondingly further, nesting works for both 2-space and 4-space documents, and the indents follow the zoom level. Contributed by @shmuelzon (#17).
+
 ## [1.6.0] - 2026-06-12
 
 ### Added
