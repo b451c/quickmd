@@ -24,6 +24,14 @@ struct WindowConfigurator: NSViewRepresentable {
                 // give it the last size the user chose instead of the hardcoded
                 // default. Tabs skip this — they adopt the host window's frame.
                 WindowSizeMemory.apply(to: window)
+                // SwiftUI applies the scene's defaultSize to the window AFTER
+                // this callback (same runloop turn), clobbering the resize
+                // above — verified empirically on macOS 15. Re-apply once
+                // scene setup has finished; apply() is a no-op when the size
+                // already matches, so this never causes a visible double-jump.
+                DispatchQueue.main.async {
+                    WindowSizeMemory.apply(to: window)
+                }
             }
             WindowSizeMemory.track(window)
         }
