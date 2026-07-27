@@ -46,6 +46,9 @@ struct TableBlockView: View, TableAlignmentProvider {
     /// Stored column count - computed once on init for efficiency
     private let columnCount: Int
 
+    /// Headerless tables (`| | |`) skip the header band entirely
+    private let showsHeader: Bool
+
     init(headers: [String], rows: [[String]], alignments: [TextAlignment], theme: MarkdownTheme,
          fontScale: CGFloat = 1.0, searchText: String = "", focusedOccurrence: Int? = nil) {
         self.headers = headers
@@ -56,7 +59,8 @@ struct TableBlockView: View, TableAlignmentProvider {
         self.searchText = searchText
         self.focusedOccurrence = focusedOccurrence
         self.renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
-        self.columnCount = headers.count
+        self.columnCount = max(headers.count, alignments.count, rows.map(\.count).max() ?? 0)
+        self.showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 
     // MARK: - Body
@@ -66,32 +70,35 @@ struct TableBlockView: View, TableAlignmentProvider {
         let cellOffsets = computeCellOffsets()
 
         VStack(spacing: 0) {
-            // Header row with inline dividers (no GeometryReader)
-            HStack(spacing: 0) {
-                ForEach(0..<columnCount, id: \.self) { index in
-                    let rendered = renderer.renderInline(headers[index])
-                    let localFocused = localFocusedOccurrence(cellOffset: cellOffsets.headerOffsets[index],
-                                                               cellText: headers[index])
-                    Text(searchText.isEmpty ? rendered : searchHighlight(rendered, term: searchText, focusedOccurrence: localFocused))
-                        .font(.system(size: 13 * fontScale, weight: .semibold))
-                        .foregroundColor(theme.textColor)
-                        .multilineTextAlignment(textAlignmentFor(index))
-                        .frame(maxWidth: .infinity, alignment: alignmentFor(index))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
+            if showsHeader {
+                // Header row with inline dividers (no GeometryReader)
+                HStack(spacing: 0) {
+                    ForEach(0..<columnCount, id: \.self) { index in
+                        let header = headerCell(index)
+                        let rendered = renderer.renderInline(header)
+                        let localFocused = localFocusedOccurrence(cellOffset: cellOffsets.headerOffsets[index],
+                                                                   cellText: header)
+                        Text(searchText.isEmpty ? rendered : searchHighlight(rendered, term: searchText, focusedOccurrence: localFocused))
+                            .font(.system(size: 13 * fontScale, weight: .semibold))
+                            .foregroundColor(theme.textColor)
+                            .multilineTextAlignment(textAlignmentFor(index))
+                            .frame(maxWidth: .infinity, alignment: alignmentFor(index))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
 
-                    // Inline vertical divider (except after last column)
-                    if index < columnCount - 1 {
-                        Rectangle()
-                            .fill(theme.borderColor)
-                            .frame(width: 1)
+                        // Inline vertical divider (except after last column)
+                        if index < columnCount - 1 {
+                            Rectangle()
+                                .fill(theme.borderColor)
+                                .frame(width: 1)
+                        }
                     }
                 }
-            }
-            .background(theme.headerBackgroundColor)
+                .background(theme.headerBackgroundColor)
 
-            // Header separator
-            Rectangle().fill(theme.borderColor).frame(height: 1)
+                // Header separator
+                Rectangle().fill(theme.borderColor).frame(height: 1)
+            }
 
             // Data rows with inline dividers
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
@@ -129,6 +136,11 @@ struct TableBlockView: View, TableAlignmentProvider {
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.borderColor, lineWidth: 1))
     }
 
+    /// Header cell at index, or "" when the header row is shorter than the column count
+    private func headerCell(_ index: Int) -> String {
+        index < headers.count ? headers[index] : ""
+    }
+
     // MARK: - Per-Cell Occurrence Tracking
 
     private struct CellOffsets {
@@ -146,7 +158,7 @@ struct TableBlockView: View, TableAlignmentProvider {
         var headerOffsets: [Int] = []
         for i in 0..<columnCount {
             headerOffsets.append(offset)
-            offset += countOccurrences(in: headers[i], of: searchText)
+            offset += countOccurrences(in: headerCell(i), of: searchText)
         }
         var rowOffsets: [[Int]] = []
         for row in rows {
