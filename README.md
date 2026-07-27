@@ -23,53 +23,55 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ## Features
 
-### ⚡ **Blazing Fast**
+### Blazing Fast
 - Opens in milliseconds—no loading screens
 - Native SwiftUI app—lightweight
 - Lazy native rendering—even 10,000+ line documents open without freezing the UI
 
-### 🔁 **Companion to Your Editor**
-- ✅ **Auto-reload** — the document refreshes the moment your editor saves it. Enable auto-save in VS Code/Cursor/Zed and QuickMD becomes a live preview
-- ✅ **Open in External Editor (`⌘E`)** — one-click handoff to VS Code, Cursor, Sublime, Zed, Typora, Obsidian and more (auto-detected; configurable in Settings)
-- ✅ **Copy button on code blocks** — hover and click, like on GitHub
-- ✅ **Mermaid zoom** — open any diagram in a pinch-to-zoom viewer
+### Companion to Your Editor
+- **Auto-reload** — the document refreshes the moment your editor saves it. Enable auto-save in VS Code/Cursor/Zed and QuickMD becomes a live preview
+- **Open in External Editor (`⌘E`)** — one-click handoff to VS Code, Cursor, Sublime, Zed, Typora, Obsidian and more (auto-detected; configurable in Settings)
+- **Copy button on code blocks** — hover and click, like on GitHub
+- **Mermaid zoom** — open any diagram in a pinch-to-zoom viewer
 
-### 📝 **Complete Markdown Support**
-- ✅ Headers, bold, italic, strikethrough (ATX `#` and setext underline styles)
-- ✅ Tables with proper column alignment
-- ✅ Code blocks with syntax highlighting
-- ✅ **LaTeX math** — display (`$$...$$`) and inline (`$...$`) with TeX-quality rendering
-- ✅ **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more
-- ✅ **Footnotes** — `[^id]` references with definitions at end of document
-- ✅ Task lists with checkboxes (`- [ ]` / `- [x]`)
-- ✅ Nested lists (ordered and unordered)
-- ✅ Images (local and remote URLs)
-- ✅ Links (inline, reference-style, autolinks)
-- ✅ Nested blockquotes with level indicators
-- ✅ Horizontal rules
-- ✅ YAML frontmatter (rendered as a neutral code block)
-- ✅ Windows (CRLF) and legacy line endings, UTF-16/Latin-1 fallbacks
+### Complete Markdown Support
+- Headers, bold, italic, strikethrough (ATX `#` and setext underline styles)
+- **GitHub-flavored alerts** — `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]` render as native callouts in GitHub's palette
+- Tables with proper column alignment (headerless `| | |` tables too)
+- Code blocks with syntax highlighting
+- **LaTeX math** — display (`$$...$$`) and inline (`$...$`) with TeX-quality rendering
+- **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more
+- **Footnotes** — `[^id]` references with definitions at end of document
+- Task lists with checkboxes (`- [ ]` / `- [x]`)
+- Nested lists (ordered and unordered)
+- Images (local and remote URLs)
+- Links (inline, reference-style, autolinks)
+- Nested blockquotes with level indicators
+- Horizontal rules
+- YAML frontmatter (rendered as a neutral code block)
+- Windows (CRLF) and legacy line endings, UTF-16/Latin-1 fallbacks
 
-### 🔍 **Navigation & Search**
+### Navigation & Search
+- Zoom the whole document (`⌘+` / `⌘-` / `⌘0`) — per window, everything scales
 - Find in document (`⌘F`) with match count and per-word navigation
 - Word-level highlighting across all block types (text, code, tables, blockquotes)
 - Table of Contents sidebar (`⌘⇧T`) — auto-generated from headings
 - Copy entire document (`⌘⇧C`) or individual sections (hover heading → copy icon)
-- Export to PDF (`⌘⇧E`) and Print (`⌘P`)
+- Export to PDF (`⌘⇧E`) — **vector text** (selectable, searchable) with **rendered Mermaid diagrams** — and Print (`⌘P`)
 
-### 🎨 **Custom Themes**
+### Custom Themes
 - 7 built-in themes: Auto, Solarized Light/Dark, Dracula, GitHub, Gruvbox Dark, Nord
 - **User themes from disk** — drop a JSON file into `~/Library/Containers/pl.falami.studio.QuickMD/Data/Library/Application Support/QuickMD/Themes/` (or use the **Import Theme…** button in Settings). Live reload, no restart. See [docs/themes/](docs/themes/) for the schema and examples.
 - Settings panel (`⌘,`) with color previews
 - Theme persists across app restarts
 
-### 💻 **Developer-Friendly**
+### Developer-Friendly
 - Syntax highlighting for 10+ languages (Swift, Python, JavaScript, Go, Rust, etc.)
 - Perfect for README files and documentation
 - Handles AI-generated markdown perfectly
 - Dark mode that follows system settings (or choose a fixed theme)
 
-### 🔒 **Privacy Focused**
+### Privacy Focused
 - No analytics, no tracking
 - Works completely offline (except for remote images)
 - Your files stay on your device
@@ -185,9 +187,9 @@ Now all your Markdown files will open instantly with QuickMD!
 - 7 built-in themes + user themes from disk, with `@AppStorage` persistence
 - `AsyncImage` for remote image rendering
 - Security-Scoped Bookmarks for local image access in sandbox
-- Per-block PDF export with multi-page pagination
+- Per-block **vector PDF export** — selectable text, embedded fonts, Mermaid diagrams as images, multi-page pagination
 - Zero external package dependencies — everything is vendored or bundled
-- Unit test suite (76 tests) + GitHub Actions CI building every flavor on each push
+- Unit test suite (95 tests) + GitHub Actions CI building every flavor on each push
 
 ## Project Structure
 
@@ -207,7 +209,8 @@ QuickMD/
 │   ├── InlineMathSegmenter.swift   # $...$ segmentation
 │   ├── FileWatchManager.swift      # Auto-reload file watcher (DispatchSource)
 │   ├── ExternalEditorManager.swift # ⌘E editor detection + launch
-│   ├── WindowTabbing.swift         # Native macOS tab merging
+│   ├── WindowTabbing.swift         # Native macOS tab merging + window size memory
+│   ├── MermaidPDFRenderer.swift    # Mermaid → image rendering for PDF export
 │   ├── CustomThemeStore.swift      # User themes from disk (live reload + validation)
 │   ├── RecentDocumentsStore.swift  # Recent documents tracking
 │   ├── TipJarManager.swift         # StoreKit 2 IAP (App Store only)
@@ -225,6 +228,7 @@ QuickMD/
 │   │   ├── TableBlockView.swift    # Table rendering with alignment
 │   │   ├── ImageBlockView.swift    # Local + remote image rendering
 │   │   ├── BlockquoteView.swift    # Nested blockquotes
+│   │   ├── AlertBlockView.swift    # GitHub-flavored alerts ([!NOTE], [!TIP], ...)
 │   │   ├── ChromeButtons.swift     # Heading copy, source copy, edit, support buttons
 │   │   ├── SearchBar.swift         # Find in document (⌘F)
 │   │   ├── TableOfContentsView.swift # ToC sidebar (⌘⇧T)
@@ -282,8 +286,8 @@ CI runs the test suite plus Release builds of both flavors on every push and pul
 
 ### Get Help
 
-- 🐛 [Report a Bug](https://github.com/b451c/quickmd/issues)
-- 💡 [Request a Feature](https://github.com/b451c/quickmd/issues)
+- [Report a Bug](https://github.com/b451c/quickmd/issues)
+- [Request a Feature](https://github.com/b451c/quickmd/issues)
 
 ### Support Development
 
@@ -320,9 +324,13 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Mermaid diagram zoom ([#12](https://github.com/b451c/quickmd/issues/12))
 - [x] YAML frontmatter + setext headings + CRLF line endings
 - [x] Unit test suite + GitHub Actions CI
-- [ ] Mermaid diagram PDF export (full fidelity)
-- [ ] GFM alerts/admonitions (NOTE, WARNING, TIP)
+- [x] Per-window zoom (`⌘+` / `⌘-` / `⌘0`) — contributed by [@shmuelzon](https://github.com/shmuelzon)
+- [x] Vector PDF export (selectable, searchable text) — contributed by [@weiykong](https://github.com/weiykong)
+- [x] Mermaid diagram PDF export (full fidelity)
+- [x] GFM alerts/admonitions (NOTE, TIP, IMPORTANT, WARNING, CAUTION)
+- [x] Remember last window size
 - [ ] Definition lists
+- [ ] Reading mode (distraction-free)
 
 Have a feature request? [Open an issue!](https://github.com/b451c/quickmd/issues)
 
@@ -350,8 +358,8 @@ QuickMD respects your privacy. See our [Privacy Policy](PRIVACY.md) for details.
 
 <div align="center">
 
-**Built with ❤️ using Swift and SwiftUI**
+**Built with Swift and SwiftUI. No dependencies, no compromises.**
 
-⭐ Star this repo if you find QuickMD useful!
+If QuickMD is useful to you, a star helps others find it.
 
 </div>
