@@ -28,6 +28,10 @@ struct FocusedOpenInExternalEditorKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct FocusedZoomActionKey: FocusedValueKey {
+    typealias Value = (MarkdownZoom) -> Void
+}
+
 extension FocusedValues {
     var documentText: String? {
         get { self[FocusedDocumentTextKey.self] }
@@ -52,6 +56,10 @@ extension FocusedValues {
     var openInExternalEditorAction: (() -> Void)? {
         get { self[FocusedOpenInExternalEditorKey.self] }
         set { self[FocusedOpenInExternalEditorKey.self] = newValue }
+    }
+    var zoomAction: ((MarkdownZoom) -> Void)? {
+        get { self[FocusedZoomActionKey.self] }
+        set { self[FocusedZoomActionKey.self] = newValue }
     }
 }
 

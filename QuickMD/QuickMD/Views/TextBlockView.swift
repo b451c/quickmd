@@ -73,6 +73,10 @@ struct TextBlockView: View {
     let attributed: AttributedString
     var hasInlineMath: Bool = false
     let theme: MarkdownTheme
+    var fontScale: CGFloat = 1.0
+    /// Bumped by MarkdownView every time a parse produces new blocks. This is
+    /// the cache-invalidation signal — see `cacheKey`.
+    var contentVersion: Int = 0
     var searchTerm: String = ""
     var focusedOccurrence: Int? = nil
     let heightCache: BlockHeightCache
@@ -83,12 +87,15 @@ struct TextBlockView: View {
     @State private var cachedKey: String = ""
 
     init(blockId: String, attributed: AttributedString, hasInlineMath: Bool = false,
-         theme: MarkdownTheme, searchTerm: String = "", focusedOccurrence: Int? = nil,
+         theme: MarkdownTheme, fontScale: CGFloat = 1.0, contentVersion: Int = 0,
+         searchTerm: String = "", focusedOccurrence: Int? = nil,
          heightCache: BlockHeightCache, onLink: @escaping (URL) -> Void) {
         self.blockId = blockId
         self.attributed = attributed
         self.hasInlineMath = hasInlineMath
         self.theme = theme
+        self.fontScale = fontScale
+        self.contentVersion = contentVersion
         self.searchTerm = searchTerm
         self.focusedOccurrence = focusedOccurrence
         self.heightCache = heightCache
@@ -97,15 +104,19 @@ struct TextBlockView: View {
         _contentHeight = State(initialValue: heightCache.height(for: blockId) ?? 18)
     }
 
-    /// isDark is part of the key: "Auto" resolves to different palettes per
-    /// system appearance while keeping the same name.
+    /// Keyed on `contentVersion`, NOT on a theme/scale/length fingerprint.
+    /// `attributed` is rebuilt by the parse for every theme, colour-scheme and
+    /// zoom change, and a font-size-only change leaves the character count
+    /// identical — so any content-blind key reports a false hit and pins the
+    /// previous render (that is what made zoom lag one step behind). The
+    /// version counter changes exactly when a new `attributed` arrives.
     private var cacheKey: String {
-        "\(theme.name)|\(theme.isDark)|\(blockId)|\(attributed.characters.count)"
+        "\(contentVersion)|\(blockId)"
     }
 
     var body: some View {
         let ns = (cacheKey == cachedKey ? cachedNS : nil) ?? Self.makeNSAttributedString(
-            from: attributed, hasInlineMath: hasInlineMath, theme: theme)
+            from: attributed, hasInlineMath: hasInlineMath, theme: theme, fontScale: fontScale)
 
         BlockTextView(
             attributed: ns,
@@ -137,7 +148,8 @@ struct TextBlockView: View {
     /// Text pipeline dropped attachments; that constraint no longer applies).
     nonisolated static func makeNSAttributedString(from attributed: AttributedString,
                                                    hasInlineMath: Bool,
-                                                   theme: MarkdownTheme) -> NSAttributedString {
+                                                   theme: MarkdownTheme,
+                                                   fontScale: CGFloat) -> NSAttributedString {
         guard hasInlineMath else {
             return (try? NSAttributedString(attributed, including: \.appKit))
                 ?? NSAttributedString(string: String(attributed.characters))
@@ -170,11 +182,11 @@ struct TextBlockView: View {
                     attrIndex = end
                 }
 
-                if let image = renderMathImage(latex: latex, theme: theme) {
+                if let image = renderMathImage(latex: latex, theme: theme, fontScale: fontScale) {
                     let attachment = NSTextAttachment()
                     attachment.image = image
                     // Center the math image against the 14pt body cap height
-                    let bodyFont = NSFont.systemFont(ofSize: 14)
+                    let bodyFont = NSFont.systemFont(ofSize: 14 * fontScale)
                     let yOffset = (bodyFont.capHeight - image.size.height) / 2
                     attachment.bounds = CGRect(x: 0, y: yOffset,
                                                width: image.size.width, height: image.size.height)
@@ -182,7 +194,7 @@ struct TextBlockView: View {
                 } else {
                     // Fallback: italic literal, same as the legacy pipeline
                     var attr = AttributedString(latex)
-                    attr.setDualFont(size: 14, italic: true)
+                    attr.setDualFont(size: 14 * fontScale, italic: true)
                     attr.setDualForeground(theme.textColor)
                     if let ns = try? NSAttributedString(attr, including: \.appKit) {
                         result.append(ns)
@@ -194,10 +206,10 @@ struct TextBlockView: View {
         return result
     }
 
-    nonisolated private static func renderMathImage(latex: String, theme: MarkdownTheme) -> NSImage? {
+    nonisolated private static func renderMathImage(latex: String, theme: MarkdownTheme, fontScale: CGFloat) -> NSImage? {
         var mathImage = MathImage(
             latex: latex,
-            fontSize: 14,
+            fontSize: 14 * fontScale,
             textColor: NSColor(theme.textColor),
             labelMode: .text,
             textAlignment: .left

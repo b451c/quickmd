@@ -6,6 +6,8 @@ import SwiftUI
 /// Handles: fenced code blocks, tables, images, setext headers, and text paragraphs
 struct MarkdownBlockParser: Sendable {
     let theme: MarkdownTheme
+    /// ⌘+ / ⌘- zoom multiplier, forwarded to the renderer.
+    let fontScale: CGFloat
 
     // Cached renderer instance - created once per parser, not per flushTextBuffer call
     private let renderer: MarkdownRenderer
@@ -16,13 +18,15 @@ struct MarkdownBlockParser: Sendable {
     private static let refLinkDefRegex = try! NSRegularExpression(pattern: MarkdownTheme.referenceLinkDefinitionPattern)
     private static let footnoteDefRegex = try! NSRegularExpression(pattern: MarkdownTheme.footnoteDefinitionPattern)
 
-    init(theme: MarkdownTheme) {
+    init(theme: MarkdownTheme, fontScale: CGFloat = 1.0) {
         self.theme = theme
-        self.renderer = MarkdownRenderer(theme: theme)
+        self.fontScale = fontScale
+        self.renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
     }
 
     init(colorScheme: ColorScheme) {
         self.theme = MarkdownTheme.cached(for: colorScheme)
+        self.fontScale = 1.0
         self.renderer = MarkdownRenderer(theme: self.theme)
     }
 
@@ -92,7 +96,7 @@ struct MarkdownBlockParser: Sendable {
         // Use reference-aware renderer if definitions were found
         let activeRenderer = referenceDefinitions.isEmpty && footnoteDefinitions.isEmpty
             ? self.renderer
-            : MarkdownRenderer(theme: theme, referenceDefinitions: referenceDefinitions, footnoteDefinitions: footnoteDefinitions)
+            : MarkdownRenderer(theme: theme, fontScale: fontScale, referenceDefinitions: referenceDefinitions, footnoteDefinitions: footnoteDefinitions)
 
         var i = 0
         var textBuffer: [String] = []
@@ -321,18 +325,18 @@ struct MarkdownBlockParser: Sendable {
 
             // Horizontal rule separator
             var rule = AttributedString("────────────────────────────────\n")
-            rule.setDualFont(size: 12)
+            rule.setDualFont(size: renderer.scaled(12))
             rule.setDualForeground(theme.secondaryTextColor)
             footnoteText.append(rule)
 
             for (index, def) in footnoteDefinitions.enumerated() {
                 let number = index + 1
                 var prefix = AttributedString("\(number). ")
-                prefix.setDualFont(size: 12, bold: true)
+                prefix.setDualFont(size: renderer.scaled(12), bold: true)
                 prefix.setDualForeground(theme.secondaryTextColor)
 
                 var content = activeRenderer.renderInline(def.content)
-                content.setDualFont(size: 12)
+                content.setDualFont(size: renderer.scaled(12))
                 content.setDualForeground(theme.secondaryTextColor)
 
                 footnoteText.append(prefix)

@@ -36,6 +36,7 @@ struct TableBlockView: View, TableAlignmentProvider {
     let rows: [[String]]
     let alignments: [TextAlignment]
     let theme: MarkdownTheme
+    var fontScale: CGFloat = 1.0
     var searchText: String = ""
     var focusedOccurrence: Int? = nil
 
@@ -46,14 +47,15 @@ struct TableBlockView: View, TableAlignmentProvider {
     private let columnCount: Int
 
     init(headers: [String], rows: [[String]], alignments: [TextAlignment], theme: MarkdownTheme,
-         searchText: String = "", focusedOccurrence: Int? = nil) {
+         fontScale: CGFloat = 1.0, searchText: String = "", focusedOccurrence: Int? = nil) {
         self.headers = headers
         self.rows = rows
         self.alignments = alignments
         self.theme = theme
+        self.fontScale = fontScale
         self.searchText = searchText
         self.focusedOccurrence = focusedOccurrence
-        self.renderer = MarkdownRenderer(theme: theme)
+        self.renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
         self.columnCount = headers.count
     }
 
@@ -71,7 +73,7 @@ struct TableBlockView: View, TableAlignmentProvider {
                     let localFocused = localFocusedOccurrence(cellOffset: cellOffsets.headerOffsets[index],
                                                                cellText: headers[index])
                     Text(searchText.isEmpty ? rendered : searchHighlight(rendered, term: searchText, focusedOccurrence: localFocused))
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.system(size: 13 * fontScale, weight: .semibold))
                         .foregroundColor(theme.textColor)
                         .multilineTextAlignment(textAlignmentFor(index))
                         .frame(maxWidth: .infinity, alignment: alignmentFor(index))
@@ -100,7 +102,7 @@ struct TableBlockView: View, TableAlignmentProvider {
                         let localFocused = localFocusedOccurrence(cellOffset: cellOffsets.rowOffsets[rowIndex][colIndex],
                                                                    cellText: cell)
                         Text(searchText.isEmpty ? rendered : searchHighlight(rendered, term: searchText, focusedOccurrence: localFocused))
-                            .font(.system(size: 13))
+                            .font(.system(size: 13 * fontScale))
                             .foregroundColor(theme.textColor)
                             .multilineTextAlignment(textAlignmentFor(colIndex))
                             .frame(maxWidth: .infinity, alignment: alignmentFor(colIndex))

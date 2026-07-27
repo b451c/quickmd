@@ -13,6 +13,7 @@ struct HeadingBlockView: View {
     let level: Int
     let title: String
     let theme: MarkdownTheme
+    var fontScale: CGFloat = 1.0
     let searchText: String
     let focusedOccurrence: Int?
     let onCopySection: () -> Void
@@ -20,7 +21,7 @@ struct HeadingBlockView: View {
     @State private var hideWorkItem: DispatchWorkItem?
 
     var body: some View {
-        let headingAttr = MarkdownRenderer(theme: theme).renderHeader(title, level: level)
+        let headingAttr = MarkdownRenderer(theme: theme, fontScale: fontScale).renderHeader(title, level: level)
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             if searchText.isEmpty {
                 Text(headingAttr)

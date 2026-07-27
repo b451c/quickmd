@@ -45,6 +45,9 @@ struct QuickMDApp: App {
                 Divider()
                 CopyMarkdownCommand()
             }
+            CommandGroup(after: .toolbar) {
+                ZoomCommands()
+            }
             CommandGroup(replacing: .help) {
                 Button("QuickMD Help") {
                     NSWorkspace.shared.open(AppURLs.github)
@@ -82,6 +85,29 @@ struct QuickMDApp: App {
         }
         .windowResizability(.contentSize)
         #endif
+    }
+}
+
+/// View ▸ Bigger / Smaller / Actual Size — scales the rendered text of the
+/// frontmost document only, via @FocusedValue (same routing as ⌘F and ⌘⇧T),
+/// so zooming one tab leaves the others alone.
+struct ZoomCommands: View {
+    @FocusedValue(\.zoomAction) var zoomAction
+
+    var body: some View {
+        Button("Bigger") { zoomAction?(.bigger) }
+            .keyboardShortcut("+", modifiers: .command)
+            .disabled(zoomAction == nil)
+
+        Button("Smaller") { zoomAction?(.smaller) }
+            .keyboardShortcut("-", modifiers: .command)
+            .disabled(zoomAction == nil)
+
+        Button("Actual Size") { zoomAction?(.actualSize) }
+            .keyboardShortcut("0", modifiers: .command)
+            .disabled(zoomAction == nil)
+
+        Divider()
     }
 }
 

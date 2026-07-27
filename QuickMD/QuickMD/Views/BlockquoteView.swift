@@ -10,6 +10,8 @@ struct BlockquoteView: View {
     let content: String
     let level: Int
     let theme: MarkdownTheme
+    var fontScale: CGFloat = 1.0
+    var contentVersion: Int = 0
     var searchText: String = ""
     var focusedOccurrence: Int? = nil
     let heightCache: BlockHeightCache
@@ -19,17 +21,20 @@ struct BlockquoteView: View {
     private let renderer: MarkdownRenderer
 
     init(blockId: String, content: String, level: Int, theme: MarkdownTheme,
+         fontScale: CGFloat = 1.0, contentVersion: Int = 0,
          searchText: String = "", focusedOccurrence: Int? = nil,
          heightCache: BlockHeightCache, onLink: @escaping (URL) -> Void) {
         self.blockId = blockId
         self.content = content
         self.level = level
         self.theme = theme
+        self.fontScale = fontScale
+        self.contentVersion = contentVersion
         self.searchText = searchText
         self.focusedOccurrence = focusedOccurrence
         self.heightCache = heightCache
         self.onLink = onLink
-        self.renderer = MarkdownRenderer(theme: theme)
+        self.renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
     }
 
     var body: some View {
@@ -46,6 +51,8 @@ struct BlockquoteView: View {
                 blockId: blockId,
                 attributed: renderedContent(),
                 theme: theme,
+                fontScale: fontScale,
+                contentVersion: contentVersion,
                 searchTerm: searchText,
                 focusedOccurrence: focusedOccurrence,
                 heightCache: heightCache,
