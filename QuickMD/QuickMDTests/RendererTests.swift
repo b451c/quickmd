@@ -92,6 +92,72 @@ final class RendererTests: XCTestCase {
         XCTAssertTrue(checked.contains("☑"))
     }
 
+    // MARK: - List indentation
+
+    /// Paragraph style of the first list item in `markdown`, as the NSTextView
+    /// pipeline sees it (SwiftUI `Text` ignores paragraph styles entirely).
+    private func listStyle(_ markdown: String, scale: CGFloat = 1.0) throws -> NSParagraphStyle {
+        let r = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light), fontScale: scale)
+        let ns = try NSAttributedString(r.render(markdown), including: \.appKit)
+        let style = ns.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        return try XCTUnwrap(style, "list item carries no paragraph style")
+    }
+
+    /// The bug: with no hanging indent a wrapped item's continuation lines fall
+    /// back to the marker's margin, so bullets/numbers and text share one edge.
+    func testListItemHangsWrappedLinesPastItsMarker() throws {
+        for markdown in ["- alpha", "1. alpha", "- [ ] alpha", "- [x] alpha"] {
+            let style = try listStyle(markdown)
+            XCTAssertGreaterThan(style.firstLineHeadIndent, 0,
+                                 "\(markdown): marker sits flush against the text margin")
+            XCTAssertGreaterThan(style.headIndent, style.firstLineHeadIndent,
+                                 "\(markdown): wrapped lines are not hung under the item text")
+        }
+    }
+
+    /// A wider marker has to hang further, or "10." would overlap its own text.
+    func testWiderOrderedMarkerHangsFurther() throws {
+        let single = try listStyle("1. alpha")
+        let double = try listStyle("10. alpha")
+        XCTAssertGreaterThan(double.headIndent, single.headIndent)
+    }
+
+    func testNestedItemsIndentDeeperThanTheirParent() {
+        // Two-space and four-space nesting are both common, and neither may
+        // collapse a level onto its parent's margin.
+        for unit in ["  ", "    "] {
+            let levels = (0...3).map { MarkdownRenderer.listLevel(for: Substring(String(repeating: unit, count: $0))) }
+            XCTAssertEqual(levels, levels.sorted(), "unit '\(unit)': levels not monotonic")
+            XCTAssertEqual(Set(levels).count, levels.count, "unit '\(unit)': two levels share one margin")
+            XCTAssertEqual(levels.first, 0, "unit '\(unit)': top level must be 0")
+        }
+    }
+
+    func testTabIndentIsOneNestingStep() {
+        XCTAssertEqual(MarkdownRenderer.listLevel(for: "\t"), 1)
+        XCTAssertEqual(MarkdownRenderer.listLevel(for: "\t\t"), 2)
+    }
+
+    func testListLevelIsCappedForRunawayIndents() {
+        XCTAssertLessThanOrEqual(MarkdownRenderer.listLevel(for: Substring(String(repeating: " ", count: 400))), 8)
+    }
+
+    /// Indents are point values, so they have to follow ⌘+ / ⌘- like the fonts.
+    func testListIndentScalesWithZoom() throws {
+        let normal = try listStyle("- alpha")
+        let zoomed = try listStyle("- alpha", scale: 2.0)
+        XCTAssertEqual(zoomed.firstLineHeadIndent, normal.firstLineHeadIndent * 2, accuracy: 0.01)
+        XCTAssertGreaterThan(zoomed.headIndent, normal.headIndent)
+    }
+
+    /// Nesting must stay in the characters too: the print/PDF pipeline renders
+    /// through SwiftUI `Text`, which drops paragraph styles.
+    func testNestingSurvivesInPlainTextForPrintPipeline() {
+        let out = String(renderer.render("- top\n  - nested\n").characters)
+        XCTAssertTrue(out.contains("• top"))
+        XCTAssertTrue(out.contains("    • nested"))
+    }
+
     // MARK: - Footnote references
 
     func testFootnoteReferenceRendersSuperscript() {

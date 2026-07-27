@@ -13,6 +13,8 @@ import AppKit
 // Every style the renderer sets MUST stamp both scopes, or one pipeline
 // silently loses formatting. Use these helpers — never set `.font` /
 // `.foregroundColor` directly in renderer code.
+// The one exception is NSParagraphStyle (list indents): SwiftUI `Text` has no
+// equivalent, so it is AppKit-only by necessity — see "List Indentation".
 extension AttributedString {
 
     /// Set font in both SwiftUI and AppKit scopes.
@@ -144,22 +146,22 @@ struct MarkdownRenderer: Sendable {
 
         // Task list (must check before unordered list)
         if let taskMatch = parseTaskList(line) {
-            return renderTaskItem(taskMatch.content, indent: taskMatch.indent, checked: taskMatch.checked)
+            return renderTaskItem(taskMatch.content, level: taskMatch.level, checked: taskMatch.checked)
         }
 
         // Unordered list
         if let bullet = ["- ", "* ", "+ "].first(where: { trimmed.hasPrefix($0) }) {
-            let indent = line.prefix(while: { $0 == " " || $0 == "\t" }).count
+            let level = Self.listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" }))
             let content = String(trimmed.dropFirst(bullet.count))
-            return renderListItem(content, indent: indent, ordered: false, number: 0)
+            return renderListItem(content, level: level, ordered: false, number: 0)
         }
 
         // Ordered list
         if let match = trimmed.range(of: #"^(\d+)\.\s"#, options: .regularExpression) {
-            let indent = line.prefix(while: { $0 == " " || $0 == "\t" }).count
+            let level = Self.listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" }))
             let number = Int(trimmed.prefix(while: { $0.isNumber })) ?? 1
             let content = String(trimmed[match.upperBound...])
-            return renderListItem(content, indent: indent, ordered: true, number: number)
+            return renderListItem(content, level: level, ordered: true, number: number)
         }
 
         // Empty line
@@ -183,20 +185,55 @@ struct MarkdownRenderer: Sendable {
         return attr
     }
 
-    private func renderListItem(_ text: String, indent: Int, ordered: Bool, number: Int) -> AttributedString {
-        let indentStr = String(repeating: "    ", count: indent / 4 + (indent % 4 > 0 ? 1 : 0))
-        let prefix = indentStr + (ordered ? "\(number). " : "• ")
+    // MARK: - List Indentation
+    //
+    // A list item is one paragraph: "<indent spaces><marker> <item text>".
+    // Two things have to happen for it to read as a list:
+    //
+    //  1. Nesting — carried by the leading spaces in the marker prefix. It has
+    //     to live in the CHARACTERS, not in the paragraph style, because the
+    //     print/PDF pipeline renders blocks through SwiftUI `Text`, which
+    //     ignores NSParagraphStyle entirely.
+    //  2. A hanging indent so a wrapped item's continuation lines line up under
+    //     the item text instead of falling back to the marker's own margin
+    //     (which made bullets/numbers and body text share one left edge).
+    //     Only the paragraph style can express that, so the NSTextView pipeline
+    //     gets it and `Text` degrades to flush-left wrapping as before.
+
+    /// Points between the text margin and a list marker, at 1.0 zoom. Separates
+    /// the list from surrounding paragraphs at every nesting level.
+    private static let listGutter: CGFloat = 16
+
+    /// Spaces prepended per nesting level.
+    private static let listIndentUnit = "    "
+
+    /// Nesting level from a list line's leading whitespace, counting a tab as
+    /// one nesting step.
+    ///
+    /// Authors nest with either two or four spaces and a single line can't say
+    /// which, so we count one level per two columns: a two-space document keeps
+    /// every level distinct (dividing by four would collapse its first two
+    /// levels onto the same margin), and a four-space document simply indents a
+    /// step deeper than authored. Capped so a pathological indent can't push
+    /// text off the right edge.
+    static func listLevel(for whitespace: Substring) -> Int {
+        let columns = whitespace.reduce(0) { $0 + ($1 == "\t" ? 2 : 1) }
+        return min(columns / 2, 8)
+    }
+
+    private func renderListItem(_ text: String, level: Int, ordered: Bool, number: Int) -> AttributedString {
+        let prefix = Self.indentSpaces(level) + (ordered ? "\(number). " : "• ")
         var attr = AttributedString(prefix)
         attr.setDualFont(size: scaled(14))
         attr.setDualForeground(theme.textColor)
         attr.append(renderInlineFormatting(text))
+        applyListParagraphStyle(&attr, hangingUnder: prefix)
         return attr
     }
 
-    private func renderTaskItem(_ text: String, indent: Int, checked: Bool) -> AttributedString {
-        let indentStr = String(repeating: "    ", count: indent / 4 + (indent % 4 > 0 ? 1 : 0))
-        let checkbox = checked ? "☑ " : "☐ "
-        var attr = AttributedString(indentStr + checkbox)
+    private func renderTaskItem(_ text: String, level: Int, checked: Bool) -> AttributedString {
+        let prefix = Self.indentSpaces(level) + (checked ? "☑ " : "☐ ")
+        var attr = AttributedString(prefix)
         attr.setDualFont(size: scaled(14))
         attr.setDualForeground(checked ? theme.checkboxColor : theme.textColor)
 
@@ -206,10 +243,32 @@ struct MarkdownRenderer: Sendable {
             content.setDualForeground(theme.secondaryTextColor)
         }
         attr.append(content)
+        applyListParagraphStyle(&attr, hangingUnder: prefix)
         return attr
     }
 
-    private func parseTaskList(_ line: String) -> (content: String, indent: Int, checked: Bool)? {
+    private static func indentSpaces(_ level: Int) -> String {
+        String(repeating: listIndentUnit, count: level)
+    }
+
+    /// Indents the whole item by the list gutter and hangs its wrapped lines
+    /// under the item text, i.e. past `prefix` (the indent spaces + marker).
+    private func applyListParagraphStyle(_ attr: inout AttributedString, hangingUnder prefix: String) {
+        let gutter = scaled(Self.listGutter)
+        let style = NSMutableParagraphStyle()
+        style.firstLineHeadIndent = gutter
+        style.headIndent = gutter + width(of: prefix)
+        attr[AttributeScopes.AppKitAttributes.ParagraphStyleAttribute.self] = style
+    }
+
+    /// Typeset width of body-font text — the marker prefix, to size the hang.
+    private func width(of string: String) -> CGFloat {
+        (string as NSString)
+            .size(withAttributes: [.font: NSFont.systemFont(ofSize: scaled(14))])
+            .width
+    }
+
+    private func parseTaskList(_ line: String) -> (content: String, level: Int, checked: Bool)? {
         let nsRange = NSRange(line.startIndex..., in: line)
 
         guard let match = Self.taskListRegex.firstMatch(in: line, range: nsRange),
@@ -217,11 +276,11 @@ struct MarkdownRenderer: Sendable {
               let checkRange = Range(match.range(at: 2), in: line),
               let contentRange = Range(match.range(at: 3), in: line) else { return nil }
 
-        let indent = line[indentRange].count
+        let level = Self.listLevel(for: line[indentRange])
         let checked = line[checkRange].lowercased() == "x"
         let content = String(line[contentRange])
 
-        return (content: content, indent: indent, checked: checked)
+        return (content: content, level: level, checked: checked)
     }
 
     private func renderHorizontalRule() -> AttributedString {
