@@ -1,6 +1,6 @@
 cask "quickmd" do
-  version "1.6.0"
-  sha256 "df777871c4cba400c9e5520a525bfd7ad49acf25c20ae22d85a7eab4412711cc"
+  version "1.7.0"
+  sha256 "4e5a92bb8861c5f8cdc1f68522398894bbb6f4cfd040009b83fd5be42ff47175"
 
   url "https://github.com/b451c/quickmd/releases/download/v#{version}/QuickMD-v#{version}.zip",
       verified: "github.com/b451c/quickmd/"
