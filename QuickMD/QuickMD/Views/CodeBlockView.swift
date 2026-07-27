@@ -31,6 +31,7 @@ struct CodeBlockView: View {
     let code: String
     let language: String
     let theme: MarkdownTheme
+    var fontScale: CGFloat = 1.0
     var searchText: String = ""
     var focusedOccurrence: Int? = nil
 
@@ -48,7 +49,7 @@ struct CodeBlockView: View {
         // "Auto" keeps its name across light/dark palette flips. We use
         // code.count + first/last chars to keep the key cheap; if anyone
         // manages a collision we just recompute.
-        "\(theme.name)|\(theme.isDark)|\(code.count)|\(code.prefix(8))…\(code.suffix(8))"
+        "\(theme.name)|\(theme.isDark)|\(fontScale)|\(code.count)|\(code.prefix(8))…\(code.suffix(8))"
     }
 
     var body: some View {
@@ -57,13 +58,13 @@ struct CodeBlockView: View {
         // highlight (5 regex passes) is NEVER computed synchronously in body —
         // the eager VStack renders every block on document open, and per-block
         // main-thread regex work was a measurable share of large-doc open time.
-        let attributed = (cacheKey == cachedKey ? cachedAttributed : nil) ?? Self.plainAttributedString(code: code, theme: theme)
+        let attributed = (cacheKey == cachedKey ? cachedAttributed : nil) ?? Self.plainAttributedString(code: code, theme: theme, fontScale: fontScale)
 
         return ZStack(alignment: .topTrailing) {
             VStack(alignment: .leading, spacing: 0) {
                 if !language.isEmpty {
                     Text(language)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .font(.system(size: 11 * fontScale, weight: .medium, design: .monospaced))
                         .foregroundColor(theme.secondaryTextColor)
                         .padding(.horizontal, 12)
                         .padding(.top, 8)
@@ -117,9 +118,13 @@ struct CodeBlockView: View {
             let key = cacheKey
             let code = self.code
             let theme = self.theme
+            let fontScale = self.fontScale
             let boxed = await Task.detached(priority: .userInitiated) {
-                SendableAttributedString(value: Self.computeHighlightedAttributedString(code: code, theme: theme))
+                SendableAttributedString(value: Self.computeHighlightedAttributedString(code: code, theme: theme, fontScale: fontScale))
             }.value
+            // The task is cancelled when cacheKey changes (zoom, theme, content).
+            // Without this guard a superseded highlight can land last and stick.
+            guard !Task.isCancelled else { return }
             cachedAttributed = boxed.value
             cachedKey = key
         }
@@ -129,17 +134,17 @@ struct CodeBlockView: View {
 
     /// Base font + text color only — cheap enough for body while the real
     /// highlight is being computed in the background task.
-    nonisolated static func plainAttributedString(code: String, theme: MarkdownTheme) -> NSAttributedString {
+    nonisolated static func plainAttributedString(code: String, theme: MarkdownTheme, fontScale: CGFloat) -> NSAttributedString {
         let result = NSMutableAttributedString(string: code)
         let fullRange = NSRange(location: 0, length: (code as NSString).length)
-        result.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), range: fullRange)
+        result.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 13 * fontScale, weight: .regular), range: fullRange)
         result.addAttribute(.foregroundColor, value: NSColor(theme.textColor), range: fullRange)
         return result
     }
 
     /// Full syntax highlight. Static + nonisolated so the detached task can run
     /// it off the main actor, capturing plain values (code + theme), not the view.
-    nonisolated static func computeHighlightedAttributedString(code: String, theme: MarkdownTheme) -> NSAttributedString {
+    nonisolated static func computeHighlightedAttributedString(code: String, theme: MarkdownTheme, fontScale: CGFloat) -> NSAttributedString {
         #if DEBUG
         let signpostID = codeSignpost.makeSignpostID()
         let state = codeSignpost.beginInterval("compute", id: signpostID, "lines=\(code.split(separator: "\n").count)")
@@ -148,7 +153,7 @@ struct CodeBlockView: View {
 
         let result = NSMutableAttributedString(string: code)
         let fullRange = NSRange(location: 0, length: (code as NSString).length)
-        let baseFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let baseFont = NSFont.monospacedSystemFont(ofSize: 13 * fontScale, weight: .regular)
 
         result.addAttribute(.font, value: baseFont, range: fullRange)
         result.addAttribute(.foregroundColor, value: NSColor(theme.textColor), range: fullRange)

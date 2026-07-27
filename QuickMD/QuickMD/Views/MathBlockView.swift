@@ -7,9 +7,10 @@ import SwiftUI
 struct MathBlockView: View {
     let latex: String
     let theme: MarkdownTheme
+    var fontScale: CGFloat = 1.0
 
     var body: some View {
-        MathLabelView(latex: latex, fontSize: 20, textColor: NSColor(theme.textColor))
+        MathLabelView(latex: latex, fontSize: 20 * fontScale, textColor: NSColor(theme.textColor))
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.vertical, 8)
     }

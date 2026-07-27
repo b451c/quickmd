@@ -160,4 +160,40 @@ final class RendererTests: XCTestCase {
         _ = renderer.renderHeader("title", level: 0)
         _ = renderer.renderHeader("title", level: 99)
     }
+
+    // MARK: - Zoom (⌘+ / ⌘-)
+
+    /// Both style scopes must scale, or one of the two pipelines (SwiftUI Text
+    /// vs. NSTextView) would keep rendering at the unzoomed size.
+    func testFontScaleAppliesToBothScopes() {
+        let scaled = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light), fontScale: 2.0)
+        let run = scaled.renderHeader("title", level: 1).runs.first!
+        XCTAssertEqual(run[AttributeScopes.AppKitAttributes.FontAttribute.self]?.pointSize, 64)  // 32 × 2
+        XCTAssertNotNil(run.font)
+    }
+
+    /// Body paragraphs travel through the parser, not renderHeader — the path
+    /// that was silently dropping the zoom in the first cut.
+    func testFontScaleReachesBodyTextBlocks() {
+        func bodySizes(_ scale: CGFloat) -> [CGFloat] {
+            let parser = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light), fontScale: scale)
+            return parser.parse("# Title\n\nSome **body** text.\n").flatMap { block -> [CGFloat] in
+                guard case .text(let attr) = block.content else { return [] }
+                return attr.runs.compactMap { $0[AttributeScopes.AppKitAttributes.FontAttribute.self]?.pointSize }
+            }
+        }
+        XCTAssertEqual(bodySizes(1.0), [14, 14, 14])
+        XCTAssertEqual(bodySizes(2.0), [28, 28, 28])
+    }
+
+    func testZoomStepsClampAtBothEnds() {
+        let steps = MarkdownZoom.steps
+        XCTAssertEqual(MarkdownZoom.bigger.applied(to: steps.last!), steps.last!)
+        XCTAssertEqual(MarkdownZoom.smaller.applied(to: steps.first!), steps.first!)
+        XCTAssertEqual(MarkdownZoom.bigger.applied(to: 1.0), 1.1)
+        XCTAssertEqual(MarkdownZoom.smaller.applied(to: 1.0), 0.9)
+        XCTAssertEqual(MarkdownZoom.actualSize.applied(to: 2.5), 1.0)
+        // An off-ladder value snaps to the nearest rung instead of getting stuck
+        XCTAssertEqual(MarkdownZoom.bigger.applied(to: 1.04), 1.1)
+    }
 }

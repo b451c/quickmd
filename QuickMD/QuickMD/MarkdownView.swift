@@ -31,6 +31,10 @@ struct MarkdownView: View {
     /// The watched file disappeared from its path (moved/deleted).
     @State private var fileMissing = false
     @State private var cachedBlocks: [MarkdownBlock] = []
+    /// Incremented on every successful parse. Text blocks use it to invalidate
+    /// their NSAttributedString caches — a font-size-only change leaves the
+    /// characters identical, so nothing cheaper detects it reliably.
+    @State private var contentVersion: Int = 0
     /// Per-text-block precomputed plain string + inline-math flag. Built once at parse
     /// time so per-render `blockView(_:)` doesn't repeatedly call
     /// `String(attributedString.characters)` and an `NSRegularExpression` on every body
@@ -63,6 +67,16 @@ struct MarkdownView: View {
     /// may have typed again while a previous computation was still running).
     @State private var searchGeneration: Int = 0
     @AppStorage("selectedTheme") private var selectedThemeName: String = "Auto"
+    /// ⌘+ / ⌘- / ⌘0 zoom. Deliberately @State, not @AppStorage: zoom belongs to
+    /// this window only and every document starts back at 100%.
+    /// This is the *requested* scale — it drives the re-parse.
+    @State private var fontScale: Double = 1.0
+    /// The scale `cachedBlocks` was actually parsed with. Views render from
+    /// this, never from `fontScale`, so headings (rendered synchronously in
+    /// body) can't resize a frame ahead of body text (which waits for the
+    /// background parse). Updated in the same transaction as `cachedBlocks`,
+    /// so the whole document changes size in one step.
+    @State private var renderedFontScale: Double = 1.0
 
     init(document: MarkdownDocument, documentURL: URL?) {
         self.document = document
@@ -79,6 +93,7 @@ struct MarkdownView: View {
         let text: String
         let colorScheme: ColorScheme
         let themeName: String
+        let fontScale: Double
     }
 
     var body: some View {
@@ -264,17 +279,19 @@ struct MarkdownView: View {
         .focusedSceneValue(\.copyDocumentAction, { copyToClipboard(currentText) })
         .focusedSceneValue(\.openInExternalEditorAction, { openInExternalEditor() })
         .focusedSceneValue(\.toggleDocumentListAction, { withAnimation(.easeInOut(duration: 0.2)) { isDocumentListVisible.toggle() } })
+        .focusedSceneValue(\.zoomAction, { zoom in fontScale = zoom.applied(to: fontScale) })
         .environment(\.openURL, OpenURLAction { url in
             handleLinkActivation(url)
             return .handled
         })
         .frame(minWidth: 400, minHeight: 300)
-        .task(id: DocumentIdentity(text: currentText, colorScheme: colorScheme, themeName: selectedThemeName)) {
+        .task(id: DocumentIdentity(text: currentText, colorScheme: colorScheme, themeName: selectedThemeName, fontScale: fontScale)) {
             let text = currentText
             let currentTheme = theme
             isParsing = true
+            let scale = CGFloat(fontScale)
             let parsed: ParsedDocument = await Task.detached(priority: .userInitiated) {
-                let blocks = MarkdownBlockParser(theme: currentTheme).parse(text)
+                let blocks = MarkdownBlockParser(theme: currentTheme, fontScale: scale).parse(text)
                 // Pre-compute per-text-block metadata on the background thread so the
                 // main thread never has to do it later.
                 var meta: [String: TextBlockMeta] = [:]
@@ -292,8 +309,15 @@ struct MarkdownView: View {
                 }
                 return ParsedDocument(blocks: blocks, textMeta: meta)
             }.value
+            // SwiftUI cancels this task when the id changes (new text, theme or
+            // zoom) but the detached parse above keeps running to completion —
+            // without this guard a superseded parse can land last and win, which
+            // is what made repeated ⌘+/⌘- jump to arbitrary sizes.
+            guard !Task.isCancelled else { return }
             heightCache.removeAll()  // new content/theme — stale heights would mis-seed blocks
             cachedBlocks = parsed.blocks
+            renderedFontScale = Double(scale)
+            contentVersion += 1
             textBlockMeta = parsed.textMeta
             headings = parsed.blocks.compactMap { block in
                 if case .heading(let level, let title, let sourceLine) = block.content {
@@ -401,6 +425,7 @@ struct MarkdownView: View {
         let _ = viewSignpost.emitEvent("blockView", "id=\(block.id, privacy: .public)")
         #endif
         let focusedOcc = (block.id == focusedBlockId) ? focusedOccInBlock : nil
+        let scale = CGFloat(renderedFontScale)
         let view = Group {
             switch block.content {
             case .text(let attributedString):
@@ -412,6 +437,8 @@ struct MarkdownView: View {
                     attributed: attributedString,
                     hasInlineMath: textBlockMeta[block.id]?.hasInlineMath ?? false,
                     theme: theme,
+                    fontScale: scale,
+                    contentVersion: contentVersion,
                     searchTerm: searchText,
                     focusedOccurrence: focusedOcc,
                     heightCache: heightCache,
@@ -420,12 +447,12 @@ struct MarkdownView: View {
 
             case .table(let headers, let rows, let alignments):
                 TableBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme,
-                               searchText: searchText, focusedOccurrence: focusedOcc)
+                               fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc)
                     .padding(.vertical, 8)
 
             case .codeBlock(let code, let language):
                 CodeBlockView(code: code, language: language, theme: theme,
-                              searchText: searchText, focusedOccurrence: focusedOcc)
+                              fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc)
                     .padding(.vertical, 4)
 
             case .image(let url, let alt):
@@ -434,6 +461,7 @@ struct MarkdownView: View {
 
             case .blockquote(let content, let level):
                 BlockquoteView(blockId: block.id, content: content, level: level, theme: theme,
+                               fontScale: scale, contentVersion: contentVersion,
                                searchText: searchText, focusedOccurrence: focusedOcc,
                                heightCache: heightCache,
                                onLink: { handleLinkActivation($0) })
@@ -445,6 +473,7 @@ struct MarkdownView: View {
                     level: level,
                     title: title,
                     theme: theme,
+                    fontScale: scale,
                     searchText: searchText,
                     focusedOccurrence: focusedOcc,
                     onCopySection: {
@@ -456,7 +485,7 @@ struct MarkdownView: View {
                 )
 
             case .mathBlock(let latex):
-                MathBlockView(latex: latex, theme: theme)
+                MathBlockView(latex: latex, theme: theme, fontScale: scale)
                     .padding(.vertical, 4)
 
             case .mermaidDiagram(let source):

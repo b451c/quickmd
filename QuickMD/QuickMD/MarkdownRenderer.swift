@@ -59,8 +59,31 @@ extension AttributedString {
     }
 }
 
+// MARK: - Zoom (⌘+ / ⌘- / ⌘0)
+
+/// One step of the text-size ladder. Deliberately NOT a theme property and NOT
+/// persisted: zoom belongs to the window you're reading in, so every document
+/// opens at 100% and adjusting one tab leaves the others alone.
+enum MarkdownZoom {
+    case bigger, smaller, actualSize
+
+    static let steps: [Double] = [0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+
+    /// Applies this step to `current`, clamped at both ends of the ladder.
+    func applied(to current: Double) -> Double {
+        guard self != .actualSize else { return 1.0 }
+        // Snap to the nearest rung first so we never get stuck between steps.
+        let index = Self.steps.enumerated()
+            .min(by: { abs($0.element - current) < abs($1.element - current) })?.offset ?? 0
+        let target = self == .bigger ? index + 1 : index - 1
+        return Self.steps[min(max(target, 0), Self.steps.count - 1)]
+    }
+}
+
 struct MarkdownRenderer: Sendable {
     let theme: MarkdownTheme
+    /// ⌘+ / ⌘- zoom multiplier for this render pass. 1.0 = design sizes.
+    let fontScale: CGFloat
     let referenceDefinitions: [String: String]
     let footnoteDefinitions: [(id: String, content: String)]
 
@@ -69,17 +92,22 @@ struct MarkdownRenderer: Sendable {
     private static let autolinkRegex = try! NSRegularExpression(pattern: MarkdownTheme.autolinkPattern)
     private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
 
-    init(theme: MarkdownTheme, referenceDefinitions: [String: String] = [:], footnoteDefinitions: [(id: String, content: String)] = []) {
+    init(theme: MarkdownTheme, fontScale: CGFloat = 1.0, referenceDefinitions: [String: String] = [:], footnoteDefinitions: [(id: String, content: String)] = []) {
         self.theme = theme
+        self.fontScale = fontScale
         self.referenceDefinitions = referenceDefinitions
         self.footnoteDefinitions = footnoteDefinitions
     }
 
     init(colorScheme: ColorScheme, referenceDefinitions: [String: String] = [:]) {
         self.theme = MarkdownTheme.cached(for: colorScheme)
+        self.fontScale = 1.0
         self.referenceDefinitions = referenceDefinitions
         self.footnoteDefinitions = []
     }
+
+    /// Scales a design-time point size to this render pass's zoom level.
+    func scaled(_ size: CGFloat) -> CGFloat { size * fontScale }
 
     // MARK: - Main Render
 
@@ -150,7 +178,7 @@ struct MarkdownRenderer: Sendable {
         let sizes: [CGFloat] = [32, 26, 22, 18, 16, 14]
         // Safety guard: ensure level is within bounds to prevent crash
         let safeLevel = max(1, min(level, 6))
-        attr.setDualFont(size: sizes[safeLevel - 1], bold: true)
+        attr.setDualFont(size: scaled(sizes[safeLevel - 1]), bold: true)
         attr.setDualForeground(theme.textColor)
         return attr
     }
@@ -159,7 +187,7 @@ struct MarkdownRenderer: Sendable {
         let indentStr = String(repeating: "    ", count: indent / 4 + (indent % 4 > 0 ? 1 : 0))
         let prefix = indentStr + (ordered ? "\(number). " : "• ")
         var attr = AttributedString(prefix)
-        attr.setDualFont(size: 14)
+        attr.setDualFont(size: scaled(14))
         attr.setDualForeground(theme.textColor)
         attr.append(renderInlineFormatting(text))
         return attr
@@ -169,7 +197,7 @@ struct MarkdownRenderer: Sendable {
         let indentStr = String(repeating: "    ", count: indent / 4 + (indent % 4 > 0 ? 1 : 0))
         let checkbox = checked ? "☑ " : "☐ "
         var attr = AttributedString(indentStr + checkbox)
-        attr.setDualFont(size: 14)
+        attr.setDualFont(size: scaled(14))
         attr.setDualForeground(checked ? theme.checkboxColor : theme.textColor)
 
         var content = renderInlineFormatting(text)
@@ -198,7 +226,7 @@ struct MarkdownRenderer: Sendable {
 
     private func renderHorizontalRule() -> AttributedString {
         var attr = AttributedString("────────────────────────────────")
-        attr.setDualFont(size: 14)
+        attr.setDualFont(size: scaled(14))
         attr.setDualForeground(theme.secondaryTextColor)
         return attr
     }
@@ -219,7 +247,7 @@ struct MarkdownRenderer: Sendable {
         func flushPlainText() {
             guard !plainTextBuffer.isEmpty else { return }
             var attr = AttributedString(plainTextBuffer)
-            attr.setDualFont(size: 14)
+            attr.setDualFont(size: scaled(14))
             attr.setDualForeground(theme.textColor)
             result.append(attr)
             plainTextBuffer = ""
@@ -265,7 +293,7 @@ struct MarkdownRenderer: Sendable {
             // 3+ backticks in inline context — render as literal backtick characters
             let backticks = String(repeating: "`", count: backtickCount)
             var attr = AttributedString(backticks)
-            attr.setDualFont(size: 14)
+            attr.setDualFont(size: scaled(14))
             attr.setDualForeground(theme.textColor)
             return (attr, remaining.dropFirst(backtickCount))
         }
@@ -292,7 +320,7 @@ struct MarkdownRenderer: Sendable {
         }
 
         var attr = AttributedString(code)
-        attr.setDualFont(size: 13, monospaced: true)
+        attr.setDualFont(size: scaled(13), monospaced: true)
         attr.setDualForeground(theme.textColor)
         attr.setDualBackground(theme.codeBackgroundColor)
         return (attr, afterOpening[closeRange.upperBound...])
@@ -307,7 +335,7 @@ struct MarkdownRenderer: Sendable {
 
         let text = String(afterMarker[..<endRange.lowerBound])
         var attr = AttributedString(text)
-        attr.setDualFont(size: 14, bold: true, italic: true)
+        attr.setDualFont(size: scaled(14), bold: true, italic: true)
         attr.setDualForeground(theme.textColor)
         return (attr, afterMarker[endRange.upperBound...])
     }
@@ -323,7 +351,7 @@ struct MarkdownRenderer: Sendable {
         let boldText = String(afterMarker[..<endRange.lowerBound])
         // Recursively parse inner text for nested emphasis (e.g., **bold *and italic* text**)
         var attr = renderInlineFormatting(boldText)
-        attr.setDualFont(size: 14, bold: true)
+        attr.setDualFont(size: scaled(14), bold: true)
         attr.setDualForeground(theme.textColor)
         return (attr, afterMarker[endRange.upperBound...])
     }
@@ -362,7 +390,7 @@ struct MarkdownRenderer: Sendable {
         let italicText = String(afterMarker[..<endIndex])
         // Recursively parse inner text for nested emphasis (e.g., *italic **and bold** text*)
         var attr = renderInlineFormatting(italicText)
-        attr.setDualFont(size: 14, italic: true)
+        attr.setDualFont(size: scaled(14), italic: true)
         attr.setDualForeground(theme.textColor)
         return (attr, afterMarker[afterMarker.index(after: endIndex)...])
     }
@@ -375,7 +403,7 @@ struct MarkdownRenderer: Sendable {
 
         let strikeText = String(afterMarker[..<endRange.lowerBound])
         var attr = AttributedString(strikeText)
-        attr.setDualFont(size: 14)
+        attr.setDualFont(size: scaled(14))
         attr.setDualForeground(theme.textColor)
         attr.setDualStrikethrough()
         return (attr, afterMarker[endRange.upperBound...])
@@ -433,7 +461,7 @@ struct MarkdownRenderer: Sendable {
 
     private func makeLink(text: String, url: String, remaining: Substring) -> (AttributedString, Substring) {
         var attr = AttributedString(text)
-        attr.setDualFont(size: 14)
+        attr.setDualFont(size: scaled(14))
         attr.setDualForeground(theme.linkColor)
         attr.setDualUnderline()
 
@@ -471,7 +499,7 @@ struct MarkdownRenderer: Sendable {
         let urlText = String(remaining[urlStart..<urlEndIdx])
 
         var attr = AttributedString("[Image: \(altText)]")
-        attr.setDualFont(size: 14, italic: true)
+        attr.setDualFont(size: scaled(14), italic: true)
         attr.setDualForeground(theme.secondaryTextColor)
         if let url = URL(string: urlText) {
             attr.link = url
@@ -485,7 +513,7 @@ struct MarkdownRenderer: Sendable {
         guard MarkdownTheme.escapableChars.contains(escaped) else { return nil }
 
         var attr = AttributedString(String(escaped))
-        attr.setDualFont(size: 14)
+        attr.setDualFont(size: scaled(14))
         attr.setDualForeground(theme.textColor)
         return (attr, remaining.dropFirst(2))
     }
@@ -504,7 +532,7 @@ struct MarkdownRenderer: Sendable {
 
         let urlText = String(str[range])
         var attr = AttributedString(urlText)
-        attr.setDualFont(size: 14)
+        attr.setDualFont(size: scaled(14))
         attr.setDualForeground(theme.linkColor)
         attr.setDualUnderline()
         if let url = URL(string: urlText) {
@@ -542,7 +570,7 @@ struct MarkdownRenderer: Sendable {
         let superscript = String(String(number).map { superscriptDigits[$0] ?? $0 })
 
         var attr = AttributedString(superscript)
-        attr.setDualFont(size: 11, bold: true)
+        attr.setDualFont(size: scaled(11), bold: true)
         attr.setDualForeground(theme.linkColor)
         return (attr, afterBracket[afterBracket.index(after: closeIndex)...])
     }
