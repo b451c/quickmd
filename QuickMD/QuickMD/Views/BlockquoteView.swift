@@ -65,10 +65,11 @@ struct BlockquoteView: View {
     }
 
     /// Inline-render each quote line and join with newlines — one attributed
-    /// string for the whole quote body.
+    /// string for the whole quote body. Soft breaks are joined first so a
+    /// single newline inside a quote paragraph reads as a space (CommonMark).
     private func renderedContent() -> AttributedString {
         var result = AttributedString()
-        let lines = content.components(separatedBy: "\n")
+        let lines = MarkdownRenderer.joinSoftBreaks(content.components(separatedBy: "\n"))
         for (index, line) in lines.enumerated() {
             if line.trimmingCharacters(in: .whitespaces).isEmpty {
                 result.append(AttributedString(" "))

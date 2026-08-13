@@ -116,12 +116,83 @@ struct MarkdownRenderer: Sendable {
     func render(_ markdown: String) -> AttributedString {
         var result = AttributedString()
 
-        for line in markdown.components(separatedBy: "\n") {
+        for line in Self.joinSoftBreaks(markdown.components(separatedBy: "\n")) {
             result.append(renderLine(line))
             result.append(AttributedString("\n"))
         }
 
         return result
+    }
+
+    // MARK: - Soft Breaks
+
+    /// CommonMark renders a single newline inside a paragraph as a space (a
+    /// soft break), not a line break. The renderer is line-based, so this
+    /// pre-pass joins consecutive paragraph lines into one logical line before
+    /// they reach `renderLine`. A list item also absorbs the plain lines that
+    /// follow it (lazy continuation), so wrapped item text stays inside the
+    /// item and gets its hanging indent instead of dropping to the left
+    /// margin as a bogus paragraph. A hard break — two or more trailing
+    /// spaces, or a trailing backslash — still ends the visual line, and
+    /// headers, rules, and blanks always keep their own line.
+    static func joinSoftBreaks(_ lines: [String]) -> [String] {
+        var joined: [String] = []
+        var openParagraph = false  // last joined line can absorb a continuation
+
+        for line in lines {
+            let kind = classify(line)
+            guard kind != .structural else {
+                joined.append(line)
+                openParagraph = false
+                continue
+            }
+
+            let hardBreak = endsWithHardBreak(line)
+            var text = line
+            while text.last == " " || text.last == "\t" { text.removeLast() }
+            if hardBreak && text.hasSuffix("\\") { text.removeLast() }
+
+            if kind == .paragraph && openParagraph {
+                joined[joined.count - 1] += " " + text.trimmingCharacters(in: .whitespaces)
+            } else {
+                joined.append(text)
+            }
+            openParagraph = !hardBreak
+        }
+
+        return joined
+    }
+
+    private enum LineKind {
+        /// Blank, header, or horizontal rule — never joins with anything.
+        case structural
+        /// Bullet/ordered/task item — always starts its own joined line, but
+        /// leaves its paragraph open so following plain lines merge into the
+        /// item (CommonMark lazy continuation).
+        case listItem
+        /// Regular paragraph text — continues an open paragraph, or opens one.
+        case paragraph
+    }
+
+    /// Must mirror the dispatch in `renderLine`, or a structural line could
+    /// get glued into the paragraph before it.
+    private static func classify(_ line: String) -> LineKind {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return .structural }
+        let nsRange = NSRange(line.startIndex..., in: line)
+        if headerRegex.firstMatch(in: line, range: nsRange) != nil { return .structural }
+        if trimmed.range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil { return .structural }
+        if taskListRegex.firstMatch(in: line, range: nsRange) != nil { return .listItem }
+        if ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) { return .listItem }
+        if trimmed.range(of: #"^(\d+)\.\s"#, options: .regularExpression) != nil { return .listItem }
+        return .paragraph
+    }
+
+    /// Two-plus trailing spaces, or an odd run of trailing backslashes (an
+    /// even run is escaped literal backslashes, e.g. `foo\\`).
+    private static func endsWithHardBreak(_ line: String) -> Bool {
+        if line.hasSuffix("  ") { return true }
+        return line.reversed().prefix(while: { $0 == "\\" }).count % 2 == 1
     }
 
     // MARK: - Line Rendering
