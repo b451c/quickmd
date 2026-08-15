@@ -158,6 +158,83 @@ final class RendererTests: XCTestCase {
         XCTAssertTrue(out.contains("    • nested"))
     }
 
+    // MARK: - Soft line breaks
+
+    /// CommonMark: a single newline inside a paragraph is a soft break,
+    /// rendered as a space — not a visible line break.
+    func testSingleNewlineJoinsParagraphLines() {
+        let out = String(renderer.render("one\ntwo").characters)
+        XCTAssertTrue(out.contains("one two"), "soft break rendered as line break: \(out)")
+    }
+
+    func testBlankLineStillSeparatesParagraphs() {
+        let out = String(renderer.render("one\n\ntwo").characters)
+        XCTAssertFalse(out.contains("one two"))
+    }
+
+    func testTrailingDoubleSpaceIsHardBreak() {
+        let out = String(renderer.render("one  \ntwo").characters)
+        XCTAssertTrue(out.contains("one\ntwo"))
+    }
+
+    func testTrailingBackslashIsHardBreak() {
+        let out = String(renderer.render("one\\\ntwo").characters)
+        XCTAssertTrue(out.contains("one\ntwo"))
+        XCTAssertFalse(out.contains("\\"), "hard-break backslash must be consumed")
+    }
+
+    func testEscapedTrailingBackslashIsNotHardBreak() {
+        // `one\\` is a literal backslash, so the newline stays a soft break.
+        let out = String(renderer.render("one\\\\\ntwo").characters)
+        XCTAssertTrue(out.contains("one\\ two"))
+    }
+
+    func testStructuralLinesAreNotGluedIntoParagraph() {
+        XCTAssertFalse(String(renderer.render("para\n# Title").characters).contains("para #"))
+        XCTAssertFalse(String(renderer.render("para\n- item").characters).contains("para •"))
+        XCTAssertFalse(String(renderer.render("para\n1. item").characters).contains("para 1."))
+    }
+
+    func testListItemsKeepTheirOwnLines() {
+        let out = String(renderer.render("- one\n- two").characters)
+        XCTAssertTrue(out.contains("• one\n"))
+        XCTAssertTrue(out.contains("• two"))
+    }
+
+    func testContinuationLineLeadingIndentIsDropped() {
+        let out = String(renderer.render("one\n   two").characters)
+        XCTAssertTrue(out.contains("one two"))
+    }
+
+    /// The bug: wrapped item text on its own (indented) source lines fell out
+    /// of the item and rendered as a flush-left paragraph. Lazy continuation
+    /// pulls it back into the item, where the hanging indent applies.
+    func testListItemAbsorbsWrappedContinuationLines() {
+        let out = String(renderer.render("- first part,\n  wrapped middle,\n  wrapped tail").characters)
+        XCTAssertTrue(out.contains("• first part, wrapped middle, wrapped tail"))
+    }
+
+    func testOrderedItemAbsorbsWrappedContinuationLines() {
+        let out = String(renderer.render("1. first part\n   wrapped tail").characters)
+        XCTAssertTrue(out.contains("1. first part wrapped tail"))
+    }
+
+    func testTaskItemAbsorbsWrappedContinuationLines() {
+        let out = String(renderer.render("- [ ] first part\n  wrapped tail").characters)
+        XCTAssertTrue(out.contains("☐ first part wrapped tail"))
+    }
+
+    func testNextListItemIsNotAbsorbedAsContinuation() {
+        let out = String(renderer.render("- one\n- two").characters)
+        XCTAssertTrue(out.contains("• one\n"))
+        XCTAssertTrue(out.contains("• two"))
+    }
+
+    func testBlankLineEndsListItemParagraph() {
+        let out = String(renderer.render("- item\n\npara").characters)
+        XCTAssertFalse(out.contains("item para"))
+    }
+
     // MARK: - Footnote references
 
     func testFootnoteReferenceRendersSuperscript() {

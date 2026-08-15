@@ -79,9 +79,11 @@ struct AlertBlockView: View {
 
     /// Inline-render each body line and join with newlines — one attributed
     /// string for the whole alert body (same approach as BlockquoteView).
+    /// Soft breaks are joined first so a single newline inside a paragraph
+    /// reads as a space (CommonMark).
     private func renderedContent() -> AttributedString {
         var result = AttributedString()
-        let lines = content.components(separatedBy: "\n")
+        let lines = MarkdownRenderer.joinSoftBreaks(content.components(separatedBy: "\n"))
         for (index, line) in lines.enumerated() {
             if line.trimmingCharacters(in: .whitespaces).isEmpty {
                 result.append(AttributedString(" "))
