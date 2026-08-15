@@ -373,8 +373,10 @@ struct PrintableBlockquoteView: View {
                     .padding(.trailing, 8)
             }
 
+            // Same soft-break pre-pass as the on-screen BlockquoteView, so a
+            // quote written one sentence per line prints as one paragraph.
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(content.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
+                ForEach(Array(MarkdownRenderer.joinSoftBreaks(content.components(separatedBy: "\n")).enumerated()), id: \.offset) { _, line in
                     if line.trimmingCharacters(in: .whitespaces).isEmpty {
                         Text(" ").font(renderer.theme.fonts.swiftUI(size: 12))
                     } else {
@@ -412,7 +414,8 @@ struct PrintableAlertView: View {
             }
             .foregroundColor(accent)
 
-            ForEach(Array(content.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
+            // Soft breaks joined first — mirrors AlertBlockView on screen.
+            ForEach(Array(MarkdownRenderer.joinSoftBreaks(content.components(separatedBy: "\n")).enumerated()), id: \.offset) { _, line in
                 if line.trimmingCharacters(in: .whitespaces).isEmpty {
                     Text(" ").font(renderer.theme.fonts.swiftUI(size: 12))
                 } else {
