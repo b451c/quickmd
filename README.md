@@ -50,6 +50,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Horizontal rules
 - YAML frontmatter (rendered as a neutral code block)
 - Windows (CRLF) and legacy line endings, UTF-16/Latin-1 fallbacks
+- CommonMark soft breaks — a single newline inside a paragraph reads as a space; two trailing spaces or a trailing `\` make a hard break
 
 ### Navigation & Search
 - Zoom the whole document (`⌘+` / `⌘-` / `⌘0`) — per window, everything scales
@@ -59,11 +60,12 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Copy entire document (`⌘⇧C`) or individual sections (hover heading → copy icon)
 - Export to PDF (`⌘⇧E`) — **vector text** (selectable, searchable) with **rendered Mermaid diagrams** — and Print (`⌘P`)
 
-### Custom Themes
+### Custom Themes & Fonts
 - 7 built-in themes: Auto, Solarized Light/Dark, Dracula, GitHub, Gruvbox Dark, Nord
 - **User themes from disk** — drop a JSON file into `~/Library/Containers/pl.falami.studio.QuickMD/Data/Library/Application Support/QuickMD/Themes/` (or use the **Import Theme…** button in Settings). Live reload, no restart. See [docs/themes/](docs/themes/) for the schema and examples.
-- Settings panel (`⌘,`) with color previews
-- Theme persists across app restarts
+- **Custom font families** — pick any installed font for body text and another for code in Settings → Fonts (JetBrains Mono for code, a serif for reading…). Applies to the document, print and PDF; size and zoom are unaffected. Themes can set their own with `bodyFontFamily` / `codeFontFamily`.
+- Settings panel (`⌘,`) with color and font previews
+- Theme and fonts persist across app restarts
 
 ### Developer-Friendly
 - Syntax highlighting for 10+ languages (Swift, Python, JavaScript, Go, Rust, etc.)
@@ -184,12 +186,12 @@ Now all your Markdown files will open instantly with QuickMD!
 - Regex-based syntax highlighting for code blocks (computed off the main thread)
 - LaTeX math rendering via vendored [SwiftMath](https://github.com/mgriebling/SwiftMath) (Core Graphics, no network); inline math as native text attachments
 - Mermaid diagram rendering via bundled [Mermaid.js](https://mermaid.js.org/) (offline, no CDN), with snapshot caching and a zoom viewer
-- 7 built-in themes + user themes from disk, with `@AppStorage` persistence
+- 7 built-in themes + user themes from disk, with `@AppStorage` persistence; document font families resolved through `NSFontDescriptor` with a small cache and system-font fallback
 - `AsyncImage` for remote image rendering
 - Security-Scoped Bookmarks for local image access in sandbox
 - Per-block **vector PDF export** — selectable text, embedded fonts, Mermaid diagrams as images, multi-page pagination
 - Zero external package dependencies — everything is vendored or bundled
-- Unit test suite (95 tests) + GitHub Actions CI building every flavor on each push
+- Unit test suite (123 tests) + GitHub Actions CI building every flavor on each push
 
 ## Project Structure
 
@@ -202,7 +204,8 @@ QuickMD/
 │   ├── MarkdownBlock.swift         # Block type enum
 │   ├── MarkdownBlockParser.swift   # Line-by-line block parser (+ YAML frontmatter)
 │   ├── MarkdownRenderer.swift      # Inline markdown → AttributedString (SwiftUI + AppKit scopes)
-│   ├── MarkdownTheme.swift         # Built-in themes
+│   ├── MarkdownTheme.swift         # Built-in themes (+ font family merging)
+│   ├── DocumentFonts.swift         # Body/code font families: resolution, cache, Settings + theme merge
 │   ├── MarkdownExport.swift        # PDF export + print support
 │   ├── DocumentSearch.swift        # Find-in-document match engine
 │   ├── SectionExtractor.swift      # "Copy section" boundaries from parser source lines
@@ -233,7 +236,8 @@ QuickMD/
 │   │   ├── SearchBar.swift         # Find in document (⌘F)
 │   │   ├── TableOfContentsView.swift # ToC sidebar (⌘⇧T)
 │   │   ├── RecentDocumentsSidebar.swift # Recent docs sidebar (⌘⇧D)
-│   │   ├── SettingsView.swift      # Settings window (⌘,): Themes + Editor tabs
+│   │   ├── SettingsView.swift      # Settings window (⌘,): Themes + Fonts + Editor tabs
+│   │   ├── FontPickerView.swift    # Body / code font family pickers
 │   │   ├── ExternalEditorPickerView.swift # Editor selection
 │   │   └── ThemePickerView.swift   # Theme picker + import/reload
 │   └── Assets.xcassets/            # App icon + assets
@@ -329,6 +333,8 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Mermaid diagram PDF export (full fidelity)
 - [x] GFM alerts/admonitions (NOTE, TIP, IMPORTANT, WARNING, CAUTION)
 - [x] Remember last window size
+- [x] CommonMark soft breaks — contributed by [@shmuelzon](https://github.com/shmuelzon)
+- [x] Custom font families for body text and code ([#18](https://github.com/b451c/quickmd/issues/18))
 - [ ] Definition lists
 - [ ] Reading mode (distraction-free)
 
