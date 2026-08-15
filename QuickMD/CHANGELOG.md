@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Custom Fonts:** Settings (⌘,) gains a **Fonts** tab — pick any installed font family for body text and another for code (JetBrains Mono, Fira Code, a serif for long reads…). The choice applies to every open document, print and PDF export; font size and ⌘+/⌘− zoom are unaffected, and the app's own controls keep the system font. Custom themes can carry their own typography with two new optional keys, `bodyFontFamily` and `codeFontFamily`, which take precedence over the Settings choice; a family that isn't installed is reported in the theme picker and falls back to the system font, so the theme still loads. Requested by [@cloud-on-prem](https://github.com/cloud-on-prem) (#18).
 
+### Fixed
+- **Freeze while scrolling:** Scrolling a document up and down with the mouse wheel could lock the window at 100 % CPU (an endless SwiftUI layout loop in the lazy block list, present since 1.6.0 but rare). Documents up to 256 KB now lay out eagerly, block heights are measured synchronously instead of being fed back through view state, and blockquote bars no longer sit in a stack that re-negotiates the text width — verified with an automated wheel-scroll harness across every test document.
+
 ### Changed
 - **Soft Line Breaks (behavior change):** A single newline inside a paragraph now renders as a space, as CommonMark and GitHub do, instead of a visible line break — documents written one sentence per line read as flowing paragraphs, and wrapped list-item text stays inside the item with its hanging indent. Hard breaks still work: end the line with two spaces or a backslash. Headings, rules and blank lines never join. Applies to paragraphs, blockquotes and alerts, on screen and in PDF/print alike. Contributed by [@shmuelzon](https://github.com/shmuelzon) (#19).
 
