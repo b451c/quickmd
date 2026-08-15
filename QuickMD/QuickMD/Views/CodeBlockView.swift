@@ -35,7 +35,6 @@ struct CodeBlockView: View {
     var searchText: String = ""
     var focusedOccurrence: Int? = nil
 
-    @State private var contentHeight: CGFloat = 20
     /// Cache of the highlighted NSAttributedString. Keyed by `cacheKey` so we
     /// only recompute when the code or theme actually changes — not on every
     /// scroll-induced body re-evaluation.
@@ -75,10 +74,8 @@ struct CodeBlockView: View {
                 CodeTextView(
                     attributed: attributed,
                     searchTerm: searchText,
-                    focusedOccurrence: focusedOccurrence,
-                    contentHeight: $contentHeight
+                    focusedOccurrence: focusedOccurrence
                 )
-                .frame(height: contentHeight)
                 .padding(.horizontal, 12)
                 .padding(.vertical, language.isEmpty ? 12 : 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -207,15 +204,14 @@ private enum CodeHighlightRegex {
 
 // MARK: - NSTextView Wrapper
 
-/// Self-sizing, read-only NSTextView wrapper. Reports its computed height to the
-/// parent SwiftUI view via `contentHeight` binding so SwiftUI can give it the
-/// correct frame. Search highlighting is applied via `temporaryAttributes` on the
-/// layout manager (no rebuild of the text storage).
+/// Self-sizing, read-only NSTextView wrapper. Its height is answered
+/// synchronously from `sizeThatFits` (see `SelfSizingTextView.measuredHeight`),
+/// never round-tripped through SwiftUI state. Search highlighting is applied via
+/// `temporaryAttributes` on the layout manager (no rebuild of the text storage).
 private struct CodeTextView: NSViewRepresentable {
     let attributed: NSAttributedString
     let searchTerm: String
     let focusedOccurrence: Int?
-    @Binding var contentHeight: CGFloat
 
     func makeNSView(context: Context) -> SelfSizingTextView {
         #if DEBUG
@@ -225,29 +221,15 @@ private struct CodeTextView: NSViewRepresentable {
         #endif
 
         let textView = SelfSizingTextView()
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.drawsBackground = false
-        textView.textContainerInset = .zero
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainer?.widthTracksTextView = true
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.autoresizingMask = [.width]
-        textView.allowsUndo = false
-        textView.usesFindBar = false
-        textView.heightCallback = { [weak textView] newHeight in
-            guard textView != nil else { return }
-            DispatchQueue.main.async {
-                if abs(self.contentHeight - newHeight) > 0.5 {
-                    self.contentHeight = newHeight
-                }
-            }
-        }
+        textView.configureForSelfSizing()
         #if DEBUG
         codeLog.debug("makeNSView: created NSTextView, attr length=\(attributed.length)")
         #endif
         return textView
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: SelfSizingTextView, context: Context) -> CGSize? {
+        nsView.size(fitting: proposal)
     }
 
     func updateNSView(_ textView: SelfSizingTextView, context: Context) {
@@ -269,6 +251,7 @@ private struct CodeTextView: NSViewRepresentable {
             #endif
             storageRef?.setAttributedString(attributed)
             textView.cachedAttributed = attributed
+            textView.invalidateMeasurement()
         }
 
         // Search highlight only re-applied when the term or focused-occurrence changed.
@@ -280,22 +263,6 @@ private struct CodeTextView: NSViewRepresentable {
             textView.lastFocusedOccurrence = focusedOccurrence
         }
 
-        // Refresh the height callback closure (the binding may capture different
-        // state across renders).
-        textView.heightCallback = { [weak textView] newHeight in
-            guard textView != nil else { return }
-            DispatchQueue.main.async {
-                if abs(self.contentHeight - newHeight) > 0.5 {
-                    self.contentHeight = newHeight
-                }
-            }
-        }
-
-        // Only force a height recompute when text actually changed; otherwise the
-        // text view's own layout() callback handles width changes naturally.
-        if textChanged {
-            textView.recomputeHeightIfNeeded()
-        }
     }
 
     // Search highlighting shared with TextBlockView — see applyNSSearchHighlight
@@ -304,10 +271,28 @@ private struct CodeTextView: NSViewRepresentable {
 
 // MARK: - Self-Sizing NSTextView
 
-/// NSTextView that reports its content height through `heightCallback` whenever
-/// layout completes. Used by `CodeTextView` to drive the SwiftUI `.frame(height:)`.
+/// Read-only NSTextView whose height is a pure function of the proposed width,
+/// answered synchronously from the wrapper's `sizeThatFits` via
+/// `size(fitting:)`. Used by `CodeTextView` and `BlockTextView`.
+///
+/// Measurement runs on a *second* layout manager attached to the same text
+/// storage (`measureLayoutManager`), never on the display container: the
+/// display container keeps AppKit's default `widthTracksTextView`, so it always
+/// wraps at the frame SwiftUI gave us, and a proposal probe at some other width
+/// can neither reflow the visible text nor leave the container at a stale
+/// width. Same storage + same padding ⇒ both managers wrap identically, so the
+/// measured height is exactly the drawn height.
+///
+/// SwiftUI owns the frame: `isVerticallyResizable` is off so the text view
+/// never re-sizes itself after layout (an AppKit-side frame change would
+/// invalidate the SwiftUI host, which reassigns the frame, and the two
+/// ping-pong at 100 % CPU).
+///
+/// History: until 1.8.0 the height travelled the other way — `layout()`
+/// measured the text and pushed it into SwiftUI `@State` (`.frame(height:)`)
+/// on the next runloop turn, so every freshly created block changed size after
+/// appearing. See constraints.md ("Block heights are synchronous").
 final class SelfSizingTextView: NSTextView {
-    var heightCallback: ((CGFloat) -> Void)?
     /// Identity reference to the last-applied attributed string. Lets the wrapper
     /// short-circuit `updateNSView` work when SwiftUI hands us the same instance.
     var cachedAttributed: NSAttributedString?
@@ -316,36 +301,66 @@ final class SelfSizingTextView: NSTextView {
     var lastSearchTerm: String = ""
     var lastFocusedOccurrence: Int?
 
-    private var lastReportedHeight: CGFloat = -1
-    private var lastLayoutWidth: CGFloat = -1
+    private var measuredWidth: CGFloat = -1
+    private var measuredHeight: CGFloat = 0
 
-    override func layout() {
-        super.layout()
-        // Only recompute if width actually changed — saves work on no-op layout
-        // passes triggered by parent scroll/redraw cycles.
-        if abs(bounds.width - lastLayoutWidth) > 0.5 {
-            lastLayoutWidth = bounds.width
-            recomputeHeightIfNeeded()
-        }
+    private lazy var measureContainer: NSTextContainer = {
+        let tc = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        tc.lineFragmentPadding = 0
+        tc.widthTracksTextView = false
+        tc.heightTracksTextView = false
+        return tc
+    }()
+
+    private lazy var measureLayoutManager: NSLayoutManager = {
+        let lm = NSLayoutManager()
+        lm.addTextContainer(measureContainer)
+        textStorage?.addLayoutManager(lm)
+        return lm
+    }()
+
+    /// One-time setup shared by both wrappers (call right after init).
+    func configureForSelfSizing() {
+        isEditable = false
+        isSelectable = true
+        drawsBackground = false
+        textContainerInset = .zero
+        textContainer?.lineFragmentPadding = 0
+        textContainer?.widthTracksTextView = true
+        isHorizontallyResizable = false
+        isVerticallyResizable = false
+        autoresizingMask = []
+        allowsUndo = false
+        usesFindBar = false
+        // Touch the TextKit 1 layout manager up front (macOS 12+ text views
+        // start in TextKit 2 and switch on first access) so display and
+        // measurement share one text storage from the start.
+        _ = layoutManager
     }
 
-    override func resize(withOldSuperviewSize oldSize: NSSize) {
-        super.resize(withOldSuperviewSize: oldSize)
-        recomputeHeightIfNeeded()
+    /// Forget the cached measurement (call after the text storage changed).
+    func invalidateMeasurement() { measuredWidth = -1 }
+
+    /// Height of the current text laid out at `width`, cached per width.
+    func measuredHeight(forWidth width: CGFloat) -> CGFloat {
+        if abs(width - measuredWidth) < 0.5 { return measuredHeight }
+        let lm = measureLayoutManager
+        measureContainer.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
+        lm.ensureLayout(for: measureContainer)
+        measuredHeight = ceil(lm.usedRect(for: measureContainer).height)
+        measuredWidth = width
+        return measuredHeight
     }
 
-    func recomputeHeightIfNeeded() {
-        guard let lm = layoutManager, let tc = textContainer else { return }
-        let width = bounds.width > 0 ? bounds.width : tc.containerSize.width
-        if width > 0 {
-            tc.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+    /// `sizeThatFits` implementation shared by both wrappers. A concrete width
+    /// proposal is measured; an unspecified/zero/infinite width (LazyVStack's
+    /// estimate queries) returns the last measurement so the estimate never
+    /// reflows the text at a bogus width — or nil (SwiftUI default) before the
+    /// first real layout.
+    func size(fitting proposal: ProposedViewSize) -> CGSize? {
+        if let width = proposal.width, width.isFinite, width > 0 {
+            return CGSize(width: width, height: measuredHeight(forWidth: width))
         }
-        lm.ensureLayout(for: tc)
-        let used = lm.usedRect(for: tc).height
-        let h = ceil(used)
-        if abs(h - lastReportedHeight) > 0.5 {
-            lastReportedHeight = h
-            heightCallback?(h)
-        }
+        return measuredWidth > 0 ? CGSize(width: measuredWidth, height: measuredHeight) : nil
     }
 }

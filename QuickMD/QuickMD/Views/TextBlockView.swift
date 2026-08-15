@@ -5,8 +5,10 @@ import AppKit
 
 /// Remembers the last measured height of each block, keyed by block id.
 /// LazyVStack destroys and recreates views during scroll; without this a
-/// recreated NSTextView starts at a placeholder height and "jumps" when its
-/// real height arrives, making upward scrolling stutter.
+/// recreated view starts at a placeholder height and "jumps" when its real
+/// height arrives, making upward scrolling stutter. Since 1.8.0 text and code
+/// blocks size synchronously (`SelfSizingTextView.size(fitting:)`) and no longer
+/// need it — Mermaid diagrams (height arrives from the WebView) still do.
 ///
 /// Main-thread only BY CONVENTION (all reads/writes happen from SwiftUI view
 /// inits / height callbacks dispatched to main). Deliberately NOT @MainActor:
@@ -79,17 +81,15 @@ struct TextBlockView: View {
     var contentVersion: Int = 0
     var searchTerm: String = ""
     var focusedOccurrence: Int? = nil
-    let heightCache: BlockHeightCache
     let onLink: (URL) -> Void
 
-    @State private var contentHeight: CGFloat
     @State private var cachedNS: NSAttributedString?
     @State private var cachedKey: String = ""
 
     init(blockId: String, attributed: AttributedString, hasInlineMath: Bool = false,
          theme: MarkdownTheme, fontScale: CGFloat = 1.0, contentVersion: Int = 0,
          searchTerm: String = "", focusedOccurrence: Int? = nil,
-         heightCache: BlockHeightCache, onLink: @escaping (URL) -> Void) {
+         onLink: @escaping (URL) -> Void) {
         self.blockId = blockId
         self.attributed = attributed
         self.hasInlineMath = hasInlineMath
@@ -98,10 +98,7 @@ struct TextBlockView: View {
         self.contentVersion = contentVersion
         self.searchTerm = searchTerm
         self.focusedOccurrence = focusedOccurrence
-        self.heightCache = heightCache
         self.onLink = onLink
-        // Seed with the last measured height so lazy re-creation doesn't jump.
-        _contentHeight = State(initialValue: heightCache.height(for: blockId) ?? 18)
     }
 
     /// Keyed on `contentVersion`, NOT on a theme/scale/length fingerprint.
@@ -118,19 +115,14 @@ struct TextBlockView: View {
         let ns = (cacheKey == cachedKey ? cachedNS : nil) ?? Self.makeNSAttributedString(
             from: attributed, hasInlineMath: hasInlineMath, theme: theme, fontScale: fontScale)
 
+        // Height comes from BlockTextView.sizeThatFits (synchronous, per width) —
+        // no state round-trip, so lazy re-creation can't jump or oscillate.
         BlockTextView(
             attributed: ns,
             searchTerm: searchTerm,
             focusedOccurrence: focusedOccurrence,
-            onLink: onLink,
-            onHeight: { [weak heightCache] height in
-                heightCache?.set(height, for: blockId)
-                if abs(contentHeight - height) > 0.5 {
-                    contentHeight = height
-                }
-            }
+            onLink: onLink
         )
-        .frame(height: contentHeight)
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: cacheKey) {
             let key = cacheKey
@@ -223,37 +215,28 @@ struct TextBlockView: View {
 // MARK: - NSTextView Wrapper
 
 /// Read-only, self-sizing NSTextView for one block. Reuses `SelfSizingTextView`
-/// (CodeBlockView.swift) for height reporting and update short-circuiting.
+/// (CodeBlockView.swift) for synchronous height measurement and update
+/// short-circuiting.
 private struct BlockTextView: NSViewRepresentable {
     let attributed: NSAttributedString
     let searchTerm: String
     let focusedOccurrence: Int?
     let onLink: (URL) -> Void
-    let onHeight: (CGFloat) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onLink: onLink) }
 
     func makeNSView(context: Context) -> SelfSizingTextView {
         let textView = SelfSizingTextView()
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.drawsBackground = false
-        textView.textContainerInset = .zero
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainer?.widthTracksTextView = true
-        textView.isHorizontallyResizable = false
-        textView.isVerticallyResizable = true
-        textView.autoresizingMask = [.width]
-        textView.allowsUndo = false
-        textView.usesFindBar = false
+        textView.configureForSelfSizing()
         textView.delegate = context.coordinator
         // Keep the renderer's link color/underline — only add the pointer cursor.
         // (NSTextView's default linkTextAttributes would repaint links blue.)
         textView.linkTextAttributes = [.cursor: NSCursor.pointingHand]
-        textView.heightCallback = { newHeight in
-            DispatchQueue.main.async { onHeight(newHeight) }
-        }
         return textView
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: SelfSizingTextView, context: Context) -> CGSize? {
+        nsView.size(fitting: proposal)
     }
 
     func updateNSView(_ textView: SelfSizingTextView, context: Context) {
@@ -263,6 +246,7 @@ private struct BlockTextView: NSViewRepresentable {
         if textChanged {
             textView.textStorage?.setAttributedString(attributed)
             textView.cachedAttributed = attributed
+            textView.invalidateMeasurement()
         }
 
         let searchChanged = (textView.lastSearchTerm != searchTerm) ||
@@ -273,13 +257,6 @@ private struct BlockTextView: NSViewRepresentable {
             textView.lastFocusedOccurrence = focusedOccurrence
         }
 
-        textView.heightCallback = { newHeight in
-            DispatchQueue.main.async { onHeight(newHeight) }
-        }
-
-        if textChanged {
-            textView.recomputeHeightIfNeeded()
-        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {

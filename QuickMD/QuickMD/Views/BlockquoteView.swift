@@ -14,7 +14,6 @@ struct BlockquoteView: View {
     var contentVersion: Int = 0
     var searchText: String = ""
     var focusedOccurrence: Int? = nil
-    let heightCache: BlockHeightCache
     let onLink: (URL) -> Void
 
     /// Cached renderer - created once per view
@@ -23,7 +22,7 @@ struct BlockquoteView: View {
     init(blockId: String, content: String, level: Int, theme: MarkdownTheme,
          fontScale: CGFloat = 1.0, contentVersion: Int = 0,
          searchText: String = "", focusedOccurrence: Int? = nil,
-         heightCache: BlockHeightCache, onLink: @escaping (URL) -> Void) {
+         onLink: @escaping (URL) -> Void) {
         self.blockId = blockId
         self.content = content
         self.level = level
@@ -32,32 +31,41 @@ struct BlockquoteView: View {
         self.contentVersion = contentVersion
         self.searchText = searchText
         self.focusedOccurrence = focusedOccurrence
-        self.heightCache = heightCache
         self.onLink = onLink
         self.renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
     }
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            // Left border bars - one per nesting level
-            ForEach(0..<level, id: \.self) { _ in
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(theme.blockquoteColor.opacity(0.5))
-                    .frame(width: 3)
-                    .padding(.trailing, 8)
-            }
+    /// Bar width + gap per nesting level.
+    private static let barWidth: CGFloat = 3
+    private static let barGap: CGFloat = 8
 
-            TextBlockView(
-                blockId: blockId,
-                attributed: renderedContent(),
-                theme: theme,
-                fontScale: fontScale,
-                contentVersion: contentVersion,
-                searchTerm: searchText,
-                focusedOccurrence: focusedOccurrence,
-                heightCache: heightCache,
-                onLink: onLink
-            )
+    var body: some View {
+        // The quote body is the layout root; the level bars are an overlay,
+        // not HStack siblings. An HStack re-negotiates its NSViewRepresentable
+        // child's width with ideal/min/max proposals on every pass, which is
+        // exactly the kind of width churn the self-sizing text view should not
+        // see (during the 1.8.0 scroll-freeze investigation, demo.md never
+        // looped once its blockquotes were removed). Text and bars keep the
+        // old geometry: 16 pt indent, then (3 pt bar + 8 pt gap) per level.
+        TextBlockView(
+            blockId: blockId,
+            attributed: renderedContent(),
+            theme: theme,
+            fontScale: fontScale,
+            contentVersion: contentVersion,
+            searchTerm: searchText,
+            focusedOccurrence: focusedOccurrence,
+            onLink: onLink
+        )
+        .padding(.leading, CGFloat(level) * (Self.barWidth + Self.barGap))
+        .overlay(alignment: .leading) {
+            HStack(spacing: Self.barGap) {
+                ForEach(0..<level, id: \.self) { _ in
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(theme.blockquoteColor.opacity(0.5))
+                        .frame(width: Self.barWidth)
+                }
+            }
         }
         .padding(.leading, 16)
         .padding(.vertical, 2)

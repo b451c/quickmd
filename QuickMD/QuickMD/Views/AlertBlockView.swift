@@ -16,7 +16,6 @@ struct AlertBlockView: View {
     var contentVersion: Int = 0
     var searchText: String = ""
     var focusedOccurrence: Int? = nil
-    let heightCache: BlockHeightCache
     let onLink: (URL) -> Void
 
     /// Cached renderer - created once per view (same pattern as BlockquoteView)
@@ -25,7 +24,7 @@ struct AlertBlockView: View {
     init(blockId: String, kind: AlertKind, content: String, theme: MarkdownTheme,
          fontScale: CGFloat = 1.0, contentVersion: Int = 0,
          searchText: String = "", focusedOccurrence: Int? = nil,
-         heightCache: BlockHeightCache, onLink: @escaping (URL) -> Void) {
+         onLink: @escaping (URL) -> Void) {
         self.blockId = blockId
         self.kind = kind
         self.content = content
@@ -34,7 +33,6 @@ struct AlertBlockView: View {
         self.contentVersion = contentVersion
         self.searchText = searchText
         self.focusedOccurrence = focusedOccurrence
-        self.heightCache = heightCache
         self.onLink = onLink
         self.renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
     }
@@ -60,7 +58,6 @@ struct AlertBlockView: View {
                     contentVersion: contentVersion,
                     searchTerm: searchText,
                     focusedOccurrence: focusedOccurrence,
-                    heightCache: heightCache,
                     onLink: onLink
                 )
             }

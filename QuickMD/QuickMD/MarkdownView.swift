@@ -89,6 +89,29 @@ struct MarkdownView: View {
         _currentText = State(initialValue: document.text)
     }
 
+    /// Documents up to this size render in an eager `VStack`; larger ones in
+    /// `LazyVStack`.
+    ///
+    /// Why not always lazy: LazyVStack sizes the rows it has not placed by
+    /// extrapolating from the ones it has. Markdown rows range from a 17-pt
+    /// paragraph to a 500-pt code block, so as rows are placed and unplaced
+    /// during scrolling the estimate for the rest swings by hundreds of points,
+    /// every visible row shifts, the visible set changes, the estimate swings
+    /// again — and on macOS 15 that settles into a permanent 100 % main-thread
+    /// layout loop (wheel-scroll up and down on demo.md: 4 of 5 attempts;
+    /// eager VStack: 0 of 5). With every row placed there is nothing to
+    /// estimate. See constraints.md.
+    ///
+    /// Why not always eager: creating every NSTextView up front costs main-
+    /// thread time proportional to the text — no measurable stall up to this
+    /// limit (190 KB / 2 000 dense link lines) and ~1 s for the 11 700-line
+    /// #10 repro, which therefore stays on the lazy path exactly as it shipped
+    /// in 1.7.0.
+    static let eagerLayoutByteLimit = 256 * 1024
+
+    /// Set with each parse from the document size (see `eagerLayoutByteLimit`).
+    @State private var useEagerLayout = true
+
     /// Resolved theme from user selection + system color scheme + Settings fonts
     private var theme: MarkdownTheme {
         MarkdownTheme.theme(named: selectedThemeName, colorScheme: colorScheme)
@@ -142,16 +165,17 @@ struct MarkdownView: View {
 
                 ScrollViewReader { proxy in
                     ScrollView {
-                        // LazyVStack is safe again (Issue #10 / #11): no block
-                        // type uses SwiftUI Text(...).textSelection(.enabled)
-                        // anymore — text, headings and blockquotes render through
-                        // NSTextView (TextBlockView), which has native selection
-                        // and none of the SelectionOverlay churn that froze the
-                        // Sprint 4.2 attempt (constraints.md, bug B). Height
-                        // jumps on re-creation are absorbed by BlockHeightCache.
-                        LazyVStack(alignment: .leading, spacing: 8) {
-                            ForEach(cachedBlocks) { block in
-                                blockView(for: block)
+                        // Eager VStack for documents up to `eagerLayoutByteLimit`,
+                        // LazyVStack above it — see `useEagerLayout`. Both stacks
+                        // host the same block views: text, headings, blockquotes
+                        // and code render through NSTextView, so neither stack
+                        // has the SwiftUI text-selection overlay that froze the
+                        // Sprint 4.2 attempt (constraints.md, bug B).
+                        Group {
+                            if useEagerLayout {
+                                VStack(alignment: .leading, spacing: 8) { blockList }
+                            } else {
+                                LazyVStack(alignment: .leading, spacing: 8) { blockList }
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -323,7 +347,8 @@ struct MarkdownView: View {
             // without this guard a superseded parse can land last and win, which
             // is what made repeated ⌘+/⌘- jump to arbitrary sizes.
             guard !Task.isCancelled else { return }
-            heightCache.removeAll()  // new content/theme — stale heights would mis-seed blocks
+            heightCache.removeAll()  // new content/theme — stale heights would mis-seed diagrams
+            useEagerLayout = text.utf8.count <= Self.eagerLayoutByteLimit
             cachedBlocks = parsed.blocks
             renderedFontScale = Double(scale)
             contentVersion += 1
@@ -428,6 +453,13 @@ struct MarkdownView: View {
 
     // MARK: - Block Rendering
 
+    /// The document's blocks, shared by the eager and lazy stacks.
+    private var blockList: some View {
+        ForEach(cachedBlocks) { block in
+            blockView(for: block)
+        }
+    }
+
     @ViewBuilder
     private func blockView(for block: MarkdownBlock) -> some View {
         #if DEBUG
@@ -450,7 +482,6 @@ struct MarkdownView: View {
                     contentVersion: contentVersion,
                     searchTerm: searchText,
                     focusedOccurrence: focusedOcc,
-                    heightCache: heightCache,
                     onLink: { handleLinkActivation($0) }
                 )
 
@@ -472,14 +503,12 @@ struct MarkdownView: View {
                 BlockquoteView(blockId: block.id, content: content, level: level, theme: theme,
                                fontScale: scale, contentVersion: contentVersion,
                                searchText: searchText, focusedOccurrence: focusedOcc,
-                               heightCache: heightCache,
                                onLink: { handleLinkActivation($0) })
 
             case .alert(let kind, let content):
                 AlertBlockView(blockId: block.id, kind: kind, content: content, theme: theme,
                                fontScale: scale, contentVersion: contentVersion,
                                searchText: searchText, focusedOccurrence: focusedOcc,
-                               heightCache: heightCache,
                                onLink: { handleLinkActivation($0) })
                     .padding(.vertical, 4)
                     .padding(.vertical, 4)
