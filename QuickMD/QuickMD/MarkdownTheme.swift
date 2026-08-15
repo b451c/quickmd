@@ -54,6 +54,13 @@ struct MarkdownTheme: Sendable, Identifiable {
     let typeColor: Color
     let checkboxColor: Color
 
+    // MARK: - Fonts
+
+    /// Document font families (body / code). Built-in themes leave both nil
+    /// (system fonts); custom themes may set them in their JSON. Views and
+    /// export merge the user's Settings choice in via `resolvingFonts(defaults:)`.
+    var fonts: DocumentFonts = .system
+
     // MARK: - Factory
 
     /// Resolves a theme by name. Order: built-in → custom store → fallback (auto).
@@ -71,9 +78,25 @@ struct MarkdownTheme: Sendable, Identifiable {
         return colorScheme == .dark ? _autoDark : _autoLight
     }
 
-    /// Convenience for export/print code that always uses light theme
+    /// The Auto palette for a color scheme, system fonts — the neutral baseline
+    /// (unit tests, and the palette half of `exportTheme(for:)`).
     static func cached(for colorScheme: ColorScheme) -> MarkdownTheme {
         theme(named: ThemeName.auto, colorScheme: colorScheme)
+    }
+
+    /// Theme for print / PDF export: the Auto palette for the given scheme
+    /// (white-page safe) plus the user's Settings fonts. Theme-specific fonts
+    /// don't apply here — export never renders with the current theme.
+    static func exportTheme(for colorScheme: ColorScheme) -> MarkdownTheme {
+        cached(for: colorScheme).resolvingFonts(defaults: .fromUserDefaults())
+    }
+
+    /// Copy of this theme with the font families it leaves unset filled from
+    /// `defaults` (the user's Settings choice) — theme-specific fonts win.
+    func resolvingFonts(defaults: DocumentFonts) -> MarkdownTheme {
+        var copy = self
+        copy.fonts = fonts.resolving(defaults: defaults)
+        return copy
     }
 
     /// All built-in themes for picker display (Auto resolved to light variant for preview).

@@ -17,23 +17,17 @@ import AppKit
 // equivalent, so it is AppKit-only by necessity — see "List Indentation".
 extension AttributedString {
 
-    /// Set font in both SwiftUI and AppKit scopes.
-    mutating func setDualFont(size: CGFloat, bold: Bool = false, italic: Bool = false, monospaced: Bool = false) {
-        var swiftUIFont: Font = monospaced
-            ? .system(size: size, weight: bold ? .bold : .regular, design: .monospaced)
-            : .system(size: size, weight: bold ? .bold : .regular)
-        if italic { swiftUIFont = swiftUIFont.italic() }
-        self.font = swiftUIFont
-
-        var nsFont: NSFont = monospaced
-            ? .monospacedSystemFont(ofSize: size, weight: bold ? .bold : .regular)
-            : .systemFont(ofSize: size, weight: bold ? .bold : .regular)
-        if italic {
-            let descriptor = nsFont.fontDescriptor.withSymbolicTraits(
-                nsFont.fontDescriptor.symbolicTraits.union(.italic))
-            nsFont = NSFont(descriptor: descriptor, size: size) ?? nsFont
-        }
-        self[AttributeScopes.AppKitAttributes.FontAttribute.self] = nsFont
+    /// Set font in both SwiftUI and AppKit scopes. `fonts` supplies the family
+    /// (body, or code when `monospaced`) — the theme's `DocumentFonts`, which
+    /// already has the user's Settings choice merged in. Required on purpose:
+    /// a call site that forgets it would silently render in the system font.
+    mutating func setDualFont(size: CGFloat, bold: Bool = false, italic: Bool = false,
+                              monospaced: Bool = false, fonts: DocumentFonts) {
+        self.font = fonts.swiftUI(size: size, weight: bold ? .bold : .regular,
+                                  italic: italic, monospaced: monospaced)
+        self[AttributeScopes.AppKitAttributes.FontAttribute.self] =
+            fonts.appKit(size: size, weight: bold ? .bold : .regular,
+                         italic: italic, monospaced: monospaced)
     }
 
     /// Set foreground color in both scopes.
@@ -101,8 +95,9 @@ struct MarkdownRenderer: Sendable {
         self.footnoteDefinitions = footnoteDefinitions
     }
 
+    /// Print/PDF convenience: Auto palette + the user's Settings fonts.
     init(colorScheme: ColorScheme, referenceDefinitions: [String: String] = [:]) {
-        self.theme = MarkdownTheme.cached(for: colorScheme)
+        self.theme = MarkdownTheme.exportTheme(for: colorScheme)
         self.fontScale = 1.0
         self.referenceDefinitions = referenceDefinitions
         self.footnoteDefinitions = []
@@ -251,7 +246,7 @@ struct MarkdownRenderer: Sendable {
         let sizes: [CGFloat] = [32, 26, 22, 18, 16, 14]
         // Safety guard: ensure level is within bounds to prevent crash
         let safeLevel = max(1, min(level, 6))
-        attr.setDualFont(size: scaled(sizes[safeLevel - 1]), bold: true)
+        attr.setDualFont(size: scaled(sizes[safeLevel - 1]), bold: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         return attr
     }
@@ -295,7 +290,7 @@ struct MarkdownRenderer: Sendable {
     private func renderListItem(_ text: String, level: Int, ordered: Bool, number: Int) -> AttributedString {
         let prefix = Self.indentSpaces(level) + (ordered ? "\(number). " : "• ")
         var attr = AttributedString(prefix)
-        attr.setDualFont(size: scaled(14))
+        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         attr.append(renderInlineFormatting(text))
         applyListParagraphStyle(&attr, hangingUnder: prefix)
@@ -305,7 +300,7 @@ struct MarkdownRenderer: Sendable {
     private func renderTaskItem(_ text: String, level: Int, checked: Bool) -> AttributedString {
         let prefix = Self.indentSpaces(level) + (checked ? "☑ " : "☐ ")
         var attr = AttributedString(prefix)
-        attr.setDualFont(size: scaled(14))
+        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(checked ? theme.checkboxColor : theme.textColor)
 
         var content = renderInlineFormatting(text)
@@ -333,9 +328,11 @@ struct MarkdownRenderer: Sendable {
     }
 
     /// Typeset width of body-font text — the marker prefix, to size the hang.
+    /// Measured with the theme's body font (not the system font) so a custom
+    /// family with wider markers still hangs wrapped lines under the text.
     private func width(of string: String) -> CGFloat {
         (string as NSString)
-            .size(withAttributes: [.font: NSFont.systemFont(ofSize: scaled(14))])
+            .size(withAttributes: [.font: theme.fonts.appKit(size: scaled(14))])
             .width
     }
 
@@ -356,7 +353,7 @@ struct MarkdownRenderer: Sendable {
 
     private func renderHorizontalRule() -> AttributedString {
         var attr = AttributedString("────────────────────────────────")
-        attr.setDualFont(size: scaled(14))
+        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.secondaryTextColor)
         return attr
     }
@@ -377,7 +374,7 @@ struct MarkdownRenderer: Sendable {
         func flushPlainText() {
             guard !plainTextBuffer.isEmpty else { return }
             var attr = AttributedString(plainTextBuffer)
-            attr.setDualFont(size: scaled(14))
+            attr.setDualFont(size: scaled(14), fonts: theme.fonts)
             attr.setDualForeground(theme.textColor)
             result.append(attr)
             plainTextBuffer = ""
@@ -423,7 +420,7 @@ struct MarkdownRenderer: Sendable {
             // 3+ backticks in inline context — render as literal backtick characters
             let backticks = String(repeating: "`", count: backtickCount)
             var attr = AttributedString(backticks)
-            attr.setDualFont(size: scaled(14))
+            attr.setDualFont(size: scaled(14), fonts: theme.fonts)
             attr.setDualForeground(theme.textColor)
             return (attr, remaining.dropFirst(backtickCount))
         }
@@ -450,7 +447,7 @@ struct MarkdownRenderer: Sendable {
         }
 
         var attr = AttributedString(code)
-        attr.setDualFont(size: scaled(13), monospaced: true)
+        attr.setDualFont(size: scaled(13), monospaced: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         attr.setDualBackground(theme.codeBackgroundColor)
         return (attr, afterOpening[closeRange.upperBound...])
@@ -465,7 +462,7 @@ struct MarkdownRenderer: Sendable {
 
         let text = String(afterMarker[..<endRange.lowerBound])
         var attr = AttributedString(text)
-        attr.setDualFont(size: scaled(14), bold: true, italic: true)
+        attr.setDualFont(size: scaled(14), bold: true, italic: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         return (attr, afterMarker[endRange.upperBound...])
     }
@@ -481,7 +478,7 @@ struct MarkdownRenderer: Sendable {
         let boldText = String(afterMarker[..<endRange.lowerBound])
         // Recursively parse inner text for nested emphasis (e.g., **bold *and italic* text**)
         var attr = renderInlineFormatting(boldText)
-        attr.setDualFont(size: scaled(14), bold: true)
+        attr.setDualFont(size: scaled(14), bold: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         return (attr, afterMarker[endRange.upperBound...])
     }
@@ -520,7 +517,7 @@ struct MarkdownRenderer: Sendable {
         let italicText = String(afterMarker[..<endIndex])
         // Recursively parse inner text for nested emphasis (e.g., *italic **and bold** text*)
         var attr = renderInlineFormatting(italicText)
-        attr.setDualFont(size: scaled(14), italic: true)
+        attr.setDualFont(size: scaled(14), italic: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         return (attr, afterMarker[afterMarker.index(after: endIndex)...])
     }
@@ -533,7 +530,7 @@ struct MarkdownRenderer: Sendable {
 
         let strikeText = String(afterMarker[..<endRange.lowerBound])
         var attr = AttributedString(strikeText)
-        attr.setDualFont(size: scaled(14))
+        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         attr.setDualStrikethrough()
         return (attr, afterMarker[endRange.upperBound...])
@@ -591,7 +588,7 @@ struct MarkdownRenderer: Sendable {
 
     private func makeLink(text: String, url: String, remaining: Substring) -> (AttributedString, Substring) {
         var attr = AttributedString(text)
-        attr.setDualFont(size: scaled(14))
+        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.linkColor)
         attr.setDualUnderline()
 
@@ -629,7 +626,7 @@ struct MarkdownRenderer: Sendable {
         let urlText = String(remaining[urlStart..<urlEndIdx])
 
         var attr = AttributedString("[Image: \(altText)]")
-        attr.setDualFont(size: scaled(14), italic: true)
+        attr.setDualFont(size: scaled(14), italic: true, fonts: theme.fonts)
         attr.setDualForeground(theme.secondaryTextColor)
         if let url = URL(string: urlText) {
             attr.link = url
@@ -643,7 +640,7 @@ struct MarkdownRenderer: Sendable {
         guard MarkdownTheme.escapableChars.contains(escaped) else { return nil }
 
         var attr = AttributedString(String(escaped))
-        attr.setDualFont(size: scaled(14))
+        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         return (attr, remaining.dropFirst(2))
     }
@@ -662,7 +659,7 @@ struct MarkdownRenderer: Sendable {
 
         let urlText = String(str[range])
         var attr = AttributedString(urlText)
-        attr.setDualFont(size: scaled(14))
+        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.linkColor)
         attr.setDualUnderline()
         if let url = URL(string: urlText) {
@@ -700,7 +697,7 @@ struct MarkdownRenderer: Sendable {
         let superscript = String(String(number).map { superscriptDigits[$0] ?? $0 })
 
         var attr = AttributedString(superscript)
-        attr.setDualFont(size: scaled(11), bold: true)
+        attr.setDualFont(size: scaled(11), bold: true, fonts: theme.fonts)
         attr.setDualForeground(theme.linkColor)
         return (attr, afterBracket[afterBracket.index(after: closeIndex)...])
     }

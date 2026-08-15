@@ -79,7 +79,7 @@ struct TableBlockView: View, TableAlignmentProvider {
                         let localFocused = localFocusedOccurrence(cellOffset: cellOffsets.headerOffsets[index],
                                                                    cellText: header)
                         Text(searchText.isEmpty ? rendered : searchHighlight(rendered, term: searchText, focusedOccurrence: localFocused))
-                            .font(.system(size: 13 * fontScale, weight: .semibold))
+                            .font(theme.fonts.swiftUI(size: 13 * fontScale, weight: .semibold))
                             .foregroundColor(theme.textColor)
                             .multilineTextAlignment(textAlignmentFor(index))
                             .frame(maxWidth: .infinity, alignment: alignmentFor(index))
@@ -109,7 +109,7 @@ struct TableBlockView: View, TableAlignmentProvider {
                         let localFocused = localFocusedOccurrence(cellOffset: cellOffsets.rowOffsets[rowIndex][colIndex],
                                                                    cellText: cell)
                         Text(searchText.isEmpty ? rendered : searchHighlight(rendered, term: searchText, focusedOccurrence: localFocused))
-                            .font(.system(size: 13 * fontScale))
+                            .font(theme.fonts.swiftUI(size: 13 * fontScale))
                             .foregroundColor(theme.textColor)
                             .multilineTextAlignment(textAlignmentFor(colIndex))
                             .frame(maxWidth: .infinity, alignment: alignmentFor(colIndex))

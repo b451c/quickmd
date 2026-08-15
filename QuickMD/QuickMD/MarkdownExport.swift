@@ -141,8 +141,8 @@ struct PrintableTableView: View, TableAlignmentProvider {
     /// Cached renderer instance - created once on init
     private let renderer: MarkdownRenderer
 
-    /// Cached theme instance for consistent colors
-    private let theme = MarkdownTheme.cached(for: .light)
+    /// Cached theme instance for consistent colors + the user's document fonts
+    private let theme = MarkdownTheme.exportTheme(for: .light)
 
     /// Stored column count - computed once on init for efficiency
     private let columnCount: Int
@@ -166,7 +166,7 @@ struct PrintableTableView: View, TableAlignmentProvider {
                 HStack(spacing: 0) {
                     ForEach(0..<columnCount, id: \.self) { index in
                         Text(renderer.renderInline(index < headers.count ? headers[index] : ""))
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(theme.fonts.swiftUI(size: 12, weight: .semibold))
                             .foregroundColor(.black)
                             .multilineTextAlignment(textAlignmentFor(index))
                             .frame(maxWidth: .infinity, alignment: alignmentFor(index))
@@ -190,7 +190,7 @@ struct PrintableTableView: View, TableAlignmentProvider {
                     ForEach(0..<columnCount, id: \.self) { colIndex in
                         let cell = colIndex < row.count ? row[colIndex] : ""
                         Text(renderer.renderInline(cell))
-                            .font(.system(size: 11))
+                            .font(theme.fonts.swiftUI(size: 11))
                             .foregroundColor(.black)
                             .multilineTextAlignment(textAlignmentFor(colIndex))
                             .frame(maxWidth: .infinity, alignment: alignmentFor(colIndex))
@@ -219,6 +219,8 @@ struct PrintableTableView: View, TableAlignmentProvider {
 struct PrintableCodeBlockView: View {
     let code: String
     let language: String
+    /// User's document fonts (Settings) — code family for the block body.
+    private let fonts = MarkdownTheme.exportTheme(for: .light).fonts
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -232,7 +234,7 @@ struct PrintableCodeBlockView: View {
             }
 
             Text(code)
-                .font(.system(size: 11, design: .monospaced))
+                .font(fonts.swiftUI(size: 11, monospaced: true))
                 .foregroundColor(.black)
                 .padding(.horizontal, 10)
                 .padding(.vertical, language.isEmpty ? 10 : 6)
@@ -304,7 +306,7 @@ struct MarkdownPrintableBlockView: View {
     /// Pre-rendered Mermaid diagrams keyed by source (MermaidPDFRenderer).
     /// Sources without an entry fall back to the styled-code representation.
     var mermaidImages: [String: NSImage] = [:]
-    private let theme = MarkdownTheme.cached(for: .light)
+    private let theme = MarkdownTheme.exportTheme(for: .light)
     private let renderer = MarkdownRenderer(colorScheme: .light)
 
     var body: some View {
@@ -374,10 +376,10 @@ struct PrintableBlockquoteView: View {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(content.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
                     if line.trimmingCharacters(in: .whitespaces).isEmpty {
-                        Text(" ").font(.system(size: 12))
+                        Text(" ").font(renderer.theme.fonts.swiftUI(size: 12))
                     } else {
                         Text(renderer.renderInline(line))
-                            .font(.system(size: 12).italic())
+                            .font(renderer.theme.fonts.swiftUI(size: 12, italic: true))
                             .foregroundColor(Color(white: 0.3))
                     }
                 }
@@ -406,16 +408,16 @@ struct PrintableAlertView: View {
                 Image(systemName: kind.symbolName)
                     .font(.system(size: 11, weight: .semibold))
                 Text(kind.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(renderer.theme.fonts.swiftUI(size: 12, weight: .semibold))
             }
             .foregroundColor(accent)
 
             ForEach(Array(content.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
                 if line.trimmingCharacters(in: .whitespaces).isEmpty {
-                    Text(" ").font(.system(size: 12))
+                    Text(" ").font(renderer.theme.fonts.swiftUI(size: 12))
                 } else {
                     Text(renderer.renderInline(line))
-                        .font(.system(size: 12))
+                        .font(renderer.theme.fonts.swiftUI(size: 12))
                         .foregroundColor(Color(white: 0.2))
                 }
             }

@@ -24,8 +24,9 @@ struct MarkdownBlockParser: Sendable {
         self.renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
     }
 
+    /// Print/PDF convenience: Auto palette + the user's Settings fonts.
     init(colorScheme: ColorScheme) {
-        self.theme = MarkdownTheme.cached(for: colorScheme)
+        self.theme = MarkdownTheme.exportTheme(for: colorScheme)
         self.fontScale = 1.0
         self.renderer = MarkdownRenderer(theme: self.theme)
     }
@@ -338,18 +339,18 @@ struct MarkdownBlockParser: Sendable {
 
             // Horizontal rule separator
             var rule = AttributedString("────────────────────────────────\n")
-            rule.setDualFont(size: renderer.scaled(12))
+            rule.setDualFont(size: renderer.scaled(12), fonts: theme.fonts)
             rule.setDualForeground(theme.secondaryTextColor)
             footnoteText.append(rule)
 
             for (index, def) in footnoteDefinitions.enumerated() {
                 let number = index + 1
                 var prefix = AttributedString("\(number). ")
-                prefix.setDualFont(size: renderer.scaled(12), bold: true)
+                prefix.setDualFont(size: renderer.scaled(12), bold: true, fonts: theme.fonts)
                 prefix.setDualForeground(theme.secondaryTextColor)
 
                 var content = activeRenderer.renderInline(def.content)
-                content.setDualFont(size: renderer.scaled(12))
+                content.setDualFont(size: renderer.scaled(12), fonts: theme.fonts)
                 content.setDualForeground(theme.secondaryTextColor)
 
                 footnoteText.append(prefix)

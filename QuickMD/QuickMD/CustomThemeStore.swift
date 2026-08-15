@@ -79,6 +79,12 @@ final class CustomThemeStore: ObservableObject {
                         errors.append("\(url.lastPathComponent): \(problem)")
                         logger.warning("Rejected theme \(url.lastPathComponent, privacy: .public): \(problem, privacy: .public)")
                     } else {
+                        // Font warnings don't reject the theme — it loads with
+                        // the system font in place of the missing family.
+                        if let warning = dto.fontWarning {
+                            errors.append("\(url.lastPathComponent): \(warning)")
+                            logger.warning("Theme \(url.lastPathComponent, privacy: .public): \(warning, privacy: .public)")
+                        }
                         loaded.append(dto.toTheme())
                     }
                 } catch {
@@ -181,10 +187,14 @@ final class CustomThemeStore: ObservableObject {
 // MARK: - JSON DTO
 
 /// Disk format for a custom theme. All colors are hex strings (6 or 8 chars, optional `#`).
+/// `bodyFontFamily` / `codeFontFamily` are optional font families (issue #18);
+/// absent = system fonts / the user's Settings choice.
 /// Internal (not private) so unit tests can exercise decoding + validation.
 struct CustomThemeDTO: Decodable {
     let name: String
     let isDark: Bool
+    let bodyFontFamily: String?
+    let codeFontFamily: String?
     let textColor: String
     let secondaryTextColor: String
     let linkColor: String
@@ -224,6 +234,20 @@ struct CustomThemeDTO: Decodable {
         return nil
     }
 
+    /// Non-fatal: names a font family that isn't installed on this Mac. The
+    /// theme still loads (that family renders with the system font), but the
+    /// picker shows the message so a typo doesn't go unnoticed.
+    var fontWarning: String? {
+        let missing = [("bodyFontFamily", bodyFontFamily), ("codeFontFamily", codeFontFamily)]
+            .compactMap { field, value -> String? in
+                guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !value.isEmpty, !DocumentFonts.isInstalled(value) else { return nil }
+                return "\(field) \u{201C}\(value)\u{201D}"
+            }
+        guard !missing.isEmpty else { return nil }
+        return "font not installed, using the system font instead: \(missing.joined(separator: ", "))"
+    }
+
     /// Same trimming rules as `Color(hex:)`: optional `#`, surrounding whitespace.
     static func isValidHexColor(_ value: String) -> Bool {
         let trimmed = value.trimmingCharacters(in: CharacterSet(charactersIn: "#").union(.whitespaces))
@@ -248,7 +272,16 @@ struct CustomThemeDTO: Decodable {
             commentColor: Color(hex: commentColor),
             numberColor: Color(hex: numberColor),
             typeColor: Color(hex: typeColor),
-            checkboxColor: Color(hex: checkboxColor)
+            checkboxColor: Color(hex: checkboxColor),
+            // An uninstalled family is dropped (nil) rather than kept, so it
+            // doesn't shadow the user's Settings choice in `resolvingFonts`.
+            fonts: DocumentFonts(body: Self.installedOrNil(bodyFontFamily),
+                                 code: Self.installedOrNil(codeFontFamily))
         )
+    }
+
+    private static func installedOrNil(_ family: String?) -> String? {
+        guard let family, DocumentFonts.isInstalled(family) else { return nil }
+        return family
     }
 }

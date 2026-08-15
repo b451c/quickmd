@@ -47,7 +47,7 @@ struct AlertBlockView: View {
                 Image(systemName: kind.symbolName)
                     .font(.system(size: 13 * fontScale, weight: .semibold))
                 Text(kind.title)
-                    .font(.system(size: 14 * fontScale, weight: .semibold))
+                    .font(theme.fonts.swiftUI(size: 14 * fontScale, weight: .semibold))
             }
             .foregroundColor(accent)
 

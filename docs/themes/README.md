@@ -15,6 +15,7 @@ Themes appear under a **Custom** section in the picker (live reload — no resta
 ## JSON Schema
 
 All 14 colors are required. Hex strings accept 6 chars (`RRGGBB`) or 8 chars with alpha (`RRGGBBAA`). Leading `#` optional.
+The two font fields are optional (QuickMD 1.8+) — omit them to use the system fonts or whatever is chosen in Settings → Fonts.
 
 ```json
 {
@@ -33,7 +34,9 @@ All 14 colors are required. Hex strings accept 6 chars (`RRGGBB`) or 8 chars wit
   "commentColor": "#9FB6C4",
   "numberColor": "#E5AFB7",
   "typeColor": "#9FB6C4",
-  "checkboxColor": "#B7BD73"
+  "checkboxColor": "#B7BD73",
+  "bodyFontFamily": "Georgia",
+  "codeFontFamily": "JetBrains Mono"
 }
 ```
 
@@ -55,6 +58,8 @@ All 14 colors are required. Hex strings accept 6 chars (`RRGGBB`) or 8 chars wit
 | `numberColor` | Syntax: numeric literals. |
 | `typeColor` | Syntax: PascalCase type names. |
 | `checkboxColor` | Task list `- [x]` checkmarks. |
+| `bodyFontFamily` | *(optional)* Font family for body text — paragraphs, headings, lists, tables, quotes, alerts. Overrides the global choice in Settings → Fonts. |
+| `codeFontFamily` | *(optional)* Font family for code — fenced blocks and inline code. Overrides Settings → Fonts. |
 
 ## Examples
 
@@ -67,4 +72,5 @@ This folder ships two starter themes you can download and modify:
 
 - **Live reload:** save the JSON file and the picker updates immediately.
 - **Validation errors** are shown inline at the bottom of the picker — fix and save.
+- **Fonts:** use the family name as shown in Font Book (e.g. `"Georgia"`, `"JetBrains Mono"`, `"Fira Code"`). A family that isn't installed on the Mac is reported in the picker and the theme falls back to the system font (or the Settings → Fonts choice) for that role — the theme still loads. Font size and ⌘+/⌘− zoom are unaffected; only the family changes. Print/PDF export uses the Settings fonts, not the theme's (export always renders with the light Auto palette).
 - **App Sandbox** automatically grants access to `~/Library/Containers/<bundle-id>/Data/`. The Import button uses an open panel, which grants read access to the chosen file regardless of location.

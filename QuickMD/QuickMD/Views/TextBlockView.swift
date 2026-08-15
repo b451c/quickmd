@@ -186,7 +186,7 @@ struct TextBlockView: View {
                     let attachment = NSTextAttachment()
                     attachment.image = image
                     // Center the math image against the 14pt body cap height
-                    let bodyFont = NSFont.systemFont(ofSize: 14 * fontScale)
+                    let bodyFont = theme.fonts.appKit(size: 14 * fontScale)
                     let yOffset = (bodyFont.capHeight - image.size.height) / 2
                     attachment.bounds = CGRect(x: 0, y: yOffset,
                                                width: image.size.width, height: image.size.height)
@@ -194,7 +194,7 @@ struct TextBlockView: View {
                 } else {
                     // Fallback: italic literal, same as the legacy pipeline
                     var attr = AttributedString(latex)
-                    attr.setDualFont(size: 14 * fontScale, italic: true)
+                    attr.setDualFont(size: 14 * fontScale, italic: true, fonts: theme.fonts)
                     attr.setDualForeground(theme.textColor)
                     if let ns = try? NSAttributedString(attr, including: \.appKit) {
                         result.append(ns)

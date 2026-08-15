@@ -67,6 +67,11 @@ struct MarkdownView: View {
     /// may have typed again while a previous computation was still running).
     @State private var searchGeneration: Int = 0
     @AppStorage("selectedTheme") private var selectedThemeName: String = "Auto"
+    /// Settings → Fonts. "" = system. Merged into the theme below (a custom
+    /// theme's own families win) and part of `DocumentIdentity`, because font
+    /// families are baked into the AttributedStrings at parse time.
+    @AppStorage(DocumentFonts.bodyDefaultsKey) private var bodyFontFamily: String = ""
+    @AppStorage(DocumentFonts.codeDefaultsKey) private var codeFontFamily: String = ""
     /// ⌘+ / ⌘- / ⌘0 zoom. Deliberately @State, not @AppStorage: zoom belongs to
     /// this window only and every document starts back at 100%.
     /// This is the *requested* scale — it drives the re-parse.
@@ -84,15 +89,17 @@ struct MarkdownView: View {
         _currentText = State(initialValue: document.text)
     }
 
-    /// Resolved theme from user selection + system color scheme
+    /// Resolved theme from user selection + system color scheme + Settings fonts
     private var theme: MarkdownTheme {
         MarkdownTheme.theme(named: selectedThemeName, colorScheme: colorScheme)
+            .resolvingFonts(defaults: DocumentFonts(body: bodyFontFamily, code: codeFontFamily))
     }
 
     private struct DocumentIdentity: Equatable {
         let text: String
         let colorScheme: ColorScheme
         let themeName: String
+        let fonts: DocumentFonts
         let fontScale: Double
     }
 
@@ -285,7 +292,9 @@ struct MarkdownView: View {
             return .handled
         })
         .frame(minWidth: 400, minHeight: 300)
-        .task(id: DocumentIdentity(text: currentText, colorScheme: colorScheme, themeName: selectedThemeName, fontScale: fontScale)) {
+        .task(id: DocumentIdentity(text: currentText, colorScheme: colorScheme, themeName: selectedThemeName,
+                                   fonts: DocumentFonts(body: bodyFontFamily, code: codeFontFamily),
+                                   fontScale: fontScale)) {
             let text = currentText
             let currentTheme = theme
             isParsing = true

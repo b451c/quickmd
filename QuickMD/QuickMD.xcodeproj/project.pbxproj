@@ -9,6 +9,10 @@
 /* Begin PBXBuildFile section */
 		A1B2C3D401000060 /* AlertBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000060 /* AlertBlockView.swift */; };
 		A1B2C3D401000061 /* MermaidPDFRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000061 /* MermaidPDFRenderer.swift */; };
+		A1B2C3D401000062 /* DocumentFonts.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000062 /* DocumentFonts.swift */; };
+		A1B2C3D401000063 /* FontPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000063 /* FontPickerView.swift */; };
+		A1B2C3D401000064 /* FontTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000064 /* FontTests.swift */; };
+		A1B2C3D401000065 /* DocumentFonts.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000062 /* DocumentFonts.swift */; };
 		A1B2C3D401000001 /* QuickMDApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000001 /* QuickMDApp.swift */; };
 		A1B2C3D401000002 /* MarkdownDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000002 /* MarkdownDocument.swift */; };
 		A1B2C3D401000003 /* MarkdownView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000003 /* MarkdownView.swift */; };
@@ -96,6 +100,9 @@
 /* Begin PBXFileReference section */
 		A1B2C3D400000060 /* AlertBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertBlockView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000061 /* MermaidPDFRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidPDFRenderer.swift; sourceTree = "<group>"; };
+		A1B2C3D400000062 /* DocumentFonts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentFonts.swift; sourceTree = "<group>"; };
+		A1B2C3D400000063 /* FontPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontPickerView.swift; sourceTree = "<group>"; };
+		A1B2C3D400000064 /* FontTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000001 /* QuickMDApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickMDApp.swift; sourceTree = "<group>"; };
 		A1B2C3D400000002 /* MarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDocument.swift; sourceTree = "<group>"; };
 		A1B2C3D400000003 /* MarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownView.swift; sourceTree = "<group>"; };
@@ -210,6 +217,7 @@
 				A1B2C3D400000045 /* DocumentAndThemeTests.swift */,
 				A1B2C3D400000046 /* SearchTests.swift */,
 				A1B2C3D40000004D /* FileWatcherTests.swift */,
+				A1B2C3D400000064 /* FontTests.swift */,
 			);
 			path = QuickMDTests;
 			sourceTree = "<group>";
@@ -237,6 +245,7 @@
 				A1B2C3D40000000A /* TipJarView.swift */,
 				A1B2C3D40000000C /* MarkdownExport.swift */,
 				A1B2C3D400000061 /* MermaidPDFRenderer.swift */,
+				A1B2C3D400000062 /* DocumentFonts.swift */,
 				A1B2C3D400000017 /* SandboxAccessManager.swift */,
 				A1B2C3D40000003A /* CustomThemeStore.swift */,
 				A1B2C3D40000003B /* RecentDocumentsStore.swift */,
@@ -266,6 +275,7 @@
 				A1B2C3D400000060 /* AlertBlockView.swift */,
 				A1B2C3D40000004B /* ExternalEditorPickerView.swift */,
 				A1B2C3D40000004C /* SettingsView.swift */,
+				A1B2C3D400000063 /* FontPickerView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -487,6 +497,8 @@
 				A1B2C3D40100004E /* ExternalEditorManager.swift in Sources */,
 				A1B2C3D40100004F /* ExternalEditorPickerView.swift in Sources */,
 				A1B2C3D401000050 /* SettingsView.swift in Sources */,
+				A1B2C3D401000062 /* DocumentFonts.swift in Sources */,
+				A1B2C3D401000063 /* FontPickerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -511,6 +523,8 @@
 				A1B2C3D401000051 /* FileWatcherTests.swift in Sources */,
 				A1B2C3D401000052 /* FileWatchManager.swift in Sources (Tests) */,
 				A1B2C3D401000053 /* ExternalEditorManager.swift in Sources (Tests) */,
+				A1B2C3D401000064 /* FontTests.swift in Sources */,
+				A1B2C3D401000065 /* DocumentFonts.swift in Sources (Tests) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

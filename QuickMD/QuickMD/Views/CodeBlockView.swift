@@ -45,11 +45,12 @@ struct CodeBlockView: View {
     @State private var justCopied = false
 
     private var cacheKey: String {
-        // theme.name + isDark + a content fingerprint. isDark matters because
-        // "Auto" keeps its name across light/dark palette flips. We use
-        // code.count + first/last chars to keep the key cheap; if anyone
-        // manages a collision we just recompute.
-        "\(theme.name)|\(theme.isDark)|\(fontScale)|\(code.count)|\(code.prefix(8))…\(code.suffix(8))"
+        // theme.name + isDark + code font + a content fingerprint. isDark
+        // matters because "Auto" keeps its name across light/dark palette
+        // flips; the code family because Settings can change it under an
+        // unchanged theme name. We use code.count + first/last chars to keep
+        // the key cheap; if anyone manages a collision we just recompute.
+        "\(theme.name)|\(theme.isDark)|\(theme.fonts.code ?? "")|\(fontScale)|\(code.count)|\(code.prefix(8))…\(code.suffix(8))"
     }
 
     var body: some View {
@@ -137,7 +138,7 @@ struct CodeBlockView: View {
     nonisolated static func plainAttributedString(code: String, theme: MarkdownTheme, fontScale: CGFloat) -> NSAttributedString {
         let result = NSMutableAttributedString(string: code)
         let fullRange = NSRange(location: 0, length: (code as NSString).length)
-        result.addAttribute(.font, value: NSFont.monospacedSystemFont(ofSize: 13 * fontScale, weight: .regular), range: fullRange)
+        result.addAttribute(.font, value: theme.fonts.appKit(size: 13 * fontScale, monospaced: true), range: fullRange)
         result.addAttribute(.foregroundColor, value: NSColor(theme.textColor), range: fullRange)
         return result
     }
@@ -153,7 +154,7 @@ struct CodeBlockView: View {
 
         let result = NSMutableAttributedString(string: code)
         let fullRange = NSRange(location: 0, length: (code as NSString).length)
-        let baseFont = NSFont.monospacedSystemFont(ofSize: 13 * fontScale, weight: .regular)
+        let baseFont = theme.fonts.appKit(size: 13 * fontScale, monospaced: true)
 
         result.addAttribute(.font, value: baseFont, range: fullRange)
         result.addAttribute(.foregroundColor, value: NSColor(theme.textColor), range: fullRange)
