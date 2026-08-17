@@ -105,6 +105,11 @@ struct MarkdownView: View {
     /// whole block list, and this is a debugging escape hatch, not a setting.
     private let useLegacyLayout: Bool
 
+    /// File name suggested by the PDF export save panel (`ExportPDFCommand`).
+    private var exportName: String {
+        documentURL?.deletingPathExtension().lastPathComponent ?? "document"
+    }
+
     init(document: MarkdownDocument, documentURL: URL?) {
         self.document = document
         self.documentURL = documentURL
@@ -179,7 +184,9 @@ struct MarkdownView: View {
             || (!cachedBlocks.isEmpty && measured.table.count != cachedBlocks.count)
     }
 
-    var body: some View {
+    /// The window content (sidebars + document + overlays). Kept out of `body`
+    /// so the modifier chain below stays inside the type-checker's budget.
+    private var documentStack: some View {
         HStack(spacing: 0) {
             // Recent documents sidebar (leftmost)
             if isDocumentListVisible {
@@ -382,6 +389,10 @@ struct MarkdownView: View {
                 }
             }
         }
+    }
+
+    var body: some View {
+        documentStack
         .background(theme.backgroundColor)
         .background(WindowConfigurator { window in
             // Make every QuickMD document window prefer to join existing windows
@@ -392,6 +403,7 @@ struct MarkdownView: View {
             window.tabbingIdentifier = "pl.falami.studio.QuickMD.Document"
         })
         .focusedSceneValue(\.documentText, currentText)
+        .focusedSceneValue(\.exportName, exportName)
         .focusedSceneValue(\.searchAction, { toggleSearch() })
         .focusedSceneValue(\.toggleToCAction, { withAnimation(.easeInOut(duration: 0.2)) { isToCVisible.toggle() } })
         .focusedSceneValue(\.copyDocumentAction, { copyToClipboard(currentText) })

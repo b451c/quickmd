@@ -32,10 +32,22 @@ struct FocusedZoomActionKey: FocusedValueKey {
     typealias Value = (MarkdownZoom) -> Void
 }
 
+/// File name (without extension) the export save panel should suggest — the
+/// focused document's own name, or "document" for an untitled buffer. Published
+/// as a non-optional String because the optional `focusedSceneValue(_:_:)`
+/// overload is macOS 14+.
+struct FocusedExportNameKey: FocusedValueKey {
+    typealias Value = String
+}
+
 extension FocusedValues {
     var documentText: String? {
         get { self[FocusedDocumentTextKey.self] }
         set { self[FocusedDocumentTextKey.self] = newValue }
+    }
+    var exportName: String? {
+        get { self[FocusedExportNameKey.self] }
+        set { self[FocusedExportNameKey.self] = newValue }
     }
     var searchAction: (() -> Void)? {
         get { self[FocusedSearchActionKey.self] }
@@ -702,11 +714,12 @@ class PrintManager {
 
 struct ExportPDFCommand: View {
     @FocusedValue(\.documentText) private var documentText
+    @FocusedValue(\.exportName) private var exportName
 
     var body: some View {
         Button("Export as PDF\u{2026}") {
             if let text = documentText {
-                PDFExportManager.exportToPDF(documentText: text)
+                PDFExportManager.exportToPDF(documentText: text, suggestedName: exportName ?? "document")
             }
         }
         .disabled(documentText?.isEmpty ?? true)
