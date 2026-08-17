@@ -26,7 +26,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 ### Blazing Fast
 - Opens in milliseconds—no loading screens
 - Native SwiftUI + AppKit app—lightweight, zero dependencies
-- Native virtualized layout with exact, pre-measured heights—10,000+ line documents open and scroll smoothly, Table of Contents and search jumps land exactly, and your reading position survives zoom, theme changes, resizes and auto-reload
+- Huge documents (10,000+ lines) open and scroll smoothly, Table of Contents and search jumps land exactly, and QuickMD keeps your place through zoom, theme changes, resizes and auto-reload
 
 ### Companion to Your Editor
 - **Auto-reload** — the document refreshes the moment your editor saves it. Enable auto-save in VS Code/Cursor/Zed and QuickMD becomes a live preview
@@ -341,7 +341,7 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Remember last window size
 - [x] CommonMark soft breaks — contributed by [@shmuelzon](https://github.com/shmuelzon)
 - [x] Custom font families for body text and code ([#18](https://github.com/b451c/quickmd/issues/18))
-- [x] Native virtualized document layout — exact heights for every document size, exact ToC/search jumps, reading position kept across zoom/reload/resize
+- [x] Native document layout with exact, pre-measured block heights (AppKit-hosted virtualized list) — smooth scrolling for every document size, exact ToC/search jumps, reading position kept across zoom/reload/resize
 - [x] Zoom indicator + reset pill, typeset math in PDF/print
 - [x] Definition lists
 - [x] Reading mode (distraction-free)
