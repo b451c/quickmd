@@ -17,7 +17,7 @@
 
 ## Overview
 
-**QuickMD** is the fastest, most elegant Markdown viewer for macOS. Double-click any `.md` file and instantly see beautifully rendered content. No Electron bloat, no loading screens—just pure native macOS performance.
+**QuickMD** is a fast, elegant, fully native Markdown viewer for macOS. Double-click any `.md` file and instantly see beautifully rendered content. No Electron bloat, no loading screens—just pure native macOS performance.
 
 Perfect for developers, writers, students, and anyone who works with Markdown daily. Think of it as the **Preview.app equivalent for Markdown files**.
 
@@ -71,7 +71,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 ### Developer-Friendly
 - Lightweight syntax highlighting (keywords, strings, comments, numbers, types) that works across common languages — Swift, Python, JavaScript, Go, Rust and more
 - Perfect for README files and documentation
-- Handles AI-generated markdown perfectly
+- Handles AI-generated Markdown well — GFM tables, nested and task lists, code fences, alerts, math
 - Dark mode that follows system settings (or choose a fixed theme)
 
 ### Privacy Focused
