@@ -47,6 +47,7 @@ struct QuickMDApp: App {
             }
             CommandGroup(after: .toolbar) {
                 ZoomCommands()
+                ReadingModeCommand()
             }
             CommandGroup(replacing: .help) {
                 Button("QuickMD Help") {
@@ -112,25 +113,49 @@ struct ZoomCommands: View {
     }
 }
 
+/// View ▸ Reading Mode (⌘⇧R) — distraction-free reading for the frontmost
+/// document only, via @FocusedValue (same routing as ⌘F, ⌘⇧T and the zoom
+/// commands), so one tab entering reading mode leaves the others alone.
+struct ReadingModeCommand: View {
+    @FocusedValue(\.toggleReadingModeAction) var toggleReadingModeAction
+    /// Optional because that is how focused values arrive; `== true` therefore
+    /// also covers "no document focused", where the title is moot anyway.
+    @FocusedValue(\.isReadingMode) var isReadingMode
+
+    var body: some View {
+        Button(isReadingMode == true ? "Exit Reading Mode" : "Reading Mode") {
+            toggleReadingModeAction?()
+        }
+        .keyboardShortcut("r", modifiers: [.command, .shift])
+        .disabled(toggleReadingModeAction == nil)
+    }
+}
+
 struct ToggleToCCommand: View {
     @FocusedValue(\.toggleToCAction) var toggleToCAction
+    @FocusedValue(\.isReadingMode) var isReadingMode
 
     var body: some View {
         Button("Table of Contents") {
             toggleToCAction?()
         }
         .keyboardShortcut("t", modifiers: [.command, .shift])
+        // Reading mode hides both sidebars without touching their flags; a
+        // toggle now would only flip hidden state and surprise the reader later.
+        .disabled(isReadingMode == true)
     }
 }
 
 struct ToggleDocumentListCommand: View {
     @FocusedValue(\.toggleDocumentListAction) var toggleDocumentListAction
+    @FocusedValue(\.isReadingMode) var isReadingMode
 
     var body: some View {
         Button("Recent Documents") {
             toggleDocumentListAction?()
         }
         .keyboardShortcut("d", modifiers: [.command, .shift])
+        .disabled(isReadingMode == true)
     }
 }
 

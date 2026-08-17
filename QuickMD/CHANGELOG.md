@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Edit / Copy pills:** hovering the top-right pills no longer shoves the neighbouring pill out from under the pointer — a pill expands when the pointer touches it and every touched pill stays open until the pointer leaves the group. Contributed by [@Coriou](https://github.com/Coriou) (#20).
 
 ### Added
+- **Reading mode (⌘⇧R):** hides both sidebars and the hover pills and centres the document in a 720 pt column with generous margins; ⌘F, zoom, Table of Contents jumps and PDF export keep working; `Esc` (or ⌘⇧R again) brings everything back exactly as it was. Per window.
+- **Definition lists:** `Term` followed by `: definition` lines (PHP Markdown Extra / Pandoc `:` syntax) render as a semibold term with its definitions indented and hanging under their own text; several terms can share definitions, a term can have several (also loose) definitions, wrapped and hard-broken definitions stay indented. Searchable, printable, zoom-aware.
 - **Zoom indicator:** ⌘+ / ⌘− / ⌘0 announce the new level ("Zoom 120%"), and while a document is zoomed a small "120%" pill sits next to Edit / Copy — hover shows "Reset zoom", click returns to 100%.
 - Table of Contents entries highlight on hover, matching the Recent Documents sidebar.
 - The Export as PDF panel suggests the document's file name instead of "document.pdf".

@@ -32,6 +32,19 @@ struct FocusedZoomActionKey: FocusedValueKey {
     typealias Value = (MarkdownZoom) -> Void
 }
 
+/// ⌘⇧R — enter or leave distraction-free reading in the FOCUSED document only.
+struct FocusedToggleReadingModeKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+/// Reading mode's current state, so the View menu item can read "Reading Mode" or
+/// "Exit Reading Mode". A non-optional `Bool` for the same reason as
+/// `FocusedExportNameKey`: the optional `focusedSceneValue(_:_:)` overload is
+/// macOS 14+.
+struct FocusedReadingModeStateKey: FocusedValueKey {
+    typealias Value = Bool
+}
+
 /// File name (without extension) the export save panel should suggest — the
 /// focused document's own name, or "document" for an untitled buffer. Published
 /// as a non-optional String because the optional `focusedSceneValue(_:_:)`
@@ -72,6 +85,14 @@ extension FocusedValues {
     var zoomAction: ((MarkdownZoom) -> Void)? {
         get { self[FocusedZoomActionKey.self] }
         set { self[FocusedZoomActionKey.self] = newValue }
+    }
+    var toggleReadingModeAction: (() -> Void)? {
+        get { self[FocusedToggleReadingModeKey.self] }
+        set { self[FocusedToggleReadingModeKey.self] = newValue }
+    }
+    var isReadingMode: Bool? {
+        get { self[FocusedReadingModeStateKey.self] }
+        set { self[FocusedReadingModeStateKey.self] = newValue }
     }
 }
 

@@ -42,6 +42,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - **LaTeX math** — display (`$$...$$`) and inline (`$...$`) with TeX-quality rendering
 - **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more
 - **Footnotes** — `[^id]` references with definitions at end of document
+- **Definition lists** — `Term` followed by `: definition` lines (PHP Markdown Extra / Pandoc `:` syntax); several terms per definition, several definitions per term, wrapped definitions hang under their text
 - Task lists with checkboxes (`- [ ]` / `- [x]`)
 - Nested lists (ordered and unordered)
 - Images (local and remote URLs)
@@ -57,6 +58,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Find in document (`⌘F`) with match count and per-word navigation
 - Word-level highlighting across all block types (text, code, tables, blockquotes)
 - Table of Contents sidebar (`⌘⇧T`) — auto-generated from headings
+- Reading mode (`⌘⇧R`) — hides both sidebars and the hover buttons and centres the text in a 720 pt column; `Esc` brings everything back
 - Copy entire document (`⌘⇧C`) or individual sections (hover heading → copy icon)
 - Export to PDF (`⌘⇧E`) — **vector text** (selectable, searchable) with **rendered Mermaid diagrams** — and Print (`⌘P`)
 
@@ -165,6 +167,7 @@ Now all your Markdown files will open instantly with QuickMD!
 | `⌘⇧C` | Copy Markdown source |
 | `⌘⇧T` | Toggle Table of Contents |
 | `⌘⇧D` | Toggle Recent Documents sidebar |
+| `⌘⇧R` | Reading mode (distraction-free) |
 | `⌃⇥` / `⌃⇧⇥` | Switch between tabs |
 | `⌘⇧E` | Export to PDF |
 | `⌘P` | Print |
@@ -335,8 +338,8 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Remember last window size
 - [x] CommonMark soft breaks — contributed by [@shmuelzon](https://github.com/shmuelzon)
 - [x] Custom font families for body text and code ([#18](https://github.com/b451c/quickmd/issues/18))
-- [ ] Definition lists
-- [ ] Reading mode (distraction-free)
+- [x] Definition lists
+- [x] Reading mode (distraction-free)
 
 Have a feature request? [Open an issue!](https://github.com/b451c/quickmd/issues)
 

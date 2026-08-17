@@ -105,6 +105,34 @@ struct VirtualBlockList: NSViewRepresentable {
         let token: Int
     }
 
+    /// How wide the text column may get and how much air it has at the document's
+    /// ends — the two numbers reading mode changes (v1.9).
+    ///
+    /// One value rather than two inputs, so a change is a single `!=` in
+    /// `updateNSView` and the anchor is captured and restored exactly once for the
+    /// whole switch.
+    struct LayoutStyle: Equatable {
+        /// Upper bound on the width a block view is laid out at. `nil` = fill the
+        /// window, which is every mode but reading mode.
+        let maxContentWidth: CGFloat?
+        /// Visible gap above the first block and below the last one.
+        let verticalPadding: CGFloat
+
+        static let standard = LayoutStyle(maxContentWidth: nil,
+                                          verticalPadding: Metrics.contentVerticalPadding)
+        static let reading = LayoutStyle(maxContentWidth: Metrics.readingMaxContentWidth,
+                                         verticalPadding: Metrics.readingContentVerticalPadding)
+
+        /// The scroll view's top/bottom content inset for this style.
+        ///
+        /// Not simply `verticalPadding`: `NSTableView` centres each row inside its
+        /// rect, which puts HALF the intercell spacing above the first row and
+        /// half below the last one (measured). Subtracting that half makes the
+        /// gap the reader sees exactly `verticalPadding`, and makes a `.top` jump
+        /// to any row — row 0 included — leave that same gap above its content.
+        var edgeInset: CGFloat { max(0, verticalPadding - Metrics.blockSpacing / 2) }
+    }
+
     /// Row content, in block order.
     let blocks: [MarkdownBlock]
     /// One height + kind per block, for a specific content width. While
@@ -117,7 +145,12 @@ struct VirtualBlockList: NSViewRepresentable {
     let focusedBlockId: String?
     let focusedOccInBlock: Int?
     let scrollRequest: ScrollRequest?
-    /// Column width − 2 × `contentHorizontalPadding`: the width a block view
+    /// Column width cap + end padding (reading mode vs. everything else). Feeds
+    /// BOTH the width the heights are measured at and the width the cells lay
+    /// their content out at — one number, so the two cannot drift.
+    let layoutStyle: LayoutStyle
+    /// Column width − 2 × `contentHorizontalPadding`, capped by
+    /// `layoutStyle.maxContentWidth`: the width a block view
     /// actually gets, and therefore the width the heights must be measured at.
     /// Written by the coordinator (never per frame during a live resize — D4).
     @Binding var contentWidth: CGFloat
@@ -142,6 +175,10 @@ struct VirtualBlockList: NSViewRepresentable {
         // starts at `.min` replays whatever ToC or search jump happens to be the
         // current value — sending the reader somewhere they left minutes ago.
         coordinator.lastScrollToken = scrollRequest?.token ?? .min
+        // Adopted, not defaulted: `makeNSView` configures the scroll view from
+        // the same value, so the coordinator must not think a style change is
+        // pending on the first `updateNSView`.
+        coordinator.layoutStyle = layoutStyle
         return coordinator
     }
 
@@ -195,18 +232,14 @@ struct VirtualBlockList: NSViewRepresentable {
         scrollView.autohidesScrollers = false
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
-        // The 24 pt that used to be `.padding(.vertical:)` on the stack. As
-        // content insets they scroll with the document exactly as before, but
-        // AppKit — not us — owns the arithmetic (see `contentTopY`).
-        //
-        // Why not exactly 24: `NSTableView` centres each row inside its rect,
-        // which puts HALF the intercell spacing above the first row and half
-        // below the last one (measured). Subtracting that half here makes the
-        // visible gap at both ends of the document exactly
-        // `contentVerticalPadding`, and makes a `.top` jump to any row — row 0
-        // included — leave exactly that same gap above the row's content.
+        // The 24 pt (48 in reading mode) that used to be `.padding(.vertical:)`
+        // on the stack. As content insets they scroll with the document exactly
+        // as before, but AppKit — not us — owns the arithmetic (see
+        // `contentTopY`). The half-spacing correction lives in
+        // `LayoutStyle.edgeInset`; the coordinator re-applies it when the style
+        // changes.
         scrollView.automaticallyAdjustsContentInsets = false
-        let edgeInset = max(0, Metrics.contentVerticalPadding - Metrics.blockSpacing / 2)
+        let edgeInset = layoutStyle.edgeInset
         scrollView.contentInsets = NSEdgeInsets(top: edgeInset, left: 0,
                                                bottom: edgeInset, right: 0)
         scrollView.contentView.drawsBackground = false
@@ -227,6 +260,9 @@ struct VirtualBlockList: NSViewRepresentable {
         coordinator.content = content
         coordinator.onHeightReport = onHeightReport
         coordinator.setContentWidth = { width in contentWidth = width }
+        // Before anything that builds a root view or reads a width: entering or
+        // leaving reading mode changes both.
+        coordinator.applyLayoutStyle(layoutStyle)
         coordinator.syncWidthIfNeeded(parentValue: contentWidth)
 
         // A half-measured document is never shown: keep the previous model until
@@ -288,6 +324,11 @@ struct VirtualBlockList: NSViewRepresentable {
         var focusedBlockId: String?
         var focusedOccInBlock: Int?
         var lastScrollToken: Int = .min
+        /// Column cap + end padding currently in force. Adopted in
+        /// `makeCoordinator` and changed only through `applyLayoutStyle`, which is
+        /// what keeps the cells' layout width, the published `contentWidth` and
+        /// the scroll insets in agreement.
+        var layoutStyle: LayoutStyle = .standard
 
         // MARK: AppKit
 
@@ -725,7 +766,8 @@ struct VirtualBlockList: NSViewRepresentable {
         }
 
         /// The width a block view gets: the visible content width minus the
-        /// horizontal padding the cell applies on both sides.
+        /// horizontal padding the cell applies on both sides, capped in reading
+        /// mode by `layoutStyle.maxContentWidth`.
         ///
         /// Read from the CLIP VIEW, not from the column, and 0 before the first
         /// layout: `NSTableColumn`'s default width is an arbitrary non-zero
@@ -733,10 +775,72 @@ struct VirtualBlockList: NSViewRepresentable {
         /// nonsense width — for a 10 000-line document, seconds of TextKit work
         /// for a table that is thrown away on the next frame. `syncColumnWidth`
         /// keeps the column equal to this, so the two never disagree.
+        ///
+        /// This is the ONE definition of the width the heights are measured at,
+        /// and `rootView(for:)` expresses the same `min` as a SwiftUI frame — so
+        /// layout width == measurement width by construction, at any clip width.
         private func currentContentWidth() -> CGFloat {
             let available = quantizedClipWidth()
             guard available > 0 else { return 0 }
-            return max(0, available - 2 * Metrics.contentHorizontalPadding)
+            let inner = available - 2 * Metrics.contentHorizontalPadding
+            guard let cap = layoutStyle.maxContentWidth else { return max(0, inner) }
+            return max(0, floor(min(inner, cap)))
+        }
+
+        // MARK: - Layout style (reading mode)
+
+        /// Reading mode came on or went off.
+        ///
+        /// Three things move together, and the order is the point:
+        ///
+        ///  1. the scroll view's end insets (24 pt ⇄ 48 pt),
+        ///  2. the cells' layout width (`rootView(for:)` reads the new cap, so the
+        ///     MATERIALIZED cells have to be re-hosted — the rest pick it up when
+        ///     AppKit builds them),
+        ///  3. the width the heights are measured at, published to the parent,
+        ///     whose `HeightsIdentity` task re-measures and installs a new table.
+        ///
+        /// Between 2 and 3 the text re-wraps inside the previous row heights —
+        /// the same transient a live resize has, and for the same reason (the
+        /// re-measure is the expensive half). The anchor is captured before and
+        /// restored after, because changing the top inset alone would slide the
+        /// document by the difference.
+        func applyLayoutStyle(_ style: LayoutStyle) {
+            guard style != layoutStyle else { return }
+            let anchor = captureAnchor()
+            let previousInset = layoutStyle.edgeInset
+            layoutStyle = style
+            applyContentInsets()
+            refreshMaterializedRootViews()
+            if let anchor {
+                if anchor.row == 0 {
+                    // At the top the larger/smaller inset IS the visible change.
+                    restore(anchor, previousCount: blocks.count)
+                } else {
+                    // Mid-document: keep the content visually still. Preserving
+                    // `contentTopY` would shift everything by the inset delta
+                    // (a 24 pt jolt on every toggle); keeping the raw clip origin
+                    // means restoring the document offset minus that delta.
+                    let delta = layoutStyle.edgeInset - previousInset
+                    let top = tableView.map { $0.rect(ofRow: anchor.row).minY } ?? 0
+                    setContentTop(top + anchor.offsetWithinRow - delta, animated: false)
+                }
+            }
+            #if DEBUG
+            listLog.debug("layoutStyle: cap=\(style.maxContentWidth.map { "\(Int($0))" } ?? "none", privacy: .public) padding=\(style.verticalPadding, format: .fixed(precision: 0))")
+            #endif
+            // Debounced like a resize, NOT immediate: leaving reading mode brings
+            // the sidebars back through a 0.2 s animation, and an immediate
+            // publish would measure the whole document at the still-sidebar-less
+            // width and then again at the settled one. The re-arming debounce
+            // collapses entry and exit to exactly one measure each.
+            scheduleWidthReport()
+        }
+
+        private func applyContentInsets() {
+            guard let scrollView else { return }
+            let inset = layoutStyle.edgeInset
+            scrollView.contentInsets = NSEdgeInsets(top: inset, left: 0, bottom: inset, right: 0)
         }
 
         private var isLiveResizing: Bool {
@@ -842,10 +946,33 @@ struct VirtualBlockList: NSViewRepresentable {
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .fixedSize(horizontal: false, vertical: true)
 
+            // The reading-mode column cap, expressed as a frame so that the LAYOUT
+            // SYSTEM computes `min(clipWidth − 2 · padding, cap)` — the exact
+            // expression `currentContentWidth()` publishes and the heights are
+            // measured with. Baking the number into a padding instead would freeze
+            // it at the width it had when this root view was built, and the clip
+            // width moves without a rebuild all through a live resize: the cells
+            // would then wrap at a width the row heights were never measured for
+            // (and NSTableView does not clip its rows). The outer frame centres
+            // the capped column; with no cap both frames take the full proposal
+            // and change nothing, which is exactly the 1.8.0 geometry.
+            //
+            // The cap the CELLS use is never narrower than the width the installed
+            // height table was measured at: entering reading mode narrows the
+            // column only when the 720-measured table lands, so paragraphs never
+            // wrap taller than their (still wide) rows and bleed into the block
+            // below. Leaving lifts the cap at once — that only creates slack
+            // inside rows, never overlap — and the re-measure closes it.
+            let styleCap = layoutStyle.maxContentWidth ?? .infinity
+            let cellCap = table.contentWidth > 0 ? max(styleCap, table.contentWidth) : styleCap
+            let column = base
+                .frame(maxWidth: cellCap, alignment: .topLeading)
+                .frame(maxWidth: .infinity, alignment: .center)
+
             let reports = row < table.kinds.count && table.kinds[row] == .reported
             if reports {
                 return AnyView(
-                    base
+                    column
                         .modifier(RowHeightReporter(blockId: block.id, generation: generation,
                                                     report: { [weak self] id, height in
                                                         self?.reportHeight(blockId: id, height: height)
@@ -856,7 +983,7 @@ struct VirtualBlockList: NSViewRepresentable {
                 )
             }
             return AnyView(
-                base
+                column
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(.horizontal, Metrics.contentHorizontalPadding)
                     .id(block.id)

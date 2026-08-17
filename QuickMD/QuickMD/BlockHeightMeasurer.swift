@@ -74,6 +74,24 @@ enum BlockLayout {
         static let contentVerticalPadding: CGFloat = 24
         static let blockSpacing: CGFloat = 8
 
+        // MARK: Reading mode (v1.9)
+        //
+        // Distraction-free reading changes exactly two numbers of the document
+        // column: it stops growing past a comfortable measure and gets more air
+        // above and below. Everything else about a block's geometry is the same,
+        // so `BlockHeightMeasurer` needs no reading-mode branch at all — it is
+        // handed the clamped `contentWidth` like any other width.
+
+        /// Upper bound on the text column in reading mode; wider windows centre
+        /// the column instead of stretching the lines. 720 pt is ~90 characters
+        /// at the 16 pt default body size — past that the eye loses the line it
+        /// came from on the way back to the left margin.
+        static let readingMaxContentWidth: CGFloat = 720
+        /// `contentVerticalPadding`'s reading-mode counterpart: the top and
+        /// bottom breathing room, doubled, because in reading mode nothing else
+        /// occupies the top of the window.
+        static let readingContentVerticalPadding: CGFloat = 48
+
         static let tableOuterVerticalPadding: CGFloat = 8
         static let codeOuterVerticalPadding: CGFloat = 4
         static let imageOuterVerticalPadding: CGFloat = 8

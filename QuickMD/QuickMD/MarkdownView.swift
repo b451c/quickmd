@@ -47,6 +47,9 @@ struct MarkdownView: View {
     @State private var matchBlockIds: [String] = []
     @State private var scrollTrigger: Int = 0
     @State private var keyMonitor: Any?
+    /// The NSWindow hosting this view (set by `WindowConfigurator`); the key
+    /// monitor uses it to ignore events addressed to other tabs' windows.
+    @State private var hostWindow: NSWindow?
     @AppStorage("isToCVisible") private var isToCVisible: Bool = false
     @AppStorage("isDocumentListVisible") private var isDocumentListVisible: Bool = false
     @AppStorage("documentListWidth") private var documentListWidth: Double = 220
@@ -82,6 +85,16 @@ struct MarkdownView: View {
     /// background parse). Updated in the same transaction as `cachedBlocks`,
     /// so the whole document changes size in one step.
     @State private var renderedFontScale: Double = 1.0
+    /// ⌘⇧R — distraction-free reading: both sidebars, the top-right chrome pills
+    /// and the Support/Tip Jar button step out of the way, and the text column
+    /// stops at `Metrics.readingMaxContentWidth` and centres itself.
+    ///
+    /// @State, not @AppStorage, for the same reason as `fontScale`: it belongs to
+    /// this window and this reading session. A viewer that reopens with its
+    /// sidebars and buttons missing reads as broken, not as focused. The sidebar
+    /// flags themselves are never touched — reading mode only overrides where
+    /// they are USED, so leaving it restores exactly what the reader had.
+    @State private var isReadingMode = false
     /// The virtualized list's height table + pre-converted strings for
     /// `cachedBlocks`, produced by `BlockHeightMeasurer` (v1.9 D3/D4). Replaced
     /// wholesale, never merged — except for the single-row patches height
@@ -188,8 +201,10 @@ struct MarkdownView: View {
     /// so the modifier chain below stays inside the type-checker's budget.
     private var documentStack: some View {
         HStack(spacing: 0) {
-            // Recent documents sidebar (leftmost)
-            if isDocumentListVisible {
+            // Recent documents sidebar (leftmost). Reading mode hides both
+            // sidebars at the USE SITE — their @AppStorage flags keep whatever the
+            // reader chose, so leaving reading mode brings back exactly that.
+            if isDocumentListVisible && !isReadingMode {
                 RecentDocumentsSidebar(theme: theme, currentURL: documentURL)
                     .frame(width: documentListWidth)
                     .transition(.move(edge: .leading).combined(with: .opacity))
@@ -197,7 +212,7 @@ struct MarkdownView: View {
             }
 
             // Table of Contents sidebar
-            if isToCVisible && !headings.isEmpty {
+            if isToCVisible && !headings.isEmpty && !isReadingMode {
                 TableOfContentsView(headings: headings, onSelect: { targetId in
                     if useLegacyLayout {
                         tocScrollTarget = targetId
@@ -247,7 +262,16 @@ struct MarkdownView: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, Metrics.contentHorizontalPadding)
-                            .padding(.vertical, Metrics.contentVerticalPadding)
+                            // Reading mode, legacy path: cap the column (padding
+                            // included, so the text measure matches the virtual
+                            // path's) and centre it in the scroll view.
+                            .frame(maxWidth: isReadingMode
+                                   ? Metrics.readingMaxContentWidth + 2 * Metrics.contentHorizontalPadding
+                                   : .infinity)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, isReadingMode
+                                     ? Metrics.readingContentVerticalPadding
+                                     : Metrics.contentVerticalPadding)
                         }
                         .onChange(of: scrollTrigger) { _ in
                             scrollToCurrentMatch(proxy: proxy)
@@ -272,6 +296,7 @@ struct MarkdownView: View {
                         focusedBlockId: focusedBlockId,
                         focusedOccInBlock: focusedOccInBlock,
                         scrollRequest: scrollRequest,
+                        layoutStyle: isReadingMode ? .reading : .standard,
                         contentWidth: $contentWidth,
                         onHeightReport: { blockId, row, height in
                             applyHeightReport(blockId: blockId, row: row, height: height)
@@ -284,8 +309,10 @@ struct MarkdownView: View {
                 }
             }
             .overlay(alignment: .topLeading) {
-                // Reveal sidebar when hidden (sits at top-leading; out of the way of content)
-                if !isDocumentListVisible {
+                // Reveal sidebar when hidden (sits at top-leading; out of the way
+                // of content). Reading mode is the one state where "hidden" was
+                // not the reader asking for a way back.
+                if !isDocumentListVisible && !isReadingMode {
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             isDocumentListVisible = true
@@ -308,26 +335,32 @@ struct MarkdownView: View {
                 }
             }
             .overlay(alignment: .topTrailing) {
-                HStack(spacing: 8) {
-                    if fontScale != 1.0 {
-                        ZoomResetButton(theme: theme, fontScale: fontScale) {
-                            applyZoom(.actualSize)
+                // The zoom / Edit / Copy cluster. Gone in reading mode — its
+                // shortcuts (⌘0, ⌘E, ⌘⇧C) all still work, so nothing is lost
+                // except the thing hovering over the text.
+                if !isReadingMode {
+                    HStack(spacing: 8) {
+                        if fontScale != 1.0 {
+                            ZoomResetButton(theme: theme, fontScale: fontScale) {
+                                applyZoom(.actualSize)
+                            }
+                            .transition(.opacity)
                         }
-                        .transition(.opacity)
-                    }
-                    if documentURL != nil {
-                        EditInEditorButton(theme: theme) {
-                            openInExternalEditor()
+                        if documentURL != nil {
+                            EditInEditorButton(theme: theme) {
+                                openInExternalEditor()
+                            }
+                        }
+                        CopySourceButton(theme: theme) {
+                            copyToClipboard(currentText)
                         }
                     }
-                    CopySourceButton(theme: theme) {
-                        copyToClipboard(currentText)
-                    }
+                    .animation(.easeInOut(duration: 0.15), value: fontScale != 1.0)
+                    .chromeHoverCluster()
+                    .padding(.top, isSearchVisible ? 44 : 8)
+                    .padding(.trailing, 24)
+                    .transition(.opacity)
                 }
-                .animation(.easeInOut(duration: 0.15), value: fontScale != 1.0)
-                .chromeHoverCluster()
-                .padding(.top, isSearchVisible ? 44 : 8)
-                .padding(.trailing, 24)
             }
             .overlay(alignment: .top) {
                 if fileMissing {
@@ -352,14 +385,17 @@ struct MarkdownView: View {
                 }
             }
             .overlay(alignment: .bottomTrailing) {
-                Group {
-                    #if APPSTORE
-                    TipJarButton(theme: theme)
-                    #else
-                    SupportButton(theme: theme)
-                    #endif
+                if !isReadingMode {
+                    Group {
+                        #if APPSTORE
+                        TipJarButton(theme: theme)
+                        #else
+                        SupportButton(theme: theme)
+                        #endif
+                    }
+                    .padding(16)
+                    .transition(.opacity)
                 }
-                .padding(16)
             }
             .overlay(alignment: .center) {
                 if isRenderPending {
@@ -398,7 +434,13 @@ struct MarkdownView: View {
         }
     }
 
-    var body: some View {
+    /// `documentStack` plus the window configuration and every value the app's
+    /// menu commands read from the focused document.
+    ///
+    /// Split out of `body` for the same reason as `documentStack` itself: with ten
+    /// chained `focusedSceneValue` calls in front of the `.task`s, the whole
+    /// modifier chain no longer type-checks inside the compiler's budget.
+    private var configuredDocumentStack: some View {
         documentStack
         .background(theme.backgroundColor)
         .background(WindowConfigurator { window in
@@ -408,15 +450,34 @@ struct MarkdownView: View {
             // tabbingIdentifier so AppKit groups them in a single tabbed window.
             window.tabbingMode = .preferred
             window.tabbingIdentifier = "pl.falami.studio.QuickMD.Document"
+            // Remembered so the process-global key monitor below can ignore
+            // key events addressed to OTHER windows (tabs are separate windows).
+            hostWindow = window
         })
         .focusedSceneValue(\.documentText, currentText)
         .focusedSceneValue(\.exportName, exportName)
         .focusedSceneValue(\.searchAction, { toggleSearch() })
-        .focusedSceneValue(\.toggleToCAction, { withAnimation(.easeInOut(duration: 0.2)) { isToCVisible.toggle() } })
+        .focusedSceneValue(\.toggleToCAction, {
+            // No-op in reading mode: the sidebars are hidden and must come back
+            // exactly as they were, so their flags are not touched meanwhile.
+            guard !isReadingMode else { return }
+            withAnimation(.easeInOut(duration: 0.2)) { isToCVisible.toggle() }
+        })
         .focusedSceneValue(\.copyDocumentAction, { copyToClipboard(currentText) })
         .focusedSceneValue(\.openInExternalEditorAction, { openInExternalEditor() })
-        .focusedSceneValue(\.toggleDocumentListAction, { withAnimation(.easeInOut(duration: 0.2)) { isDocumentListVisible.toggle() } })
+        .focusedSceneValue(\.toggleDocumentListAction, {
+            guard !isReadingMode else { return }
+            withAnimation(.easeInOut(duration: 0.2)) { isDocumentListVisible.toggle() }
+        })
         .focusedSceneValue(\.zoomAction, { zoom in applyZoom(zoom) })
+        .focusedSceneValue(\.toggleReadingModeAction, { toggleReadingMode() })
+        // The menu item's title flips with the state, so the View menu needs the
+        // flag as well as the action (⌘⇧R routes to the focused tab only).
+        .focusedSceneValue(\.isReadingMode, isReadingMode)
+    }
+
+    var body: some View {
+        configuredDocumentStack
         .environment(\.openURL, OpenURLAction { url in
             handleLinkActivation(url)
             return .handled
@@ -562,10 +623,21 @@ struct MarkdownView: View {
             // in QuickMDApp.swift, which correctly targets the active tab.
             //
             // Only handle the search-bar-specific keys here (⌘G next match,
-            // ⇧⌘G previous, Escape close). These already gate on the per-view
-            // `isSearchVisible` flag, so inactive tabs return the event
-            // unchanged and the active tab consumes it.
+            // ⇧⌘G previous, Escape close) and Escape for reading mode. These
+            // already gate on per-view state (`isSearchVisible`, `isReadingMode`),
+            // so inactive tabs return the event unchanged and the active tab
+            // consumes it. ⌘⇧R itself is a menu shortcut, routed through
+            // `@FocusedValue` like ⌘F/⌘⇧T/⌘⇧D — a monitor would toggle every
+            // open tab at once.
             keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                // Every tab installs one of these monitors and ALL of them see
+                // every keypress. Per-view state alone is not enough to make
+                // that safe for a MODE (a reader can leave reading mode on in
+                // a background tab), so gate on the event's window: only the
+                // tab that owns the key window handles it.
+                if let hostWindow, let eventWindow = event.window, eventWindow !== hostWindow {
+                    return event
+                }
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
                 if flags.contains(.command) && event.charactersIgnoringModifiers == "g" {
@@ -578,10 +650,20 @@ struct MarkdownView: View {
                         return nil
                     }
                 }
-                if event.keyCode == 53 && isSearchVisible {
-                    isSearchVisible = false
-                    searchText = ""
-                    return nil
+                if event.keyCode == 53 {  // Escape
+                    // Search first: with both open, Escape is the reader asking
+                    // to dismiss the thing they opened last, and the search bar
+                    // is the only one of the two they can open from inside
+                    // reading mode.
+                    if isSearchVisible {
+                        isSearchVisible = false
+                        searchText = ""
+                        return nil
+                    }
+                    if isReadingMode {
+                        setReadingMode(false)
+                        return nil
+                    }
                 }
                 return event
             }
@@ -758,6 +840,32 @@ struct MarkdownView: View {
         let next = zoom.applied(to: fontScale)
         fontScale = next
         showToast("Zoom \(Int((next * 100).rounded()))%")
+    }
+
+    // MARK: - Reading Mode
+
+    /// ⌘⇧R (View ▸ Reading Mode) and the menu item's Exit counterpart.
+    private func toggleReadingMode() {
+        setReadingMode(!isReadingMode)
+    }
+
+    /// Enter or leave reading mode.
+    ///
+    /// The toast is shown on the way IN only, and it says how to get out: ⌘⇧R is
+    /// discoverable from the menu, but a reader who has just watched every control
+    /// disappear needs the answer before they start looking for it. On the way out
+    /// nothing needs saying — the sidebars and pills coming back are the message.
+    private func setReadingMode(_ on: Bool) {
+        guard on != isReadingMode else { return }
+        // Animate what is cheap to animate: the sidebars' move/opacity transitions
+        // and the pills' fade. The document column re-lays out through the
+        // measurer (AppKit, virtual path), which is deliberately outside this.
+        // Plain assignment on purpose: an animated transaction here would also
+        // reach `updateNSView` → the hosted cells' `rootView` re-assignment and
+        // could animate the AppKit column's re-wrap. The sidebars and pills
+        // animate through their own `.animation(value: isReadingMode)`.
+        isReadingMode = on
+        if on { showToast("Reading Mode (Esc to exit)") }
     }
 
     private func showToast(_ message: String) {
