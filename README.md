@@ -32,7 +32,6 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - **Auto-reload** — the document refreshes the moment your editor saves it. Enable auto-save in VS Code/Cursor/Zed and QuickMD becomes a live preview
 - **Open in External Editor (`⌘E`)** — one-click handoff to VS Code, Cursor, Sublime, Zed, Typora, Obsidian and more (auto-detected; configurable in Settings)
 - **Copy button on code blocks** — hover and click, like on GitHub
-- **Mermaid zoom** — open any diagram in a pinch-to-zoom viewer
 
 ### Complete Markdown Support
 - Headers, bold, italic, strikethrough (ATX `#` and setext underline styles)
@@ -40,7 +39,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Tables with proper column alignment (headerless `| | |` tables too)
 - Code blocks with syntax highlighting
 - **LaTeX math** — display (`$$...$$`) and inline (`$...$`) with TeX-quality rendering
-- **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more
+- **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more, with a pinch-to-zoom viewer
 - **Footnotes** — `[^id]` references with definitions at end of document
 - **Definition lists** — `Term` followed by `: definition` lines (PHP Markdown Extra / Pandoc `:` syntax); several terms per definition, several definitions per term, wrapped definitions hang under their text
 - Task lists with checkboxes (`- [ ]` / `- [x]`)
@@ -70,7 +69,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Theme and fonts persist across app restarts
 
 ### Developer-Friendly
-- Syntax highlighting for 10+ languages (Swift, Python, JavaScript, Go, Rust, etc.)
+- Lightweight syntax highlighting (keywords, strings, comments, numbers, types) that works across common languages — Swift, Python, JavaScript, Go, Rust and more
 - Perfect for README files and documentation
 - Handles AI-generated markdown perfectly
 - Dark mode that follows system settings (or choose a fixed theme)
@@ -98,7 +97,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 <td><img src="QuickMD/Screenshots/screenshot-4.png" width="400" alt="Mermaid diagrams"></td>
 </tr>
 <tr>
-<td align="center"><em>GitHub-flavored alerts (new in 1.7)</em></td>
+<td align="center"><em>GitHub-flavored alerts</em></td>
 <td align="center"><em>Mermaid diagrams, rendered natively</em></td>
 </tr>
 </table>
@@ -171,13 +170,13 @@ Now all your Markdown files will open instantly with QuickMD!
 | `⌃⇥` / `⌃⇧⇥` | Switch between tabs |
 | `⌘⇧E` | Export to PDF |
 | `⌘P` | Print |
-| `⌘,` | Settings (themes + external editor) |
+| `⌘,` | Settings (themes, fonts, external editor) |
 | `⌘+` / `⌘-` / `⌘0` | Zoom in / out / actual size |
 
 ## Tech Stack
 
 - **Language:** Swift 5.9
-- **Framework:** SwiftUI
+- **Framework:** SwiftUI + AppKit
 - **Minimum OS:** macOS 13.0 (Ventura)
 - **Architecture:** Native Apple Silicon + Intel
 
