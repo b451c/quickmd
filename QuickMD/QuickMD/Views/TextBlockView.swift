@@ -81,6 +81,12 @@ struct TextBlockView: View {
     var contentVersion: Int = 0
     var searchTerm: String = ""
     var focusedOccurrence: Int? = nil
+    /// The converted string, already built off-main by `BlockHeightMeasurer`
+    /// (it has to build it to measure the row anyway — v1.9 D12). When present
+    /// we skip `makeNSAttributedString` entirely, on first render and on every
+    /// cell reuse. `nil` on the legacy layout path, which then falls back to
+    /// converting once and caching it in `cachedNS`.
+    var preconverted: NSAttributedString? = nil
     let onLink: (URL) -> Void
 
     @State private var cachedNS: NSAttributedString?
@@ -89,6 +95,7 @@ struct TextBlockView: View {
     init(blockId: String, attributed: AttributedString, hasInlineMath: Bool = false,
          theme: MarkdownTheme, fontScale: CGFloat = 1.0, contentVersion: Int = 0,
          searchTerm: String = "", focusedOccurrence: Int? = nil,
+         preconverted: NSAttributedString? = nil,
          onLink: @escaping (URL) -> Void) {
         self.blockId = blockId
         self.attributed = attributed
@@ -98,6 +105,7 @@ struct TextBlockView: View {
         self.contentVersion = contentVersion
         self.searchTerm = searchTerm
         self.focusedOccurrence = focusedOccurrence
+        self.preconverted = preconverted
         self.onLink = onLink
     }
 
@@ -112,8 +120,10 @@ struct TextBlockView: View {
     }
 
     var body: some View {
-        let ns = (cacheKey == cachedKey ? cachedNS : nil) ?? Self.makeNSAttributedString(
-            from: attributed, hasInlineMath: hasInlineMath, theme: theme, fontScale: fontScale)
+        let ns = preconverted
+            ?? (cacheKey == cachedKey ? cachedNS : nil)
+            ?? Self.makeNSAttributedString(
+                from: attributed, hasInlineMath: hasInlineMath, theme: theme, fontScale: fontScale)
 
         // Height comes from BlockTextView.sizeThatFits (synchronous, per width) —
         // no state round-trip, so lazy re-creation can't jump or oscillate.
@@ -125,6 +135,9 @@ struct TextBlockView: View {
         )
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: cacheKey) {
+            // Nothing to cache when the string was handed to us already built —
+            // and skipping the @State write avoids a pointless re-render per cell.
+            guard preconverted == nil else { return }
             let key = cacheKey
             cachedNS = ns
             cachedKey = key
@@ -134,81 +147,19 @@ struct TextBlockView: View {
     // MARK: - AttributedString → NSAttributedString
 
     /// Converts the renderer's dual-scope AttributedString into an
-    /// NSAttributedString. For paragraphs containing inline `$...$` math the
-    /// math segments are rendered to images (SwiftMath) and embedded as
-    /// NSTextAttachment — which NSTextView renders natively (the old SwiftUI
-    /// Text pipeline dropped attachments; that constraint no longer applies).
+    /// NSAttributedString, with inline `$...$` math embedded as
+    /// `NSTextAttachment` images.
+    ///
+    /// The implementation lives in `BlockTextConverter` (BlockHeightMeasurer.swift)
+    /// because `BlockHeightMeasurer` sizes a row by laying out this exact string;
+    /// this wrapper just binds the production math engine.
     nonisolated static func makeNSAttributedString(from attributed: AttributedString,
                                                    hasInlineMath: Bool,
                                                    theme: MarkdownTheme,
                                                    fontScale: CGFloat) -> NSAttributedString {
-        guard hasInlineMath else {
-            return (try? NSAttributedString(attributed, including: \.appKit))
-                ?? NSAttributedString(string: String(attributed.characters))
-        }
-
-        let plain = String(attributed.characters)
-        let segments = InlineMathSegmenter.split(plain)
-        let result = NSMutableAttributedString()
-        var attrIndex = attributed.startIndex
-
-        for segment in segments {
-            switch segment {
-            case .text(let str):
-                if let end = attributed.characters.index(attrIndex, offsetBy: str.count,
-                                                         limitedBy: attributed.endIndex) {
-                    let slice = AttributedString(attributed[attrIndex..<end])
-                    if let ns = try? NSAttributedString(slice, including: \.appKit) {
-                        result.append(ns)
-                    } else {
-                        result.append(NSAttributedString(string: str))
-                    }
-                    attrIndex = end
-                }
-
-            case .math(let latex):
-                // Skip past the $latex$ in the source AttributedString
-                let skipCount = latex.count + 2
-                if let end = attributed.characters.index(attrIndex, offsetBy: skipCount,
-                                                         limitedBy: attributed.endIndex) {
-                    attrIndex = end
-                }
-
-                if let image = renderMathImage(latex: latex, theme: theme, fontScale: fontScale) {
-                    let attachment = NSTextAttachment()
-                    attachment.image = image
-                    // Center the math image against the 14pt body cap height
-                    let bodyFont = theme.fonts.appKit(size: 14 * fontScale)
-                    let yOffset = (bodyFont.capHeight - image.size.height) / 2
-                    attachment.bounds = CGRect(x: 0, y: yOffset,
-                                               width: image.size.width, height: image.size.height)
-                    result.append(NSAttributedString(attachment: attachment))
-                } else {
-                    // Fallback: italic literal, same as the legacy pipeline
-                    var attr = AttributedString(latex)
-                    attr.setDualFont(size: 14 * fontScale, italic: true, fonts: theme.fonts)
-                    attr.setDualForeground(theme.textColor)
-                    if let ns = try? NSAttributedString(attr, including: \.appKit) {
-                        result.append(ns)
-                    }
-                }
-            }
-        }
-
-        return result
-    }
-
-    nonisolated private static func renderMathImage(latex: String, theme: MarkdownTheme, fontScale: CGFloat) -> NSImage? {
-        var mathImage = MathImage(
-            latex: latex,
-            fontSize: 14 * fontScale,
-            textColor: NSColor(theme.textColor),
-            labelMode: .text,
-            textAlignment: .left
-        )
-        let (error, image, _) = mathImage.asImage()
-        guard error == nil, let image = image else { return nil }
-        return image
+        BlockTextConverter.makeNSAttributedString(from: attributed, hasInlineMath: hasInlineMath,
+                                                  theme: theme, fontScale: fontScale,
+                                                  math: .swiftMath)
     }
 }
 

@@ -98,6 +98,9 @@
 		A1B2C3D401000066 /* ChromeHoverState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000066 /* ChromeHoverState.swift */; };
 		A1B2C3D401000067 /* ChromeHoverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000067 /* ChromeHoverTests.swift */; };
 		A1B2C3D401000068 /* ChromeHoverState.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000066 /* ChromeHoverState.swift */; };
+		A1B2C3D401000069 /* BlockHeightMeasurer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000069 /* BlockHeightMeasurer.swift */; };
+		A1B2C3D40100006A /* BlockHeightMeasurerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */; };
+		A1B2C3D40100006B /* BlockHeightMeasurer.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000069 /* BlockHeightMeasurer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -106,6 +109,8 @@
 		A1B2C3D400000062 /* DocumentFonts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentFonts.swift; sourceTree = "<group>"; };
 		A1B2C3D400000063 /* FontPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontPickerView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000064 /* FontTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000069 /* BlockHeightMeasurer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockHeightMeasurer.swift; sourceTree = "<group>"; };
+		A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockHeightMeasurerTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000001 /* QuickMDApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickMDApp.swift; sourceTree = "<group>"; };
 		A1B2C3D400000002 /* MarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDocument.swift; sourceTree = "<group>"; };
 		A1B2C3D400000003 /* MarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownView.swift; sourceTree = "<group>"; };
@@ -224,6 +229,7 @@
 				A1B2C3D40000004D /* FileWatcherTests.swift */,
 				A1B2C3D400000064 /* FontTests.swift */,
 				A1B2C3D400000067 /* ChromeHoverTests.swift */,
+				A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */,
 			);
 			path = QuickMDTests;
 			sourceTree = "<group>";
@@ -238,6 +244,7 @@
 				A1B2C3D400000008 /* MarkdownTheme.swift */,
 				A1B2C3D40000000D /* MarkdownBlock.swift */,
 				A1B2C3D40000000E /* MarkdownBlockParser.swift */,
+				A1B2C3D400000069 /* BlockHeightMeasurer.swift */,
 				A1B2C3D40000003D /* SectionExtractor.swift */,
 				A1B2C3D40000003E /* DocumentSearch.swift */,
 				A1B2C3D40000003F /* WindowTabbing.swift */,
@@ -507,6 +514,7 @@
 				A1B2C3D401000050 /* SettingsView.swift in Sources */,
 				A1B2C3D401000062 /* DocumentFonts.swift in Sources */,
 				A1B2C3D401000063 /* FontPickerView.swift in Sources */,
+				A1B2C3D401000069 /* BlockHeightMeasurer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -535,6 +543,8 @@
 				A1B2C3D401000065 /* DocumentFonts.swift in Sources (Tests) */,
 				A1B2C3D401000067 /* ChromeHoverTests.swift in Sources */,
 				A1B2C3D401000068 /* ChromeHoverState.swift in Sources (Tests) */,
+				A1B2C3D40100006A /* BlockHeightMeasurerTests.swift in Sources */,
+				A1B2C3D40100006B /* BlockHeightMeasurer.swift in Sources (Tests) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -109,6 +109,12 @@ struct MarkdownView: View {
     /// in 1.7.0.
     static let eagerLayoutByteLimit = 256 * 1024
 
+    /// Content insets, inter-block spacing and the per-kind `.padding(.vertical:)`
+    /// applied in `blockView(for:)` — see `BlockLayout.Document`. Shared with
+    /// `BlockHeightMeasurer`: those outer paddings are part of a block's row
+    /// height, so both sides have to read the same numbers.
+    typealias Layout = BlockLayout.Document
+
     /// Set with each parse from the document size (see `eagerLayoutByteLimit`).
     @State private var useEagerLayout = true
 
@@ -173,14 +179,14 @@ struct MarkdownView: View {
                         // Sprint 4.2 attempt (constraints.md, bug B).
                         Group {
                             if useEagerLayout {
-                                VStack(alignment: .leading, spacing: 8) { blockList }
+                                VStack(alignment: .leading, spacing: Layout.blockSpacing) { blockList }
                             } else {
-                                LazyVStack(alignment: .leading, spacing: 8) { blockList }
+                                LazyVStack(alignment: .leading, spacing: Layout.blockSpacing) { blockList }
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 32)
-                        .padding(.vertical, 24)
+                        .padding(.horizontal, Layout.contentHorizontalPadding)
+                        .padding(.vertical, Layout.contentVerticalPadding)
                     }
                     .onChange(of: scrollTrigger) { _ in
                         scrollToCurrentMatch(proxy: proxy)
@@ -329,16 +335,15 @@ struct MarkdownView: View {
                 // Pre-compute per-text-block metadata on the background thread so the
                 // main thread never has to do it later.
                 var meta: [String: TextBlockMeta] = [:]
-                let mathRegex = try? NSRegularExpression(pattern: #"\$[^\s$].*?\$"#)
                 for block in blocks {
                     if case .text(let attr) = block.content {
                         let plain = String(attr.characters)
-                        var hasMath = false
-                        if plain.contains("$"), let regex = mathRegex {
-                            let range = NSRange(plain.startIndex..., in: plain)
-                            hasMath = regex.firstMatch(in: plain, range: range) != nil
-                        }
-                        meta[block.id] = TextBlockMeta(plain: plain, hasInlineMath: hasMath)
+                        // Same test BlockHeightMeasurer applies when meta is
+                        // missing — one rule, or a measured row and the view it
+                        // hosts disagree about inline math.
+                        meta[block.id] = TextBlockMeta(
+                            plain: plain,
+                            hasInlineMath: BlockTextConverter.containsInlineMath(plain))
                     }
                 }
                 return ParsedDocument(blocks: blocks, textMeta: meta)
@@ -489,16 +494,16 @@ struct MarkdownView: View {
             case .table(let headers, let rows, let alignments):
                 TableBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme,
                                fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, Layout.tableOuterVerticalPadding)
 
             case .codeBlock(let code, let language):
                 CodeBlockView(code: code, language: language, theme: theme,
                               fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, Layout.codeOuterVerticalPadding)
 
             case .image(let url, let alt):
                 ImageBlockView(url: url, alt: alt, theme: theme, documentURL: documentURL)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, Layout.imageOuterVerticalPadding)
 
             case .blockquote(let content, let level):
                 BlockquoteView(blockId: block.id, content: content, level: level, theme: theme,
@@ -511,8 +516,7 @@ struct MarkdownView: View {
                                fontScale: scale, contentVersion: contentVersion,
                                searchText: searchText, focusedOccurrence: focusedOcc,
                                onLink: { handleLinkActivation($0) })
-                    .padding(.vertical, 4)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, Layout.alertOuterVerticalPadding)
 
             case .heading(let level, let title, _):
                 HeadingBlockView(
@@ -533,12 +537,12 @@ struct MarkdownView: View {
 
             case .mathBlock(let latex):
                 MathBlockView(latex: latex, theme: theme, fontScale: scale)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, Layout.mathOuterVerticalPadding)
 
             case .mermaidDiagram(let source):
                 MermaidBlockView(blockId: block.id, source: source, theme: theme,
                                  heightCache: heightCache)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, Layout.mermaidOuterVerticalPadding)
             }
         }
 

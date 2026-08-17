@@ -39,13 +39,17 @@ struct AlertBlockView: View {
 
     private var accent: Color { kind.accentColor(isDark: theme.isDark) }
 
+    /// Paddings, spacing and label font sizes — see `BlockLayout.Alert`
+    /// (shared with `BlockHeightMeasurer`).
+    typealias Layout = BlockLayout.Alert
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: Layout.stackSpacing) {
+            HStack(spacing: Layout.titleRowSpacing) {
                 Image(systemName: kind.symbolName)
-                    .font(.system(size: 13 * fontScale, weight: .semibold))
+                    .font(.system(size: Layout.iconFontSize * fontScale, weight: .semibold))
                 Text(kind.title)
-                    .font(theme.fonts.swiftUI(size: 14 * fontScale, weight: .semibold))
+                    .font(theme.fonts.swiftUI(size: Layout.titleFontSize * fontScale, weight: .semibold))
             }
             .foregroundColor(accent)
 
@@ -62,35 +66,22 @@ struct AlertBlockView: View {
                 )
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, Layout.horizontalPadding)
+        .padding(.vertical, Layout.verticalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(accent.opacity(0.06))
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(accent)
-                .frame(width: 3)
+                .frame(width: Layout.accentBarWidth)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .clipShape(RoundedRectangle(cornerRadius: Layout.cornerRadius))
     }
 
-    /// Inline-render each body line and join with newlines — one attributed
-    /// string for the whole alert body (same approach as BlockquoteView).
-    /// Soft breaks are joined first so a single newline inside a paragraph
-    /// reads as a space (CommonMark).
+    /// One attributed string for the whole alert body — see
+    /// `MarkdownRenderer.renderQuotedBody` (shared with the blockquote view and
+    /// the height measurer).
     private func renderedContent() -> AttributedString {
-        var result = AttributedString()
-        let lines = MarkdownRenderer.joinSoftBreaks(content.components(separatedBy: "\n"))
-        for (index, line) in lines.enumerated() {
-            if line.trimmingCharacters(in: .whitespaces).isEmpty {
-                result.append(AttributedString(" "))
-            } else {
-                result.append(renderer.renderInline(line))
-            }
-            if index < lines.count - 1 {
-                result.append(AttributedString("\n"))
-            }
-        }
-        return result
+        renderer.renderQuotedBody(content)
     }
 }

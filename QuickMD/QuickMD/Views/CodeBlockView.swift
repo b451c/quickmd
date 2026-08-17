@@ -43,6 +43,10 @@ struct CodeBlockView: View {
     @State private var isHovered = false
     @State private var justCopied = false
 
+    /// Paddings, the language-label font size and the code font size — see
+    /// `BlockLayout.Code` (shared with `BlockHeightMeasurer`).
+    typealias Layout = BlockLayout.Code
+
     private var cacheKey: String {
         // theme.name + isDark + code font + a content fingerprint. isDark
         // matters because "Auto" keeps its name across light/dark palette
@@ -64,11 +68,12 @@ struct CodeBlockView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if !language.isEmpty {
                     Text(language)
-                        .font(.system(size: 11 * fontScale, weight: .medium, design: .monospaced))
+                        .font(.system(size: Layout.languageLabelFontSize * fontScale,
+                                      weight: .medium, design: .monospaced))
                         .foregroundColor(theme.secondaryTextColor)
-                        .padding(.horizontal, 12)
-                        .padding(.top, 8)
-                        .padding(.bottom, 4)
+                        .padding(.horizontal, Layout.horizontalPadding)
+                        .padding(.top, Layout.languageLabelTopPadding)
+                        .padding(.bottom, Layout.languageLabelBottomPadding)
                 }
 
                 CodeTextView(
@@ -76,12 +81,13 @@ struct CodeBlockView: View {
                     searchTerm: searchText,
                     focusedOccurrence: focusedOccurrence
                 )
-                .padding(.horizontal, 12)
-                .padding(.vertical, language.isEmpty ? 12 : 8)
+                .padding(.horizontal, Layout.horizontalPadding)
+                .padding(.vertical, language.isEmpty ? Layout.verticalPaddingWithoutLanguage
+                                                     : Layout.verticalPaddingWithLanguage)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(theme.codeBackgroundColor)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: Layout.cornerRadius))
 
             // Hover-to-reveal copy button — the single most common action on a
             // code block in documentation.
@@ -131,13 +137,11 @@ struct CodeBlockView: View {
     // MARK: - Attributed String Construction
 
     /// Base font + text color only — cheap enough for body while the real
-    /// highlight is being computed in the background task.
+    /// highlight is being computed in the background task. Built by
+    /// `BlockTextConverter` because `BlockHeightMeasurer` lays out this exact
+    /// string to size the row (the highlight only changes colours).
     nonisolated static func plainAttributedString(code: String, theme: MarkdownTheme, fontScale: CGFloat) -> NSAttributedString {
-        let result = NSMutableAttributedString(string: code)
-        let fullRange = NSRange(location: 0, length: (code as NSString).length)
-        result.addAttribute(.font, value: theme.fonts.appKit(size: 13 * fontScale, monospaced: true), range: fullRange)
-        result.addAttribute(.foregroundColor, value: NSColor(theme.textColor), range: fullRange)
-        return result
+        BlockTextConverter.plainCode(code, theme: theme, fontScale: fontScale)
     }
 
     /// Full syntax highlight. Static + nonisolated so the detached task can run
@@ -151,7 +155,7 @@ struct CodeBlockView: View {
 
         let result = NSMutableAttributedString(string: code)
         let fullRange = NSRange(location: 0, length: (code as NSString).length)
-        let baseFont = theme.fonts.appKit(size: 13 * fontScale, monospaced: true)
+        let baseFont = theme.fonts.appKit(size: Layout.codeFontSize * fontScale, monospaced: true)
 
         result.addAttribute(.font, value: baseFont, range: fullRange)
         result.addAttribute(.foregroundColor, value: NSColor(theme.textColor), range: fullRange)
@@ -319,29 +323,18 @@ final class SelfSizingTextView: NSTextView {
         return lm
     }()
 
-    /// One-time setup shared by both wrappers (call right after init).
-    func configureForSelfSizing() {
-        isEditable = false
-        isSelectable = true
-        drawsBackground = false
-        textContainerInset = .zero
-        textContainer?.lineFragmentPadding = 0
-        textContainer?.widthTracksTextView = true
-        isHorizontallyResizable = false
-        isVerticallyResizable = false
-        autoresizingMask = []
-        allowsUndo = false
-        usesFindBar = false
-        // Touch the TextKit 1 layout manager up front (macOS 12+ text views
-        // start in TextKit 2 and switch on first access) so display and
-        // measurement share one text storage from the start.
-        _ = layoutManager
-    }
+    // One-time setup lives on NSTextView as `configureForSelfSizing()`
+    // (BlockHeightMeasurer.swift) so the parity tests can reproduce a block's
+    // text layout with the identical configuration.
 
     /// Forget the cached measurement (call after the text storage changed).
     func invalidateMeasurement() { measuredWidth = -1 }
 
     /// Height of the current text laid out at `width`, cached per width.
+    ///
+    /// `BlockHeightMeasurer.exactHeight` reproduces these four lines on a
+    /// standalone stack; the two MUST agree to the point (pinned by
+    /// `BlockHeightMeasurerTests`).
     func measuredHeight(forWidth width: CGFloat) -> CGFloat {
         if abs(width - measuredWidth) < 0.5 { return measuredHeight }
         let lm = measureLayoutManager

@@ -15,8 +15,10 @@ struct ImageBlockView: View {
     let theme: MarkdownTheme
     let documentURL: URL?
 
-    /// Maximum display width for images
-    private static let maxDisplayWidth: CGFloat = 600
+    /// Display width cap and the pre-load placeholder height — see
+    /// `BlockLayout.ImageBlock` (shared with `BlockHeightMeasurer`, which starts
+    /// an image row at the placeholder height).
+    typealias Layout = BlockLayout.ImageBlock
 
     /// Maximum pixel dimension for downsampling (2x for Retina)
     private static let maxPixelDimension: Int = 1200
@@ -39,12 +41,12 @@ struct ImageBlockView: View {
                         switch phase {
                         case .empty:
                             ProgressView()
-                                .frame(height: 100)
+                                .frame(height: Layout.placeholderHeight)
                         case .success(let image):
                             image
                                 .resizable()
                                 .aspectRatio(contentMode: .fit)
-                                .frame(maxWidth: Self.maxDisplayWidth)
+                                .frame(maxWidth: Layout.maxDisplayWidth)
                                 .clipShape(RoundedRectangle(cornerRadius: 8))
                         case .failure:
                             imageErrorView
@@ -74,18 +76,18 @@ struct ImageBlockView: View {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: Self.maxDisplayWidth)
+                .frame(maxWidth: Layout.maxDisplayWidth)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         } else if isLoadingLocal {
             ProgressView()
-                .frame(height: 100)
+                .frame(height: Layout.placeholderHeight)
         } else if accessDenied {
             accessDeniedView(for: fileURL)
         } else if fileNotFound {
             imageErrorView
         } else {
             Color.clear
-                .frame(height: 100)
+                .frame(height: Layout.placeholderHeight)
                 .task {
                     await loadLocalImage(from: fileURL)
                 }
@@ -107,7 +109,7 @@ struct ImageBlockView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
         }
-        .frame(maxWidth: Self.maxDisplayWidth)
+        .frame(maxWidth: Layout.maxDisplayWidth)
         .padding(.vertical, 12)
     }
 

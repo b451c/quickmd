@@ -35,9 +35,9 @@ struct BlockquoteView: View {
         self.renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
     }
 
-    /// Bar width + gap per nesting level.
-    private static let barWidth: CGFloat = 3
-    private static let barGap: CGFloat = 8
+    /// Bar width + gap per nesting level, quote indent, vertical padding — see
+    /// `BlockLayout.Quote` (shared with `BlockHeightMeasurer`).
+    typealias Layout = BlockLayout.Quote
 
     var body: some View {
         // The quote body is the layout root; the level bars are an overlay,
@@ -57,37 +57,25 @@ struct BlockquoteView: View {
             focusedOccurrence: focusedOccurrence,
             onLink: onLink
         )
-        .padding(.leading, CGFloat(level) * (Self.barWidth + Self.barGap))
+        .padding(.leading, CGFloat(level) * (Layout.barWidth + Layout.barGap))
         .overlay(alignment: .leading) {
-            HStack(spacing: Self.barGap) {
+            HStack(spacing: Layout.barGap) {
                 ForEach(0..<level, id: \.self) { _ in
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(theme.blockquoteColor.opacity(0.5))
-                        .frame(width: Self.barWidth)
+                        .frame(width: Layout.barWidth)
                 }
             }
         }
-        .padding(.leading, 16)
-        .padding(.vertical, 2)
+        .padding(.leading, Layout.leadingInset)
+        .padding(.vertical, Layout.verticalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Inline-render each quote line and join with newlines — one attributed
-    /// string for the whole quote body. Soft breaks are joined first so a
-    /// single newline inside a quote paragraph reads as a space (CommonMark).
+    /// One attributed string for the whole quote body — see
+    /// `MarkdownRenderer.renderQuotedBody` (shared with the alert view and the
+    /// height measurer).
     private func renderedContent() -> AttributedString {
-        var result = AttributedString()
-        let lines = MarkdownRenderer.joinSoftBreaks(content.components(separatedBy: "\n"))
-        for (index, line) in lines.enumerated() {
-            if line.trimmingCharacters(in: .whitespaces).isEmpty {
-                result.append(AttributedString(" "))
-            } else {
-                result.append(renderer.renderInline(line))
-            }
-            if index < lines.count - 1 {
-                result.append(AttributedString("\n"))
-            }
-        }
-        return result
+        renderer.renderQuotedBody(content)
     }
 }

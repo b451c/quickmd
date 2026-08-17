@@ -251,6 +251,31 @@ struct MarkdownRenderer: Sendable {
         return attr
     }
 
+    /// Inline-renders a quoted body — a blockquote or a GFM alert — into ONE
+    /// AttributedString: soft breaks joined first (a single newline inside a
+    /// quote paragraph reads as a space, CommonMark), then each remaining line
+    /// inline-rendered and joined with newlines. A blank line becomes a single
+    /// space so it still occupies a line.
+    ///
+    /// Shared by `BlockquoteView`, `AlertBlockView` and `BlockHeightMeasurer`:
+    /// the measured string has to be the rendered string, character for
+    /// character, or the row height is wrong.
+    func renderQuotedBody(_ content: String) -> AttributedString {
+        var result = AttributedString()
+        let lines = Self.joinSoftBreaks(content.components(separatedBy: "\n"))
+        for (index, line) in lines.enumerated() {
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                result.append(AttributedString(" "))
+            } else {
+                result.append(renderInline(line))
+            }
+            if index < lines.count - 1 {
+                result.append(AttributedString("\n"))
+            }
+        }
+        return result
+    }
+
     // MARK: - List Indentation
     //
     // A list item is one paragraph: "<indent spaces><marker> <item text>".
