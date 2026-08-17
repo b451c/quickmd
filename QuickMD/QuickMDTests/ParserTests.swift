@@ -431,4 +431,210 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(results.matchBlockIds.count, 1)
         XCTAssertTrue(results.matchBlockIds[0].hasPrefix("alert-"))
     }
+
+    // MARK: - sourceLine on EVERY block (D8)
+
+    private func firstBlock(_ idPrefix: String, in blocks: [MarkdownBlock]) -> MarkdownBlock? {
+        blocks.first { $0.id.hasPrefix(idPrefix) }
+    }
+
+    /// Every line number below is the ORIGINAL 0-based one. Front matter is
+    /// consumed by the pre-step and the two definition lines are filtered out of
+    /// the parser's working `lines`, so each assertion fails if a block reports
+    /// its index in the FILTERED array instead of the original document.
+    ///
+    ///  0 `---`            front matter opens        11 `let x = 1`
+    ///  1 `title: Fixture`                           12 ` ``` `
+    ///  2 `---`            front matter closes       13 (blank)
+    ///  3 `[ref]: …`       filtered                  14 table header
+    ///  4 `[^fn]: …`       filtered                  15 table separator
+    ///  5 (blank)                                    16 table row
+    ///  6 `# Heading`                                17 (blank)
+    ///  7 (blank)                                    18 `> quoted line`
+    ///  8 `Paragraph …`                              19 (blank)
+    ///  9 (blank)                                    20 `> [!NOTE]`
+    /// 10 ` ```swift `     fence opens               21 `> alert body`
+    ///                                               22 (blank)
+    /// 23 `![alt](image.png)`                        24 (blank)
+    /// 25 `$$`             math opens                26 `a^2 + b^2`
+    /// 27 `$$`             math closes               28 (blank)
+    /// 29 ` ```mermaid `   fence opens               30-31 diagram
+    /// 32 ` ``` `          last line of the document
+    func testEveryBlockKindCarriesOriginalSourceLine() {
+        let md = """
+        ---
+        title: Fixture
+        ---
+        [ref]: https://example.com
+        [^fn]: A footnote definition
+
+        # Heading
+
+        Paragraph text with a [link][ref] and a note[^fn].
+
+        ```swift
+        let x = 1
+        ```
+
+        | A | B |
+        |---|---|
+        | 1 | 2 |
+
+        > quoted line
+
+        > [!NOTE]
+        > alert body
+
+        ![alt](image.png)
+
+        $$
+        a^2 + b^2
+        $$
+
+        ```mermaid
+        graph TD
+        A-->B
+        ```
+        """
+        // Guard the fixture itself: if the line layout above drifts, fail here
+        // rather than reporting confusing off-by-N sourceLine mismatches.
+        let fixtureLines = md.components(separatedBy: "\n")
+        XCTAssertEqual(fixtureLines.count, 33)
+        XCTAssertEqual(fixtureLines[6], "# Heading")
+        XCTAssertEqual(fixtureLines[25], "$$")
+
+        let blocks = parse(md)
+
+        // Front matter → the line of its opening `---`
+        guard case .codeBlock(_, let frontMatterLanguage) = blocks.first?.content else {
+            return XCTFail("expected the yaml front-matter block first, got \(blocks.map(\.id))")
+        }
+        XCTAssertEqual(frontMatterLanguage, "yaml")
+        XCTAssertEqual(blocks[0].sourceLine, 0, "front matter starts at its opening ---")
+
+        // Heading — stored value and the associated one section copy reads
+        guard let heading = firstBlock("heading-", in: blocks),
+              case .heading(_, let title, let associatedLine) = heading.content else {
+            return XCTFail("expected a heading, got \(blocks.map(\.id))")
+        }
+        XCTAssertEqual(title, "Heading")
+        XCTAssertEqual(heading.sourceLine, 6)
+        XCTAssertEqual(associatedLine, heading.sourceLine,
+                       "stored sourceLine must equal .heading's associated sourceLine")
+
+        // Paragraph — the blank line at 7 was buffered with it but must not be
+        // claimed as its start.
+        let paragraph = blocks.first { plainText($0)?.contains("Paragraph text") == true }
+        XCTAssertEqual(paragraph?.sourceLine, 8, "text block starts at its first non-blank line")
+
+        // Fenced code — the OPENING fence, not the closing one
+        let swiftFence = blocks.first {
+            if case .codeBlock(_, let language) = $0.content { return language == "swift" }
+            return false
+        }
+        XCTAssertEqual(swiftFence?.sourceLine, 10)
+
+        XCTAssertEqual(firstBlock("table-", in: blocks)?.sourceLine, 14, "table starts at its header row")
+        XCTAssertEqual(firstBlock("blockquote-", in: blocks)?.sourceLine, 18)
+        XCTAssertEqual(firstBlock("alert-", in: blocks)?.sourceLine, 20)
+        XCTAssertEqual(firstBlock("image-", in: blocks)?.sourceLine, 23)
+        XCTAssertEqual(firstBlock("math-", in: blocks)?.sourceLine, 25, "math starts at its opening $$")
+        XCTAssertEqual(firstBlock("mermaid-", in: blocks)?.sourceLine, 29)
+
+        // The synthetic footnote block renders after everything, so it anchors to
+        // the last line of the document (keeps sourceLine non-decreasing).
+        guard let last = blocks.last, let footnotes = plainText(last) else {
+            return XCTFail("expected the footnote block last, got \(blocks.map(\.id))")
+        }
+        XCTAssertTrue(footnotes.contains("A footnote definition"))
+        XCTAssertEqual(last.sourceLine, 32)
+
+        // Nothing may point past the document, and the list must never go backwards.
+        XCTAssertTrue(blocks.allSatisfy { $0.sourceLine >= 0 && $0.sourceLine < fixtureLines.count })
+        XCTAssertEqual(blocks.map(\.sourceLine), blocks.map(\.sourceLine).sorted(),
+                       "block sourceLines must be non-decreasing in document order")
+    }
+
+    func testChunkedTextRunReportsEachChunksOwnFirstLine() {
+        // 80 paragraphs, each followed by a blank line → one 160-line buffer that
+        // flushTextBuffer splits at blank-line boundaries.
+        var lines: [String] = []
+        for n in 1...80 {
+            lines.append("paragraph \(n)")
+            lines.append("")
+        }
+        let blocks = parse(lines.joined(separator: "\n"))
+        let textBlocks = blocks.filter { $0.id.hasPrefix("text-") }
+        XCTAssertGreaterThan(textBlocks.count, 1, "a 160-line run must split into several blocks")
+
+        let sourceLines = textBlocks.map(\.sourceLine)
+        XCTAssertEqual(sourceLines.first, 0)
+        XCTAssertEqual(sourceLines, sourceLines.sorted())
+        XCTAssertEqual(Set(sourceLines).count, sourceLines.count,
+                       "chunk sourceLines must be strictly increasing, not repeated")
+
+        // Each chunk's sourceLine must be the ORIGINAL line of the first line it
+        // renders — a shared buffer start (0 for every chunk) fails here.
+        for block in textBlocks {
+            guard let rendered = plainText(block) else {
+                return XCTFail("\(block.id) is not a text block")
+            }
+            let firstRenderedLine = rendered.components(separatedBy: "\n").first {
+                !$0.trimmingCharacters(in: .whitespaces).isEmpty
+            }
+            XCTAssertEqual(firstRenderedLine, lines[block.sourceLine],
+                           "\(block.id) claims line \(block.sourceLine)")
+        }
+    }
+
+    func testHeadingStoredSourceLineMatchesAssociatedValue() {
+        // 0 `[ref]: …` (filtered), 1 blank, 2 `# ATX`, 3 `body`, 4 blank,
+        // 5 `Setext`, 6 `------`
+        let md = """
+        [ref]: https://example.com
+
+        # ATX
+        body
+
+        Setext
+        ------
+        """
+        let headings = parse(md).filter { $0.id.hasPrefix("heading-") }
+        XCTAssertEqual(headings.count, 2, "expected one ATX and one setext heading")
+        for heading in headings {
+            guard case .heading(_, let title, let associatedLine) = heading.content else {
+                return XCTFail("\(heading.id) is not a heading")
+            }
+            XCTAssertEqual(heading.sourceLine, associatedLine, "\(title)")
+        }
+        XCTAssertEqual(headings[0].sourceLine, 2)
+        XCTAssertEqual(headings[1].sourceLine, 5, "setext: the text line, not the ---- underline")
+    }
+
+    /// Blank lines between two non-text blocks used to flush an EMPTY `.text`
+    /// block (rendered as a ~42 pt gap between adjacent blockquotes). The parser
+    /// now drops all-blank buffers and all-blank chunks.
+    func testBlankLinesBetweenBlocksDoNotProduceEmptyTextBlocks() {
+        let md = """
+        > first quote
+
+        > second quote
+
+        # Heading
+
+        ```swift
+        let x = 1
+        ```
+        """
+        let blocks = parse(md)
+        let empties = blocks.filter { plainText($0)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true }
+        XCTAssertTrue(empties.isEmpty, "empty text blocks: \(empties.map(\.id))")
+        XCTAssertEqual(blocks.map { String($0.id.split(separator: "-")[0]) }, ["blockquote", "blockquote", "heading", "code"])
+
+        // A very long run of blank lines (longer than a text chunk) is dropped too.
+        let longGap = "para one\n" + String(repeating: "\n", count: 80) + "para two"
+        let gapBlocks = parse(longGap)
+        XCTAssertEqual(gapBlocks.count, 2, "\(gapBlocks.map(\.id))")
+        XCTAssertEqual(gapBlocks[1].sourceLine, 81)
+    }
 }

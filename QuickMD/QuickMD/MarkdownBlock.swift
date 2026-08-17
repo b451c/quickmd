@@ -57,6 +57,20 @@ enum AlertKind: String, Sendable, CaseIterable {
 struct MarkdownBlock: Identifiable, Sendable {
     let id: String
     let content: BlockContent
+    /// 0-based index of this block's FIRST source line in the ORIGINAL document
+    /// text — i.e. before the parser's definition-filtering pre-pass removes
+    /// reference-link/footnote definitions (the parser maps it back through its
+    /// `lineMap`, exactly as `.heading`'s associated `sourceLine` has always been).
+    ///
+    /// Stored (like `id`) so hot layout paths never pay for a switch over
+    /// `BlockContent`. Used for scroll-anchor preservation across re-parses:
+    /// when block identity can't be matched positionally, the anchor is the
+    /// first row whose `sourceLine` is ≥ the old anchor's.
+    ///
+    /// For `.heading` this is always equal to the associated `sourceLine` in
+    /// `.heading(level:title:sourceLine:)`, which section copy (`SectionExtractor`)
+    /// reads — that associated value stays the authority there.
+    let sourceLine: Int
 
     enum BlockContent: Sendable {
         case text(AttributedString)
@@ -75,31 +89,36 @@ struct MarkdownBlock: Identifiable, Sendable {
         case mermaidDiagram(source: String)
     }
 
-    static func text(index: Int, _ attributed: AttributedString) -> MarkdownBlock {
-        MarkdownBlock(id: "text-\(index)", content: .text(attributed))
+    // Every factory takes `sourceLine` WITHOUT a default: the parser is the only
+    // caller and it always knows the mapped original line. A default here would
+    // silently produce 0-anchored blocks the moment a new parser branch forgets it.
+    static func text(index: Int, _ attributed: AttributedString, sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "text-\(index)", content: .text(attributed), sourceLine: sourceLine)
     }
-    static func table(index: Int, headers: [String], rows: [[String]], alignments: [TextAlignment]) -> MarkdownBlock {
-        MarkdownBlock(id: "table-\(index)", content: .table(headers: headers, rows: rows, alignments: alignments))
+    static func table(index: Int, headers: [String], rows: [[String]], alignments: [TextAlignment], sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "table-\(index)", content: .table(headers: headers, rows: rows, alignments: alignments), sourceLine: sourceLine)
     }
-    static func codeBlock(index: Int, code: String, language: String) -> MarkdownBlock {
-        MarkdownBlock(id: "code-\(index)", content: .codeBlock(code: code, language: language))
+    static func codeBlock(index: Int, code: String, language: String, sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "code-\(index)", content: .codeBlock(code: code, language: language), sourceLine: sourceLine)
     }
-    static func image(index: Int, url: String, alt: String) -> MarkdownBlock {
-        MarkdownBlock(id: "image-\(index)", content: .image(url: url, alt: alt))
+    static func image(index: Int, url: String, alt: String, sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "image-\(index)", content: .image(url: url, alt: alt), sourceLine: sourceLine)
     }
-    static func blockquote(index: Int, content: String, level: Int) -> MarkdownBlock {
-        MarkdownBlock(id: "blockquote-\(index)", content: .blockquote(content: content, level: level))
+    static func blockquote(index: Int, content: String, level: Int, sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "blockquote-\(index)", content: .blockquote(content: content, level: level), sourceLine: sourceLine)
     }
-    static func alert(index: Int, kind: AlertKind, content: String) -> MarkdownBlock {
-        MarkdownBlock(id: "alert-\(index)", content: .alert(kind: kind, content: content))
+    static func alert(index: Int, kind: AlertKind, content: String, sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "alert-\(index)", content: .alert(kind: kind, content: content), sourceLine: sourceLine)
     }
+    /// One `sourceLine` feeds both the stored property and the associated value —
+    /// they are the same line by definition, so they can never drift apart.
     static func heading(index: Int, level: Int, title: String, sourceLine: Int) -> MarkdownBlock {
-        MarkdownBlock(id: "heading-\(index)", content: .heading(level: level, title: title, sourceLine: sourceLine))
+        MarkdownBlock(id: "heading-\(index)", content: .heading(level: level, title: title, sourceLine: sourceLine), sourceLine: sourceLine)
     }
-    static func mathBlock(index: Int, latex: String) -> MarkdownBlock {
-        MarkdownBlock(id: "math-\(index)", content: .mathBlock(latex: latex))
+    static func mathBlock(index: Int, latex: String, sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "math-\(index)", content: .mathBlock(latex: latex), sourceLine: sourceLine)
     }
-    static func mermaidDiagram(index: Int, source: String) -> MarkdownBlock {
-        MarkdownBlock(id: "mermaid-\(index)", content: .mermaidDiagram(source: source))
+    static func mermaidDiagram(index: Int, source: String, sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "mermaid-\(index)", content: .mermaidDiagram(source: source), sourceLine: sourceLine)
     }
 }

@@ -55,7 +55,9 @@ struct MarkdownBlockParser: Sendable {
             if let closingIndex {
                 let yaml = allLines[1..<closingIndex].joined(separator: "\n")
                 if !yaml.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    blocks.append(.codeBlock(index: blockIndex, code: yaml, language: "yaml"))
+                    // Front matter starts at the opening `---`, which the branch
+                    // condition pins to line 0 of the original document.
+                    blocks.append(.codeBlock(index: blockIndex, code: yaml, language: "yaml", sourceLine: 0))
                     blockIndex += 1
                 }
                 firstContentLine = closingIndex + 1
@@ -100,10 +102,15 @@ struct MarkdownBlockParser: Sendable {
             : MarkdownRenderer(theme: theme, fontScale: fontScale, referenceDefinitions: referenceDefinitions, footnoteDefinitions: footnoteDefinitions)
 
         var i = 0
-        var textBuffer: [String] = []
+        // Each buffered line keeps the index it had in `allLines` so a flushed
+        // chunk can report the ORIGINAL first line, not its position in `lines`.
+        var textBuffer: [(line: String, originalIndex: Int)] = []
 
         while i < lines.count {
             let line = lines[i]
+            // Original-document line of the block that starts here (definition
+            // lines were dropped from `lines`, so `i` alone is not the answer).
+            let sourceLine = lineMap[i]
 
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
 
@@ -136,10 +143,12 @@ struct MarkdownBlockParser: Sendable {
                 }
 
                 let codeContent = codeLines.joined(separator: "\n")
+                // `sourceLine` was captured at the OPENING fence, before `i` walked
+                // to the closing one.
                 if language.lowercased() == "mermaid" {
-                    blocks.append(.mermaidDiagram(index: blockIndex, source: codeContent))
+                    blocks.append(.mermaidDiagram(index: blockIndex, source: codeContent, sourceLine: sourceLine))
                 } else {
-                    blocks.append(.codeBlock(index: blockIndex, code: codeContent, language: language))
+                    blocks.append(.codeBlock(index: blockIndex, code: codeContent, language: language, sourceLine: sourceLine))
                 }
                 blockIndex += 1
                 continue
@@ -155,7 +164,7 @@ struct MarkdownBlockParser: Sendable {
                 if afterDollar.hasSuffix("$$") {
                     let latex = String(afterDollar.dropLast(2)).trimmingCharacters(in: .whitespaces)
                     if !latex.isEmpty {
-                        blocks.append(.mathBlock(index: blockIndex, latex: latex))
+                        blocks.append(.mathBlock(index: blockIndex, latex: latex, sourceLine: sourceLine))
                         blockIndex += 1
                     }
                     i += 1
@@ -178,7 +187,8 @@ struct MarkdownBlockParser: Sendable {
 
                 let latex = mathLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
                 if !latex.isEmpty {
-                    blocks.append(.mathBlock(index: blockIndex, latex: latex))
+                    // Opening `$$` line, not the closing one.
+                    blocks.append(.mathBlock(index: blockIndex, latex: latex, sourceLine: sourceLine))
                     blockIndex += 1
                 }
                 continue
@@ -192,7 +202,7 @@ struct MarkdownBlockParser: Sendable {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
                 let level = min(max(line[hashRange].count, 1), 6)
                 let title = String(line[contentRange]).trimmingCharacters(in: .whitespaces)
-                blocks.append(.heading(index: blockIndex, level: level, title: title, sourceLine: lineMap[i]))
+                blocks.append(.heading(index: blockIndex, level: level, title: title, sourceLine: sourceLine))
                 blockIndex += 1
                 i += 1
                 continue
@@ -201,7 +211,7 @@ struct MarkdownBlockParser: Sendable {
             // Standalone image (on its own line)
             if let imageMatch = parseStandaloneImage(line) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
-                blocks.append(.image(index: blockIndex, url: imageMatch.url, alt: imageMatch.alt))
+                blocks.append(.image(index: blockIndex, url: imageMatch.url, alt: imageMatch.alt, sourceLine: sourceLine))
                 blockIndex += 1
                 i += 1
                 continue
@@ -214,7 +224,8 @@ struct MarkdownBlockParser: Sendable {
 
                 if nextLine.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
-                    blocks.append(.heading(index: blockIndex, level: 1, title: trimmed, sourceLine: lineMap[i]))
+                    // Setext: the TEXT line owns the heading, not the `===` underline.
+                    blocks.append(.heading(index: blockIndex, level: 1, title: trimmed, sourceLine: sourceLine))
                     blockIndex += 1
                     i += 2
                     continue
@@ -228,7 +239,7 @@ struct MarkdownBlockParser: Sendable {
                 // added nothing. (Caught by ParserTests.testSetextHeadings.)
                 if nextLine.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
-                    blocks.append(.heading(index: blockIndex, level: 2, title: trimmed, sourceLine: lineMap[i]))
+                    blocks.append(.heading(index: blockIndex, level: 2, title: trimmed, sourceLine: sourceLine))
                     blockIndex += 1
                     i += 2
                     continue
@@ -259,7 +270,8 @@ struct MarkdownBlockParser: Sendable {
                     alignments = normalizeArray(alignments, to: columnCount, default: .leading)
                     rows = rows.map { normalizeArray($0, to: columnCount, default: "") }
 
-                    blocks.append(.table(index: blockIndex, headers: headers, rows: rows, alignments: alignments))
+                    // Header row line — `i` has already walked past the body rows.
+                    blocks.append(.table(index: blockIndex, headers: headers, rows: rows, alignments: alignments, sourceLine: sourceLine))
                     blockIndex += 1
                     continue
                 }
@@ -284,7 +296,11 @@ struct MarkdownBlockParser: Sendable {
                         }
                     }
 
-                    // Accumulate consecutive lines at the same nesting level
+                    // Accumulate consecutive lines at the same nesting level.
+                    // A single `>` run can yield SEVERAL blocks (one per nesting
+                    // level), so each group needs its OWN first line — the outer
+                    // `sourceLine` only describes the first group.
+                    let groupSourceLine = lineMap[i]
                     let groupLevel = level
                     var groupLines = [String(scanner)]
                     i += 1
@@ -317,9 +333,9 @@ struct MarkdownBlockParser: Sendable {
                         if groupLevel == 1, let kind = AlertKind(markerLine: groupLines[0]) {
                             let body = groupLines.dropFirst().joined(separator: "\n")
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
-                            blocks.append(.alert(index: blockIndex, kind: kind, content: body))
+                            blocks.append(.alert(index: blockIndex, kind: kind, content: body, sourceLine: groupSourceLine))
                         } else {
-                            blocks.append(.blockquote(index: blockIndex, content: content, level: groupLevel))
+                            blocks.append(.blockquote(index: blockIndex, content: content, level: groupLevel, sourceLine: groupSourceLine))
                         }
                         blockIndex += 1
                     }
@@ -327,7 +343,7 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
-            textBuffer.append(line)
+            textBuffer.append((line: line, originalIndex: sourceLine))
             i += 1
         }
 
@@ -358,7 +374,12 @@ struct MarkdownBlockParser: Sendable {
                 footnoteText.append(AttributedString("\n"))
             }
 
-            blocks.append(.text(index: blockIndex, footnoteText))
+            // Synthetic block: it renders at the very end regardless of where the
+            // `[^id]:` definitions sat in the file, so anchoring it to the last
+            // source line keeps `sourceLine` non-decreasing across the block list
+            // (definitions in the middle of a document would otherwise make the
+            // final block point backwards).
+            blocks.append(.text(index: blockIndex, footnoteText, sourceLine: max(allLines.count - 1, 0)))
             blockIndex += 1
         }
 
@@ -444,8 +465,16 @@ struct MarkdownBlockParser: Sendable {
     /// small enough for SwiftUI Text to lay out quickly.
     private static let textChunkLineLimit = 30
 
-    private func flushTextBuffer(_ buffer: inout [String], to blocks: inout [MarkdownBlock], index: inout Int, using renderer: MarkdownRenderer) {
+    private func flushTextBuffer(_ buffer: inout [(line: String, originalIndex: Int)], to blocks: inout [MarkdownBlock], index: inout Int, using renderer: MarkdownRenderer) {
         guard !buffer.isEmpty else { return }
+        // A buffer of nothing but blank lines (the separator between two
+        // blockquotes, a heading and a code fence, …) used to flush an EMPTY
+        // text block that rendered as a ~42 pt gap. Drop it: block spacing is
+        // the stack's job, not the parser's.
+        guard buffer.contains(where: { !$0.line.trimmingCharacters(in: .whitespaces).isEmpty }) else {
+            buffer.removeAll()
+            return
+        }
 
         // Slice the buffer into chunks of ≤ textChunkLineLimit lines, preferring
         // blank-line boundaries so we never split a paragraph.
@@ -459,7 +488,7 @@ struct MarkdownBlockParser: Sendable {
             if hardEnd < buffer.count {
                 var probe = hardEnd - 1
                 while probe > chunkStart {
-                    if buffer[probe].trimmingCharacters(in: .whitespaces).isEmpty {
+                    if buffer[probe].line.trimmingCharacters(in: .whitespaces).isEmpty {
                         sliceEnd = probe + 1   // include the blank line in this chunk
                         break
                     }
@@ -469,8 +498,17 @@ struct MarkdownBlockParser: Sendable {
                 // the chunk is one long paragraph and we just have to take the hit.
             }
 
-            let slice = buffer[chunkStart..<sliceEnd].joined(separator: "\n")
-            blocks.append(.text(index: index, renderer.render(slice)))
+            let chunk = buffer[chunkStart..<sliceEnd]
+            // Each chunk reports the original line of ITS first NON-BLANK line —
+            // the separator blank lines the previous block left behind are not
+            // content. A chunk with no content at all (a long run of blank lines
+            // sliced off on its own) is dropped for the same reason as above.
+            guard let chunkSourceLine = chunk.first(where: { !$0.line.trimmingCharacters(in: .whitespaces).isEmpty })?.originalIndex else {
+                chunkStart = sliceEnd
+                continue
+            }
+            let slice = chunk.map(\.line).joined(separator: "\n")
+            blocks.append(.text(index: index, renderer.render(slice), sourceLine: chunkSourceLine))
             index += 1
             chunkStart = sliceEnd
         }
