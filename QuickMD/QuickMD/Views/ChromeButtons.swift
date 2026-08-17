@@ -60,12 +60,22 @@ struct HeadingBlockView: View {
 
 /// How a chrome pill decides whether to show its label.
 ///
-/// `.local` — the pill tracks the pointer itself (Support, Tip Jar).
-/// `.cluster` — a parent `chromeHoverCluster()` owns hover so siblings
-/// expand and collapse together and do not shove each other sideways.
+/// `.local` — the pill tracks the pointer itself (Tip Jar).
+/// `.cluster` — a parent `chromeHoverCluster()` reports whether the pointer
+/// is inside the group. A pill expands only once the pointer has actually
+/// touched it, and every touched pill stays expanded until the pointer
+/// leaves the whole group. Growing only the pill under the pointer keeps
+/// that pill under the pointer (capsules grow leftward from a trailing
+/// anchor); holding siblings open means nothing jumps back while the
+/// pointer travels between them.
+/// `.fixed` — never expands and applies no hover feedback of its own. Menu
+/// labels on macOS render once and ignore later state changes (opacity,
+/// conditional text), so the host applies hover feedback outside the label
+/// (see `SupportButton`).
 private enum ChromeExpansionSource: Equatable {
     case local
-    case cluster(expanded: Bool)
+    case cluster(active: Bool)
+    case fixed
 }
 
 private struct ChromeExpansionSourceKey: EnvironmentKey {
@@ -117,7 +127,9 @@ private struct ChromeHoverTracking: ViewModifier {
 }
 
 /// Shared hover for a group of pills. Independent per-button expansion
-/// shifts siblings and makes the pointer miss the other control.
+/// shifts siblings and makes the pointer miss the other control; the
+/// cluster keeps every touched pill open while the pointer is inside the
+/// group (see `ChromeExpansionSource.cluster`).
 struct ChromeHoverCluster: ViewModifier {
     @State private var hover = ChromeHoverState()
 
@@ -128,7 +140,7 @@ struct ChromeHoverCluster: ViewModifier {
             // what actually keeps the pointer "inside" while crossing pills.
             .padding(4)
             .contentShape(Rectangle())
-            .environment(\.chromeExpansionSource, .cluster(expanded: hover.isExpanded))
+            .environment(\.chromeExpansionSource, .cluster(active: hover.isExpanded))
             .modifier(ChromeHoverTracking(hover: $hover))
             .padding(-4)
     }
@@ -151,11 +163,15 @@ struct ChromePillLabel<Icon: View>: View {
     @Environment(\.chromeExpansionSource) private var expansionSource
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var localHover = ChromeHoverState()
+    /// Cluster mode: the pointer has been over THIS pill since the cluster
+    /// became active. Reset when the cluster deactivates.
+    @State private var touched = false
 
     private var expanded: Bool {
         switch expansionSource {
-        case .cluster(let expanded): return expanded
         case .local: return localHover.isExpanded
+        case .cluster(let active): return active && touched
+        case .fixed: return false
         }
     }
 
@@ -173,26 +189,35 @@ struct ChromePillLabel<Icon: View>: View {
         .clipShape(Capsule())
         .contentShape(Capsule())
         .foregroundColor(tint)
-        .opacity(expanded ? 1.0 : 0.5)
+        .opacity(ownsHoverFeedback && !expanded ? 0.5 : 1.0)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: expanded)
-        .modifier(LocalHoverIfNeeded(enabled: isLocal, hover: $localHover))
+        .modifier(ChromePillTracking(source: expansionSource, localHover: $localHover, touched: $touched))
     }
 
-    private var isLocal: Bool {
-        if case .local = expansionSource { return true }
-        return false
-    }
+    /// `.fixed` pills leave dimming/brightening to their host.
+    private var ownsHoverFeedback: Bool { expansionSource != .fixed }
 }
 
-private struct LocalHoverIfNeeded: ViewModifier {
-    let enabled: Bool
-    @Binding var hover: ChromeHoverState
+/// Per-mode pointer tracking for `ChromePillLabel`.
+private struct ChromePillTracking: ViewModifier {
+    let source: ChromeExpansionSource
+    @Binding var localHover: ChromeHoverState
+    @Binding var touched: Bool
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if enabled {
-            content.modifier(ChromeHoverTracking(hover: $hover))
-        } else {
+        switch source {
+        case .local:
+            content.modifier(ChromeHoverTracking(hover: $localHover))
+        case .cluster(let active):
+            content
+                .onHover { hovering in
+                    if hovering { touched = true }
+                }
+                .onChange(of: active) { isActive in
+                    if !isActive { touched = false }
+                }
+        case .fixed:
             content
         }
     }
@@ -281,6 +306,8 @@ struct TipJarButton: View {
 #if !APPSTORE
 struct SupportButton: View {
     let theme: MarkdownTheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hover = ChromeHoverState()
 
     var body: some View {
         Menu {
@@ -301,12 +328,18 @@ struct SupportButton: View {
                 Label("Ko-fi", systemImage: "heart.fill")
             }
         } label: {
+            // Menu labels render once on macOS and ignore later state changes,
+            // so the label is `.fixed` and hover feedback lives on the Menu.
             ChromePillLabel(theme: theme, title: "Support") {
                 Text("☕")
                     .font(.system(size: 12))
             }
+            .environment(\.chromeExpansionSource, .fixed)
         }
         .menuStyle(.button)
+        .opacity(hover.isExpanded ? 1.0 : 0.5)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: hover.isExpanded)
+        .modifier(ChromeHoverTracking(hover: $hover))
         .help("Support QuickMD development")
         .accessibilityLabel("Support")
     }
