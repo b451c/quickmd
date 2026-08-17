@@ -40,9 +40,20 @@ final class BlockHeightMeasurerTests: XCTestCase {
     private func measure(_ blocks: [MarkdownBlock], width: CGFloat,
                          fontScale: CGFloat = 1.0,
                          seeds: [String: CGFloat] = [:]) -> MeasuredBlocks {
-        BlockHeightMeasurer.measure(blocks: blocks, meta: [:], theme: theme,
+        BlockHeightMeasurer.measure(blocks: blocks, theme: theme,
                                     fontScale: fontScale, contentWidth: width,
                                     heightSeeds: seeds, math: math)
+    }
+
+    /// A pass with NO math engine — what the background task does, because
+    /// SwiftMath may only be touched on main (thread rule in
+    /// `BlockHeightMeasurer`'s header). Math rows come back deferred.
+    private func measureWithoutMathEngine(_ blocks: [MarkdownBlock], width: CGFloat,
+                                          fontScale: CGFloat = 1.0,
+                                          seeds: [String: CGFloat] = [:]) -> MeasuredBlocks {
+        BlockHeightMeasurer.measure(blocks: blocks, theme: theme,
+                                    fontScale: fontScale, contentWidth: width,
+                                    heightSeeds: seeds, math: nil)
     }
 
     private static let longParagraph: String = {
@@ -203,16 +214,20 @@ final class BlockHeightMeasurerTests: XCTestCase {
     func testCodeBlockParityWithAndWithoutLanguage() {
         let body = (1...12).map { "let value\($0) = compute(\($0)) // a comment that makes the line long enough to wrap" }
             .joined(separator: "\n")
-        let fixtures: [(name: String, markdown: String, language: String)] = [
-            ("code with language", "```swift\n\(body)\n```", "swift"),
-            ("code without language", "```\n\(body)\n```", ""),
-            ("code 200 lines", "```swift\n" + (1...200).map { "line \($0): let x\($0) = \($0)" }.joined(separator: "\n") + "\n```", "swift"),
+        let fixtures: [(name: String, markdown: String, language: String, scale: CGFloat)] = [
+            ("code with language", "```swift\n\(body)\n```", "swift", 1.0),
+            ("code without language", "```\n\(body)\n```", "", 1.0),
+            ("code 200 lines", "```swift\n" + (1...200).map { "line \($0): let x\($0) = \($0)" }.joined(separator: "\n") + "\n```", "swift", 1.0),
+            // Short fences, where the copy button — not the code — is the taller
+            // ZStack child. See `testShortCodeFenceIsFlooredByTheCopyButton`.
+            ("empty fence", "```\n```", "", 1.0),
+            ("one line, no language, 0.7 zoom", "```\nlet a = 1\n```", "", 0.7),
         ]
 
         for fixture in fixtures {
             let blocks = parse(fixture.markdown)
             for width in widths {
-                let measured = measure(blocks, width: width)
+                let measured = measure(blocks, width: width, fontScale: fixture.scale)
                 for (index, block) in blocks.enumerated() {
                     guard case .codeBlock(let code, let language) = block.content else { continue }
                     XCTAssertEqual(language, fixture.language, fixture.name)
@@ -221,19 +236,51 @@ final class BlockHeightMeasurerTests: XCTestCase {
                     // The view installs exactly this string (the async highlight
                     // only recolours it), so the test builds it the same way —
                     // through the shared converter `CodeBlockView` forwards to.
-                    let ns = BlockTextConverter.plainCode(code, theme: theme, fontScale: 1.0)
+                    let ns = BlockTextConverter.plainCode(code, theme: theme, fontScale: fixture.scale)
                     let inner = liveTextHeight(ns, width: width - 2 * BlockLayout.Code.horizontalPadding)
                     let chrome = language.isEmpty
                         ? 2 * BlockLayout.Code.verticalPaddingWithoutLanguage
-                        : BlockLayout.Code.languageLabelHeight(fontScale: 1.0)
+                        : BlockLayout.Code.languageLabelHeight(fontScale: fixture.scale)
                             + BlockLayout.Code.languageLabelTopPadding
                             + BlockLayout.Code.languageLabelBottomPadding
                             + 2 * BlockLayout.Code.verticalPaddingWithLanguage
-                    let expected = inner + chrome + 2 * BlockLayout.Document.codeOuterVerticalPadding
+                    // The ZStack is as tall as its taller child: the code VStack
+                    // or the always-present copy button.
+                    let expected = max(inner + chrome, BlockLayout.Code.copyButtonFloorHeight)
+                        + 2 * BlockLayout.Document.codeOuterVerticalPadding
                     XCTAssertEqual(measured.table.heights[index], expected, accuracy: tolerance,
                                    "\(fixture.name) @\(width)")
                 }
             }
+        }
+    }
+
+    /// The hover-to-copy button is hidden with `.opacity(0)`, never removed, so
+    /// it is a floor under a code row — and its icon font is NOT scaled by zoom,
+    /// so the floor is one constant. The 0.7-zoom one-line fence is the boundary
+    /// case: 11 pt of code + 24 pt of padding = 35 pt, three points under it.
+    func testShortCodeFenceIsFlooredByTheCopyButton() {
+        let floor = BlockLayout.Code.copyButtonFloorHeight
+        let outer = 2 * BlockLayout.Document.codeOuterVerticalPadding
+        let fixtures: [(name: String, markdown: String, scale: CGFloat)] = [
+            ("empty fence", "```\n```", 1.0),
+            ("one line at 0.7 zoom", "```\nlet a = 1\n```", 0.7),
+        ]
+
+        for fixture in fixtures {
+            let blocks = parse(fixture.markdown)
+            guard let index = blocks.firstIndex(where: {
+                      if case .codeBlock = $0.content { return true } else { return false } }),
+                  case .codeBlock(let code, _) = blocks[index].content else {
+                return XCTFail("\(fixture.name) did not parse as a code block")
+            }
+            let ns = BlockTextConverter.plainCode(code, theme: theme, fontScale: fixture.scale)
+            let stack = liveTextHeight(ns, width: 600 - 2 * BlockLayout.Code.horizontalPadding)
+                + 2 * BlockLayout.Code.verticalPaddingWithoutLanguage
+            XCTAssertLessThanOrEqual(stack, floor,
+                                     "\(fixture.name) no longer exercises the floor (stack \(stack))")
+            XCTAssertEqual(measure(blocks, width: 600, fontScale: fixture.scale).table.heights[index],
+                           floor + outer, accuracy: tolerance, fixture.name)
         }
     }
 
@@ -279,13 +326,15 @@ final class BlockHeightMeasurerTests: XCTestCase {
         }
     }
 
-    /// A whole measure pass off-main, the way `MarkdownView` will call it.
+    /// A whole measure pass off-main, the way `MarkdownView` will call it — with
+    /// no math engine, since that is the one thing a background thread may not
+    /// touch (thread rule in `BlockHeightMeasurer`'s file header).
     func testMeasureOffMainMatchesMainThread() {
         let blocks = parse(Self.mixedDocument)
-        let onMain = measure(blocks, width: 800).table
+        let onMain = measureWithoutMathEngine(blocks, width: 800).table
         var offMain: BlockHeightTable = .empty
         DispatchQueue.global(qos: .userInitiated).sync {
-            offMain = measure(blocks, width: 800).table
+            offMain = measureWithoutMathEngine(blocks, width: 800).table
         }
         XCTAssertEqual(onMain, offMain)
     }
@@ -471,36 +520,62 @@ final class BlockHeightMeasurerTests: XCTestCase {
     /// height, which is not a documented function of `NSFont` metrics. It must
     /// never be SHORT (that clips the hosted view) and must stay within a point
     /// or two (a larger error would show as a visible gap).
+    ///
+    /// The two rows built on it are also PINNED to it by their views
+    /// (`AlertBlockView`'s title HStack, `CodeBlockView`'s language label), which
+    /// is what makes those rows exact rather than estimated — asserted here too,
+    /// against `NSHostingView`, which reports fitting sizes rounded up to whole
+    /// points.
     func testSingleLineHeightNeverUnderestimatesSwiftUIText() {
         for scale in [0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0] as [CGFloat] {
             // Alert title row.
             let titleFont = theme.fonts.appKit(size: BlockLayout.Alert.titleFontSize * scale,
                                                weight: .semibold)
-            let liveTitle = hostedHeight(
-                HStack(spacing: BlockLayout.Alert.titleRowSpacing) {
-                    Image(systemName: AlertKind.note.symbolName)
-                        .font(.system(size: BlockLayout.Alert.iconFontSize * scale, weight: .semibold))
-                    Text(AlertKind.note.title)
-                        .font(theme.fonts.swiftUI(size: BlockLayout.Alert.titleFontSize * scale,
-                                                  weight: .semibold))
-                })
+            let titleRow = HStack(spacing: BlockLayout.Alert.titleRowSpacing) {
+                Image(systemName: AlertKind.note.symbolName)
+                    .font(.system(size: BlockLayout.Alert.iconFontSize * scale, weight: .semibold))
+                Text(AlertKind.note.title)
+                    .font(theme.fonts.swiftUI(size: BlockLayout.Alert.titleFontSize * scale,
+                                              weight: .semibold))
+            }
+            let liveTitle = hostedHeight(titleRow)
             let predictedTitle = BlockLayout.Alert.titleRowHeight(theme: theme, fontScale: scale)
             XCTAssertGreaterThanOrEqual(predictedTitle, liveTitle,
                                         "alert title row underestimated at scale \(scale)")
             XCTAssertLessThanOrEqual(predictedTitle, liveTitle + 2,
                                      "alert title row overestimated at scale \(scale)")
             XCTAssertGreaterThan(BlockLayout.singleLineHeight(for: titleFont), 0)
+            XCTAssertEqual(hostedHeight(titleRow.frame(height: predictedTitle)),
+                           ceil(predictedTitle), accuracy: 0.01,
+                           "pinned alert title row is not the predicted height at scale \(scale)")
 
             // Code block language label.
-            let liveLabel = hostedHeight(
-                Text("swift").font(.system(size: BlockLayout.Code.languageLabelFontSize * scale,
-                                           weight: .medium, design: .monospaced)))
+            let label = Text("swift")
+                .font(.system(size: BlockLayout.Code.languageLabelFontSize * scale,
+                              weight: .medium, design: .monospaced))
+            let liveLabel = hostedHeight(label)
             let predictedLabel = BlockLayout.Code.languageLabelHeight(fontScale: scale)
             XCTAssertGreaterThanOrEqual(predictedLabel, liveLabel,
                                         "code language label underestimated at scale \(scale)")
             XCTAssertLessThanOrEqual(predictedLabel, liveLabel + 2,
                                      "code language label overestimated at scale \(scale)")
+            XCTAssertEqual(hostedHeight(label.lineLimit(1).frame(height: predictedLabel)),
+                           ceil(predictedLabel), accuracy: 0.01,
+                           "pinned language label is not the predicted height at scale \(scale)")
         }
+    }
+
+    /// The code block's copy button, hosted the way `CodeBlockView` builds it.
+    /// `.background`, `.clipShape`, `.buttonStyle(.plain)` and `.opacity` do not
+    /// change its fitting size (checked while measuring the constant), so the
+    /// icon font + the two paddings are the whole story.
+    func testCodeCopyButtonConstantsMatchTheRealButton() {
+        let button = Image(systemName: "doc.on.doc")
+            .font(.system(size: BlockLayout.Code.copyButtonIconFontSize))
+            .padding(BlockLayout.Code.copyButtonIconPadding)
+            .padding(BlockLayout.Code.copyButtonOuterPadding)
+        XCTAssertEqual(NSHostingView(rootView: button).fittingSize.height,
+                       BlockLayout.Code.copyButtonFloorHeight, accuracy: 1)
     }
 
     /// The hover-to-copy button's fitting size is a hard-coded constant because it
@@ -517,14 +592,8 @@ final class BlockHeightMeasurerTests: XCTestCase {
 
     // MARK: - Zoom
 
-    /// Zoom re-parses, so the measurer sees larger fonts; every row with real
-    /// content has to grow with them.
-    ///
-    /// Whitespace-only text blocks (the parser emits one per blank line between
-    /// blocks) are skipped on purpose: their string carries no font attribute, so
-    /// the text view lays them out in its default font and their height is the
-    /// same at every zoom level. That is 1.8.0 behaviour, and the measurer
-    /// reproduces it exactly — which is what parity means here.
+    /// Zoom re-parses, so the measurer sees larger fonts; every row has to grow
+    /// with them.
     func testHeightsGrowWithFontScale() {
         let markdown = Self.longParagraph + "\n\n> quoted body\n\n```swift\nlet a = 1\n```\n"
         let blocks = parse(markdown, fontScale: 1.0)
@@ -534,18 +603,169 @@ final class BlockHeightMeasurerTests: XCTestCase {
 
         var compared = 0
         for (index, block) in blocks.enumerated() {
-            if case .text = block.content,
-               let ns = small.converted[block.id],
-               ns.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                XCTAssertEqual(large.table.heights[index], small.table.heights[index],
-                               accuracy: tolerance,
-                               "blank filler row \(block.id) should be zoom-independent")
-                continue
-            }
             XCTAssertGreaterThan(large.table.heights[index], small.table.heights[index],
                                  "row \(index) (\(block.id)) did not grow with zoom")
             compared += 1
         }
         XCTAssertGreaterThanOrEqual(compared, 3, "fixture stopped covering text/quote/code")
     }
+
+    // MARK: - Narrow windows (clamped widths)
+
+    /// Every width the measurer lays out at is `contentWidth` minus chrome, and
+    /// the subtraction can go negative: at 60 pt a level-5 quote body computes to
+    /// 60 − 16 − 5·11 = −11. `BlockLayout.clampedWidth` floors all of them, so
+    /// nothing traps and no row explodes into thousands of points.
+    func testNarrowContentWidthStaysFiniteAndSane() {
+        let markdown = """
+        > > > > > tight
+
+        ```swift
+        let a = 1
+        ```
+
+        | a | b |
+        |---|---|
+        | 1 | 2 |
+
+        # Heading
+
+        A short paragraph.
+        """
+        let blocks = parse(markdown)
+        XCTAssertTrue(blocks.contains {
+            if case .blockquote(_, let level) = $0.content { return level == 5 } else { return false }
+        }, "fixture stopped producing a level-5 quote")
+        XCTAssertGreaterThan(BlockLayout.Quote.bodyWidth(contentWidth: 60, level: 5), 0,
+                             "quote body width must be clamped positive")
+
+        let measured = measure(blocks, width: 60)
+        XCTAssertEqual(measured.table.count, blocks.count)
+        for (index, height) in measured.table.heights.enumerated() {
+            XCTAssertTrue(height.isFinite, "row \(index) is not finite")
+            XCTAssertGreaterThan(height, 0, "row \(index) measured to \(height)")
+            XCTAssertLessThan(height, 2000, "row \(index) exploded to \(height)")
+        }
+    }
+
+    // MARK: - No math engine off-main (thread rule)
+
+    /// Inline math in a paragraph, a display-math block, a math-free paragraph,
+    /// and a quote whose `$y$` must NOT count (quote bodies never opt into inline
+    /// math, so they never need the engine).
+    private static let mathDocument = """
+    A paragraph with inline math $x^2$ inside it, long enough to wrap somewhere.
+
+    A paragraph with no math at all, also long enough to wrap at four hundred points.
+
+    $$
+    x = \\frac{1}{2}
+    $$
+
+    > a quoted line mentioning $y$ but rendered without inline math
+    """
+
+    private func mathRowIndices(in blocks: [MarkdownBlock]) -> [Int] {
+        blocks.enumerated().compactMap { index, block in
+            switch block.content {
+            case .text(let attributed):
+                return BlockTextConverter.containsInlineMath(String(attributed.characters)) ? index : nil
+            case .mathBlock:
+                return index
+            default:
+                return nil
+            }
+        }
+    }
+
+    func testMeasureWithoutMathEngineDefersExactlyTheMathRows() {
+        let blocks = parse(Self.mathDocument)
+        let expected = mathRowIndices(in: blocks)
+        XCTAssertEqual(expected.count, 2, "fixture stopped covering both math row kinds")
+
+        let deferred = measureWithoutMathEngine(blocks, width: 600)
+        XCTAssertEqual(deferred.mathPendingRows, expected)
+        for index in expected {
+            XCTAssertNil(deferred.converted[blocks[index].id],
+                         "deferred row \(index) must not have a converted string")
+            XCTAssertGreaterThan(deferred.table.heights[index], 0,
+                                 "deferred row \(index) needs a placeholder height")
+        }
+
+        // Everything the engine is not needed for was measured normally, and the
+        // classification of a row never depends on the engine.
+        let withEngine = measure(blocks, width: 600)
+        XCTAssertEqual(deferred.table.kinds, withEngine.table.kinds)
+        for (index, block) in blocks.enumerated() where !expected.contains(index) {
+            XCTAssertEqual(deferred.table.heights[index], withEngine.table.heights[index],
+                           accuracy: tolerance, "non-math row \(index) changed")
+            XCTAssertEqual(deferred.converted[block.id]?.string,
+                           withEngine.converted[block.id]?.string, "row \(index)")
+        }
+    }
+
+    /// Finishing the deferred rows on main has to land exactly where a one-shot
+    /// measurement with the engine would have.
+    @MainActor
+    func testMeasureMathRowsMatchesADirectMeasurementRowForRow() {
+        let blocks = parse(Self.mathDocument)
+        for width in widths {
+            let deferred = measureWithoutMathEngine(blocks, width: width)
+            XCTAssertFalse(deferred.mathPendingRows.isEmpty, "@\(width)")
+
+            let finished = BlockHeightMeasurer.measureMathRows(
+                deferred.mathPendingRows, in: deferred, blocks: blocks, theme: theme,
+                fontScale: 1.0, contentWidth: width, math: math)
+            let direct = measure(blocks, width: width)
+
+            XCTAssertEqual(finished.mathPendingRows, [], "@\(width)")
+            XCTAssertEqual(finished.table, direct.table, "@\(width)")
+            XCTAssertEqual(Set(finished.converted.keys), Set(direct.converted.keys), "@\(width)")
+            for (id, expected) in direct.converted {
+                XCTAssertEqual(finished.converted[id]?.string, expected.string, "\(id) @\(width)")
+            }
+        }
+    }
+
+    /// A document with no math needs no second pass at all.
+    @MainActor
+    func testDocumentWithoutMathHasNothingPending() {
+        let blocks = parse(Self.mixedDocumentWithoutMath)
+        XCTAssertEqual(mathRowIndices(in: blocks), [], "fixture must contain no math")
+
+        for width in widths {
+            let deferred = measureWithoutMathEngine(blocks, width: width)
+            XCTAssertEqual(deferred.mathPendingRows, [], "@\(width)")
+            XCTAssertEqual(deferred.table, measure(blocks, width: width).table, "@\(width)")
+            // …and running the second pass anyway changes nothing.
+            let finished = BlockHeightMeasurer.measureMathRows(
+                deferred.mathPendingRows, in: deferred, blocks: blocks, theme: theme,
+                fontScale: 1.0, contentWidth: width, math: math)
+            XCTAssertEqual(finished.table, deferred.table, "@\(width)")
+        }
+    }
+
+    private static let mixedDocumentWithoutMath = """
+    # A heading
+
+    A paragraph with some **bold** text, long enough to wrap at four hundred points.
+
+    - list item one
+    - list item two
+
+    > a blockquote
+
+    > [!WARNING]
+    > mind the gap
+
+    ```swift
+    let a = 1
+    ```
+
+    | a | b |
+    |---|---|
+    | 1 | 2 |
+
+    ![alt text](image.png)
+    """
 }
