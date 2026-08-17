@@ -25,8 +25,8 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ### Blazing Fast
 - Opens in milliseconds—no loading screens
-- Native SwiftUI app—lightweight
-- Lazy native rendering—even 10,000+ line documents open without freezing the UI
+- Native SwiftUI + AppKit app—lightweight, zero dependencies
+- Native virtualized layout with exact, pre-measured heights—10,000+ line documents open and scroll smoothly, Table of Contents and search jumps land exactly, and your reading position survives zoom, theme changes, resizes and auto-reload
 
 ### Companion to Your Editor
 - **Auto-reload** — the document refreshes the moment your editor saves it. Enable auto-save in VS Code/Cursor/Zed and QuickMD becomes a live preview
@@ -184,7 +184,7 @@ Now all your Markdown files will open instantly with QuickMD!
 ### Key Components
 
 - Custom Markdown parser with block-level parsing, YAML frontmatter and reference link pre-pass
-- Native `NSTextView` text pipeline with lazy layout — native selection, native links, no SwiftUI text bottlenecks on huge documents
+- Native `NSTextView` text pipeline hosted in a virtualized `NSTableView` — native selection, native links, exact row heights measured off the main thread, no SwiftUI text bottlenecks on huge documents
 - Per-document file watcher (`DispatchSource`) powering auto-reload, including atomic editor saves
 - Regex-based syntax highlighting for code blocks (computed off the main thread)
 - LaTeX math rendering via vendored [SwiftMath](https://github.com/mgriebling/SwiftMath) (Core Graphics, no network); inline math as native text attachments
@@ -203,7 +203,7 @@ QuickMD/
 ├── QuickMD/
 │   ├── QuickMDApp.swift            # App entry point + menu commands
 │   ├── MarkdownDocument.swift      # FileDocument model (encoding + line-ending normalization)
-│   ├── MarkdownView.swift          # Main document view (lazy block layout)
+│   ├── MarkdownView.swift          # Main document view (parse + measure pipeline, overlays)
 │   ├── MarkdownBlock.swift         # Block type enum
 │   ├── MarkdownBlockParser.swift   # Line-by-line block parser (+ YAML frontmatter)
 │   ├── MarkdownRenderer.swift      # Inline markdown → AttributedString (SwiftUI + AppKit scopes)
@@ -213,6 +213,7 @@ QuickMD/
 │   ├── DocumentSearch.swift        # Find-in-document match engine
 │   ├── SectionExtractor.swift      # "Copy section" boundaries from parser source lines
 │   ├── InlineMathSegmenter.swift   # $...$ segmentation
+│   ├── BlockHeightMeasurer.swift   # Off-main exact block heights (TextKit) + BlockLayout metrics
 │   ├── FileWatchManager.swift      # Auto-reload file watcher (DispatchSource)
 │   ├── ExternalEditorManager.swift # ⌘E editor detection + launch
 │   ├── WindowTabbing.swift         # Native macOS tab merging + window size memory
@@ -227,6 +228,7 @@ QuickMD/
 │   │   ├── mermaid.min.js          # Bundled Mermaid.js
 │   │   └── mermaid-template.html   # HTML template for diagrams
 │   ├── Views/
+│   │   ├── VirtualBlockList.swift  # NSScrollView + NSTableView host: one row per block, exact heights
 │   │   ├── TextBlockView.swift     # NSTextView-backed text blocks (native selection, inline math)
 │   │   ├── CodeBlockView.swift     # NSTextView-backed code blocks (+ copy button)
 │   │   ├── MathBlockView.swift     # LaTeX display math ($$...$$)
@@ -235,7 +237,8 @@ QuickMD/
 │   │   ├── ImageBlockView.swift    # Local + remote image rendering
 │   │   ├── BlockquoteView.swift    # Nested blockquotes
 │   │   ├── AlertBlockView.swift    # GitHub-flavored alerts ([!NOTE], [!TIP], ...)
-│   │   ├── ChromeButtons.swift     # Heading copy, source copy, edit, support buttons
+│   │   ├── ChromeButtons.swift     # Heading copy, source copy, edit, zoom, support pills
+│   │   ├── ChromeHoverState.swift  # Hover-cluster state for the top-right pills
 │   │   ├── SearchBar.swift         # Find in document (⌘F)
 │   │   ├── TableOfContentsView.swift # ToC sidebar (⌘⇧T)
 │   │   ├── RecentDocumentsSidebar.swift # Recent docs sidebar (⌘⇧D)
