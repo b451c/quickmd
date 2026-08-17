@@ -56,40 +56,181 @@ struct HeadingBlockView: View {
     }
 }
 
+// MARK: - Shared hover-expand capsule
+
+/// How a chrome pill decides whether to show its label.
+///
+/// `.local` — the pill tracks the pointer itself (Support, Tip Jar).
+/// `.cluster` — a parent `chromeHoverCluster()` owns hover so siblings
+/// expand and collapse together and do not shove each other sideways.
+private enum ChromeExpansionSource: Equatable {
+    case local
+    case cluster(expanded: Bool)
+}
+
+private struct ChromeExpansionSourceKey: EnvironmentKey {
+    static let defaultValue: ChromeExpansionSource = .local
+}
+
+private extension EnvironmentValues {
+    var chromeExpansionSource: ChromeExpansionSource {
+        get { self[ChromeExpansionSourceKey.self] }
+        set { self[ChromeExpansionSourceKey.self] = newValue }
+    }
+}
+
+/// Pointer tracking for one hover region. Cancels an in-flight collapse on
+/// re-entry and on disappear so a late timer cannot mutate a gone view.
+private struct ChromeHoverTracking: ViewModifier {
+    @Binding var hover: ChromeHoverState
+    @State private var collapseWork: DispatchWorkItem?
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                collapseWork?.cancel()
+                collapseWork = nil
+                var next = hover
+                if hovering {
+                    next.pointerEntered()
+                    hover = next
+                } else {
+                    let generation = next.pointerExited()
+                    hover = next
+                    let work = DispatchWorkItem {
+                        var collapsed = hover
+                        collapsed.applyScheduledCollapse(generation: generation)
+                        hover = collapsed
+                    }
+                    collapseWork = work
+                    DispatchQueue.main.asyncAfter(
+                        deadline: .now() + ChromeHoverState.collapseDelay,
+                        execute: work
+                    )
+                }
+            }
+            .onDisappear {
+                collapseWork?.cancel()
+                collapseWork = nil
+            }
+    }
+}
+
+/// Shared hover for a group of pills. Independent per-button expansion
+/// shifts siblings and makes the pointer miss the other control.
+struct ChromeHoverCluster: ViewModifier {
+    @State private var hover = ChromeHoverState()
+
+    func body(content: Content) -> some View {
+        content
+            // Grow the hover bounds (gap + 4pt slop) without shifting layout.
+            // onHover tracks layout bounds, not contentShape, so padding is
+            // what actually keeps the pointer "inside" while crossing pills.
+            .padding(4)
+            .contentShape(Rectangle())
+            .environment(\.chromeExpansionSource, .cluster(expanded: hover.isExpanded))
+            .modifier(ChromeHoverTracking(hover: $hover))
+            .padding(-4)
+    }
+}
+
+extension View {
+    func chromeHoverCluster() -> some View {
+        modifier(ChromeHoverCluster())
+    }
+}
+
+/// Visual capsule used by every document-chrome pill. Expansion comes from
+/// a parent cluster when present, otherwise from local hover.
+struct ChromePillLabel<Icon: View>: View {
+    let theme: MarkdownTheme
+    let title: String
+    var tint: Color = .secondary
+    @ViewBuilder var icon: () -> Icon
+
+    @Environment(\.chromeExpansionSource) private var expansionSource
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var localHover = ChromeHoverState()
+
+    private var expanded: Bool {
+        switch expansionSource {
+        case .cluster(let expanded): return expanded
+        case .local: return localHover.isExpanded
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            icon()
+            if expanded {
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+            }
+        }
+        .padding(.horizontal, expanded ? 10 : 6)
+        .padding(.vertical, 4)
+        .background(theme.codeBackgroundColor.opacity(expanded ? 0.9 : 0.6))
+        .clipShape(Capsule())
+        .contentShape(Capsule())
+        .foregroundColor(tint)
+        .opacity(expanded ? 1.0 : 0.5)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: expanded)
+        .modifier(LocalHoverIfNeeded(enabled: isLocal, hover: $localHover))
+    }
+
+    private var isLocal: Bool {
+        if case .local = expansionSource { return true }
+        return false
+    }
+}
+
+private struct LocalHoverIfNeeded: ViewModifier {
+    let enabled: Bool
+    @Binding var hover: ChromeHoverState
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.modifier(ChromeHoverTracking(hover: $hover))
+        } else {
+            content
+        }
+    }
+}
+
+/// Button-wrapped chrome pill. Keeps a stable accessibility name even
+/// when the visible label is collapsed.
+struct ChromePill<Icon: View>: View {
+    let theme: MarkdownTheme
+    let title: String
+    let help: String
+    var tint: Color = .secondary
+    let action: () -> Void
+    @ViewBuilder var icon: () -> Icon
+
+    var body: some View {
+        Button(action: action) {
+            ChromePillLabel(theme: theme, title: title, tint: tint, icon: icon)
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help(help)
+        .accessibilityLabel(title)
+    }
+}
+
 // MARK: - Copy Source Button
 
 /// Subtle top-right button to copy the entire raw markdown
 struct CopySourceButton: View {
     let theme: MarkdownTheme
     let action: () -> Void
-    @State private var isHovered = false
 
     var body: some View {
-        Button {
-            action()
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "doc.on.doc")
-                    .font(.system(size: 11))
-                if isHovered {
-                    Text("Copy source")
-                        .font(.system(size: 11, weight: .medium))
-                }
-            }
-            .padding(.horizontal, isHovered ? 10 : 6)
-            .padding(.vertical, 4)
-            .background(theme.codeBackgroundColor.opacity(isHovered ? 0.9 : 0.6))
-            .clipShape(Capsule())
+        ChromePill(theme: theme, title: "Copy source", help: "Copy source", action: action) {
+            Image(systemName: "doc.on.doc")
+                .font(.system(size: 11))
         }
-        .buttonStyle(.plain)
-        .focusable(false)
-        .foregroundColor(.secondary)
-        .opacity(isHovered ? 1.0 : 0.5)
-        .animation(.easeInOut(duration: 0.2), value: isHovered)
-        .onHover { hovering in
-            isHovered = hovering
-        }
-        .help("Copy source")
     }
 }
 
@@ -99,34 +240,17 @@ struct CopySourceButton: View {
 struct EditInEditorButton: View {
     let theme: MarkdownTheme
     let action: () -> Void
-    @State private var isHovered = false
 
     var body: some View {
-        Button {
-            action()
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "pencil")
-                    .font(.system(size: 11))
-                if isHovered {
-                    Text("Edit")
-                        .font(.system(size: 11, weight: .medium))
-                }
-            }
-            .padding(.horizontal, isHovered ? 10 : 6)
-            .padding(.vertical, 4)
-            .background(theme.codeBackgroundColor.opacity(isHovered ? 0.9 : 0.6))
-            .clipShape(Capsule())
+        ChromePill(
+            theme: theme,
+            title: "Edit",
+            help: "Open in external editor (⌘E)",
+            action: action
+        ) {
+            Image(systemName: "pencil")
+                .font(.system(size: 11))
         }
-        .buttonStyle(.plain)
-        .focusable(false)
-        .foregroundColor(.secondary)
-        .opacity(isHovered ? 1.0 : 0.5)
-        .animation(.easeInOut(duration: 0.2), value: isHovered)
-        .onHover { hovering in
-            isHovered = hovering
-        }
-        .help("Open in external editor (⌘E)")
     }
 }
 
@@ -136,34 +260,18 @@ struct EditInEditorButton: View {
 struct TipJarButton: View {
     let theme: MarkdownTheme
     @Environment(\.openWindow) private var openWindow
-    @State private var isHovered = false
 
     var body: some View {
-        Button {
-            openWindow(id: "tip-jar")
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "heart.fill")
-                    .font(.system(size: 11))
-                if isHovered {
-                    Text("Tip Jar")
-                        .font(.system(size: 11, weight: .medium))
-                }
-            }
-            .padding(.horizontal, isHovered ? 10 : 6)
-            .padding(.vertical, 4)
-            .background(theme.codeBackgroundColor.opacity(isHovered ? 0.9 : 0.6))
-            .clipShape(Capsule())
+        ChromePill(
+            theme: theme,
+            title: "Tip Jar",
+            help: "Support QuickMD",
+            tint: .pink,
+            action: { openWindow(id: "tip-jar") }
+        ) {
+            Image(systemName: "heart.fill")
+                .font(.system(size: 11))
         }
-        .buttonStyle(.plain)
-        .focusable(false)
-        .foregroundColor(.pink)
-        .opacity(isHovered ? 1.0 : 0.5)
-        .animation(.easeInOut(duration: 0.2), value: isHovered)
-        .onHover { hovering in
-            isHovered = hovering
-        }
-        .help("Support QuickMD")
     }
 }
 #endif
@@ -173,7 +281,6 @@ struct TipJarButton: View {
 #if !APPSTORE
 struct SupportButton: View {
     let theme: MarkdownTheme
-    @State private var isHovered = false
 
     var body: some View {
         Menu {
@@ -194,26 +301,14 @@ struct SupportButton: View {
                 Label("Ko-fi", systemImage: "heart.fill")
             }
         } label: {
-            HStack(spacing: 4) {
+            ChromePillLabel(theme: theme, title: "Support") {
                 Text("☕")
                     .font(.system(size: 12))
-                if isHovered {
-                    Text("Support")
-                        .font(.system(size: 11, weight: .medium))
-                }
             }
-            .padding(.horizontal, isHovered ? 10 : 6)
-            .padding(.vertical, 4)
-            .background(theme.codeBackgroundColor.opacity(isHovered ? 0.9 : 0.6))
-            .clipShape(Capsule())
         }
         .menuStyle(.button)
-        .opacity(isHovered ? 1.0 : 0.5)
-        .animation(.easeInOut(duration: 0.2), value: isHovered)
-        .onHover { hovering in
-            isHovered = hovering
-        }
         .help("Support QuickMD development")
+        .accessibilityLabel("Support")
     }
 }
 #endif

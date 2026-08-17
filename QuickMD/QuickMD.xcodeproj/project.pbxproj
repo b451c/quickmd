@@ -95,6 +95,9 @@
 		A1B2C3D401000051 /* FileWatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000004D /* FileWatcherTests.swift */; };
 		A1B2C3D401000052 /* FileWatchManager.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000049 /* FileWatchManager.swift */; };
 		A1B2C3D401000053 /* ExternalEditorManager.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000004A /* ExternalEditorManager.swift */; };
+		A1B2C3D401000066 /* ChromeHoverState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000066 /* ChromeHoverState.swift */; };
+		A1B2C3D401000067 /* ChromeHoverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000067 /* ChromeHoverTests.swift */; };
+		A1B2C3D401000068 /* ChromeHoverState.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000066 /* ChromeHoverState.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -179,6 +182,8 @@
 		A1B2C3D40000004B /* ExternalEditorPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalEditorPickerView.swift; sourceTree = "<group>"; };
 		A1B2C3D40000004C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A1B2C3D40000004D /* FileWatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileWatcherTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000066 /* ChromeHoverState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeHoverState.swift; sourceTree = "<group>"; };
+		A1B2C3D400000067 /* ChromeHoverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeHoverTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -218,6 +223,7 @@
 				A1B2C3D400000046 /* SearchTests.swift */,
 				A1B2C3D40000004D /* FileWatcherTests.swift */,
 				A1B2C3D400000064 /* FontTests.swift */,
+				A1B2C3D400000067 /* ChromeHoverTests.swift */,
 			);
 			path = QuickMDTests;
 			sourceTree = "<group>";
@@ -271,6 +277,7 @@
 				A1B2C3D400000019 /* MermaidBlockView.swift */,
 				A1B2C3D40000003C /* RecentDocumentsSidebar.swift */,
 				A1B2C3D400000040 /* ChromeButtons.swift */,
+				A1B2C3D400000066 /* ChromeHoverState.swift */,
 				A1B2C3D400000047 /* TextBlockView.swift */,
 				A1B2C3D400000060 /* AlertBlockView.swift */,
 				A1B2C3D40000004B /* ExternalEditorPickerView.swift */,
@@ -489,6 +496,7 @@
 				A1B2C3D40100003A /* DocumentSearch.swift in Sources */,
 				A1B2C3D40100003B /* WindowTabbing.swift in Sources */,
 				A1B2C3D40100003C /* ChromeButtons.swift in Sources */,
+				A1B2C3D401000066 /* ChromeHoverState.swift in Sources */,
 				A1B2C3D40100004A /* TextBlockView.swift in Sources */,
 				A1B2C3D401000060 /* AlertBlockView.swift in Sources */,
 				A1B2C3D401000061 /* MermaidPDFRenderer.swift in Sources */,
@@ -525,6 +533,8 @@
 				A1B2C3D401000053 /* ExternalEditorManager.swift in Sources (Tests) */,
 				A1B2C3D401000064 /* FontTests.swift in Sources */,
 				A1B2C3D401000065 /* DocumentFonts.swift in Sources (Tests) */,
+				A1B2C3D401000067 /* ChromeHoverTests.swift in Sources */,
+				A1B2C3D401000068 /* ChromeHoverState.swift in Sources (Tests) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
