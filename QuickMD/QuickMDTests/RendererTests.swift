@@ -158,6 +158,95 @@ final class RendererTests: XCTestCase {
         XCTAssertTrue(out.contains("    • nested"))
     }
 
+    // MARK: - Definition lists
+
+    private func definitionList(_ groups: [MarkdownRenderer.DefinitionGroup],
+                                scale: CGFloat = 1.0) -> AttributedString {
+        MarkdownRenderer(theme: MarkdownTheme.cached(for: .light), fontScale: scale)
+            .renderDefinitionList(groups: groups)
+    }
+
+    /// The indent has to live in the CHARACTERS as well: print/PDF renders the
+    /// block through SwiftUI `Text`, which ignores NSParagraphStyle, so without
+    /// the spaces a printed definition would share its term's left edge.
+    func testDefinitionListPlainTextCarriesTheIndentForPrint() {
+        let attr = definitionList([.init(terms: ["Apple"], definitions: ["A fruit"])])
+        XCTAssertEqual(String(attr.characters), "Apple\n    A fruit\n")
+    }
+
+    func testDefinitionGroupsAreSeparatedByABlankLine() {
+        let attr = definitionList([
+            .init(terms: ["Apple"], definitions: ["fruit"]),
+            .init(terms: ["Orange"], definitions: ["citrus"])
+        ])
+        XCTAssertEqual(String(attr.characters), "Apple\n    fruit\n\nOrange\n    citrus\n")
+    }
+
+    /// Paragraph style / font of the definition body, as only the NSTextView
+    /// pipeline sees them.
+    private func definitionBody(_ groups: [MarkdownRenderer.DefinitionGroup],
+                                scale: CGFloat = 1.0) throws -> (font: NSFont, style: NSParagraphStyle) {
+        let attr = definitionList(groups, scale: scale)
+        let ns = try NSAttributedString(attr, including: \.appKit)
+        // First character of the definition text, past "term\n" + the indent spaces.
+        let plain = String(attr.characters)
+        let offset = try XCTUnwrap(plain.range(of: "\n    ")).upperBound
+        let index = plain.distance(from: plain.startIndex, to: offset)
+        let font = try XCTUnwrap(ns.attribute(.font, at: index, effectiveRange: nil) as? NSFont)
+        let style = try XCTUnwrap(ns.attribute(.paragraphStyle, at: index, effectiveRange: nil) as? NSParagraphStyle,
+                                  "definition body carries no paragraph style")
+        return (font, style)
+    }
+
+    func testDefinitionBodyIsIndentedAndHangsItsWrappedLines() throws {
+        let groups: [MarkdownRenderer.DefinitionGroup] = [.init(terms: ["Apple"], definitions: ["A fruit"])]
+        let body = try definitionBody(groups)
+        XCTAssertEqual(body.style.firstLineHeadIndent, 24, accuracy: 0.01)
+        XCTAssertGreaterThan(body.style.headIndent, body.style.firstLineHeadIndent,
+                             "wrapped lines must hang under the definition text, not under its indent spaces")
+
+        // The term itself sits at the text margin, in semibold.
+        let ns = try NSAttributedString(definitionList(groups), including: \.appKit)
+        let termStyle = ns.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(termStyle?.firstLineHeadIndent ?? 0, 0, accuracy: 0.01)
+        let termFont = try XCTUnwrap(ns.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        XCTAssertTrue(termFont.fontDescriptor.symbolicTraits.contains(.bold), "term must be semibold")
+        XCTAssertFalse(body.font.fontDescriptor.symbolicTraits.contains(.bold), "definition must not be bold")
+    }
+
+    /// Indents are point values, so ⌘+ / ⌘- has to move them like the fonts.
+    func testDefinitionIndentScalesWithZoom() throws {
+        let groups: [MarkdownRenderer.DefinitionGroup] = [.init(terms: ["Apple"], definitions: ["A fruit"])]
+        let normal = try definitionBody(groups)
+        let zoomed = try definitionBody(groups, scale: 2.0)
+        XCTAssertEqual(zoomed.style.firstLineHeadIndent, normal.style.firstLineHeadIndent * 2, accuracy: 0.01)
+        XCTAssertGreaterThan(zoomed.style.headIndent, normal.style.headIndent)
+    }
+
+    func testDefinitionListRendersInlineFormatting() {
+        let attr = definitionList([.init(terms: ["**Apple** pie"],
+                                         definitions: ["A [fruit](https://example.com)"])])
+        XCTAssertEqual(String(attr.characters), "Apple pie\n    A fruit\n")
+        XCTAssertEqual(attr.runs.compactMap(\.link).first?.absoluteString, "https://example.com")
+    }
+
+    func testDefinitionBodyJoinsSoftBreaks() {
+        let attr = definitionList([.init(terms: ["Term"], definitions: ["first part\nwrapped tail"])])
+        XCTAssertEqual(String(attr.characters), "Term\n    first part wrapped tail\n")
+    }
+
+    /// A hard break inside a definition keeps two lines — both still indented.
+    func testDefinitionBodyKeepsHardBreaks() throws {
+        let attr = definitionList([.init(terms: ["Term"], definitions: ["first part  \nsecond line"])])
+        XCTAssertEqual(String(attr.characters), "Term\n    first part\n    second line\n")
+        let ns = try NSAttributedString(attr, including: \.appKit)
+        let secondLine = try XCTUnwrap(String(attr.characters).range(of: "second"))
+        let index = String(attr.characters).distance(from: String(attr.characters).startIndex,
+                                                    to: secondLine.lowerBound)
+        let style = ns.attribute(.paragraphStyle, at: index, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(style?.firstLineHeadIndent ?? 0, 24, accuracy: 0.01)
+    }
+
     // MARK: - Soft line breaks
 
     /// CommonMark: a single newline inside a paragraph is a soft break,

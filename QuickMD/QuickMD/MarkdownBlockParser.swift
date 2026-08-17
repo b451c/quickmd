@@ -343,6 +343,34 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
+            // Definition list (PHP Markdown Extra / Pandoc). Detected FROM the
+            // `: definition` line, looking BACK at the buffered term lines:
+            // probing forward from every paragraph line would re-walk the whole
+            // paragraph run once per line (quadratic on prose-heavy documents),
+            // and by the time we reach the definition the term is buffered
+            // anyway. Placed last, so every other block start above wins — and
+            // a term is only ever a line that is not itself a block start
+            // (`isTermCandidate`).
+            if let firstDefinition = Self.definitionText(of: line),
+               let run = trailingTermRun(in: textBuffer) {
+                // Whatever sat above the terms is a paragraph of its own — the
+                // term line is NOT part of it (PHP Markdown Extra reads
+                // "para line\n: def" as term + definition).
+                var preceding = Array(textBuffer[..<run.bufferStart])
+                flushTextBuffer(&preceding, to: &blocks, index: &blockIndex, using: activeRenderer)
+                let termSourceLine = textBuffer[run.bufferStart].originalIndex
+                textBuffer.removeAll()
+
+                let list = scanDefinitionList(lines, terms: run.terms,
+                                              firstDefinition: firstDefinition, from: i + 1)
+                blocks.append(.text(index: blockIndex,
+                                    activeRenderer.renderDefinitionList(groups: list.groups),
+                                    sourceLine: termSourceLine))
+                blockIndex += 1
+                i = list.end
+                continue
+            }
+
             textBuffer.append((line: line, originalIndex: sourceLine))
             i += 1
         }
@@ -454,6 +482,200 @@ struct MarkdownBlockParser: Sendable {
         if array.count == count { return array }
         if array.count > count { return Array(array.prefix(count)) }
         return array + Array(repeating: defaultValue, count: count - array.count)
+    }
+
+    // MARK: - Definition Lists (PHP Markdown Extra / Pandoc)
+    //
+    // ```
+    // Apple
+    // Orange
+    // : The fruit          ← one definition shared by two terms
+    // : A company          ← a second definition of the same terms
+    //
+    // Pear                 ← a new term group, still ONE block
+    // : Another fruit
+    //   that wraps         ← lazy continuation of the definition
+    // ```
+    //
+    // The whole list becomes ONE `.text` block, rendered by
+    // `MarkdownRenderer.renderDefinitionList` — so search, height measurement,
+    // print and PDF need no new block kind. Inside a blockquote nothing changes:
+    // the quote branch above consumes those lines and `renderQuotedBody`
+    // renders them as ordinary text.
+
+    /// The text of a `: definition` line, or nil when the line is not one: up to
+    /// three leading spaces, a colon, then a space or tab, then the text.
+    ///
+    /// The space is what makes it a marker, so `:smile:` (shortcode) and
+    /// `Note: text` (colon not first) are deliberately NOT definitions — and a
+    /// line indented four or more spaces is a definition's continuation, not a
+    /// new definition.
+    private static func definitionText(of line: String) -> String? {
+        var scanner = line[...]
+        var indent = 0
+        while indent < 3, scanner.first == " " {
+            scanner = scanner.dropFirst()
+            indent += 1
+        }
+        guard scanner.first == ":" else { return nil }
+        scanner = scanner.dropFirst()
+        guard scanner.first == " " || scanner.first == "\t" else { return nil }
+        // Padding after the marker (`:   text`) is dropped, but TRAILING
+        // whitespace is kept: two trailing spaces are a hard break, and the
+        // renderer's soft-break pass has to still see them.
+        let text = String(scanner.drop(while: { $0 == " " || $0 == "\t" }))
+        return text.trimmingCharacters(in: .whitespaces).isEmpty ? nil : text
+    }
+
+    private static func isBlank(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Can this line be a definition-list TERM? Non-blank, not a definition
+    /// line, and not the start of any other block this parser recognises
+    /// (heading, list item, table row, fence, quote, image, `$$`, rule).
+    ///
+    /// It is also the test for a definition's lazy continuation lines: a
+    /// continuation is exactly "a line that could have been a term", which is
+    /// why one predicate serves both.
+    private func isTermCandidate(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, Self.definitionText(of: line) == nil else { return false }
+
+        // Fences, quotes, display math
+        if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") { return false }
+        if trimmed.hasPrefix(">") || trimmed.hasPrefix("$$") { return false }
+
+        // List items — bullets (task items included, they start `- [ ]`) and ordered
+        if ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) { return false }
+        if trimmed.range(of: #"^(\d+)\.\s"#, options: .regularExpression) != nil { return false }
+
+        // Table rows (the table branch needs a separator to fire, but a pipe row
+        // is still a table row, not a term) and separators
+        if line.filter({ $0 == "|" }).count >= 2 { return false }
+        if isTableSeparator(trimmed) { return false }
+
+        // Rules and setext underlines
+        if trimmed.range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil { return false }
+        if trimmed.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil { return false }
+
+        // ATX headings and standalone images
+        let nsRange = NSRange(line.startIndex..., in: line)
+        if Self.headerRegex.firstMatch(in: line, range: nsRange) != nil { return false }
+        if parseStandaloneImage(line) != nil { return false }
+
+        return true
+    }
+
+    /// The trailing lines of the text buffer that are the TERM(s) of the
+    /// definition list starting at the `: definition` line we just reached:
+    /// 1…N consecutive candidate lines, optionally followed by ONE blank line.
+    ///
+    /// Returns nil when the buffer does not end in a term run (no term ⇒ the
+    /// `:` line is just paragraph text). Several terms sharing one definition is
+    /// PHP Markdown Extra behaviour, so the run is taken greedily — a prose line
+    /// directly above a term, with no blank line between them, becomes a term
+    /// too, exactly as it does there.
+    private func trailingTermRun(in buffer: [(line: String, originalIndex: Int)]) -> (terms: [String], bufferStart: Int)? {
+        var end = buffer.count
+        // At most ONE blank line may sit between the terms and the definition;
+        // two means the term is too far away to be one.
+        if end > 0, Self.isBlank(buffer[end - 1].line) { end -= 1 }
+
+        var start = end
+        while start > 0, isTermCandidate(buffer[start - 1].line) { start -= 1 }
+        guard start < end else { return nil }
+
+        return (buffer[start..<end].map { $0.line.trimmingCharacters(in: .whitespaces) }, start)
+    }
+
+    /// A term run plus the definition line that makes it one, scanned FORWARD —
+    /// used for the second and later groups of a list already in progress.
+    private struct DefinitionHead {
+        let terms: [String]
+        let firstDefinition: String
+        /// Index of the line after the `: definition` line.
+        let next: Int
+    }
+
+    private func scanTermHead(_ lines: [String], from start: Int) -> DefinitionHead? {
+        var terms: [String] = []
+        var index = start
+        while index < lines.count, isTermCandidate(lines[index]) {
+            terms.append(lines[index].trimmingCharacters(in: .whitespaces))
+            index += 1
+        }
+        guard !terms.isEmpty, index < lines.count else { return nil }
+        if Self.isBlank(lines[index]) { index += 1 }   // one blank line is allowed
+        guard index < lines.count, let text = Self.definitionText(of: lines[index]) else { return nil }
+        return DefinitionHead(terms: terms, firstDefinition: text, next: index + 1)
+    }
+
+    /// Walks a definition list whose first group's terms and first definition are
+    /// already known, from `start` — the line AFTER that `: definition` line.
+    /// Returns the groups and the first line index that is NOT part of the list.
+    private func scanDefinitionList(_ lines: [String], terms firstTerms: [String],
+                                    firstDefinition: String, from start: Int)
+        -> (groups: [MarkdownRenderer.DefinitionGroup], end: Int) {
+        var groups: [MarkdownRenderer.DefinitionGroup] = []
+        var terms = firstTerms
+        var definitions: [String] = []
+        // Lines of the definition under construction — its `: ` text plus any
+        // lazy continuation lines. The renderer joins them like a paragraph.
+        var current: [String] = [firstDefinition]
+        var index = start
+
+        func closeDefinition() {
+            definitions.append(current.joined(separator: "\n"))
+            current = []
+        }
+        func closeGroup() {
+            closeDefinition()
+            groups.append(MarkdownRenderer.DefinitionGroup(terms: terms, definitions: definitions))
+            definitions = []
+        }
+
+        while index < lines.count {
+            let line = lines[index]
+
+            // A further definition of the same terms (tight list)
+            if let text = Self.definitionText(of: line) {
+                closeDefinition()
+                current = [text]
+                index += 1
+                continue
+            }
+
+            if Self.isBlank(line) {
+                // The blank ends the definition. One blank + `: ` is a further
+                // (loose) definition of the same terms; one blank + a term run
+                // that has its own definition is a new group in this SAME block;
+                // anything else ends the list, blank line left behind.
+                if index + 1 < lines.count, let text = Self.definitionText(of: lines[index + 1]) {
+                    closeDefinition()
+                    current = [text]
+                    index += 2
+                    continue
+                }
+                if let head = scanTermHead(lines, from: index + 1) {
+                    closeGroup()
+                    terms = head.terms
+                    current = [head.firstDefinition]
+                    index = head.next
+                    continue
+                }
+                break
+            }
+
+            // Lazy continuation — but a new block start (fence, heading, table,
+            // quote, list, image, math) ends the list instead.
+            guard isTermCandidate(line) else { break }
+            current.append(line)
+            index += 1
+        }
+
+        closeGroup()
+        return (groups, index)
     }
 
     // MARK: - Text Buffer

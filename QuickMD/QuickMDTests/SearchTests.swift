@@ -46,6 +46,15 @@ final class SearchTests: XCTestCase {
             "heading + text + code + blockquote + table header + table cell")
     }
 
+    /// A definition list renders into a `.text` block, so its terms and bodies
+    /// are searched through the block's plain characters like any paragraph.
+    func testDefinitionListContentIsSearchable() {
+        let blocks = parse("Apple\n: A pomaceous fruit")
+        let results = DocumentSearch.computeMatches(in: blocks, term: "pomaceous")
+        XCTAssertEqual(results.matchBlockIds.count, 1)
+        XCTAssertTrue(results.matchBlockIds[0].hasPrefix("text-"), results.matchBlockIds[0])
+    }
+
     func testSearchHighlightSetsBackgroundOnMatches() {
         var attr = AttributedString("find the word here")
         attr.font = .system(size: 14)

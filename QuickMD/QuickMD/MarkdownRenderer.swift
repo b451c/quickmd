@@ -345,10 +345,17 @@ struct MarkdownRenderer: Sendable {
     /// Indents the whole item by the list gutter and hangs its wrapped lines
     /// under the item text, i.e. past `prefix` (the indent spaces + marker).
     private func applyListParagraphStyle(_ attr: inout AttributedString, hangingUnder prefix: String) {
-        let gutter = scaled(Self.listGutter)
+        applyHangingIndent(&attr, indent: scaled(Self.listGutter), hangingUnder: prefix)
+    }
+
+    /// Indents a whole paragraph by `indent` points and hangs its wrapped lines
+    /// past `prefix` — the characters only the FIRST line carries (a list
+    /// marker, a definition's plain-text indent). Shared by list items and
+    /// definition-list bodies so there is ONE hanging-indent mechanism.
+    private func applyHangingIndent(_ attr: inout AttributedString, indent: CGFloat, hangingUnder prefix: String) {
         let style = NSMutableParagraphStyle()
-        style.firstLineHeadIndent = gutter
-        style.headIndent = gutter + width(of: prefix)
+        style.firstLineHeadIndent = indent
+        style.headIndent = indent + width(of: prefix)
         attr[AttributeScopes.AppKitAttributes.ParagraphStyleAttribute.self] = style
     }
 
@@ -374,6 +381,106 @@ struct MarkdownRenderer: Sendable {
         let content = String(line[contentRange])
 
         return (content: content, level: level, checked: checked)
+    }
+
+    // MARK: - Definition Lists (PHP Markdown Extra / Pandoc)
+    //
+    // ```
+    // Apple
+    // Orange
+    // : The fruit          ← one definition shared by two terms
+    // : A company          ← a second definition of the same terms
+    //
+    // Pear                 ← a new term group, still ONE block
+    // : Another fruit
+    //   that wraps         ← lazy continuation of the definition
+    // ```
+    //
+    // A whole list renders into ONE AttributedString (a `.text` block), so
+    // search, height measurement, print and PDF need no new block kind. Terms
+    // sit at the text margin in semibold; definitions are indented, with the
+    // same two-part trick list items use:
+    //
+    //  1. the indent lives in the CHARACTERS as spaces, because the print/PDF
+    //     pipeline renders blocks through SwiftUI `Text`, which ignores
+    //     NSParagraphStyle — without the spaces a printed definition would be
+    //     indistinguishable from its term's own left edge;
+    //  2. NSParagraphStyle adds the point-accurate indent for the on-screen
+    //     NSTextView pipeline and hangs wrapped lines under the definition
+    //     text, so a long definition stays visually inside its block.
+
+    /// Points a definition body is indented from the text margin at 1.0 zoom.
+    /// The visible indent is this plus the width of `definitionPrintIndent`,
+    /// which the characters carry (see the note above).
+    private static let definitionIndent: CGFloat = 24
+
+    /// The definition indent as characters, for the print/PDF pipeline. Same
+    /// unit list nesting uses, so a printed definition lines up with the text
+    /// of a nested list item instead of inventing a second indent scale.
+    private static let definitionPrintIndent = listIndentUnit
+
+    /// One term group of a definition list: 1…N terms that share 1…N
+    /// definitions. Both are still raw Markdown — inline formatting is applied
+    /// here, at render time, exactly like table cells and quote bodies.
+    struct DefinitionGroup: Sendable, Equatable {
+        let terms: [String]
+        let definitions: [String]
+    }
+
+    /// Renders a whole definition list into one AttributedString: every term on
+    /// its own line, then its definitions, groups separated by a blank line.
+    func renderDefinitionList(groups: [DefinitionGroup]) -> AttributedString {
+        var result = AttributedString()
+
+        for (groupIndex, group) in groups.enumerated() {
+            // A blank line between groups rather than `paragraphSpacing`:
+            // paragraph spacing is AppKit-only, so print/PDF would disagree
+            // with the screen about how far apart the groups sit.
+            if groupIndex > 0 {
+                var gap = AttributedString("\n")
+                gap.setDualFont(size: scaled(14), fonts: theme.fonts)
+                result.append(gap)
+            }
+
+            for term in group.terms {
+                result.append(renderDefinitionTerm(term))
+                result.append(AttributedString("\n"))
+            }
+
+            for definition in group.definitions {
+                // Soft breaks join like a paragraph's (CommonMark), so a
+                // definition's lazy continuation lines read as one flow; a hard
+                // break still starts a new — equally indented — line.
+                for line in Self.joinSoftBreaks(definition.components(separatedBy: "\n")) {
+                    result.append(renderDefinitionBody(line))
+                    result.append(AttributedString("\n"))
+                }
+            }
+        }
+
+        return result
+    }
+
+    /// A term: body size, semibold, at the text margin.
+    private func renderDefinitionTerm(_ text: String) -> AttributedString {
+        var attr = renderInlineFormatting(text)
+        // The weight is stamped over the whole line (as `renderHeader` does for
+        // headings) so the term reads as a label whatever its inline runs came
+        // back as. Colors and links are deliberately left alone.
+        attr.setDualFont(size: scaled(14), bold: true, fonts: theme.fonts)
+        return attr
+    }
+
+    /// One visual line of a definition body: the plain-text indent, the inline
+    /// content, and the hanging indent for the NSTextView pipeline.
+    private func renderDefinitionBody(_ text: String) -> AttributedString {
+        var attr = AttributedString(Self.definitionPrintIndent)
+        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
+        attr.setDualForeground(theme.textColor)
+        attr.append(renderInlineFormatting(text))
+        applyHangingIndent(&attr, indent: scaled(Self.definitionIndent),
+                           hangingUnder: Self.definitionPrintIndent)
+        return attr
     }
 
     private func renderHorizontalRule() -> AttributedString {

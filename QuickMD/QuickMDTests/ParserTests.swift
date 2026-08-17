@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import AppKit
 
 /// Golden tests for MarkdownBlockParser. Each documented parser constraint
 /// (docs/constraints.md) has a test here so regressions fail mechanically
@@ -609,6 +610,192 @@ final class ParserTests: XCTestCase {
         }
         XCTAssertEqual(headings[0].sourceLine, 2)
         XCTAssertEqual(headings[1].sourceLine, 5, "setext: the text line, not the ---- underline")
+    }
+
+    // MARK: - Definition lists (PHP Markdown Extra / Pandoc)
+
+    /// Rendered lines of a `.text` block, blank ones dropped and each trimmed —
+    /// the definition indent is a rendering detail (pinned in RendererTests).
+    private func textLines(_ block: MarkdownBlock) -> [String] {
+        (plainText(block) ?? "")
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Terms are the only bold thing a definition list produces, so "no bold
+    /// run" is how a test says "this stayed an ordinary paragraph".
+    private func hasBoldRun(_ block: MarkdownBlock) -> Bool {
+        guard case .text(let attr) = block.content else { return false }
+        return attr.runs.contains {
+            $0[AttributeScopes.AppKitAttributes.FontAttribute.self]?
+                .fontDescriptor.symbolicTraits.contains(.bold) == true
+        }
+    }
+
+    /// Same idea for the definition body's hanging indent.
+    private func hasIndentedRun(_ block: MarkdownBlock) -> Bool {
+        guard case .text(let attr) = block.content else { return false }
+        return attr.runs.contains {
+            ($0[AttributeScopes.AppKitAttributes.ParagraphStyleAttribute.self]?.firstLineHeadIndent ?? 0) > 0
+        }
+    }
+
+    func testTightDefinitionListIsOneTextBlock() {
+        let blocks = parse("Apple\n: A fruit\n: A company")
+        XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
+        XCTAssertTrue(blocks[0].id.hasPrefix("text-"))
+        XCTAssertEqual(textLines(blocks[0]), ["Apple", "A fruit", "A company"])
+        XCTAssertTrue(hasBoldRun(blocks[0]), "the term must render semibold")
+        XCTAssertTrue(hasIndentedRun(blocks[0]), "definitions must be indented")
+    }
+
+    func testMultipleTermsShareTheirDefinition() {
+        let blocks = parse("Apple\nOrange\n: The fruit")
+        XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
+        XCTAssertEqual(textLines(blocks[0]), ["Apple", "Orange", "The fruit"])
+    }
+
+    func testLooseDefinitionsStayInOneBlock() {
+        // A blank line between two `: ` lines is a loose list, not two blocks.
+        let blocks = parse("Term\n: first\n\n: second")
+        XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
+        XCTAssertEqual(textLines(blocks[0]), ["Term", "first", "second"])
+    }
+
+    func testSecondTermGroupStaysInTheSameBlock() {
+        let blocks = parse("Apple\n: fruit\n\nOrange\n: citrus")
+        XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
+        XCTAssertEqual(textLines(blocks[0]), ["Apple", "fruit", "Orange", "citrus"])
+        // …separated by a blank line, so the groups read apart on screen and in print.
+        let raw = (plainText(blocks[0]) ?? "").components(separatedBy: "\n")
+        XCTAssertEqual(raw.count, 6, "\(raw)")
+        XCTAssertTrue(raw[2].isEmpty, "expected a blank line between groups: \(raw)")
+    }
+
+    func testDefinitionAbsorbsLazyContinuationLines() {
+        let blocks = parse("Term\n: first part\n  wrapped tail")
+        XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
+        XCTAssertEqual(plainText(blocks[0])?.contains("first part wrapped tail"), true,
+                       "\(plainText(blocks[0]) ?? "")")
+    }
+
+    /// A hard break on the definition's FIRST line must survive the `: ` marker:
+    /// the marker scanner may only drop the padding in front of the text.
+    func testHardBreakAfterTheDefinitionMarkerSurvives() {
+        let blocks = parse("Term\n: first line  \nsecond line")
+        XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
+        XCTAssertEqual(textLines(blocks[0]), ["Term", "first line", "second line"])
+    }
+
+    func testEmojiShortcodeIsNotADefinitionList() {
+        // `:smile:` has no space after the colon, so it is not a marker.
+        let blocks = parse("Reaction\n:smile:")
+        XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
+        XCTAssertEqual(plainText(blocks[0])?.contains(":smile:"), true)
+        XCTAssertFalse(hasBoldRun(blocks[0]), "must stay an ordinary paragraph")
+        XCTAssertFalse(hasIndentedRun(blocks[0]), "must stay an ordinary paragraph")
+    }
+
+    func testInlineColonIsNotADefinitionList() {
+        let blocks = parse("Warning\nNote: the colon is not first")
+        XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
+        XCTAssertEqual(plainText(blocks[0])?.contains("Warning Note: the colon is not first"), true,
+                       "\(plainText(blocks[0]) ?? "")")
+        XCTAssertFalse(hasBoldRun(blocks[0]), "must stay an ordinary paragraph")
+        XCTAssertFalse(hasIndentedRun(blocks[0]), "must stay an ordinary paragraph")
+    }
+
+    func testDefinitionListAfterAParagraphFlushesThatParagraphSeparately() {
+        // 0 `Intro paragraph.`, 1 blank, 2 `Term`, 3 `: definition`
+        let blocks = parse("Intro paragraph.\n\nTerm\n: definition")
+        XCTAssertEqual(blocks.count, 2, "\(blocks.map(\.id))")
+        XCTAssertEqual(textLines(blocks[0]), ["Intro paragraph."])
+        XCTAssertFalse(hasBoldRun(blocks[0]), "the paragraph must not be swallowed as a term")
+        XCTAssertEqual(textLines(blocks[1]), ["Term", "definition"])
+        XCTAssertEqual(blocks[1].sourceLine, 2, "the block starts at its first term line")
+    }
+
+    /// PHP Markdown Extra reads every non-blank line directly above the first
+    /// `: ` line as a term, so a prose line with no blank line under it becomes
+    /// one too. Pinned deliberately: it is the price of supporting several terms
+    /// per definition, which has exactly the same shape.
+    func testProseLineDirectlyAboveADefinitionBecomesATerm() {
+        let blocks = parse("Intro line\nTerm\n: definition")
+        XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
+        XCTAssertEqual(textLines(blocks[0]), ["Intro line", "Term", "definition"])
+        XCTAssertEqual(blocks[0].sourceLine, 0)
+    }
+
+    func testDefinitionListSourceLineSurvivesDefinitionFiltering() {
+        // The `[ref]:` line is dropped by the pre-pass, so a block reporting its
+        // index in the FILTERED array would claim line 1 instead of 2.
+        let blocks = parse("[ref]: https://example.com\n\nTerm\n: definition")
+        XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
+        XCTAssertEqual(blocks[0].sourceLine, 2)
+    }
+
+    func testDefinitionListEndsAtTheNextBlock() {
+        let blocks = parse("Term\n: definition\n# Heading")
+        XCTAssertEqual(blocks.map { String($0.id.split(separator: "-")[0]) }, ["text", "heading"])
+        guard case .heading(_, let title, let line) = blocks[1].content else {
+            return XCTFail("expected the heading to survive")
+        }
+        XCTAssertEqual(title, "Heading")
+        XCTAssertEqual(line, 2)
+    }
+
+    func testParagraphAfterADefinitionListIsItsOwnBlock() {
+        let blocks = parse("Term\n: definition\n\nNext paragraph.")
+        XCTAssertEqual(blocks.count, 2, "\(blocks.map(\.id))")
+        XCTAssertEqual(textLines(blocks[0]), ["Term", "definition"])
+        XCTAssertEqual(textLines(blocks[1]), ["Next paragraph."])
+        XCTAssertFalse(hasBoldRun(blocks[1]))
+    }
+
+    func testDefinitionListInsideBlockquoteIsLeftToTheBlockquote() {
+        let blocks = parse("> Term\n> : definition")
+        XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
+        guard case .blockquote(let content, let level) = blocks[0].content else {
+            return XCTFail("expected a blockquote, got \(blocks[0].id)")
+        }
+        XCTAssertEqual(level, 1)
+        XCTAssertEqual(content, "Term\n: definition")
+    }
+
+    func testDefinitionMarkerInsideCodeFenceIsNotADefinitionList() {
+        let blocks = parse("```\nTerm\n: definition\n```")
+        XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
+        guard case .codeBlock(let code, _) = blocks[0].content else {
+            return XCTFail("expected a code block, got \(blocks[0].id)")
+        }
+        XCTAssertEqual(code, "Term\n: definition")
+    }
+
+    func testDefinitionWithoutATermStaysParagraph() {
+        let blocks = parse("# Heading\n: orphan definition")
+        XCTAssertEqual(blocks.map { String($0.id.split(separator: "-")[0]) }, ["heading", "text"])
+        XCTAssertEqual(plainText(blocks[1])?.contains(": orphan definition"), true)
+        XCTAssertFalse(hasBoldRun(blocks[1]))
+        XCTAssertFalse(hasIndentedRun(blocks[1]))
+    }
+
+    func testTableRowIsNotTakenAsADefinitionTerm() {
+        let md = """
+        | A | B |
+        |---|---|
+        | 1 | 2 |
+        : definition
+        """
+        let blocks = parse(md)
+        guard case .table(let headers, let rows, _) = blocks.first?.content else {
+            return XCTFail("expected the table to survive, got \(blocks.map(\.id))")
+        }
+        XCTAssertEqual(headers, ["A", "B"])
+        XCTAssertEqual(rows.count, 1)
+        // With no term above it the `: ` line is just paragraph text.
+        XCTAssertEqual(blocks.count, 2, "\(blocks.map(\.id))")
+        XCTAssertFalse(hasBoldRun(blocks[1]))
     }
 
     /// Blank lines between two non-text blocks used to flush an EMPTY `.text`
