@@ -194,7 +194,7 @@ Now all your Markdown files will open instantly with QuickMD!
 - Security-Scoped Bookmarks for local image access in sandbox
 - Per-block **vector PDF export** — selectable text, embedded fonts, Mermaid diagrams as images, multi-page pagination
 - Zero external package dependencies — everything is vendored or bundled
-- Unit test suite (123 tests) + GitHub Actions CI building every flavor on each push
+- Unit test suite (186 tests) + GitHub Actions CI building every flavor on each push
 
 ## Project Structure
 
@@ -338,6 +338,8 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Remember last window size
 - [x] CommonMark soft breaks — contributed by [@shmuelzon](https://github.com/shmuelzon)
 - [x] Custom font families for body text and code ([#18](https://github.com/b451c/quickmd/issues/18))
+- [x] Native virtualized document layout — exact heights for every document size, exact ToC/search jumps, reading position kept across zoom/reload/resize
+- [x] Zoom indicator + reset pill, typeset math in PDF/print
 - [x] Definition lists
 - [x] Reading mode (distraction-free)
 

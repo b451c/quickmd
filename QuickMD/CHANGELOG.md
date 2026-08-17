@@ -5,7 +5,9 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.9.0] - 2026-08-17
+
+A "native layout" release: the document body was rebuilt on an AppKit-backed virtualized list with exact, pre-measured heights, which retires the last SwiftUI lazy-stack estimation and makes scrolling, jumping and reading-position preservation exact for every document size. On top of that: Reading Mode, definition lists, a zoom indicator, typeset math in PDF/print, and the hover-pill fix contributed by [@Coriou](https://github.com/Coriou) (#20). Thank you!
 
 ### Changed
 - **Document layout rebuilt on a native virtualized list:** The document body is now an AppKit table of blocks with exact, pre-measured heights (text, quotes, alerts and code are measured off the main thread with the same TextKit layout the views use; headings, tables, math, images and diagrams settle once when they appear). Every document size takes the same path — no more lazy-stack size estimation for large files — so wheel scrolling can no longer live-lock, Table of Contents and search jumps land exactly, and the reading position is preserved across zoom, theme changes, window/sidebar resizes and auto-reload. The 1.8.0 layout remains available for one release via `defaults write pl.falami.studio.QuickMD QMDLegacyBlockLayout -bool YES`.
