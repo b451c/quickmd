@@ -229,6 +229,7 @@ struct MarkdownView: View {
                         copyToClipboard(currentText)
                     }
                 }
+                .chromeHoverCluster()
                 .padding(.top, isSearchVisible ? 44 : 8)
                 .padding(.trailing, 24)
             }
