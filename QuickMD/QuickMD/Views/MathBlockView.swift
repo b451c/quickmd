@@ -11,13 +11,13 @@ struct MathBlockView: View {
 
     /// Font size and padding — see `BlockLayout.Math` (shared with
     /// `BlockHeightMeasurer`).
-    typealias Layout = BlockLayout.Math
+    typealias Metrics = BlockLayout.Math
 
     var body: some View {
-        MathLabelView(latex: latex, fontSize: Layout.fontSize * fontScale,
+        MathLabelView(latex: latex, fontSize: Metrics.fontSize * fontScale,
                       textColor: NSColor(theme.textColor))
             .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.vertical, Layout.verticalPadding)
+            .padding(.vertical, Metrics.verticalPadding)
     }
 }
 

@@ -43,9 +43,10 @@ struct CodeBlockView: View {
     @State private var isHovered = false
     @State private var justCopied = false
 
-    /// Paddings, the language-label font size and the code font size — see
-    /// `BlockLayout.Code` (shared with `BlockHeightMeasurer`).
-    typealias Layout = BlockLayout.Code
+    /// Paddings, the language-label font size, the code font size and the copy
+    /// button's metrics — see `BlockLayout.Code` (shared with
+    /// `BlockHeightMeasurer`).
+    typealias Metrics = BlockLayout.Code
 
     private var cacheKey: String {
         // theme.name + isDark + code font + a content fingerprint. isDark
@@ -67,13 +68,21 @@ struct CodeBlockView: View {
         return ZStack(alignment: .topTrailing) {
             VStack(alignment: .leading, spacing: 0) {
                 if !language.isEmpty {
+                    // Pinned to the height BlockHeightMeasurer predicts for it,
+                    // so this row is exact rather than estimated: SwiftUI's own
+                    // single-line Text height is not a documented function of
+                    // NSFont metrics (see BlockLayout.singleLineHeight), and
+                    // lineLimit(1) keeps a long language tag from wrapping into a
+                    // second line the measurer knows nothing about.
                     Text(language)
-                        .font(.system(size: Layout.languageLabelFontSize * fontScale,
+                        .font(.system(size: Metrics.languageLabelFontSize * fontScale,
                                       weight: .medium, design: .monospaced))
                         .foregroundColor(theme.secondaryTextColor)
-                        .padding(.horizontal, Layout.horizontalPadding)
-                        .padding(.top, Layout.languageLabelTopPadding)
-                        .padding(.bottom, Layout.languageLabelBottomPadding)
+                        .lineLimit(1)
+                        .frame(height: Metrics.languageLabelHeight(fontScale: fontScale))
+                        .padding(.horizontal, Metrics.horizontalPadding)
+                        .padding(.top, Metrics.languageLabelTopPadding)
+                        .padding(.bottom, Metrics.languageLabelBottomPadding)
                 }
 
                 CodeTextView(
@@ -81,16 +90,19 @@ struct CodeBlockView: View {
                     searchTerm: searchText,
                     focusedOccurrence: focusedOccurrence
                 )
-                .padding(.horizontal, Layout.horizontalPadding)
-                .padding(.vertical, language.isEmpty ? Layout.verticalPaddingWithoutLanguage
-                                                     : Layout.verticalPaddingWithLanguage)
+                .padding(.horizontal, Metrics.horizontalPadding)
+                .padding(.vertical, language.isEmpty ? Metrics.verticalPaddingWithoutLanguage
+                                                     : Metrics.verticalPaddingWithLanguage)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(theme.codeBackgroundColor)
-            .clipShape(RoundedRectangle(cornerRadius: Layout.cornerRadius))
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadius))
 
             // Hover-to-reveal copy button — the single most common action on a
-            // code block in documentation.
+            // code block in documentation. It stays in the hierarchy when
+            // hidden (only `.opacity` changes), so it is a floor under the
+            // block's height: see `BlockLayout.Code.copyButtonFloorHeight`,
+            // which BlockHeightMeasurer applies from these same constants.
             Button {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(code, forType: .string)
@@ -100,9 +112,9 @@ struct CodeBlockView: View {
                 }
             } label: {
                 Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 11))
+                    .font(.system(size: Metrics.copyButtonIconFontSize))
                     .foregroundColor(justCopied ? .green : .secondary)
-                    .padding(5)
+                    .padding(Metrics.copyButtonIconPadding)
                     .background(theme.backgroundColor.opacity(0.85))
                     .clipShape(Capsule())
             }
@@ -111,7 +123,7 @@ struct CodeBlockView: View {
             .help("Copy code")
             .accessibilityLabel("Copy code")
             .opacity(isHovered || justCopied ? 1 : 0)
-            .padding(6)
+            .padding(Metrics.copyButtonOuterPadding)
         }
         .onHover { hovering in
             isHovered = hovering
@@ -155,7 +167,7 @@ struct CodeBlockView: View {
 
         let result = NSMutableAttributedString(string: code)
         let fullRange = NSRange(location: 0, length: (code as NSString).length)
-        let baseFont = theme.fonts.appKit(size: Layout.codeFontSize * fontScale, monospaced: true)
+        let baseFont = theme.fonts.appKit(size: Metrics.codeFontSize * fontScale, monospaced: true)
 
         result.addAttribute(.font, value: baseFont, range: fullRange)
         result.addAttribute(.foregroundColor, value: NSColor(theme.textColor), range: fullRange)

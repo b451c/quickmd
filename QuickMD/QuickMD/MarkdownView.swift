@@ -113,7 +113,7 @@ struct MarkdownView: View {
     /// applied in `blockView(for:)` — see `BlockLayout.Document`. Shared with
     /// `BlockHeightMeasurer`: those outer paddings are part of a block's row
     /// height, so both sides have to read the same numbers.
-    typealias Layout = BlockLayout.Document
+    typealias Metrics = BlockLayout.Document
 
     /// Set with each parse from the document size (see `eagerLayoutByteLimit`).
     @State private var useEagerLayout = true
@@ -179,14 +179,14 @@ struct MarkdownView: View {
                         // Sprint 4.2 attempt (constraints.md, bug B).
                         Group {
                             if useEagerLayout {
-                                VStack(alignment: .leading, spacing: Layout.blockSpacing) { blockList }
+                                VStack(alignment: .leading, spacing: Metrics.blockSpacing) { blockList }
                             } else {
-                                LazyVStack(alignment: .leading, spacing: Layout.blockSpacing) { blockList }
+                                LazyVStack(alignment: .leading, spacing: Metrics.blockSpacing) { blockList }
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, Layout.contentHorizontalPadding)
-                        .padding(.vertical, Layout.contentVerticalPadding)
+                        .padding(.horizontal, Metrics.contentHorizontalPadding)
+                        .padding(.vertical, Metrics.contentVerticalPadding)
                     }
                     .onChange(of: scrollTrigger) { _ in
                         scrollToCurrentMatch(proxy: proxy)
@@ -494,16 +494,16 @@ struct MarkdownView: View {
             case .table(let headers, let rows, let alignments):
                 TableBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme,
                                fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc)
-                    .padding(.vertical, Layout.tableOuterVerticalPadding)
+                    .padding(.vertical, Metrics.tableOuterVerticalPadding)
 
             case .codeBlock(let code, let language):
                 CodeBlockView(code: code, language: language, theme: theme,
                               fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc)
-                    .padding(.vertical, Layout.codeOuterVerticalPadding)
+                    .padding(.vertical, Metrics.codeOuterVerticalPadding)
 
             case .image(let url, let alt):
                 ImageBlockView(url: url, alt: alt, theme: theme, documentURL: documentURL)
-                    .padding(.vertical, Layout.imageOuterVerticalPadding)
+                    .padding(.vertical, Metrics.imageOuterVerticalPadding)
 
             case .blockquote(let content, let level):
                 BlockquoteView(blockId: block.id, content: content, level: level, theme: theme,
@@ -516,7 +516,7 @@ struct MarkdownView: View {
                                fontScale: scale, contentVersion: contentVersion,
                                searchText: searchText, focusedOccurrence: focusedOcc,
                                onLink: { handleLinkActivation($0) })
-                    .padding(.vertical, Layout.alertOuterVerticalPadding)
+                    .padding(.vertical, Metrics.alertOuterVerticalPadding)
 
             case .heading(let level, let title, _):
                 HeadingBlockView(
@@ -537,12 +537,12 @@ struct MarkdownView: View {
 
             case .mathBlock(let latex):
                 MathBlockView(latex: latex, theme: theme, fontScale: scale)
-                    .padding(.vertical, Layout.mathOuterVerticalPadding)
+                    .padding(.vertical, Metrics.mathOuterVerticalPadding)
 
             case .mermaidDiagram(let source):
                 MermaidBlockView(blockId: block.id, source: source, theme: theme,
                                  heightCache: heightCache)
-                    .padding(.vertical, Layout.mermaidOuterVerticalPadding)
+                    .padding(.vertical, Metrics.mermaidOuterVerticalPadding)
             }
         }
 

@@ -16,6 +16,10 @@ struct AlertBlockView: View {
     var contentVersion: Int = 0
     var searchText: String = ""
     var focusedOccurrence: Int? = nil
+    /// The body's converted string, already built off-main by
+    /// `BlockHeightMeasurer` — forwarded straight to `TextBlockView` (D12).
+    /// `nil` on the legacy layout path, which converts on demand.
+    var preconverted: NSAttributedString? = nil
     let onLink: (URL) -> Void
 
     /// Cached renderer - created once per view (same pattern as BlockquoteView)
@@ -24,6 +28,7 @@ struct AlertBlockView: View {
     init(blockId: String, kind: AlertKind, content: String, theme: MarkdownTheme,
          fontScale: CGFloat = 1.0, contentVersion: Int = 0,
          searchText: String = "", focusedOccurrence: Int? = nil,
+         preconverted: NSAttributedString? = nil,
          onLink: @escaping (URL) -> Void) {
         self.blockId = blockId
         self.kind = kind
@@ -33,6 +38,7 @@ struct AlertBlockView: View {
         self.contentVersion = contentVersion
         self.searchText = searchText
         self.focusedOccurrence = focusedOccurrence
+        self.preconverted = preconverted
         self.onLink = onLink
         self.renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
     }
@@ -41,17 +47,22 @@ struct AlertBlockView: View {
 
     /// Paddings, spacing and label font sizes — see `BlockLayout.Alert`
     /// (shared with `BlockHeightMeasurer`).
-    typealias Layout = BlockLayout.Alert
+    typealias Metrics = BlockLayout.Alert
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Layout.stackSpacing) {
-            HStack(spacing: Layout.titleRowSpacing) {
+        VStack(alignment: .leading, spacing: Metrics.stackSpacing) {
+            // Pinned to the height BlockHeightMeasurer predicts for this row, so
+            // the alert's height is exact rather than estimated: both children
+            // are SwiftUI leaves whose single-line height is not a documented
+            // function of NSFont metrics (see BlockLayout.singleLineHeight).
+            HStack(spacing: Metrics.titleRowSpacing) {
                 Image(systemName: kind.symbolName)
-                    .font(.system(size: Layout.iconFontSize * fontScale, weight: .semibold))
+                    .font(.system(size: Metrics.iconFontSize * fontScale, weight: .semibold))
                 Text(kind.title)
-                    .font(theme.fonts.swiftUI(size: Layout.titleFontSize * fontScale, weight: .semibold))
+                    .font(theme.fonts.swiftUI(size: Metrics.titleFontSize * fontScale, weight: .semibold))
             }
             .foregroundColor(accent)
+            .frame(height: Metrics.titleRowHeight(theme: theme, fontScale: fontScale))
 
             if !content.isEmpty {
                 TextBlockView(
@@ -62,20 +73,21 @@ struct AlertBlockView: View {
                     contentVersion: contentVersion,
                     searchTerm: searchText,
                     focusedOccurrence: focusedOccurrence,
+                    preconverted: preconverted,
                     onLink: onLink
                 )
             }
         }
-        .padding(.horizontal, Layout.horizontalPadding)
-        .padding(.vertical, Layout.verticalPadding)
+        .padding(.horizontal, Metrics.horizontalPadding)
+        .padding(.vertical, Metrics.verticalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(accent.opacity(0.06))
         .overlay(alignment: .leading) {
             Rectangle()
                 .fill(accent)
-                .frame(width: Layout.accentBarWidth)
+                .frame(width: Metrics.accentBarWidth)
         }
-        .clipShape(RoundedRectangle(cornerRadius: Layout.cornerRadius))
+        .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadius))
     }
 
     /// One attributed string for the whole alert body — see

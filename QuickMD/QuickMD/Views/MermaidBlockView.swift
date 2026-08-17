@@ -49,14 +49,14 @@ struct MermaidBlockView: View {
 
     /// Padding, corner radius and the un-measured default height — see
     /// `BlockLayout.Mermaid` (shared with `BlockHeightMeasurer`).
-    typealias Layout = BlockLayout.Mermaid
+    typealias Metrics = BlockLayout.Mermaid
 
     init(blockId: String, source: String, theme: MarkdownTheme, heightCache: BlockHeightCache) {
         self.blockId = blockId
         self.source = source
         self.theme = theme
         self.heightCache = heightCache
-        _diagramHeight = State(initialValue: heightCache.height(for: blockId) ?? Layout.defaultHeight)
+        _diagramHeight = State(initialValue: heightCache.height(for: blockId) ?? Metrics.defaultHeight)
         _snapshot = State(initialValue: MermaidSnapshotStore.image(source: source, isDark: theme.isDark))
     }
 
@@ -86,7 +86,7 @@ struct MermaidBlockView: View {
                     .frame(height: diagramHeight)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: Layout.cornerRadius))
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadius))
 
             Button {
                 showZoom = true
@@ -104,7 +104,7 @@ struct MermaidBlockView: View {
             .opacity(isHovered ? 1 : 0)
             .padding(6)
         }
-        .padding(.vertical, Layout.verticalPadding)
+        .padding(.vertical, Metrics.verticalPadding)
         .onHover { hovering in
             isHovered = hovering
         }

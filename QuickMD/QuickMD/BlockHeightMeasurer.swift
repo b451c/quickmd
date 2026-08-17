@@ -17,8 +17,8 @@ import os
 //     height the placed view reports, to the point. That only holds if the
 //     measurer lays out the IDENTICAL NSAttributedString at the IDENTICAL width
 //     and adds the IDENTICAL chrome — i.e. if there is exactly one definition of
-//     each. The views therefore consume `BlockLayout` (via a `Layout` typealias)
-//     rather than repeating literals.
+//     each. The views therefore consume `BlockLayout` (via a `Metrics`
+//     typealias) rather than repeating literals.
 //  2. `QuickMDTests` has no TEST_HOST; it compiles a hand-picked subset of app
 //     sources directly (see project.pbxproj). The view files are not in that
 //     subset — `TextBlockView.swift` transitively needs the vendored SwiftMath
@@ -29,6 +29,22 @@ import os
 //
 // Nothing here is actor-isolated, and it only touches value types plus TextKit 1
 // objects it creates itself, so it is safe to call from a detached task.
+//
+// THREAD RULE — THE MATH ENGINE IS MAIN-THREAD ONLY.
+//
+// SwiftMath is not thread-safe: `MTMathAtomFactory` reads and lazily populates
+// unsynchronized statics (`supportedLatexSymbols` and friends, some of them
+// dictionaries of reference-type `MTMathAtom`s handed out by reference),
+// `MTFontManager` caches fonts check-then-act, and the main thread is already
+// inside that code displaying math while a background measure would enter it
+// again. So the off-main call passes `math: nil`: every row that needs the
+// engine — a paragraph whose plain text contains inline `$…$`, and every
+// `.mathBlock` — is left at a placeholder height and its index is listed in
+// `MeasuredBlocks.mathPendingRows`, with no `converted` entry. The caller then
+// finishes exactly those rows on the main actor with `measureMathRows` before
+// the table is used for layout. Passing a non-nil engine off the main thread is
+// a data race; only main-actor callers (and the tests, which inject a pure
+// stub) may do it.
 
 #if DEBUG
 // Console.app filter: subsystem == "pl.falami.studio.QuickMD" AND category == "BlockHeights"
@@ -40,8 +56,8 @@ private let heightSignpost = OSSignposter(subsystem: "pl.falami.studio.QuickMD",
 
 /// Every fixed geometry value the block views apply, in one place.
 ///
-/// Each view exposes the namespace it uses as `Layout` (e.g.
-/// `CodeBlockView.Layout.horizontalPadding`) and reads its paddings from here,
+/// Each view exposes the namespace it uses as `Metrics` (e.g.
+/// `CodeBlockView.Metrics.horizontalPadding`) and reads its paddings from here,
 /// so the measurer, the views and the parity tests can never drift apart.
 /// Values are the ones that shipped in 1.8.0 — this is a re-homing, not a
 /// redesign. Points are at 1.0 zoom unless the member takes a `fontScale`.
@@ -82,6 +98,26 @@ enum BlockLayout {
         static let codeFontSize: CGFloat = 13
         static let cornerRadius: CGFloat = 6
 
+        // MARK: Hover-to-copy button
+        //
+        // `CodeBlockView.body` is a `ZStack(alignment: .topTrailing)` whose second
+        // child is the copy button, hidden with `.opacity(0)` — it is ALWAYS in
+        // the hierarchy, so the ZStack is as tall as the taller of the two
+        // children. For a short fence (one line, or an empty one, especially at
+        // small zoom) that is the button, not the code. Its icon font is a fixed
+        // `.system(size:)` — deliberately not multiplied by `fontScale`, like the
+        // heading's copy button — so the floor is one constant for every zoom
+        // level.
+
+        static let copyButtonIconFontSize: CGFloat = 11
+        static let copyButtonIconPadding: CGFloat = 5
+        static let copyButtonOuterPadding: CGFloat = 6
+        /// Fitting height of the copy button as `CodeBlockView` places it:
+        /// an 11 pt `doc.on.doc` (16 pt tall) + 2 × 5 pt icon padding
+        /// + 2 × 6 pt outer padding. Measured with `NSHostingView` and pinned by
+        /// `BlockHeightMeasurerTests.testCodeCopyButtonConstantsMatchTheRealButton`.
+        static let copyButtonFloorHeight: CGFloat = 38
+
         /// The language label is a SwiftUI `Text` in the *system monospaced*
         /// face (not the theme's code family — `CodeBlockView` asks for
         /// `.system(design: .monospaced)`).
@@ -89,6 +125,11 @@ enum BlockLayout {
             .monospacedSystemFont(ofSize: languageLabelFontSize * fontScale, weight: .medium)
         }
 
+        /// Height of the language-label row.
+        ///
+        /// EXACT, not an estimate: `CodeBlockView` pins its label to this value
+        /// (`.lineLimit(1)` + `.frame(height:)`) instead of letting SwiftUI pick
+        /// a single-line height of its own — see `BlockLayout.singleLineHeight`.
         static func languageLabelHeight(fontScale: CGFloat) -> CGFloat {
             BlockLayout.singleLineHeight(for: languageLabelFont(fontScale: fontScale))
         }
@@ -113,8 +154,11 @@ enum BlockLayout {
         static let verticalPadding: CGFloat = 2
 
         /// Width the quote body's text view gets at nesting `level`.
+        /// Clamped — deep nesting in a narrow window takes the raw value
+        /// negative (see `BlockLayout.clampedWidth`).
         static func bodyWidth(contentWidth: CGFloat, level: Int) -> CGFloat {
-            contentWidth - leadingInset - CGFloat(level) * (barWidth + barGap)
+            BlockLayout.clampedWidth(contentWidth - leadingInset
+                                     - CGFloat(level) * (barWidth + barGap))
         }
     }
 
@@ -135,11 +179,13 @@ enum BlockLayout {
 
         /// Height of the icon + title row.
         ///
-        /// NOT exact: both children are SwiftUI leaves, and SwiftUI's single-line
-        /// `Text` height is not a published function of `NSFont` metrics (measured
-        /// deviations of 0…2 pt from `defaultLineHeight`, in both directions,
-        /// depending on point size). `singleLineHeight` is the safe upper bound —
-        /// see its documentation.
+        /// EXACT, not an estimate: both children are SwiftUI leaves whose own
+        /// single-line height is not a published function of `NSFont` metrics
+        /// (measured deviations of 0…2 pt from `defaultLineHeight`, in both
+        /// directions, depending on point size), so `AlertBlockView` pins the
+        /// HStack to this value with `.frame(height:)` rather than letting
+        /// SwiftUI choose. `singleLineHeight` is the safe upper bound of what
+        /// SwiftUI would have chosen — see its documentation.
         static func titleRowHeight(theme: MarkdownTheme, fontScale: CGFloat) -> CGFloat {
             let title = theme.fonts.appKit(size: titleFontSize * fontScale, weight: .semibold)
             let icon = NSFont.systemFont(ofSize: iconFontSize * fontScale, weight: .semibold)
@@ -191,6 +237,11 @@ enum BlockLayout {
     enum Math {
         static let verticalPadding: CGFloat = 8
         static let fontSize: CGFloat = 20
+        /// Height a display-math row starts at when the measurement ran without
+        /// the math engine (the off-main `measure(math: nil)` — see the file
+        /// header), until `measureMathRows` replaces it on the main actor. The
+        /// same 100 pt an unloaded image starts at.
+        static let placeholderHeight: CGFloat = 100
     }
 
     // MARK: Mermaid
@@ -201,6 +252,23 @@ enum BlockLayout {
         static let defaultHeight: CGFloat = 200
         static let cornerRadius: CGFloat = 6
     }
+
+    // MARK: - Derived text widths
+
+    /// Clamps a derived text-container width to a positive value.
+    ///
+    /// Every width the measurer lays text out at is `contentWidth` minus some
+    /// chrome, and `contentWidth` can legitimately be tiny (narrow window with
+    /// both sidebars open) or zero (before the first layout). A non-positive
+    /// container width does not throw — TextKit just breaks after every word, so
+    /// a one-line paragraph "measures" hundreds of points tall, and a negative
+    /// one is undefined territory nothing checks. The views can't go there
+    /// either: SwiftUI's padding/frame chain floors the width it proposes at 0.
+    /// 1 pt is the narrowest column that still behaves like a column.
+    ///
+    /// Every derived width goes through here: text, code, alert body,
+    /// `Quote.bodyWidth`, the heading estimate and the table's cells.
+    static func clampedWidth(_ width: CGFloat) -> CGFloat { max(1, width) }
 
     // MARK: - Single-line height of a SwiftUI `Text`
 
@@ -216,6 +284,12 @@ enum BlockLayout {
     /// too tall shows a hairline gap, a row that is a point too short clips the
     /// view it hosts. Pinned by
     /// `BlockHeightMeasurerTests.testSingleLineHeightNeverUnderestimatesSwiftUIText`.
+    ///
+    /// The two rows built on it — the alert's title row and the code block's
+    /// language label — do not merely get estimated with it: the views PIN
+    /// themselves to it (`.frame(height:)`, plus `.lineLimit(1)` for the label),
+    /// so those rows are exact by construction and the only residue of the
+    /// mismatch is at most a hairline of extra space inside the row.
     static func singleLineHeight(for font: NSFont) -> CGFloat {
         // A fresh layout manager per call: NSLayoutManager is not thread-safe and
         // this runs off-main. Chrome heights are computed once per document in
@@ -232,6 +306,9 @@ enum BlockLayout {
 /// called directly so this file stays free of the vendored SwiftMath sources
 /// (see the file header): production installs `MathRendering.swiftMath`
 /// (`MathBlockView.swift`), the parity tests install a deterministic stub.
+///
+/// `MathRendering.swiftMath` is MAIN-ACTOR-ONLY — see the thread rule in the
+/// file header. An off-main `measure` takes `math: nil` and defers those rows.
 struct MathRendering {
     /// Renders one inline `$…$` segment for an `NSTextAttachment`, or nil when
     /// the LaTeX does not typeset (the caller then falls back to an italic
@@ -420,8 +497,16 @@ struct MeasuredBlocks: @unchecked Sendable {
     /// Keyed by `MarkdownBlock.id`, for the blocks whose text renders through
     /// `TextBlockView` (paragraphs/footnotes, quote bodies, alert bodies).
     let converted: [String: NSAttributedString]
+    /// Rows whose height could not be computed because `measure` was called
+    /// without the math engine (`math: nil` — the off-main call, see the file
+    /// header): paragraphs containing inline `$…$` and `.mathBlock` rows. Their
+    /// `heights` entry is a placeholder and `converted` has no entry for them.
+    /// The caller MUST hand them to `BlockHeightMeasurer.measureMathRows` on the
+    /// main actor before using the table for layout. Empty whenever `measure`
+    /// got a real engine.
+    let mathPendingRows: [Int]
 
-    static let empty = MeasuredBlocks(table: .empty, converted: [:])
+    static let empty = MeasuredBlocks(table: .empty, converted: [:], mathPendingRows: [])
 }
 
 // MARK: - Measurer
@@ -459,22 +544,30 @@ enum BlockHeightMeasurer {
     /// tuple.
     ///
     /// - Parameters:
-    ///   - meta: the parse task's per-text-block metadata. Only `hasInlineMath`
-    ///     is used; a missing entry is classified with the same rule.
     ///   - contentWidth: the width `MarkdownView.blockView(for:)` output gets —
     ///     the list column width minus `2 * Document.contentHorizontalPadding`.
     ///   - heightSeeds: last-known heights (`BlockHeightCache`) used to seed
     ///     Mermaid rows so a re-created diagram doesn't start at the default.
-    ///   - math: see `MathRendering`. Required on purpose: defaulting to
-    ///     `.none` would silently mis-measure every paragraph with inline math
-    ///     and every display-math block.
+    ///   - math: the math engine, or `nil` when the call is NOT on the main
+    ///     thread — see the thread rule in the file header. With `nil`, rows
+    ///     that need the engine come back at a placeholder height, listed in
+    ///     `MeasuredBlocks.mathPendingRows`, for `measureMathRows` to finish on
+    ///     main. `kinds` never depends on this: a row is classified the same way
+    ///     either side of that split. Not defaulted on purpose — an implicit
+    ///     `.none` would silently mis-measure math instead of deferring it.
+    ///
+    /// Whether a paragraph has inline math is decided HERE, with
+    /// `BlockTextConverter.containsInlineMath` — the same function the parse task
+    /// applies for `TextBlockMeta`. The measurer used to accept that flag as a
+    /// parameter, which made it possible for the caller to hand in an answer that
+    /// disagreed with the one the view computes, i.e. to measure a different
+    /// string than the one displayed.
     static func measure(blocks: [MarkdownBlock],
-                        meta: [String: TextBlockMeta],
                         theme: MarkdownTheme,
                         fontScale: CGFloat,
                         contentWidth: CGFloat,
                         heightSeeds: [String: CGFloat] = [:],
-                        math: MathRendering) -> MeasuredBlocks {
+                        math: MathRendering?) -> MeasuredBlocks {
         #if DEBUG
         let signpostID = heightSignpost.makeSignpostID()
         let signpostState = heightSignpost.beginInterval("measureHeights", id: signpostID,
@@ -487,11 +580,29 @@ enum BlockHeightMeasurer {
         let alertTitleRowHeight = BlockLayout.Alert.titleRowHeight(theme: theme, fontScale: fontScale)
         let codeChromeWithLanguage = BlockLayout.Code.verticalChrome(hasLanguage: true, fontScale: fontScale)
         let codeChromeWithoutLanguage = BlockLayout.Code.verticalChrome(hasLanguage: false, fontScale: fontScale)
+        let mathChrome = 2 * BlockLayout.Math.verticalPadding
+            + 2 * BlockLayout.Document.mathOuterVerticalPadding
+        // Stand-in for a paragraph deferred by `math: nil` — one body line, so a
+        // pending row is at least the right order of magnitude on screen if it is
+        // ever shown before `measureMathRows` runs.
+        let pendingParagraphHeight = BlockLayout.singleLineHeight(
+            for: theme.fonts.appKit(size: 14 * fontScale))
         let renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
+
+        // Derived widths, clamped once (see `BlockLayout.clampedWidth`).
+        let textWidth = BlockLayout.clampedWidth(contentWidth)
+        let codeWidth = BlockLayout.clampedWidth(contentWidth - 2 * BlockLayout.Code.horizontalPadding)
+        let alertBodyWidth = BlockLayout.clampedWidth(contentWidth - 2 * BlockLayout.Alert.horizontalPadding)
+
+        // `makeNSAttributedString` takes an engine even for strings that have no
+        // math in them; those calls never reach it (`hasInlineMath: false`, and
+        // paragraphs that do have math are deferred instead when `math` is nil).
+        let engine = math ?? .none
 
         var heights: [CGFloat] = []
         var kinds: [RowKind] = []
         var converted: [String: NSAttributedString] = [:]
+        var mathPendingRows: [Int] = []
         heights.reserveCapacity(blocks.count)
         kinds.reserveCapacity(blocks.count)
 
@@ -499,22 +610,30 @@ enum BlockHeightMeasurer {
             switch block.content {
 
             case .text(let attributed):
-                let hasMath = meta[block.id]?.hasInlineMath
-                    ?? BlockTextConverter.containsInlineMath(String(attributed.characters))
-                let ns = BlockTextConverter.makeNSAttributedString(
-                    from: attributed, hasInlineMath: hasMath,
-                    theme: theme, fontScale: fontScale, math: math)
-                converted[block.id] = ns
-                heights.append(exactHeight(text: ns, width: contentWidth))
-                kinds.append(.exact)
+                let hasMath = BlockTextConverter.containsInlineMath(String(attributed.characters))
+                if hasMath, math == nil {
+                    // Building the string means rendering `$…$` segments through
+                    // the math engine, which this thread may not touch.
+                    mathPendingRows.append(heights.count)
+                    heights.append(pendingParagraphHeight)
+                    kinds.append(.exact)
+                } else {
+                    let ns = BlockTextConverter.makeNSAttributedString(
+                        from: attributed, hasInlineMath: hasMath,
+                        theme: theme, fontScale: fontScale, math: engine)
+                    converted[block.id] = ns
+                    heights.append(exactHeight(text: ns, width: textWidth))
+                    kinds.append(.exact)
+                }
 
             case .blockquote(let content, let level):
                 // The quote body is inline-rendered exactly as BlockquoteView
                 // does it, and passed to TextBlockView WITHOUT inline math (the
-                // view does not opt in), so we must not opt in either.
+                // view does not opt in), so we must not opt in either — which is
+                // also why a quote never needs the math engine.
                 let ns = BlockTextConverter.makeNSAttributedString(
                     from: renderer.renderQuotedBody(content), hasInlineMath: false,
-                    theme: theme, fontScale: fontScale, math: math)
+                    theme: theme, fontScale: fontScale, math: engine)
                 converted[block.id] = ns
                 let width = BlockLayout.Quote.bodyWidth(contentWidth: contentWidth, level: level)
                 heights.append(exactHeight(text: ns, width: width)
@@ -528,21 +647,22 @@ enum BlockHeightMeasurer {
                 if !content.isEmpty {
                     let ns = BlockTextConverter.makeNSAttributedString(
                         from: renderer.renderQuotedBody(content), hasInlineMath: false,
-                        theme: theme, fontScale: fontScale, math: math)
+                        theme: theme, fontScale: fontScale, math: engine)
                     converted[block.id] = ns
                     height += BlockLayout.Alert.stackSpacing
-                        + exactHeight(text: ns,
-                                      width: contentWidth - 2 * BlockLayout.Alert.horizontalPadding)
+                        + exactHeight(text: ns, width: alertBodyWidth)
                 }
                 heights.append(height)
                 kinds.append(.exact)
 
             case .codeBlock(let code, let language):
                 let ns = BlockTextConverter.plainCode(code, theme: theme, fontScale: fontScale)
-                let inner = exactHeight(text: ns,
-                                        width: contentWidth - 2 * BlockLayout.Code.horizontalPadding)
-                heights.append(inner
-                               + (language.isEmpty ? codeChromeWithoutLanguage : codeChromeWithLanguage)
+                let inner = exactHeight(text: ns, width: codeWidth)
+                let stack = inner
+                    + (language.isEmpty ? codeChromeWithoutLanguage : codeChromeWithLanguage)
+                // The always-present copy button is the ZStack's other child, so
+                // it is a floor under the row — see `Code.copyButtonFloorHeight`.
+                heights.append(max(stack, BlockLayout.Code.copyButtonFloorHeight)
                                + 2 * BlockLayout.Document.codeOuterVerticalPadding)
                 kinds.append(.exact)
 
@@ -558,12 +678,20 @@ enum BlockHeightMeasurer {
                 kinds.append(.reported)
 
             case .mathBlock(let latex):
-                heights.append(math.displayHeight(latex, theme, fontScale)
-                               + 2 * BlockLayout.Math.verticalPadding
-                               + 2 * BlockLayout.Document.mathOuterVerticalPadding)
+                if let math {
+                    heights.append(math.displayHeight(latex, theme, fontScale) + mathChrome)
+                } else {
+                    mathPendingRows.append(heights.count)
+                    heights.append(BlockLayout.Math.placeholderHeight + mathChrome)
+                }
                 kinds.append(.reported)
 
             case .image:
+                // Only the image itself: when `alt` is non-empty the view's body
+                // is a two-view tuple (image + italic caption `Text`), so the
+                // placed view reports a taller row than this. It is `.reported`
+                // precisely because the real size — decoded bitmap, caption or
+                // no caption — only exists once the view is placed.
                 heights.append(BlockLayout.ImageBlock.placeholderHeight
                                + 2 * BlockLayout.Document.imageOuterVerticalPadding)
                 kinds.append(.reported)
@@ -579,12 +707,87 @@ enum BlockHeightMeasurer {
         #if DEBUG
         let elapsedMS = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
         heightSignpost.endInterval("measureHeights", signpostState)
-        heightLog.debug("measureHeights: \(blocks.count) blocks, width=\(contentWidth, format: .fixed(precision: 1)), \(elapsedMS, format: .fixed(precision: 2)) ms")
+        heightLog.debug("measureHeights: \(blocks.count) blocks, width=\(contentWidth, format: .fixed(precision: 1)), \(mathPendingRows.count) math rows deferred, \(elapsedMS, format: .fixed(precision: 2)) ms")
         #endif
 
         return MeasuredBlocks(
             table: BlockHeightTable(heights: heights, kinds: kinds, contentWidth: contentWidth),
-            converted: converted)
+            converted: converted,
+            mathPendingRows: mathPendingRows)
+    }
+
+    /// Finishes the rows an off-main `measure(math: nil)` deferred.
+    ///
+    /// `@MainActor` because this is the only place in the measurement path
+    /// allowed to touch the math engine (thread rule in the file header). The
+    /// caller runs it after the background pass lands, before the table is used
+    /// for layout.
+    ///
+    /// Nothing else about the table changes — same `kinds`, same `contentWidth`,
+    /// every other height and converted string carried over — so
+    /// `measureMathRows(m.mathPendingRows, in: m, …, math: engine)` equals a
+    /// straight `measure(…, math: engine)`, row for row.
+    ///
+    /// - Parameters:
+    ///   - pending: normally `measured.mathPendingRows`. Indices outside the
+    ///     table, and rows that don't need the engine, are ignored.
+    ///   - blocks: the same array `measured` was produced from (row *i* is
+    ///     `blocks[i]`).
+    ///   - contentWidth: MUST be the width `measured` was produced at.
+    @MainActor
+    static func measureMathRows(_ pending: [Int],
+                                in measured: MeasuredBlocks,
+                                blocks: [MarkdownBlock],
+                                theme: MarkdownTheme,
+                                fontScale: CGFloat,
+                                contentWidth: CGFloat,
+                                math: MathRendering) -> MeasuredBlocks {
+        guard !pending.isEmpty else {
+            return MeasuredBlocks(table: measured.table, converted: measured.converted,
+                                  mathPendingRows: [])
+        }
+
+        #if DEBUG
+        let signpostID = heightSignpost.makeSignpostID()
+        let signpostState = heightSignpost.beginInterval("measureMathRows", id: signpostID,
+                                                         "rows=\(pending.count)")
+        defer { heightSignpost.endInterval("measureMathRows", signpostState) }
+        #endif
+
+        var heights = measured.table.heights
+        var converted = measured.converted
+        let textWidth = BlockLayout.clampedWidth(contentWidth)
+
+        for index in pending {
+            guard index >= 0, index < heights.count, index < blocks.count else { continue }
+            let block = blocks[index]
+            switch block.content {
+            case .text(let attributed):
+                // Re-derive the flag rather than assuming it: the row is pending
+                // *because* this test was true, and re-running it guarantees the
+                // same string `measure` would have built with a live engine.
+                let hasMath = BlockTextConverter.containsInlineMath(String(attributed.characters))
+                let ns = BlockTextConverter.makeNSAttributedString(
+                    from: attributed, hasInlineMath: hasMath,
+                    theme: theme, fontScale: fontScale, math: math)
+                converted[block.id] = ns
+                heights[index] = exactHeight(text: ns, width: textWidth)
+
+            case .mathBlock(let latex):
+                heights[index] = math.displayHeight(latex, theme, fontScale)
+                    + 2 * BlockLayout.Math.verticalPadding
+                    + 2 * BlockLayout.Document.mathOuterVerticalPadding
+
+            default:
+                continue
+            }
+        }
+
+        return MeasuredBlocks(
+            table: BlockHeightTable(heights: heights, kinds: measured.table.kinds,
+                                    contentWidth: measured.table.contentWidth),
+            converted: converted,
+            mathPendingRows: [])
     }
 
     // MARK: - Estimates for the reported kinds
@@ -601,9 +804,9 @@ enum BlockHeightMeasurer {
         let attributed = renderer.renderHeader(title, level: level)
         let ns = (try? NSAttributedString(attributed, including: \.appKit))
             ?? NSAttributedString(string: title)
-        let textWidth = contentWidth
-            - BlockLayout.Heading.copyButtonSpacing
-            - BlockLayout.Heading.copyButtonWidth
+        let textWidth = BlockLayout.clampedWidth(contentWidth
+                                                 - BlockLayout.Heading.copyButtonSpacing
+                                                 - BlockLayout.Heading.copyButtonWidth)
         return max(exactHeight(text: ns, width: textWidth), BlockLayout.Heading.copyButtonHeight)
     }
 
@@ -618,7 +821,7 @@ enum BlockHeightMeasurer {
         let showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         let dividers = CGFloat(columnCount - 1) * BlockLayout.Table.dividerWidth
         let columnWidth = (contentWidth - dividers) / CGFloat(columnCount)
-        let cellWidth = max(1, columnWidth - 2 * BlockLayout.Table.cellHorizontalPadding)
+        let cellWidth = BlockLayout.clampedWidth(columnWidth - 2 * BlockLayout.Table.cellHorizontalPadding)
         // Floor: an empty cell still occupies one line in SwiftUI, where an
         // empty text container reports no used height.
         let minCellHeight = BlockLayout.singleLineHeight(

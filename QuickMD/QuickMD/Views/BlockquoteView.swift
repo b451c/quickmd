@@ -14,6 +14,10 @@ struct BlockquoteView: View {
     var contentVersion: Int = 0
     var searchText: String = ""
     var focusedOccurrence: Int? = nil
+    /// The body's converted string, already built off-main by
+    /// `BlockHeightMeasurer` — forwarded straight to `TextBlockView` (D12).
+    /// `nil` on the legacy layout path, which converts on demand.
+    var preconverted: NSAttributedString? = nil
     let onLink: (URL) -> Void
 
     /// Cached renderer - created once per view
@@ -22,6 +26,7 @@ struct BlockquoteView: View {
     init(blockId: String, content: String, level: Int, theme: MarkdownTheme,
          fontScale: CGFloat = 1.0, contentVersion: Int = 0,
          searchText: String = "", focusedOccurrence: Int? = nil,
+         preconverted: NSAttributedString? = nil,
          onLink: @escaping (URL) -> Void) {
         self.blockId = blockId
         self.content = content
@@ -31,13 +36,14 @@ struct BlockquoteView: View {
         self.contentVersion = contentVersion
         self.searchText = searchText
         self.focusedOccurrence = focusedOccurrence
+        self.preconverted = preconverted
         self.onLink = onLink
         self.renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
     }
 
     /// Bar width + gap per nesting level, quote indent, vertical padding — see
     /// `BlockLayout.Quote` (shared with `BlockHeightMeasurer`).
-    typealias Layout = BlockLayout.Quote
+    typealias Metrics = BlockLayout.Quote
 
     var body: some View {
         // The quote body is the layout root; the level bars are an overlay,
@@ -55,20 +61,21 @@ struct BlockquoteView: View {
             contentVersion: contentVersion,
             searchTerm: searchText,
             focusedOccurrence: focusedOccurrence,
+            preconverted: preconverted,
             onLink: onLink
         )
-        .padding(.leading, CGFloat(level) * (Layout.barWidth + Layout.barGap))
+        .padding(.leading, CGFloat(level) * (Metrics.barWidth + Metrics.barGap))
         .overlay(alignment: .leading) {
-            HStack(spacing: Layout.barGap) {
+            HStack(spacing: Metrics.barGap) {
                 ForEach(0..<level, id: \.self) { _ in
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(theme.blockquoteColor.opacity(0.5))
-                        .frame(width: Layout.barWidth)
+                        .frame(width: Metrics.barWidth)
                 }
             }
         }
-        .padding(.leading, Layout.leadingInset)
-        .padding(.vertical, Layout.verticalPadding)
+        .padding(.leading, Metrics.leadingInset)
+        .padding(.vertical, Metrics.verticalPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

@@ -51,7 +51,7 @@ struct TableBlockView: View, TableAlignmentProvider {
 
     /// Cell paddings, divider/separator thickness and the cell font size — see
     /// `BlockLayout.Table` (shared with `BlockHeightMeasurer`).
-    typealias Layout = BlockLayout.Table
+    typealias Metrics = BlockLayout.Table
 
     init(headers: [String], rows: [[String]], alignments: [TextAlignment], theme: MarkdownTheme,
          fontScale: CGFloat = 1.0, searchText: String = "", focusedOccurrence: Int? = nil) {
@@ -83,25 +83,25 @@ struct TableBlockView: View, TableAlignmentProvider {
                         let localFocused = localFocusedOccurrence(cellOffset: cellOffsets.headerOffsets[index],
                                                                    cellText: header)
                         Text(searchText.isEmpty ? rendered : searchHighlight(rendered, term: searchText, focusedOccurrence: localFocused))
-                            .font(theme.fonts.swiftUI(size: Layout.cellFontSize * fontScale, weight: .semibold))
+                            .font(theme.fonts.swiftUI(size: Metrics.cellFontSize * fontScale, weight: .semibold))
                             .foregroundColor(theme.textColor)
                             .multilineTextAlignment(textAlignmentFor(index))
                             .frame(maxWidth: .infinity, alignment: alignmentFor(index))
-                            .padding(.horizontal, Layout.cellHorizontalPadding)
-                            .padding(.vertical, Layout.headerCellVerticalPadding)
+                            .padding(.horizontal, Metrics.cellHorizontalPadding)
+                            .padding(.vertical, Metrics.headerCellVerticalPadding)
 
                         // Inline vertical divider (except after last column)
                         if index < columnCount - 1 {
                             Rectangle()
                                 .fill(theme.borderColor)
-                                .frame(width: Layout.dividerWidth)
+                                .frame(width: Metrics.dividerWidth)
                         }
                     }
                 }
                 .background(theme.headerBackgroundColor)
 
                 // Header separator
-                Rectangle().fill(theme.borderColor).frame(height: Layout.separatorHeight)
+                Rectangle().fill(theme.borderColor).frame(height: Metrics.separatorHeight)
             }
 
             // Data rows with inline dividers
@@ -113,32 +113,32 @@ struct TableBlockView: View, TableAlignmentProvider {
                         let localFocused = localFocusedOccurrence(cellOffset: cellOffsets.rowOffsets[rowIndex][colIndex],
                                                                    cellText: cell)
                         Text(searchText.isEmpty ? rendered : searchHighlight(rendered, term: searchText, focusedOccurrence: localFocused))
-                            .font(theme.fonts.swiftUI(size: Layout.cellFontSize * fontScale))
+                            .font(theme.fonts.swiftUI(size: Metrics.cellFontSize * fontScale))
                             .foregroundColor(theme.textColor)
                             .multilineTextAlignment(textAlignmentFor(colIndex))
                             .frame(maxWidth: .infinity, alignment: alignmentFor(colIndex))
-                            .padding(.horizontal, Layout.cellHorizontalPadding)
-                            .padding(.vertical, Layout.cellVerticalPadding)
+                            .padding(.horizontal, Metrics.cellHorizontalPadding)
+                            .padding(.vertical, Metrics.cellVerticalPadding)
 
                         // Inline vertical divider (except after last column)
                         if colIndex < columnCount - 1 {
                             Rectangle()
                                 .fill(theme.borderColor)
-                                .frame(width: Layout.dividerWidth)
+                                .frame(width: Metrics.dividerWidth)
                         }
                     }
                 }
 
                 // Row separator (except for last row)
                 if rowIndex < rows.count - 1 {
-                    Rectangle().fill(theme.borderColor).frame(height: Layout.separatorHeight)
+                    Rectangle().fill(theme.borderColor).frame(height: Metrics.separatorHeight)
                 }
             }
         }
         .background(theme.backgroundColor)
-        .clipShape(RoundedRectangle(cornerRadius: Layout.cornerRadius))
-        .overlay(RoundedRectangle(cornerRadius: Layout.cornerRadius)
-            .stroke(theme.borderColor, lineWidth: Layout.borderWidth))
+        .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadius))
+        .overlay(RoundedRectangle(cornerRadius: Metrics.cornerRadius)
+            .stroke(theme.borderColor, lineWidth: Metrics.borderWidth))
     }
 
     /// Header cell at index, or "" when the header row is shorter than the column count

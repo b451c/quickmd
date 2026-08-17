@@ -23,11 +23,11 @@ struct HeadingBlockView: View {
     /// Copy-button spacing and icon metrics — see `BlockLayout.Heading`
     /// (shared with `BlockHeightMeasurer`, which subtracts the button from the
     /// width the title wraps at).
-    typealias Layout = BlockLayout.Heading
+    typealias Metrics = BlockLayout.Heading
 
     var body: some View {
         let headingAttr = MarkdownRenderer(theme: theme, fontScale: fontScale).renderHeader(title, level: level)
-        HStack(alignment: .firstTextBaseline, spacing: Layout.copyButtonSpacing) {
+        HStack(alignment: .firstTextBaseline, spacing: Metrics.copyButtonSpacing) {
             if searchText.isEmpty {
                 Text(headingAttr)
             } else {
@@ -38,9 +38,9 @@ struct HeadingBlockView: View {
                 onCopySection()
             } label: {
                 Image(systemName: "doc.on.doc")
-                    .font(.system(size: Layout.copyButtonIconFontSize))
+                    .font(.system(size: Metrics.copyButtonIconFontSize))
                     .foregroundColor(.secondary.opacity(0.7))
-                    .padding(Layout.copyButtonIconPadding)
+                    .padding(Metrics.copyButtonIconPadding)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
