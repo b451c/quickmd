@@ -11,7 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Document layout rebuilt on a native virtualized list:** The document body is now an AppKit table of blocks with exact, pre-measured heights (text, quotes, alerts and code are measured off the main thread with the same TextKit layout the views use; headings, tables, math, images and diagrams settle once when they appear). Every document size takes the same path — no more lazy-stack size estimation for large files — so wheel scrolling can no longer live-lock, Table of Contents and search jumps land exactly, and the reading position is preserved across zoom, theme changes, window/sidebar resizes and auto-reload. The 1.8.0 layout remains available for one release via `defaults write pl.falami.studio.QuickMD QMDLegacyBlockLayout -bool YES`.
 - **Edit / Copy pills:** hovering the top-right pills no longer shoves the neighbouring pill out from under the pointer — a pill expands when the pointer touches it and every touched pill stays open until the pointer leaves the group. Contributed by [@Coriou](https://github.com/Coriou) (#20).
 
+### Added
+- **Zoom indicator:** ⌘+ / ⌘− / ⌘0 announce the new level ("Zoom 120%"), and while a document is zoomed a small "120%" pill sits next to Edit / Copy — hover shows "Reset zoom", click returns to 100%.
+- Table of Contents entries highlight on hover, matching the Recent Documents sidebar.
+- The Export as PDF panel suggests the document's file name instead of "document.pdf".
+
 ### Fixed
+- **Math in PDF and print:** display math (`$$…$$`) exported as a yellow placeholder and inline `$…$` as raw source since the vector PDF export (1.7.0). Both now render as typeset math — display math centred, inline math sitting on the text baseline.
 - Blank lines between two blockquotes (or any two non-text blocks) no longer render as an empty ~42 pt text block.
 - Support pill (GitHub build) keeps its dimmed idle state after the pill refactor.
 

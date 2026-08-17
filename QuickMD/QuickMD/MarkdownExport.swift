@@ -95,8 +95,8 @@ struct MarkdownPrintableView: View {
             ForEach(lightBlocks) { block in
                 switch block.content {
                 case .text(let attributedString):
-                    // Force black text color
-                    Text(attributedString)
+                    // Force black text color; inline $math$ as images (PrintableMath)
+                    PrintableMath.text(from: attributedString)
                         .foregroundColor(.black)
 
                 case .table(let headers, let rows, let alignments):
@@ -125,7 +125,7 @@ struct MarkdownPrintableView: View {
                         .foregroundColor(.black)
 
                 case .mathBlock(let latex):
-                    MathBlockView(latex: latex, theme: MarkdownTheme.theme(named: ThemeName.auto, colorScheme: .light))
+                    PrintableMathBlockView(latex: latex)
                         .padding(.vertical, 4)
 
                 case .mermaidDiagram(let source):
@@ -325,7 +325,7 @@ struct MarkdownPrintableBlockView: View {
         Group {
             switch block.content {
             case .text(let attributedString):
-                Text(attributedString)
+                PrintableMath.text(from: attributedString)
                     .foregroundColor(.black)
 
             case .table(let headers, let rows, let alignments):
@@ -348,7 +348,7 @@ struct MarkdownPrintableBlockView: View {
                     .foregroundColor(.black)
 
             case .mathBlock(let latex):
-                MathBlockView(latex: latex, theme: MarkdownTheme.theme(named: ThemeName.auto, colorScheme: .light))
+                PrintableMathBlockView(latex: latex)
 
             case .mermaidDiagram(let source):
                 if let image = mermaidImages[source] {
@@ -707,6 +707,87 @@ class PrintManager {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+}
+
+
+// MARK: - Math in print / PDF
+
+/// `ImageRenderer` (vector PDF, print) draws any `NSViewRepresentable` as a
+/// yellow "unsupported" placeholder, so the printable views must never host
+/// `MTMathUILabel`; and SwiftUI `Text` drops `NSTextAttachment`, so inline math
+/// cannot ride the attachment the on-screen `NSTextView` uses either. Both go
+/// through `MathImage` → SwiftUI `Image` instead: display math as a centred
+/// image block, inline math as `Text(Image)` runs interpolated into the
+/// paragraph, sitting on the text baseline.
+enum PrintableMath {
+    static func displayImage(_ latex: String) -> NSImage? {
+        var mathImage = MathImage(latex: latex, fontSize: BlockLayout.Math.fontSize, textColor: .black)
+        let (error, image, _) = mathImage.asImage()
+        return error == nil ? image : nil
+    }
+
+    static func inlineImage(_ latex: String) -> (image: NSImage, descent: CGFloat)? {
+        var mathImage = MathImage(latex: latex, fontSize: 14, textColor: .black,
+                                  labelMode: .text, textAlignment: .left)
+        let (error, image, info) = mathImage.asImage()
+        guard error == nil, let image else { return nil }
+        return (image, info?.descent ?? 0)
+    }
+
+    /// The paragraph as SwiftUI `Text`, with every `$…$` segment replaced by its
+    /// rendered image (or an italic literal when it does not typeset). Same
+    /// segmentation as `BlockTextConverter.makeNSAttributedString`, so screen and
+    /// PDF agree on what is math.
+    static func text(from attributed: AttributedString) -> Text {
+        let plain = String(attributed.characters)
+        guard BlockTextConverter.containsInlineMath(plain) else { return Text(attributed) }
+
+        var result = Text("")
+        var index = attributed.startIndex
+        for segment in InlineMathSegmenter.split(plain) {
+            switch segment {
+            case .text(let str):
+                if let end = attributed.characters.index(index, offsetBy: str.count,
+                                                         limitedBy: attributed.endIndex) {
+                    result = result + Text(AttributedString(attributed[index..<end]))
+                    index = end
+                }
+            case .math(let latex):
+                if let end = attributed.characters.index(index, offsetBy: latex.count + 2,
+                                                         limitedBy: attributed.endIndex) {
+                    index = end
+                }
+                if let rendered = inlineImage(latex) {
+                    // Sit the image on the baseline: its own descent goes below.
+                    result = result + Text(Image(nsImage: rendered.image)).baselineOffset(-rendered.descent)
+                } else {
+                    result = result + Text(latex).italic()
+                }
+            }
+        }
+        return result
+    }
+}
+
+/// Display math for print / PDF (see `PrintableMath`). Falls back to the
+/// LaTeX source in monospace when SwiftMath cannot typeset it.
+struct PrintableMathBlockView: View {
+    let latex: String
+
+    var body: some View {
+        Group {
+            if let image = PrintableMath.displayImage(latex) {
+                Image(nsImage: image)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            } else {
+                Text(latex)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundColor(.black)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.vertical, BlockLayout.Math.verticalPadding)
     }
 }
 

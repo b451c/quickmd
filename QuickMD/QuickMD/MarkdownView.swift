@@ -309,6 +309,12 @@ struct MarkdownView: View {
             }
             .overlay(alignment: .topTrailing) {
                 HStack(spacing: 8) {
+                    if fontScale != 1.0 {
+                        ZoomResetButton(theme: theme, fontScale: fontScale) {
+                            applyZoom(.actualSize)
+                        }
+                        .transition(.opacity)
+                    }
                     if documentURL != nil {
                         EditInEditorButton(theme: theme) {
                             openInExternalEditor()
@@ -318,6 +324,7 @@ struct MarkdownView: View {
                         copyToClipboard(currentText)
                     }
                 }
+                .animation(.easeInOut(duration: 0.15), value: fontScale != 1.0)
                 .chromeHoverCluster()
                 .padding(.top, isSearchVisible ? 44 : 8)
                 .padding(.trailing, 24)
@@ -409,7 +416,7 @@ struct MarkdownView: View {
         .focusedSceneValue(\.copyDocumentAction, { copyToClipboard(currentText) })
         .focusedSceneValue(\.openInExternalEditorAction, { openInExternalEditor() })
         .focusedSceneValue(\.toggleDocumentListAction, { withAnimation(.easeInOut(duration: 0.2)) { isDocumentListVisible.toggle() } })
-        .focusedSceneValue(\.zoomAction, { zoom in fontScale = zoom.applied(to: fontScale) })
+        .focusedSceneValue(\.zoomAction, { zoom in applyZoom(zoom) })
         .environment(\.openURL, OpenURLAction { url in
             handleLinkActivation(url)
             return .handled
@@ -742,6 +749,15 @@ struct MarkdownView: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         showToast("Copied!")
+    }
+
+    /// ⌘+ / ⌘− / ⌘0 (menu, shortcuts, the zoom pill). Announces the resulting
+    /// level in the toast so the user always knows where the ladder stands;
+    /// the top-right zoom pill keeps showing it while != 100%.
+    private func applyZoom(_ zoom: MarkdownZoom) {
+        let next = zoom.applied(to: fontScale)
+        fontScale = next
+        showToast("Zoom \(Int((next * 100).rounded()))%")
     }
 
     private func showToast(_ message: String) {

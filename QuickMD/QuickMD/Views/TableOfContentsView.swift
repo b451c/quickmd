@@ -58,6 +58,7 @@ private struct ToCEntryRow: View {
     let onSelect: () -> Void
     let onCopy: (() -> Void)?
     @State private var isHovered = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 0) {
@@ -92,6 +93,16 @@ private struct ToCEntryRow: View {
             }
         }
         .padding(.trailing, 8)
+        // Same hover language as the Documents sidebar rows: a quiet rounded
+        // fill, inset 4 pt from the panel edges — the copy button alone was
+        // the only hover cue and it sits at the far right.
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(isHovered ? Color.gray.opacity(0.12) : Color.clear)
+                .padding(.horizontal, 4)
+        )
+        .contentShape(Rectangle())
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.12), value: isHovered)
         .onHover { hovering in
             isHovered = hovering
         }
