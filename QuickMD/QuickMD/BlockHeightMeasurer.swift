@@ -734,6 +734,16 @@ enum BlockHeightMeasurer {
     ///   - blocks: the same array `measured` was produced from (row *i* is
     ///     `blocks[i]`).
     ///   - contentWidth: MUST be the width `measured` was produced at.
+    ///   - reusing: strings a PREVIOUS measurement of the same content already
+    ///     built, keyed by block id — normally the caller's last
+    ///     `MeasuredBlocks.converted`. A width change re-measures the whole
+    ///     document, but it does not change a single character, a font or a math
+    ///     image: only where the text wraps. So for a paragraph found here, the
+    ///     string is taken as-is and only laid out again at the new width,
+    ///     which skips the expensive part — rendering every `$…$` segment
+    ///     through the math engine on the main thread. Pass it ONLY when the
+    ///     content is unchanged (same `contentVersion`, theme and zoom); a new
+    ///     parse must rebuild, so pass nothing.
     @MainActor
     static func measureMathRows(_ pending: [Int],
                                 in measured: MeasuredBlocks,
@@ -741,7 +751,8 @@ enum BlockHeightMeasurer {
                                 theme: MarkdownTheme,
                                 fontScale: CGFloat,
                                 contentWidth: CGFloat,
-                                math: MathRendering) -> MeasuredBlocks {
+                                math: MathRendering,
+                                reusing: [String: NSAttributedString] = [:]) -> MeasuredBlocks {
         guard !pending.isEmpty else {
             return MeasuredBlocks(table: measured.table, converted: measured.converted,
                                   mathPendingRows: [])
@@ -763,6 +774,15 @@ enum BlockHeightMeasurer {
             let block = blocks[index]
             switch block.content {
             case .text(let attributed):
+                if let existing = reusing[block.id] {
+                    // Same characters, same theme, same zoom (the caller only
+                    // reuses within one content version) — so the attachments in
+                    // this string are still the right images and only the wrap
+                    // has to be recomputed.
+                    converted[block.id] = existing
+                    heights[index] = exactHeight(text: existing, width: textWidth)
+                    continue
+                }
                 // Re-derive the flag rather than assuming it: the row is pending
                 // *because* this test was true, and re-running it guarantees the
                 // same string `measure` would have built with a live engine.

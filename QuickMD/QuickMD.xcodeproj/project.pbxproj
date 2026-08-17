@@ -101,6 +101,7 @@
 		A1B2C3D401000069 /* BlockHeightMeasurer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000069 /* BlockHeightMeasurer.swift */; };
 		A1B2C3D40100006A /* BlockHeightMeasurerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */; };
 		A1B2C3D40100006B /* BlockHeightMeasurer.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000069 /* BlockHeightMeasurer.swift */; };
+		A1B2C3D40100006C /* VirtualBlockList.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000006C /* VirtualBlockList.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -111,6 +112,7 @@
 		A1B2C3D400000064 /* FontTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000069 /* BlockHeightMeasurer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockHeightMeasurer.swift; sourceTree = "<group>"; };
 		A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockHeightMeasurerTests.swift; sourceTree = "<group>"; };
+		A1B2C3D40000006C /* VirtualBlockList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualBlockList.swift; sourceTree = "<group>"; };
 		A1B2C3D400000001 /* QuickMDApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickMDApp.swift; sourceTree = "<group>"; };
 		A1B2C3D400000002 /* MarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDocument.swift; sourceTree = "<group>"; };
 		A1B2C3D400000003 /* MarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownView.swift; sourceTree = "<group>"; };
@@ -290,6 +292,7 @@
 				A1B2C3D40000004B /* ExternalEditorPickerView.swift */,
 				A1B2C3D40000004C /* SettingsView.swift */,
 				A1B2C3D400000063 /* FontPickerView.swift */,
+				A1B2C3D40000006C /* VirtualBlockList.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -515,6 +518,7 @@
 				A1B2C3D401000062 /* DocumentFonts.swift in Sources */,
 				A1B2C3D401000063 /* FontPickerView.swift in Sources */,
 				A1B2C3D401000069 /* BlockHeightMeasurer.swift in Sources */,
+				A1B2C3D40100006C /* VirtualBlockList.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

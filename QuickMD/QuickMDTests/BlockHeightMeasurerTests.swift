@@ -727,6 +727,74 @@ final class BlockHeightMeasurerTests: XCTestCase {
         }
     }
 
+    /// A width change re-measures the whole document, and on the main actor the
+    /// expensive part of a math paragraph is rendering its `$…$` segments through
+    /// SwiftMath — which a width change cannot alter. `reusing:` therefore has to
+    /// hand the SAME string back (identity, not just equal contents) and only
+    /// re-lay it out.
+    @MainActor
+    func testMeasureMathRowsReusesSuppliedStringsInsteadOfReRendering() {
+        let blocks = parse(Self.mathDocument)
+        guard let mathRow = mathRowIndices(in: blocks).first(where: {
+            if case .text = blocks[$0].content { return true } else { return false }
+        }) else {
+            XCTFail("fixture stopped containing an inline-math paragraph")
+            return
+        }
+        let mathBlockId = blocks[mathRow].id
+
+        // First pass at 600 pt, with a live (stub) engine: this is what builds the
+        // attachment-bearing string.
+        let atSix = measureWithoutMathEngine(blocks, width: 600)
+        let built = BlockHeightMeasurer.measureMathRows(
+            atSix.mathPendingRows, in: atSix, blocks: blocks, theme: theme,
+            fontScale: 1.0, contentWidth: 600, math: math)
+        guard let builtString = built.converted[mathBlockId] else {
+            XCTFail("no converted string for \(mathBlockId)")
+            return
+        }
+
+        // Second pass at 400 pt, reusing that string. The engine here fails the
+        // test if it is asked to render anything inline: reuse must make the call
+        // unnecessary, not merely cheaper.
+        let refusingEngine = MathRendering(
+            inlineImage: { latex, _, _ in
+                XCTFail("re-rendered inline math \u{201C}\(latex)\u{201D} on a width-only re-measure")
+                return nil
+            },
+            displayHeight: { _, _, _ in 40 })
+        let atFour = measureWithoutMathEngine(blocks, width: 400)
+        let reused = BlockHeightMeasurer.measureMathRows(
+            atFour.mathPendingRows, in: atFour, blocks: blocks, theme: theme,
+            fontScale: 1.0, contentWidth: 400, math: refusingEngine,
+            reusing: built.converted)
+
+        XCTAssertTrue(reused.converted[mathBlockId] === builtString,
+                      "the reused row must keep the very same NSAttributedString")
+        XCTAssertEqual(reused.mathPendingRows, [])
+        // Reused, but re-wrapped: the height is the same string laid out at 400.
+        XCTAssertEqual(reused.table.heights[mathRow],
+                       BlockHeightMeasurer.exactHeight(text: builtString, width: 400),
+                       accuracy: tolerance)
+        // …and identical to a full rebuild at that width, which is the point.
+        let rebuilt = BlockHeightMeasurer.measureMathRows(
+            atFour.mathPendingRows, in: atFour, blocks: blocks, theme: theme,
+            fontScale: 1.0, contentWidth: 400, math: math)
+        XCTAssertEqual(reused.table, rebuilt.table)
+    }
+
+    /// Reuse is keyed per block: a row with no entry still gets built.
+    @MainActor
+    func testMeasureMathRowsBuildsRowsMissingFromReuse() {
+        let blocks = parse(Self.mathDocument)
+        let deferred = measureWithoutMathEngine(blocks, width: 600)
+        let finished = BlockHeightMeasurer.measureMathRows(
+            deferred.mathPendingRows, in: deferred, blocks: blocks, theme: theme,
+            fontScale: 1.0, contentWidth: 600, math: math,
+            reusing: ["nonexistent-block": NSAttributedString(string: "x")])
+        XCTAssertEqual(finished.table, measure(blocks, width: 600).table)
+    }
+
     /// A document with no math needs no second pass at all.
     @MainActor
     func testDocumentWithoutMathHasNothingPending() {

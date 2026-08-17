@@ -21,6 +21,10 @@ final class BlockHeightCache {
     func height(for id: String) -> CGFloat? { heights[id] }
     func set(_ height: CGFloat, for id: String) { heights[id] = height }
     func removeAll() { heights.removeAll() }
+
+    /// A value copy for `BlockHeightMeasurer.measure(heightSeeds:)` — the
+    /// measurer runs off-main and must not read this reference type from there.
+    var snapshot: [String: CGFloat] { heights }
 }
 
 // MARK: - Shared NSTextView Search Highlight

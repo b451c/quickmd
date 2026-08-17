@@ -82,10 +82,33 @@ struct MarkdownView: View {
     /// background parse). Updated in the same transaction as `cachedBlocks`,
     /// so the whole document changes size in one step.
     @State private var renderedFontScale: Double = 1.0
+    /// The virtualized list's height table + pre-converted strings for
+    /// `cachedBlocks`, produced by `BlockHeightMeasurer` (v1.9 D3/D4). Replaced
+    /// wholesale, never merged — except for the single-row patches height
+    /// reports apply (`applyHeightReport`). `.empty` on the legacy path.
+    @State private var measured: MeasuredBlocks = .empty
+    /// Width a block view actually gets, reported by `VirtualBlockList`'s
+    /// coordinator (column width − 2 × horizontal padding). 0 until the list has
+    /// had its first layout — the heights can't be measured before that.
+    @State private var contentWidth: CGFloat = 0
+    /// Current programmatic scroll target for the virtualized list (ToC, search).
+    @State private var scrollRequest: VirtualBlockList.ScrollRequest?
+    @State private var scrollRequestToken: Int = 0
+
+    /// Hidden safety valve for the v1.9 layout change (D9):
+    /// `defaults write pl.falami.studio.QuickMD QMDLegacyBlockLayout -bool YES`
+    /// restores the 1.8.0 `ScrollViewReader` + `VStack`/`LazyVStack` path.
+    /// No UI, documented in constraints.md, removed in 1.10.
+    static let legacyLayoutDefaultsKey = "QMDLegacyBlockLayout"
+
+    /// Read ONCE, at init: switching layout hosts mid-life would tear down the
+    /// whole block list, and this is a debugging escape hatch, not a setting.
+    private let useLegacyLayout: Bool
 
     init(document: MarkdownDocument, documentURL: URL?) {
         self.document = document
         self.documentURL = documentURL
+        self.useLegacyLayout = UserDefaults.standard.bool(forKey: Self.legacyLayoutDefaultsKey)
         _currentText = State(initialValue: document.text)
     }
 
@@ -132,6 +155,30 @@ struct MarkdownView: View {
         let fontScale: Double
     }
 
+    /// Re-measure trigger for the virtualized list: a new parse (`contentVersion`)
+    /// or a new column width. Everything else that changes a height — theme,
+    /// fonts, zoom — goes through a re-parse and therefore bumps `contentVersion`.
+    private struct HeightsIdentity: Equatable {
+        let contentVersion: Int
+        let contentWidth: CGFloat
+    }
+
+    /// The parse task's payload: parser output plus the height table measured at
+    /// the same width, so both land in ONE main-thread transaction (D4).
+    private struct ParsedAndMeasured: @unchecked Sendable {
+        let parsed: ParsedDocument
+        let measured: MeasuredBlocks
+    }
+
+    /// Nothing to show yet: no blocks at all, or blocks whose height table is
+    /// still being measured (the virtualized list keeps its previous content
+    /// until the pair is consistent, so the spinner covers the gap).
+    private var isRenderPending: Bool {
+        if useLegacyLayout { return isParsing && cachedBlocks.isEmpty }
+        return (isParsing && cachedBlocks.isEmpty)
+            || (!cachedBlocks.isEmpty && measured.table.count != cachedBlocks.count)
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             // Recent documents sidebar (leftmost)
@@ -145,7 +192,11 @@ struct MarkdownView: View {
             // Table of Contents sidebar
             if isToCVisible && !headings.isEmpty {
                 TableOfContentsView(headings: headings, onSelect: { targetId in
-                    tocScrollTarget = targetId
+                    if useLegacyLayout {
+                        tocScrollTarget = targetId
+                    } else {
+                        requestScroll(to: targetId, anchor: .top, animated: true)
+                    }
                 }, onCopy: { entry in
                     if let section = SectionExtractor.extractSection(from: currentText, entry: entry, headings: headings) {
                         copyToClipboard(section)
@@ -169,34 +220,59 @@ struct MarkdownView: View {
                     )
                 }
 
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        // Eager VStack for documents up to `eagerLayoutByteLimit`,
-                        // LazyVStack above it — see `useEagerLayout`. Both stacks
-                        // host the same block views: text, headings, blockquotes
-                        // and code render through NSTextView, so neither stack
-                        // has the SwiftUI text-selection overlay that froze the
-                        // Sprint 4.2 attempt (constraints.md, bug B).
-                        Group {
-                            if useEagerLayout {
-                                VStack(alignment: .leading, spacing: Metrics.blockSpacing) { blockList }
-                            } else {
-                                LazyVStack(alignment: .leading, spacing: Metrics.blockSpacing) { blockList }
+                if useLegacyLayout {
+                    // 1.8.0 layout, unchanged — kept for one release behind
+                    // `QMDLegacyBlockLayout` (D9).
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            // Eager VStack for documents up to `eagerLayoutByteLimit`,
+                            // LazyVStack above it — see `useEagerLayout`. Both stacks
+                            // host the same block views: text, headings, blockquotes
+                            // and code render through NSTextView, so neither stack
+                            // has the SwiftUI text-selection overlay that froze the
+                            // Sprint 4.2 attempt (constraints.md, bug B).
+                            Group {
+                                if useEagerLayout {
+                                    VStack(alignment: .leading, spacing: Metrics.blockSpacing) { blockList }
+                                } else {
+                                    LazyVStack(alignment: .leading, spacing: Metrics.blockSpacing) { blockList }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, Metrics.contentHorizontalPadding)
+                            .padding(.vertical, Metrics.contentVerticalPadding)
+                        }
+                        .onChange(of: scrollTrigger) { _ in
+                            scrollToCurrentMatch(proxy: proxy)
+                        }
+                        .onChange(of: tocScrollTarget) { target in
+                            guard let target = target else { return }
+                            tocScrollTarget = nil
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                proxy.scrollTo(target, anchor: .top)
                             }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, Metrics.contentHorizontalPadding)
-                        .padding(.vertical, Metrics.contentVerticalPadding)
                     }
+                } else {
+                    // v1.9 default: our own virtualized list. Exact row heights
+                    // from `measured.table`, one layout path for every document
+                    // size, nothing estimated — see VirtualBlockList.swift.
+                    VirtualBlockList(
+                        blocks: cachedBlocks,
+                        table: measured.table,
+                        contentVersion: contentVersion,
+                        searchText: searchText,
+                        focusedBlockId: focusedBlockId,
+                        focusedOccInBlock: focusedOccInBlock,
+                        scrollRequest: scrollRequest,
+                        contentWidth: $contentWidth,
+                        onHeightReport: { blockId, row, height in
+                            applyHeightReport(blockId: blockId, row: row, height: height)
+                        },
+                        content: { block in AnyView(hostedBlockView(for: block)) }
+                    )
                     .onChange(of: scrollTrigger) { _ in
-                        scrollToCurrentMatch(proxy: proxy)
-                    }
-                    .onChange(of: tocScrollTarget) { target in
-                        guard let target = target else { return }
-                        tocScrollTarget = nil
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            proxy.scrollTo(target, anchor: .top)
-                        }
+                        scrollFocusedMatchIntoView()
                     }
                 }
             }
@@ -272,11 +348,15 @@ struct MarkdownView: View {
                 .padding(16)
             }
             .overlay(alignment: .center) {
-                if isParsing && cachedBlocks.isEmpty {
+                if isRenderPending {
                     HStack(spacing: 8) {
                         ProgressView()
                             .controlSize(.small)
-                        Text("Parsing…")
+                        // Two different waits, and on a big document they are
+                        // long enough to tell apart: the parser turning text into
+                        // blocks, then the measurer turning blocks into row
+                        // heights (the virtual path only).
+                        Text(isParsing ? "Parsing…" : "Rendering…")
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
                     }
@@ -330,7 +410,11 @@ struct MarkdownView: View {
             let currentTheme = theme
             isParsing = true
             let scale = CGFloat(fontScale)
-            let parsed: ParsedDocument = await Task.detached(priority: .userInitiated) {
+            // The width the list will lay the blocks out at. 0 before the host's
+            // first layout — then the heights task below picks it up as soon as
+            // the coordinator reports one.
+            let width = useLegacyLayout ? 0 : contentWidth
+            let out: ParsedAndMeasured = await Task.detached(priority: .userInitiated) {
                 let blocks = MarkdownBlockParser(theme: currentTheme, fontScale: scale).parse(text)
                 // Pre-compute per-text-block metadata on the background thread so the
                 // main thread never has to do it later.
@@ -346,19 +430,43 @@ struct MarkdownView: View {
                             hasInlineMath: BlockTextConverter.containsInlineMath(plain))
                     }
                 }
-                return ParsedDocument(blocks: blocks, textMeta: meta)
+                // Measure in the SAME task, so blocks and their heights reach the
+                // main actor together and the list never has to guess (D4).
+                // `math: nil` is mandatory here: the SwiftMath engine is
+                // main-thread-only (thread rule in BlockHeightMeasurer.swift);
+                // the rows it defers are finished on main just below.
+                // No `heightSeeds`: `heightCache` is cleared for this parse, and
+                // block ids are positional, so the previous document's diagram
+                // heights would seed the wrong diagrams.
+                let measured = width > 0
+                    ? BlockHeightMeasurer.measure(blocks: blocks, theme: currentTheme,
+                                                  fontScale: scale, contentWidth: width,
+                                                  math: nil)
+                    : MeasuredBlocks.empty
+                return ParsedAndMeasured(parsed: ParsedDocument(blocks: blocks, textMeta: meta),
+                                         measured: measured)
             }.value
             // SwiftUI cancels this task when the id changes (new text, theme or
             // zoom) but the detached parse above keeps running to completion —
             // without this guard a superseded parse can land last and win, which
             // is what made repeated ⌘+/⌘- jump to arbitrary sizes.
             guard !Task.isCancelled else { return }
+            let parsed = out.parsed
             heightCache.removeAll()  // new content/theme — stale heights would mis-seed diagrams
             useEagerLayout = text.utf8.count <= Self.eagerLayoutByteLimit
             cachedBlocks = parsed.blocks
             renderedFontScale = Double(scale)
             contentVersion += 1
             textBlockMeta = parsed.textMeta
+            // Inline `$…$` paragraphs and display-math rows were deferred by the
+            // off-main pass; finish them here, on the main actor, before the
+            // table is used for layout.
+            measured = width > 0
+                ? BlockHeightMeasurer.measureMathRows(out.measured.mathPendingRows,
+                                                      in: out.measured, blocks: parsed.blocks,
+                                                      theme: currentTheme, fontScale: scale,
+                                                      contentWidth: width, math: .swiftMath)
+                : .empty
             headings = parsed.blocks.compactMap { block in
                 if case .heading(let level, let title, let sourceLine) = block.content {
                     return ToCEntry(id: block.id, level: level, title: title, sourceLine: sourceLine)
@@ -366,6 +474,42 @@ struct MarkdownView: View {
                 return nil
             }
             isParsing = false
+        }
+        .task(id: HeightsIdentity(contentVersion: contentVersion, contentWidth: contentWidth)) {
+            // Covers the two cases the parse transaction can't: the first layout
+            // (no width yet when the document was parsed) and every later width
+            // change (window resize, sidebar toggle or drag). Zoom, theme and
+            // font changes go through a re-parse, which measures inline.
+            guard !useLegacyLayout, contentWidth > 0, !cachedBlocks.isEmpty else { return }
+            guard measured.table.count != cachedBlocks.count
+                    || measured.table.contentWidth != contentWidth else { return }
+            let blocks = cachedBlocks
+            let currentTheme = theme
+            let scale = CGFloat(renderedFontScale)
+            let width = contentWidth
+            let version = contentVersion
+            // Mermaid rows: seed from the heights the WebViews actually reported,
+            // so a re-measure doesn't send every diagram back to the 200 pt default.
+            let seeds = heightCache.snapshot
+            // Inline-math paragraphs: hand the previous pass's strings back so the
+            // main-actor step re-wraps them instead of re-rendering every `$…$`
+            // segment through SwiftMath. Safe only because this task never runs
+            // across a content change — the guard below drops the result if a
+            // parse landed meanwhile, and everything that alters the characters
+            // (text, theme, fonts, zoom) goes through a re-parse.
+            let reusableStrings = measured.converted
+            let raw: MeasuredBlocks = await Task.detached(priority: .userInitiated) {
+                BlockHeightMeasurer.measure(blocks: blocks, theme: currentTheme, fontScale: scale,
+                                            contentWidth: width, heightSeeds: seeds, math: nil)
+            }.value
+            // A parse that landed while we were measuring owns the state now —
+            // its own transaction published a matching table.
+            guard !Task.isCancelled, version == contentVersion else { return }
+            measured = BlockHeightMeasurer.measureMathRows(raw.mathPendingRows, in: raw,
+                                                          blocks: blocks, theme: currentTheme,
+                                                          fontScale: scale, contentWidth: width,
+                                                          math: .swiftMath,
+                                                          reusing: reusableStrings)
         }
         .onChange(of: searchText) { newValue in
             searchDebounce?.cancel()
@@ -466,6 +610,24 @@ struct MarkdownView: View {
         }
     }
 
+    /// `blockView(for:)` plus the environment the block views would otherwise
+    /// lose by being hosted in an `NSHostingView` inside a table cell.
+    ///
+    /// `NSViewRepresentable` is an environment boundary: nothing applied to the
+    /// SwiftUI tree AROUND `VirtualBlockList` reaches the views inside its cells.
+    /// The link action matters — table cells and headings render their links as
+    /// SwiftUI `Text` with a Foundation `.link` attribute, which SwiftUI opens
+    /// through `openURL`; without this they would bypass
+    /// `handleLinkActivation` (relative paths unresolved, `.md` files opened by
+    /// whatever app claims them, no confirmation for exotic schemes).
+    private func hostedBlockView(for block: MarkdownBlock) -> some View {
+        blockView(for: block)
+            .environment(\.openURL, OpenURLAction { url in
+                handleLinkActivation(url)
+                return .handled
+            })
+    }
+
     @ViewBuilder
     private func blockView(for block: MarkdownBlock) -> some View {
         #if DEBUG
@@ -488,6 +650,9 @@ struct MarkdownView: View {
                     contentVersion: contentVersion,
                     searchTerm: searchText,
                     focusedOccurrence: focusedOcc,
+                    // D12 — the measurer already built this string to size the
+                    // row; nil on the legacy path (which measures nothing).
+                    preconverted: measured.converted[block.id],
                     onLink: { handleLinkActivation($0) }
                 )
 
@@ -509,12 +674,14 @@ struct MarkdownView: View {
                 BlockquoteView(blockId: block.id, content: content, level: level, theme: theme,
                                fontScale: scale, contentVersion: contentVersion,
                                searchText: searchText, focusedOccurrence: focusedOcc,
+                               preconverted: measured.converted[block.id],
                                onLink: { handleLinkActivation($0) })
 
             case .alert(let kind, let content):
                 AlertBlockView(blockId: block.id, kind: kind, content: content, theme: theme,
                                fontScale: scale, contentVersion: contentVersion,
                                searchText: searchText, focusedOccurrence: focusedOcc,
+                               preconverted: measured.converted[block.id],
                                onLink: { handleLinkActivation($0) })
                     .padding(.vertical, Metrics.alertOuterVerticalPadding)
 
@@ -574,6 +741,9 @@ struct MarkdownView: View {
         }
     }
 
+    /// Legacy path only. The 50 ms delay existed because `ScrollViewProxy` can
+    /// only resolve ids that are already in the tree; the virtualized list
+    /// resolves a row index directly and needs no such wait.
     private func scrollToCurrentMatch(proxy: ScrollViewProxy) {
         guard let targetId = focusedBlockId else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -581,6 +751,53 @@ struct MarkdownView: View {
                 proxy.scrollTo(targetId, anchor: .center)
             }
         }
+    }
+
+    // MARK: - Virtualized List Plumbing
+
+    /// Ask the virtualized list to scroll. The token — not the target — is what
+    /// the coordinator acts on, so asking twice for the same block scrolls twice
+    /// and an unrelated body re-evaluation scrolls not at all.
+    private func requestScroll(to blockId: String, anchor: VirtualBlockList.Anchor, animated: Bool) {
+        scrollRequestToken += 1
+        scrollRequest = VirtualBlockList.ScrollRequest(blockId: blockId, anchor: anchor,
+                                                      animated: animated, token: scrollRequestToken)
+    }
+
+    /// ⌘F next/previous: centre the block holding the focused match.
+    ///
+    /// Animated, like 1.8.0 (`withAnimation(.easeInOut(duration: 0.25))` around
+    /// `proxy.scrollTo(_:anchor:.center)`): the 0.25 s glide is what tells the
+    /// reader the document moved and roughly how far, where a jump-cut between
+    /// two similar-looking passages does not. Only the legacy path's 50 ms
+    /// `asyncAfter` is gone — that existed because `ScrollViewProxy` can only
+    /// resolve ids already in the tree.
+    private func scrollFocusedMatchIntoView() {
+        guard let targetId = focusedBlockId else { return }
+        requestScroll(to: targetId, anchor: .center, animated: true)
+    }
+
+    /// A placed `.reported` row told the list its real height (D3). The list has
+    /// already applied it to its own copy and compensated the scroll offset; this
+    /// keeps the parent's authoritative table in step, so the next wholesale
+    /// replace doesn't hand back the estimate.
+    private func applyHeightReport(blockId: String, row: Int, height: CGFloat) {
+        // Reports can outlive the model they were measured in (a re-parse landed
+        // in between) — the id at that row is the proof that they didn't.
+        guard row >= 0, row < cachedBlocks.count, cachedBlocks[row].id == blockId else { return }
+        let table = measured.table
+        // A row the measurer sized exactly is not up for correction (the list
+        // ignores such reports too — this is the same rule on the parent's side,
+        // so a stale report can never overwrite an exact height).
+        guard row < table.kinds.count, table.kinds[row] == .reported else { return }
+        guard row < table.heights.count, abs(table.heights[row] - height) >= 0.5 else { return }
+        var heights = table.heights
+        heights[row] = height
+        measured = MeasuredBlocks(
+            table: BlockHeightTable(heights: heights, kinds: table.kinds,
+                                    contentWidth: table.contentWidth),
+            converted: measured.converted,
+            mathPendingRows: measured.mathPendingRows)
     }
 
     /// Recompute focusedBlockId and focusedOccInBlock from currentMatchIndex
