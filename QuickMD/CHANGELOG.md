@@ -5,6 +5,11 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Recent Documents sidebar had no in-panel way to close it; the Documents header now has a collapse control (⇧⌘D still toggles).
+
 ## [1.9.0] - 2026-08-17
 
 A "native layout" release: the document body was rebuilt on an AppKit-backed virtualized list with exact, pre-measured heights, which retires the last SwiftUI lazy-stack estimation and makes scrolling, jumping and reading-position preservation exact for every document size. On top of that: Reading Mode, definition lists, a zoom indicator, typeset math in PDF/print, and the hover-pill fix contributed by [@Coriou](https://github.com/Coriou) (#20). Thank you!

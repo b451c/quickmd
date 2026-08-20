@@ -205,9 +205,11 @@ struct MarkdownView: View {
             // sidebars at the USE SITE — their @AppStorage flags keep whatever the
             // reader chose, so leaving reading mode brings back exactly that.
             if isDocumentListVisible && !isReadingMode {
-                RecentDocumentsSidebar(theme: theme, currentURL: documentURL)
-                    .frame(width: documentListWidth)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+                RecentDocumentsSidebar(theme: theme, currentURL: documentURL) {
+                    withAnimation(.easeInOut(duration: 0.2)) { isDocumentListVisible = false }
+                }
+                .frame(width: documentListWidth)
+                .transition(.move(edge: .leading).combined(with: .opacity))
                 SidebarResizeHandle(width: $documentListWidth, minWidth: 160, maxWidth: 500)
             }
 
