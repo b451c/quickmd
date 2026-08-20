@@ -223,6 +223,8 @@ struct MarkdownView: View {
                     if let section = SectionExtractor.extractSection(from: currentText, entry: entry, headings: headings) {
                         copyToClipboard(section)
                     }
+                }, onCollapse: {
+                    withAnimation(.easeInOut(duration: 0.2)) { isToCVisible = false }
                 })
                 .frame(width: 220)
                 Divider()
