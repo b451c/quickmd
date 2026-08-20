@@ -40,13 +40,13 @@ struct QuickMDApp: App {
             }
             CommandGroup(replacing: .textEditing) {
                 FindMenuCommand()
-                ToggleToCCommand()
-                ToggleDocumentListCommand()
                 Divider()
                 CopyMarkdownCommand()
             }
             CommandGroup(after: .toolbar) {
                 ZoomCommands()
+                ToggleToCCommand()
+                ToggleDocumentListCommand()
                 ReadingModeCommand()
             }
             CommandGroup(replacing: .help) {
