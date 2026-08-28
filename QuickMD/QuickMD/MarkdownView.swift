@@ -54,7 +54,6 @@ struct MarkdownView: View {
     @AppStorage("isDocumentListVisible") private var isDocumentListVisible: Bool = false
     @AppStorage("documentListWidth") private var documentListWidth: Double = 220
     @State private var headings: [ToCEntry] = []
-    @State private var tocScrollTarget: String?
     /// Transient bottom toast ("Copied!", "Opened in …"). Nil = hidden.
     @State private var toastText: String?
     /// Pre-computed focused block ID — updated only in navigateMatch/updateMatchResults
@@ -98,7 +97,7 @@ struct MarkdownView: View {
     /// The virtualized list's height table + pre-converted strings for
     /// `cachedBlocks`, produced by `BlockHeightMeasurer` (v1.9 D3/D4). Replaced
     /// wholesale, never merged — except for the single-row patches height
-    /// reports apply (`applyHeightReport`). `.empty` on the legacy path.
+    /// reports apply (`applyHeightReport`). `.empty` until the first width.
     @State private var measured: MeasuredBlocks = .empty
     /// Width a block view actually gets, reported by `VirtualBlockList`'s
     /// coordinator (column width − 2 × horizontal padding). 0 until the list has
@@ -108,16 +107,6 @@ struct MarkdownView: View {
     @State private var scrollRequest: VirtualBlockList.ScrollRequest?
     @State private var scrollRequestToken: Int = 0
 
-    /// Hidden safety valve for the v1.9 layout change (D9):
-    /// `defaults write pl.falami.studio.QuickMD QMDLegacyBlockLayout -bool YES`
-    /// restores the 1.8.0 `ScrollViewReader` + `VStack`/`LazyVStack` path.
-    /// No UI, documented in constraints.md, removed in 1.10.
-    static let legacyLayoutDefaultsKey = "QMDLegacyBlockLayout"
-
-    /// Read ONCE, at init: switching layout hosts mid-life would tear down the
-    /// whole block list, and this is a debugging escape hatch, not a setting.
-    private let useLegacyLayout: Bool
-
     /// File name suggested by the PDF export save panel (`ExportPDFCommand`).
     private var exportName: String {
         documentURL?.deletingPathExtension().lastPathComponent ?? "document"
@@ -126,38 +115,14 @@ struct MarkdownView: View {
     init(document: MarkdownDocument, documentURL: URL?) {
         self.document = document
         self.documentURL = documentURL
-        self.useLegacyLayout = UserDefaults.standard.bool(forKey: Self.legacyLayoutDefaultsKey)
         _currentText = State(initialValue: document.text)
     }
-
-    /// Documents up to this size render in an eager `VStack`; larger ones in
-    /// `LazyVStack`.
-    ///
-    /// Why not always lazy: LazyVStack sizes the rows it has not placed by
-    /// extrapolating from the ones it has. Markdown rows range from a 17-pt
-    /// paragraph to a 500-pt code block, so as rows are placed and unplaced
-    /// during scrolling the estimate for the rest swings by hundreds of points,
-    /// every visible row shifts, the visible set changes, the estimate swings
-    /// again — and on macOS 15 that settles into a permanent 100 % main-thread
-    /// layout loop (wheel-scroll up and down on demo.md: 4 of 5 attempts;
-    /// eager VStack: 0 of 5). With every row placed there is nothing to
-    /// estimate. See constraints.md.
-    ///
-    /// Why not always eager: creating every NSTextView up front costs main-
-    /// thread time proportional to the text — no measurable stall up to this
-    /// limit (190 KB / 2 000 dense link lines) and ~1 s for the 11 700-line
-    /// #10 repro, which therefore stays on the lazy path exactly as it shipped
-    /// in 1.7.0.
-    static let eagerLayoutByteLimit = 256 * 1024
 
     /// Content insets, inter-block spacing and the per-kind `.padding(.vertical:)`
     /// applied in `blockView(for:)` — see `BlockLayout.Document`. Shared with
     /// `BlockHeightMeasurer`: those outer paddings are part of a block's row
     /// height, so both sides have to read the same numbers.
     typealias Metrics = BlockLayout.Document
-
-    /// Set with each parse from the document size (see `eagerLayoutByteLimit`).
-    @State private var useEagerLayout = true
 
     /// Resolved theme from user selection + system color scheme + Settings fonts
     private var theme: MarkdownTheme {
@@ -192,7 +157,6 @@ struct MarkdownView: View {
     /// still being measured (the virtualized list keeps its previous content
     /// until the pair is consistent, so the spinner covers the gap).
     private var isRenderPending: Bool {
-        if useLegacyLayout { return isParsing && cachedBlocks.isEmpty }
         return (isParsing && cachedBlocks.isEmpty)
             || (!cachedBlocks.isEmpty && measured.table.count != cachedBlocks.count)
     }
@@ -216,11 +180,7 @@ struct MarkdownView: View {
             // Table of Contents sidebar
             if isToCVisible && !headings.isEmpty && !isReadingMode {
                 TableOfContentsView(headings: headings, onSelect: { targetId in
-                    if useLegacyLayout {
-                        tocScrollTarget = targetId
-                    } else {
-                        requestScroll(to: targetId, anchor: .top, animated: true)
-                    }
+                    requestScroll(to: targetId, anchor: .top, animated: true)
                 }, onCopy: { entry in
                     if let section = SectionExtractor.extractSection(from: currentText, entry: entry, headings: headings) {
                         copyToClipboard(section)
@@ -246,70 +206,26 @@ struct MarkdownView: View {
                     )
                 }
 
-                if useLegacyLayout {
-                    // 1.8.0 layout, unchanged — kept for one release behind
-                    // `QMDLegacyBlockLayout` (D9).
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            // Eager VStack for documents up to `eagerLayoutByteLimit`,
-                            // LazyVStack above it — see `useEagerLayout`. Both stacks
-                            // host the same block views: text, headings, blockquotes
-                            // and code render through NSTextView, so neither stack
-                            // has the SwiftUI text-selection overlay that froze the
-                            // Sprint 4.2 attempt (constraints.md, bug B).
-                            Group {
-                                if useEagerLayout {
-                                    VStack(alignment: .leading, spacing: Metrics.blockSpacing) { blockList }
-                                } else {
-                                    LazyVStack(alignment: .leading, spacing: Metrics.blockSpacing) { blockList }
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, Metrics.contentHorizontalPadding)
-                            // Reading mode, legacy path: cap the column (padding
-                            // included, so the text measure matches the virtual
-                            // path's) and centre it in the scroll view.
-                            .frame(maxWidth: isReadingMode
-                                   ? Metrics.readingMaxContentWidth + 2 * Metrics.contentHorizontalPadding
-                                   : .infinity)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.vertical, isReadingMode
-                                     ? Metrics.readingContentVerticalPadding
-                                     : Metrics.contentVerticalPadding)
-                        }
-                        .onChange(of: scrollTrigger) { _ in
-                            scrollToCurrentMatch(proxy: proxy)
-                        }
-                        .onChange(of: tocScrollTarget) { target in
-                            guard let target = target else { return }
-                            tocScrollTarget = nil
-                            withAnimation(.easeInOut(duration: 0.25)) {
-                                proxy.scrollTo(target, anchor: .top)
-                            }
-                        }
-                    }
-                } else {
-                    // v1.9 default: our own virtualized list. Exact row heights
-                    // from `measured.table`, one layout path for every document
-                    // size, nothing estimated — see VirtualBlockList.swift.
-                    VirtualBlockList(
-                        blocks: cachedBlocks,
-                        table: measured.table,
-                        contentVersion: contentVersion,
-                        searchText: searchText,
-                        focusedBlockId: focusedBlockId,
-                        focusedOccInBlock: focusedOccInBlock,
-                        scrollRequest: scrollRequest,
-                        layoutStyle: isReadingMode ? .reading : .standard,
-                        contentWidth: $contentWidth,
-                        onHeightReport: { blockId, row, height in
-                            applyHeightReport(blockId: blockId, row: row, height: height)
-                        },
-                        content: { block in AnyView(hostedBlockView(for: block)) }
-                    )
-                    .onChange(of: scrollTrigger) { _ in
-                        scrollFocusedMatchIntoView()
-                    }
+                // Our own virtualized list (v1.9): exact row heights from
+                // `measured.table`, one layout path for every document size,
+                // nothing estimated — see VirtualBlockList.swift.
+                VirtualBlockList(
+                    blocks: cachedBlocks,
+                    table: measured.table,
+                    contentVersion: contentVersion,
+                    searchText: searchText,
+                    focusedBlockId: focusedBlockId,
+                    focusedOccInBlock: focusedOccInBlock,
+                    scrollRequest: scrollRequest,
+                    layoutStyle: isReadingMode ? .reading : .standard,
+                    contentWidth: $contentWidth,
+                    onHeightReport: { blockId, row, height in
+                        applyHeightReport(blockId: blockId, row: row, height: height)
+                    },
+                    content: { block in AnyView(hostedBlockView(for: block)) }
+                )
+                .onChange(of: scrollTrigger) { _ in
+                    scrollFocusedMatchIntoView()
                 }
             }
             .overlay(alignment: .topLeading) {
@@ -497,7 +413,7 @@ struct MarkdownView: View {
             // The width the list will lay the blocks out at. 0 before the host's
             // first layout — then the heights task below picks it up as soon as
             // the coordinator reports one.
-            let width = useLegacyLayout ? 0 : contentWidth
+            let width = contentWidth
             let out: ParsedAndMeasured = await Task.detached(priority: .userInitiated) {
                 let blocks = MarkdownBlockParser(theme: currentTheme, fontScale: scale).parse(text)
                 // Pre-compute per-text-block metadata on the background thread so the
@@ -537,7 +453,6 @@ struct MarkdownView: View {
             guard !Task.isCancelled else { return }
             let parsed = out.parsed
             heightCache.removeAll()  // new content/theme — stale heights would mis-seed diagrams
-            useEagerLayout = text.utf8.count <= Self.eagerLayoutByteLimit
             cachedBlocks = parsed.blocks
             renderedFontScale = Double(scale)
             contentVersion += 1
@@ -564,7 +479,7 @@ struct MarkdownView: View {
             // (no width yet when the document was parsed) and every later width
             // change (window resize, sidebar toggle or drag). Zoom, theme and
             // font changes go through a re-parse, which measures inline.
-            guard !useLegacyLayout, contentWidth > 0, !cachedBlocks.isEmpty else { return }
+            guard contentWidth > 0, !cachedBlocks.isEmpty else { return }
             guard measured.table.count != cachedBlocks.count
                     || measured.table.contentWidth != contentWidth else { return }
             let blocks = cachedBlocks
@@ -708,13 +623,6 @@ struct MarkdownView: View {
 
     // MARK: - Block Rendering
 
-    /// The document's blocks, shared by the eager and lazy stacks.
-    private var blockList: some View {
-        ForEach(cachedBlocks) { block in
-            blockView(for: block)
-        }
-    }
-
     /// `blockView(for:)` plus the environment the block views would otherwise
     /// lose by being hosted in an `NSHostingView` inside a table cell.
     ///
@@ -756,7 +664,7 @@ struct MarkdownView: View {
                     searchTerm: searchText,
                     focusedOccurrence: focusedOcc,
                     // D12 — the measurer already built this string to size the
-                    // row; nil on the legacy path (which measures nothing).
+                    // row; nil until the document has been measured.
                     preconverted: measured.converted[block.id],
                     onLink: { handleLinkActivation($0) }
                 )
@@ -881,18 +789,6 @@ struct MarkdownView: View {
         }
     }
 
-    /// Legacy path only. The 50 ms delay existed because `ScrollViewProxy` can
-    /// only resolve ids that are already in the tree; the virtualized list
-    /// resolves a row index directly and needs no such wait.
-    private func scrollToCurrentMatch(proxy: ScrollViewProxy) {
-        guard let targetId = focusedBlockId else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            withAnimation(.easeInOut(duration: 0.25)) {
-                proxy.scrollTo(targetId, anchor: .center)
-            }
-        }
-    }
-
     // MARK: - Virtualized List Plumbing
 
     /// Ask the virtualized list to scroll. The token — not the target — is what
@@ -909,9 +805,9 @@ struct MarkdownView: View {
     /// Animated, like 1.8.0 (`withAnimation(.easeInOut(duration: 0.25))` around
     /// `proxy.scrollTo(_:anchor:.center)`): the 0.25 s glide is what tells the
     /// reader the document moved and roughly how far, where a jump-cut between
-    /// two similar-looking passages does not. Only the legacy path's 50 ms
-    /// `asyncAfter` is gone — that existed because `ScrollViewProxy` can only
-    /// resolve ids already in the tree.
+    /// two similar-looking passages does not. No delay before the request: the
+    /// list resolves a row index directly (1.8.0 needed 50 ms for
+    /// `ScrollViewProxy` to see ids already in the tree).
     private func scrollFocusedMatchIntoView() {
         guard let targetId = focusedBlockId else { return }
         requestScroll(to: targetId, anchor: .center, animated: true)

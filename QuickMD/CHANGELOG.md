@@ -5,6 +5,11 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+- The 1.8.0 layout fallback (`defaults write pl.falami.studio.QuickMD QMDLegacyBlockLayout -bool YES`) kept for one release after the 1.9.0 native layout. The virtualized list is now the only document host; the key is ignored.
+
 ## [1.9.1] - 2026-08-28
 
 A small community release: in-panel collapse controls for both sidebars and a tidier View menu, contributed by [@Coriou](https://github.com/Coriou) (#21, #22, #23), plus the Homebrew cask fix reported and fixed by [@robin-moser](https://github.com/robin-moser) (#25, #26) and [@GregOriol](https://github.com/GregOriol) (tap #2). Thank you!
