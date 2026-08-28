@@ -8,11 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- Table of Contents and Recent Documents moved from the Edit menu to View (shortcuts unchanged).
+- Table of Contents and Recent Documents moved from the Edit menu to View, next to Zoom and Reading Mode (shortcuts unchanged). Contributed by [@Coriou](https://github.com/Coriou) (#23).
 
 ### Fixed
-- Recent Documents sidebar had no in-panel way to close it; the Documents header now has a collapse control (⇧⌘D still toggles).
-- Table of Contents sidebar had no in-panel way to close it; the Contents header now has a collapse control (⇧⌘T still toggles).
+- Recent Documents sidebar had no in-panel way to close it; the Documents header now has a collapse control (⇧⌘D still toggles). Contributed by [@Coriou](https://github.com/Coriou) (#21).
+- Table of Contents sidebar had no in-panel way to close it; the Contents header now has a collapse control (⇧⌘T still toggles). Contributed by [@Coriou](https://github.com/Coriou) (#22).
+- Homebrew: the cask used the deprecated `depends_on macos: ">= :ventura"` form, which Homebrew is turning into an error; now `depends_on macos: :ventura`. Reported and fixed by [@robin-moser](https://github.com/robin-moser) (#25, #26) and [@GregOriol](https://github.com/GregOriol) (tap #2).
 
 ## [1.9.0] - 2026-08-17
 

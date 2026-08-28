@@ -22,7 +22,11 @@ struct RecentDocumentsSidebar: View {
                 Text("Documents")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.secondary)
-                Spacer()
+                    // Two header buttons now share the row; at the 160 pt minimum
+                    // width the title must keep its single line, not wrap.
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 4)
                 // Same symbol as the overlay capsule; inverse verb. Not xmark — that's row-remove.
                 Button {
                     onCollapse()

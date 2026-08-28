@@ -47,6 +47,7 @@ struct QuickMDApp: App {
                 ZoomCommands()
                 ToggleToCCommand()
                 ToggleDocumentListCommand()
+                Divider()
                 ReadingModeCommand()
             }
             CommandGroup(replacing: .help) {
