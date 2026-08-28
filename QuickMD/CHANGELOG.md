@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Recent Documents sidebar had no in-panel way to close it; the Documents header now has a collapse control (⇧⌘D still toggles).
+- Table of Contents sidebar had no in-panel way to close it; the Contents header now has a collapse control (⇧⌘T still toggles).
 
 ## [1.9.0] - 2026-08-17
 

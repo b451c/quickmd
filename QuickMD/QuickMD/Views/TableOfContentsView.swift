@@ -8,6 +8,7 @@ struct TableOfContentsView: View {
     let headings: [ToCEntry]
     let onSelect: (String) -> Void
     var onCopy: ((ToCEntry) -> Void)? = nil
+    let onCollapse: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("selectedTheme") private var selectedThemeName: String = "Auto"
 
@@ -18,13 +19,27 @@ struct TableOfContentsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
-            HStack {
+            HStack(spacing: 6) {
                 Image(systemName: "list.bullet.indent")
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
                 Text("Contents")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.secondary)
+                Spacer()
+                // Hide-sidebar language (same as Documents). Not doc.on.doc — that's row copy.
+                Button {
+                    onCollapse()
+                } label: {
+                    Image(systemName: "sidebar.leading")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .padding(3)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Hide table of contents (⇧⌘T)")
+                .accessibilityLabel("Hide table of contents")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
