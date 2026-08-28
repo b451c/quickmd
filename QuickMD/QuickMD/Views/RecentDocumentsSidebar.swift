@@ -11,6 +11,7 @@ struct RecentDocumentsSidebar: View {
     @ObservedObject var store: RecentDocumentsStore = .shared
     let theme: MarkdownTheme
     let currentURL: URL?
+    let onCollapse: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -22,6 +23,19 @@ struct RecentDocumentsSidebar: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.secondary)
                 Spacer()
+                // Same symbol as the overlay capsule; inverse verb. Not xmark — that's row-remove.
+                Button {
+                    onCollapse()
+                } label: {
+                    Image(systemName: "sidebar.leading")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .padding(3)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Hide recent documents (⇧⌘D)")
+                .accessibilityLabel("Hide recent documents")
                 if !store.documents.isEmpty {
                     Button {
                         store.clear()
