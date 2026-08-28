@@ -325,7 +325,7 @@ struct MarkdownView: View {
                         // Two different waits, and on a big document they are
                         // long enough to tell apart: the parser turning text into
                         // blocks, then the measurer turning blocks into row
-                        // heights (the virtual path only).
+                        // heights.
                         Text(isParsing ? "Parsing…" : "Rendering…")
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)

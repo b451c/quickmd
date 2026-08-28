@@ -88,8 +88,12 @@ struct TextBlockView: View {
     /// The converted string, already built off-main by `BlockHeightMeasurer`
     /// (it has to build it to measure the row anyway — v1.9 D12). When present
     /// we skip `makeNSAttributedString` entirely, on first render and on every
-    /// cell reuse. `nil` on the legacy layout path, which then falls back to
-    /// converting once and caching it in `cachedNS`.
+    /// cell reuse. `nil` for a row whose block is not in the current measured
+    /// table — `VirtualBlockList` keeps rendering the PREVIOUS generation's
+    /// blocks until the new parse and its height table land together, and
+    /// those rows fall back to converting once and caching it in `cachedNS`.
+    /// That fallback is load-bearing, not a leftover: without it text blocks
+    /// go blank in that window.
     var preconverted: NSAttributedString? = nil
     let onLink: (URL) -> Void
 

@@ -16,7 +16,8 @@ struct BlockquoteView: View {
     var focusedOccurrence: Int? = nil
     /// The body's converted string, already built off-main by
     /// `BlockHeightMeasurer` — forwarded straight to `TextBlockView` (D12).
-    /// `nil` on the legacy layout path, which converts on demand.
+    /// `nil` for rows the current measured table does not cover (see
+    /// `TextBlockView.preconverted`), which then convert on demand.
     var preconverted: NSAttributedString? = nil
     let onLink: (URL) -> Void
 
