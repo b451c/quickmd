@@ -111,12 +111,50 @@ struct MarkdownRenderer: Sendable {
     func render(_ markdown: String) -> AttributedString {
         var result = AttributedString()
 
-        for line in Self.joinSoftBreaks(markdown.components(separatedBy: "\n")) {
-            result.append(renderLine(line))
+        let lines = Self.joinSoftBreaks(markdown.components(separatedBy: "\n"))
+        // The hanging indent of an ordered item must be the width of the WIDEST
+        // marker in its list, not of its own: the body font is not monospaced,
+        // so "1. " and "10. " have different widths and each item's text would
+        // start at a different x. The run is known before any rendering, so the
+        // widest prefix is too.
+        let hangs = Self.widestOrderedPrefixes(lines)
+        for (index, line) in lines.enumerated() {
+            result.append(renderLine(line, hangingPrefix: hangs[index]))
             result.append(AttributedString("\n"))
         }
 
         return result
+    }
+
+    /// For every line, the widest ordered-list prefix of the contiguous run it
+    /// belongs to — `nil` for lines that are not ordered items.
+    ///
+    /// A run ends at the first line that is not an ordered item at the same
+    /// indent level, which is what a reader sees as one list.
+    static func widestOrderedPrefixes(_ lines: [String]) -> [String?] {
+        var out = [String?](repeating: nil, count: lines.count)
+        var start = 0
+        while start < lines.count {
+            guard let first = orderedItem(lines[start]) else { start += 1; continue }
+            var end = start, widest = first.prefix
+            while end + 1 < lines.count,
+                  let next = orderedItem(lines[end + 1]), next.level == first.level {
+                end += 1
+                if next.prefix.count > widest.count { widest = next.prefix }
+            }
+            for i in start...end { out[i] = widest }
+            start = end + 1
+        }
+        return out
+    }
+
+    /// `(prefix, level)` of an ordered list item, prefix including its indent.
+    private static func orderedItem(_ line: String) -> (prefix: String, level: Int)? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.range(of: #"^(\d+)\.\s"#, options: .regularExpression) != nil else { return nil }
+        let indent = line.prefix(while: { $0 == " " || $0 == "\t" })
+        let number = trimmed.prefix(while: { $0.isNumber })
+        return (indentSpaces(listLevel(for: indent)) + "\(number). ", listLevel(for: indent))
     }
 
     // MARK: - Soft Breaks
@@ -192,7 +230,7 @@ struct MarkdownRenderer: Sendable {
 
     // MARK: - Line Rendering
 
-    private func renderLine(_ line: String) -> AttributedString {
+    private func renderLine(_ line: String, hangingPrefix: String? = nil) -> AttributedString {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
 
         // Header - extract hash count from regex group, not space position
@@ -227,7 +265,8 @@ struct MarkdownRenderer: Sendable {
             let level = Self.listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" }))
             let number = Int(trimmed.prefix(while: { $0.isNumber })) ?? 1
             let content = String(trimmed[match.upperBound...])
-            return renderListItem(content, level: level, ordered: true, number: number)
+            return renderListItem(content, level: level, ordered: true, number: number,
+                                  hangingPrefix: hangingPrefix)
         }
 
         // Empty line
@@ -312,13 +351,15 @@ struct MarkdownRenderer: Sendable {
         return min(columns / 2, 8)
     }
 
-    private func renderListItem(_ text: String, level: Int, ordered: Bool, number: Int) -> AttributedString {
+    private func renderListItem(_ text: String, level: Int, ordered: Bool, number: Int,
+                                hangingPrefix: String? = nil) -> AttributedString {
         let prefix = Self.indentSpaces(level) + (ordered ? "\(number). " : "• ")
         var attr = AttributedString(prefix)
         attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         attr.append(renderInlineFormatting(text))
-        applyListParagraphStyle(&attr, hangingUnder: prefix)
+        // Hang under the widest prefix of the list, not under this item's own.
+        applyListParagraphStyle(&attr, hangingUnder: hangingPrefix ?? prefix)
         return attr
     }
 
