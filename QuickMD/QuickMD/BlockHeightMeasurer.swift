@@ -248,6 +248,12 @@ enum BlockLayout {
         /// the bitmap is decoded, so this is what a measured row starts at.
         static let placeholderHeight: CGFloat = 100
         static let maxDisplayWidth: CGFloat = 600
+
+        /// Scale the fitted 100% width, then keep the result inside the column.
+        static func displayWidth(fontScale: CGFloat, contentWidth: CGFloat) -> CGFloat {
+            let available = max(1, contentWidth)
+            return min(available, min(maxDisplayWidth, available) * fontScale)
+        }
     }
 
     // MARK: Display math

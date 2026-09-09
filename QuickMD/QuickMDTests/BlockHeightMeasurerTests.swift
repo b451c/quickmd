@@ -18,6 +18,15 @@ import AppKit
 /// comes from `BlockLayout`, the one place the views read it from too.
 final class BlockHeightMeasurerTests: XCTestCase {
 
+    func testImageScalingUsesFittedBaselineAndStaysInsideColumn() {
+        let width = BlockLayout.ImageBlock.displayWidth
+        XCTAssertEqual(width(1, 1200), 600)
+        XCTAssertEqual(width(1.5, 1200), 900)
+        XCTAssertEqual(width(0.75, 1200), 450)
+        XCTAssertEqual(width(0.75, 400), 300)
+        XCTAssertEqual(width(1.5, 400), 400)
+    }
+
     // MARK: - Fixtures
 
     private let widths: [CGFloat] = [400, 600, 800, 1000]

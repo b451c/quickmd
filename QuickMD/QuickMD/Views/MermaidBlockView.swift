@@ -13,8 +13,7 @@ import WebKit
 /// shown instantly instead of re-running the WebView render (no flicker), and
 /// the height is seeded from BlockHeightCache (no scroll jump).
 ///
-/// Zoom (#12): hover reveals a zoom button that opens the diagram in a sheet
-/// with pinch/button magnification.
+/// Clicking the diagram opens a window-filling preview with pinch/button zoom.
 /// Shared store of rendered-diagram snapshots, keyed by (isDark, source).
 /// Written by the inline MermaidBlockView after each successful render; read
 /// back by MermaidBlockView on LazyVStack re-creation AND by the PDF exporter
@@ -44,20 +43,30 @@ struct MermaidBlockView: View {
 
     @State private var diagramHeight: CGFloat
     @State private var snapshot: NSImage?
-    @State private var showZoom = false
+    let fontScale: CGFloat
+    let contentWidth: CGFloat
+    let onEnlarge: (GraphicPreview) -> Void
+
+    private var snapshotKey: String { "\(fontScale)|\(contentWidth)|\(source)" }
     @State private var isHovered = false
 
     /// Padding, corner radius and the un-measured default height — see
     /// `BlockLayout.Mermaid` (shared with `BlockHeightMeasurer`).
     typealias Metrics = BlockLayout.Mermaid
 
-    init(blockId: String, source: String, theme: MarkdownTheme, heightCache: BlockHeightCache) {
+    init(blockId: String, source: String, theme: MarkdownTheme, heightCache: BlockHeightCache,
+         fontScale: CGFloat, contentWidth: CGFloat, onEnlarge: @escaping (GraphicPreview) -> Void) {
         self.blockId = blockId
         self.source = source
         self.theme = theme
         self.heightCache = heightCache
+        self.fontScale = fontScale
+        self.contentWidth = contentWidth
+        self.onEnlarge = onEnlarge
         _diagramHeight = State(initialValue: heightCache.height(for: blockId) ?? Metrics.defaultHeight)
-        _snapshot = State(initialValue: MermaidSnapshotStore.image(source: source, isDark: theme.isDark))
+        let cached = MermaidSnapshotStore.image(source: "\(fontScale)|\(contentWidth)|\(source)", isDark: theme.isDark)
+        _snapshot = State(initialValue: cached)
+        if let cached { _diagramHeight = State(initialValue: cached.size.height) }
     }
 
     var body: some View {
@@ -75,12 +84,16 @@ struct MermaidBlockView: View {
                     MermaidWebView(
                         source: source,
                         isDark: theme.isDark,
+                        fontScale: fontScale,
                         diagramHeight: $diagramHeight,
                         onHeight: { height in
                             heightCache.set(height, for: blockId)
                         },
                         onSnapshot: { image in
-                            MermaidSnapshotStore.set(image, source: source, isDark: theme.isDark)
+                            MermaidSnapshotStore.set(image, source: snapshotKey, isDark: theme.isDark)
+                            if fontScale == 1 {
+                                MermaidSnapshotStore.set(image, source: source, isDark: theme.isDark)
+                            }
                         }
                     )
                     .frame(height: diagramHeight)
@@ -88,8 +101,16 @@ struct MermaidBlockView: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadius))
 
+            // A transparent button also catches clicks over the embedded WKWebView.
+            Button { onEnlarge(.diagram(source, isDark: theme.isDark)) } label: {
+                Color.clear.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Enlarge diagram")
+            .help("Click to enlarge diagram")
+
             Button {
-                showZoom = true
+                onEnlarge(.diagram(source, isDark: theme.isDark))
             } label: {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
                     .font(.system(size: 11))
@@ -108,21 +129,18 @@ struct MermaidBlockView: View {
         .onHover { hovering in
             isHovered = hovering
         }
-        .sheet(isPresented: $showZoom) {
-            MermaidZoomView(source: source, isDark: theme.isDark)
-        }
     }
 }
 
-// MARK: - Zoom Sheet (#12)
+// MARK: - Window-filling preview
 
 /// Full-size diagram viewer: pinch-to-zoom (native WKWebView magnification)
 /// plus explicit zoom buttons. Scrolling stays INSIDE this web view (it is a
 /// plain WKWebView, not the scroll-passthrough subclass used inline).
-private struct MermaidZoomView: View {
+struct MermaidZoomView: View {
     let source: String
     let isDark: Bool
-    @Environment(\.dismiss) private var dismiss
+    let onClose: () -> Void
     @State private var controller = ZoomWebViewController()
 
     var body: some View {
@@ -138,14 +156,14 @@ private struct MermaidZoomView: View {
                 Button { controller.resetZoom() } label: {
                     Image(systemName: "1.magnifyingglass")
                 }
-                .help("Actual size")
+                .help("Fit diagram to window")
                 Button { controller.zoom(by: 1.25) } label: {
                     Image(systemName: "plus.magnifyingglass")
                 }
                 .help("Zoom in")
                 Divider().frame(height: 16)
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+                Button("Done", action: onClose)
+                    .keyboardShortcut(.cancelAction)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -154,11 +172,11 @@ private struct MermaidZoomView: View {
 
             ZoomableMermaidWebView(source: source, isDark: isDark, controller: controller)
         }
-        .frame(minWidth: 700, idealWidth: 900, minHeight: 500, idealHeight: 650)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
-/// Holds a weak reference to the zoom sheet's web view so toolbar buttons can
+/// Holds a weak reference to the preview's web view so toolbar buttons can
 /// drive `magnification` directly (pinch gestures work natively alongside).
 /// Main-thread by convention (button actions); not @MainActor for older-SDK
 /// compatibility — see BlockHeightCache note in TextBlockView.swift.
@@ -215,7 +233,7 @@ private struct ZoomableMermaidWebView: NSViewRepresentable {
                 """, completionHandler: nil)
             guard let data = try? JSONSerialization.data(withJSONObject: source, options: [.fragmentsAllowed]),
                   let jsLiteral = String(data: data, encoding: .utf8) else { return }
-            webView.evaluateJavaScript("renderDiagram(\(jsLiteral), \(isDark ? "true" : "false"));",
+            webView.evaluateJavaScript("renderDiagram(\(jsLiteral), \(isDark ? "true" : "false"), 1, true);",
                                        completionHandler: nil)
         }
     }
@@ -237,6 +255,7 @@ private class ScrollPassthroughWebView: WKWebView {
 private struct MermaidWebView: NSViewRepresentable {
     let source: String
     let isDark: Bool
+    let fontScale: CGFloat
     @Binding var diagramHeight: CGFloat
     let onHeight: (CGFloat) -> Void
     let onSnapshot: (NSImage) -> Void
@@ -263,7 +282,9 @@ private struct MermaidWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         // Avoid re-rendering if content hasn't changed
-        if context.coordinator.lastSource == source && context.coordinator.lastIsDark == isDark {
+        if context.coordinator.lastSource == source,
+           context.coordinator.lastIsDark == isDark,
+           context.coordinator.parent.fontScale == fontScale {
             return
         }
         context.coordinator.parent = self
@@ -295,7 +316,7 @@ private struct MermaidWebView: NSViewRepresentable {
             guard templateLoaded, let source = lastSource, let isDark = lastIsDark else { return }
             guard let data = try? JSONSerialization.data(withJSONObject: source, options: [.fragmentsAllowed]),
                   let jsLiteral = String(data: data, encoding: .utf8) else { return }
-            webView.evaluateJavaScript("renderDiagram(\(jsLiteral), \(isDark ? "true" : "false"));",
+            webView.evaluateJavaScript("renderDiagram(\(jsLiteral), \(isDark ? "true" : "false"), \(parent.fontScale));",
                                        completionHandler: nil)
         }
 

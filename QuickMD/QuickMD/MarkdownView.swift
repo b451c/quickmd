@@ -46,6 +46,7 @@ struct MarkdownView: View {
     @State private var currentMatchIndex: Int = 0
     @State private var matchBlockIds: [String] = []
     @State private var scrollTrigger: Int = 0
+    @State private var graphicPreview: GraphicPreview?
     @State private var keyMonitor: Any?
     /// The NSWindow hosting this view (set by `WindowConfigurator`); the key
     /// monitor uses it to ignore events addressed to other tabs' windows.
@@ -362,6 +363,13 @@ struct MarkdownView: View {
     /// modifier chain no longer type-checks inside the compiler's budget.
     private var configuredDocumentStack: some View {
         documentStack
+        .disabled(graphicPreview != nil)
+        .accessibilityHidden(graphicPreview != nil)
+        .overlay {
+            if let graphicPreview {
+                GraphicPreviewOverlay(preview: graphicPreview) { self.graphicPreview = nil }
+            }
+        }
         .background(theme.backgroundColor)
         .background(WindowConfigurator { window in
             // Make every QuickMD document window prefer to join existing windows
@@ -557,6 +565,13 @@ struct MarkdownView: View {
                 if let hostWindow, let eventWindow = event.window, eventWindow !== hostWindow {
                     return event
                 }
+                if graphicPreview != nil {
+                    if event.keyCode == 53 {
+                        graphicPreview = nil
+                        return nil
+                    }
+                    return event
+                }
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
                 if flags.contains(.command) && event.charactersIgnoringModifiers == "g" {
@@ -680,7 +695,9 @@ struct MarkdownView: View {
                     .padding(.vertical, Metrics.codeOuterVerticalPadding)
 
             case .image(let url, let alt):
-                ImageBlockView(url: url, alt: alt, theme: theme, documentURL: documentURL)
+                ImageBlockView(url: url, alt: alt, theme: theme, documentURL: documentURL,
+                               fontScale: scale, contentWidth: contentWidth,
+                               onEnlarge: { graphicPreview = $0 })
                     .padding(.vertical, Metrics.imageOuterVerticalPadding)
 
             case .blockquote(let content, let level):
@@ -721,7 +738,10 @@ struct MarkdownView: View {
 
             case .mermaidDiagram(let source):
                 MermaidBlockView(blockId: block.id, source: source, theme: theme,
-                                 heightCache: heightCache)
+                                 heightCache: heightCache, fontScale: scale,
+                                 contentWidth: contentWidth,
+                                 onEnlarge: { graphicPreview = $0 })
+                    .id("\(block.id)|\(scale)|\(contentWidth)|\(theme.isDark)")
                     .padding(.vertical, Metrics.mermaidOuterVerticalPadding)
             }
         }
