@@ -1,0 +1,16 @@
+{
+  "packages": {
+    "@plantuml/core": "1.2026.8",
+    "bpmn-js": "18.28.0"
+  },
+  "sha256": {
+    "plantuml.js": "b24340bf6568007e752406a04595f130a06f01e54d20ad38cbf0209a78b721a2",
+    "viz-global.js": "fc6ca2de83dd4e3fca967d5214122777890a5cd1ab101115a1f716fc84e6dc5e",
+    "emoji.js": "e3b97a103b48bb00a6d77cf0667f3a0fda0a3799cfbc5e22494fcde024a18e49",
+    "openiconic.js": "b34a6d7c0315ad4c1d780bcfe92e7bfa89abbd4fa20ae419e3409f1cc4f56c52",
+    "themes.js": "d6f508704b276b66631cfff05291de3013ab7807972b7cb2b77a14d4beab2c2d",
+    "bpmn-viewer.js": "2314739a9f7bd01cd96a0bb12865ad559448da13e27662b6101e7abcffca57c0",
+    "diagram-js.css": "df8d417a7dcc35a72290260093c2a1380a33f7f1b2595be1991ac667a60f65cc",
+    "bpmn-js.css": "8809876df03da043c27827b1a4d5306a8ebf3d5bd0f5b2db72202778f64c023b"
+  }
+}

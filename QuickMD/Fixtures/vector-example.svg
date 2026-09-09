@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="160" viewBox="0 0 480 160">
+ <rect width="480" height="160" rx="12" fill="#eef4ff"/>
+ <g stroke="#2855ad" stroke-width="2" fill="white">
+  <rect x="20" y="40" width="150" height="80" rx="8"/>
+  <rect x="310" y="40" width="150" height="80" rx="8"/>
+  <path d="M170 80h140m-12 -8 12 8-12 8" fill="none"/>
+ </g>
+ <g fill="#142a50" font-family="sans-serif" font-size="19" text-anchor="middle">
+  <text x="95" y="86">SVG source</text><text x="385" y="86">Sharp preview</text>
+ </g>
+</svg>

@@ -388,6 +388,10 @@ final class BlockHeightMeasurerTests: XCTestCase {
     graph TD; A-->B;
     ```
 
+    ```svg
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"/>
+    ```
+
     Inline math $x^2$ in a paragraph.
 
     [^n]: a footnote definition
@@ -413,14 +417,14 @@ final class BlockHeightMeasurerTests: XCTestCase {
             case .text, .blockquote, .alert, .codeBlock:
                 XCTAssertEqual(kind, .exact, "\(block.id) should be exact")
                 seen.insert(exemplar(block))
-            case .heading, .table, .mathBlock, .image, .mermaidDiagram:
+            case .heading, .table, .mathBlock, .image, .mermaidDiagram, .diagram:
                 XCTAssertEqual(kind, .reported, "\(block.id) should be reported")
                 seen.insert(exemplar(block))
             }
         }
         // Every block kind is actually exercised by the fixture.
         XCTAssertEqual(seen, ["text", "blockquote", "alert", "codeBlock",
-                              "heading", "table", "mathBlock", "image", "mermaidDiagram"])
+                              "heading", "table", "mathBlock", "image", "mermaidDiagram", "diagram"])
 
         // Converted strings exist for exactly the TextBlockView-backed kinds.
         for block in blocks {
@@ -452,6 +456,7 @@ final class BlockHeightMeasurerTests: XCTestCase {
         case .heading: return "heading"
         case .mathBlock: return "mathBlock"
         case .mermaidDiagram: return "mermaidDiagram"
+        case .diagram: return "diagram"
         }
     }
 

@@ -80,6 +80,8 @@ private func blockSignature(_ block: MarkdownBlock) -> String {
         return "h|\(level)|" + head(title)
     case .mathBlock(let latex):
         return "m|" + head(latex)
+    case .diagram(let kind, let source):
+        return "d|\(kind.rawValue)|" + head(source)
     case .mermaidDiagram(let source):
         return "d|" + head(source)
     }

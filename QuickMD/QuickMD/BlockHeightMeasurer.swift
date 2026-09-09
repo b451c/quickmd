@@ -720,7 +720,7 @@ enum BlockHeightMeasurer {
                                + 2 * BlockLayout.Document.imageOuterVerticalPadding)
                 kinds.append(.reported)
 
-            case .mermaidDiagram:
+            case .mermaidDiagram, .diagram:
                 heights.append((heightSeeds[block.id] ?? BlockLayout.Mermaid.defaultHeight)
                                + 2 * BlockLayout.Mermaid.verticalPadding
                                + 2 * BlockLayout.Document.mermaidOuterVerticalPadding)
@@ -895,4 +895,14 @@ enum BlockHeightMeasurer {
         return height
     }
 
+}
+
+/// Apply text scale to the fitted baseline, never exceeding the column width.
+enum DiagramLayout {
+    static func size(natural: CGSize, contentWidth: CGFloat, fontScale: CGFloat) -> CGSize {
+        let width = max(1, contentWidth)
+        let factor = min(width / max(1, natural.width),
+                         min(1, width / max(1, natural.width)) * fontScale)
+        return CGSize(width: natural.width * factor, height: natural.height * factor)
+    }
 }

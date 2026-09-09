@@ -8,7 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A1B2C3D401000060 /* AlertBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000060 /* AlertBlockView.swift */; };
-		A1B2C3D401000061 /* MermaidPDFRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000061 /* MermaidPDFRenderer.swift */; };
+		A1B2C3D401000061 /* DiagramPDFRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000061 /* DiagramPDFRenderer.swift */; };
 		A1B2C3D401000062 /* DocumentFonts.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000062 /* DocumentFonts.swift */; };
 		A1B2C3D401000063 /* FontPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000063 /* FontPickerView.swift */; };
 		A1B2C3D401000064 /* FontTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000064 /* FontTests.swift */; };
@@ -33,7 +33,7 @@
 		A1B2C3D401000012 /* ThemePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000016 /* ThemePickerView.swift */; };
 		A1B2C3D401000013 /* SandboxAccessManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000017 /* SandboxAccessManager.swift */; };
 		A1B2C3D401000014 /* MathBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000018 /* MathBlockView.swift */; };
-		A1B2C3D401000015 /* MermaidBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000019 /* MermaidBlockView.swift */; };
+		A1B2C3D401000015 /* DiagramBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000019 /* DiagramBlockView.swift */; };
 		A1B2C3D401000016 /* MathFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001A /* MathFont.swift */; };
 		A1B2C3D401000017 /* MathImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001B /* MathImage.swift */; };
 		A1B2C3D401000018 /* MTBezierPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001C /* MTBezierPath.swift */; };
@@ -63,7 +63,6 @@
 		A1B2C3D401000030 /* MTElementWidthCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000034 /* MTElementWidthCalculator.swift */; };
 		A1B2C3D401000031 /* MTLineFitter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000035 /* MTLineFitter.swift */; };
 		A1B2C3D401000032 /* mermaid.min.js in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000036 /* mermaid.min.js */; };
-		A1B2C3D401000033 /* mermaid-template.html in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000037 /* mermaid-template.html */; };
 		A1B2C3D401000034 /* mathFonts.bundle in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000038 /* mathFonts.bundle */; };
 		A1B2C3D401000036 /* CustomThemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003A /* CustomThemeStore.swift */; };
 		A1B2C3D401000037 /* RecentDocumentsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003B /* RecentDocumentsStore.swift */; };
@@ -102,11 +101,16 @@
 		A1B2C3D40100006A /* BlockHeightMeasurerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */; };
 		A1B2C3D40100006B /* BlockHeightMeasurer.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000069 /* BlockHeightMeasurer.swift */; };
 		A1B2C3D40100006C /* VirtualBlockList.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000006C /* VirtualBlockList.swift */; };
+		D1A600010000000000000001 /* DiagramRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600020000000000000001; };
+		D1A600010000000000000002 /* Diagrams in Resources */ = {isa = PBXBuildFile; fileRef = D1A600020000000000000002; };
+		D1A600010000000000000003 /* DiagramRenderer.swift in Tests */ = {isa = PBXBuildFile; fileRef = D1A600020000000000000001; };
+		D1A600010000000000000004 /* DiagramRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A600020000000000000004; };
+		D1A600010000000000000005 /* DiagramPDFRenderer.swift in Tests */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000061 /* DiagramPDFRenderer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		A1B2C3D400000060 /* AlertBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertBlockView.swift; sourceTree = "<group>"; };
-		A1B2C3D400000061 /* MermaidPDFRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidPDFRenderer.swift; sourceTree = "<group>"; };
+		A1B2C3D400000061 /* DiagramPDFRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagramPDFRenderer.swift; sourceTree = "<group>"; };
 		A1B2C3D400000062 /* DocumentFonts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentFonts.swift; sourceTree = "<group>"; };
 		A1B2C3D400000063 /* FontPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontPickerView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000064 /* FontTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontTests.swift; sourceTree = "<group>"; };
@@ -137,7 +141,7 @@
 		A1B2C3D400000016 /* ThemePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePickerView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000017 /* SandboxAccessManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SandboxAccessManager.swift; sourceTree = "<group>"; };
 		A1B2C3D400000018 /* MathBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MathBlockView.swift; sourceTree = "<group>"; };
-		A1B2C3D400000019 /* MermaidBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidBlockView.swift; sourceTree = "<group>"; };
+		A1B2C3D400000019 /* DiagramBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagramBlockView.swift; sourceTree = "<group>"; };
 		A1B2C3D40000001A /* MathFont.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MathFont.swift; sourceTree = "<group>"; };
 		A1B2C3D40000001B /* MathImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MathImage.swift; sourceTree = "<group>"; };
 		A1B2C3D40000001C /* MTBezierPath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTBezierPath.swift; sourceTree = "<group>"; };
@@ -167,7 +171,6 @@
 		A1B2C3D400000034 /* MTElementWidthCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTElementWidthCalculator.swift; sourceTree = "<group>"; };
 		A1B2C3D400000035 /* MTLineFitter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTLineFitter.swift; sourceTree = "<group>"; };
 		A1B2C3D400000036 /* mermaid.min.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = mermaid.min.js; sourceTree = "<group>"; };
-		A1B2C3D400000037 /* mermaid-template.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = "mermaid-template.html"; sourceTree = "<group>"; };
 		A1B2C3D400000038 /* mathFonts.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = mathFonts.bundle; sourceTree = "<group>"; };
 		A1B2C3D40000003A /* CustomThemeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomThemeStore.swift; sourceTree = "<group>"; };
 		A1B2C3D40000003B /* RecentDocumentsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentDocumentsStore.swift; sourceTree = "<group>"; };
@@ -191,6 +194,9 @@
 		A1B2C3D40000004D /* FileWatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileWatcherTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000066 /* ChromeHoverState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeHoverState.swift; sourceTree = "<group>"; };
 		A1B2C3D400000067 /* ChromeHoverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeHoverTests.swift; sourceTree = "<group>"; };
+		D1A600020000000000000001 /* DiagramRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagramRenderer.swift; sourceTree = "<group>"; };
+		D1A600020000000000000002 /* Diagrams */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Diagrams; sourceTree = "<group>"; };
+		D1A600020000000000000004 /* DiagramRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagramRendererTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -232,6 +238,7 @@
 				A1B2C3D400000064 /* FontTests.swift */,
 				A1B2C3D400000067 /* ChromeHoverTests.swift */,
 				A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */,
+				D1A600020000000000000004 /* DiagramRendererTests.swift */,
 			);
 			path = QuickMDTests;
 			sourceTree = "<group>";
@@ -259,7 +266,8 @@
 				A1B2C3D400000009 /* TipJarManager.swift */,
 				A1B2C3D40000000A /* TipJarView.swift */,
 				A1B2C3D40000000C /* MarkdownExport.swift */,
-				A1B2C3D400000061 /* MermaidPDFRenderer.swift */,
+				A1B2C3D400000061 /* DiagramPDFRenderer.swift */,
+				D1A600020000000000000001 /* DiagramRenderer.swift */,
 				A1B2C3D400000062 /* DocumentFonts.swift */,
 				A1B2C3D400000017 /* SandboxAccessManager.swift */,
 				A1B2C3D40000003A /* CustomThemeStore.swift */,
@@ -283,7 +291,7 @@
 				A1B2C3D400000015 /* TableOfContentsView.swift */,
 				A1B2C3D400000016 /* ThemePickerView.swift */,
 				A1B2C3D400000018 /* MathBlockView.swift */,
-				A1B2C3D400000019 /* MermaidBlockView.swift */,
+				A1B2C3D400000019 /* DiagramBlockView.swift */,
 				A1B2C3D40000003C /* RecentDocumentsSidebar.swift */,
 				A1B2C3D400000040 /* ChromeButtons.swift */,
 				A1B2C3D400000066 /* ChromeHoverState.swift */,
@@ -345,7 +353,7 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D400000036 /* mermaid.min.js */,
-				A1B2C3D400000037 /* mermaid-template.html */,
+				D1A600020000000000000002 /* Diagrams */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -439,7 +447,7 @@
 			files = (
 				A1B2C3D401000005 /* Assets.xcassets in Resources */,
 				A1B2C3D401000032 /* mermaid.min.js in Resources */,
-				A1B2C3D401000033 /* mermaid-template.html in Resources */,
+				D1A600010000000000000002 /* Diagrams in Resources */,
 				A1B2C3D401000034 /* mathFonts.bundle in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -470,7 +478,7 @@
 				A1B2C3D401000012 /* ThemePickerView.swift in Sources */,
 				A1B2C3D401000013 /* SandboxAccessManager.swift in Sources */,
 				A1B2C3D401000014 /* MathBlockView.swift in Sources */,
-				A1B2C3D401000015 /* MermaidBlockView.swift in Sources */,
+				A1B2C3D401000015 /* DiagramBlockView.swift in Sources */,
 				A1B2C3D401000016 /* MathFont.swift in Sources */,
 				A1B2C3D401000017 /* MathImage.swift in Sources */,
 				A1B2C3D401000018 /* MTBezierPath.swift in Sources */,
@@ -509,7 +517,8 @@
 				A1B2C3D401000066 /* ChromeHoverState.swift in Sources */,
 				A1B2C3D40100004A /* TextBlockView.swift in Sources */,
 				A1B2C3D401000060 /* AlertBlockView.swift in Sources */,
-				A1B2C3D401000061 /* MermaidPDFRenderer.swift in Sources */,
+				A1B2C3D401000061 /* DiagramPDFRenderer.swift in Sources */,
+				D1A600010000000000000001 /* DiagramRenderer.swift in Sources */,
 				A1B2C3D40100004B /* InlineMathSegmenter.swift in Sources */,
 				A1B2C3D40100004D /* FileWatchManager.swift in Sources */,
 				A1B2C3D40100004E /* ExternalEditorManager.swift in Sources */,
@@ -548,6 +557,9 @@
 				A1B2C3D401000067 /* ChromeHoverTests.swift in Sources */,
 				A1B2C3D401000068 /* ChromeHoverState.swift in Sources (Tests) */,
 				A1B2C3D40100006A /* BlockHeightMeasurerTests.swift in Sources */,
+                D1A600010000000000000003 /* DiagramRenderer.swift in Tests */,
+                D1A600010000000000000004 /* DiagramRendererTests.swift in Sources */,
+                D1A600010000000000000005 /* DiagramPDFRenderer.swift in Tests */,
 				A1B2C3D40100006B /* BlockHeightMeasurer.swift in Sources (Tests) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

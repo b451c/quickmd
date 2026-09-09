@@ -1,0 +1,5 @@
+@startuml
+class Document
+class Renderer
+Document --> Renderer : render linked source
+@enduml

@@ -107,7 +107,7 @@ enum DocumentSearch {
                 segments = [title]
             case .mathBlock(let latex):
                 segments = [latex]
-            case .mermaidDiagram(let source):
+            case .mermaidDiagram(let source), .diagram(_, let source):
                 segments = [source]
             }
 

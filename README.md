@@ -25,7 +25,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ### Blazing Fast
 - Opens in milliseconds—no loading screens
-- Native SwiftUI + AppKit app—lightweight, zero dependencies
+- Native SwiftUI + AppKit app with bundled offline diagram renderers
 - Huge documents (10,000+ lines) open and scroll smoothly, Table of Contents and search jumps land exactly, and QuickMD keeps your place through zoom, theme changes, resizes and auto-reload
 
 ### Companion to Your Editor
@@ -39,7 +39,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Tables with proper column alignment (headerless `| | |` tables too)
 - Code blocks with syntax highlighting
 - **LaTeX math** — display (`$$...$$`) and inline (`$...$`) with TeX-quality rendering
-- **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more, with a pinch-to-zoom viewer
+- **Diagrams** — Mermaid, BPMN 2.0 XML, PlantUML, and SVG, rendered offline with vector previews. [Syntax and examples](docs/diagrams.md)
 - **Footnotes** — `[^id]` references with definitions at end of document
 - **Definition lists** — `Term` followed by `: definition` lines (PHP Markdown Extra / Pandoc `:` syntax); several terms per definition, several definitions per term, wrapped definitions hang under their text
 - Task lists with checkboxes (`- [ ]` / `- [x]`)
@@ -59,7 +59,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Table of Contents sidebar (`⌘⇧T`) — auto-generated from headings
 - Reading mode (`⌘⇧R`) — hides both sidebars and the hover buttons and centres the text in a 720 pt column; `Esc` brings everything back
 - Copy entire document (`⌘⇧C`) or individual sections (hover heading → copy icon)
-- Export to PDF (`⌘⇧E`) — **vector text** (selectable, searchable) with **rendered Mermaid diagrams** — and Print (`⌘P`)
+- Export to PDF (`⌘⇧E`) — **vector text** (selectable, searchable) with **rendered diagrams** — and Print (`⌘P`)
 
 ### Custom Themes & Fonts
 - 7 built-in themes: Auto, Solarized Light/Dark, Dracula, GitHub, Gruvbox Dark, Nord
@@ -187,11 +187,11 @@ Now all your Markdown files will open instantly with QuickMD!
 - Per-document file watcher (`DispatchSource`) powering auto-reload, including atomic editor saves
 - Regex-based syntax highlighting for code blocks (computed off the main thread)
 - LaTeX math rendering via vendored [SwiftMath](https://github.com/mgriebling/SwiftMath) (Core Graphics, no network); inline math as native text attachments
-- Mermaid diagram rendering via bundled [Mermaid.js](https://mermaid.js.org/) (offline, no CDN), with snapshot caching and a zoom viewer
+- Offline Mermaid, BPMN, and PlantUML rendering through bundled JavaScript libraries; shared SVG caching, scaling, and vector previews
 - 7 built-in themes + user themes from disk, with `@AppStorage` persistence; document font families resolved through `NSFontDescriptor` with a small cache and system-font fallback
 - `AsyncImage` for remote image rendering
 - Security-Scoped Bookmarks for local image access in sandbox
-- Per-block **vector PDF export** — selectable text, embedded fonts, Mermaid diagrams as images, multi-page pagination
+- Per-block **vector PDF export** — selectable text, embedded fonts, SVG diagrams rendered into PDF, multi-page pagination
 - Zero external package dependencies — everything is vendored or bundled
 - Unit test suite (186 tests) + GitHub Actions CI building every flavor on each push
 
@@ -216,7 +216,8 @@ QuickMD/
 │   ├── FileWatchManager.swift      # Auto-reload file watcher (DispatchSource)
 │   ├── ExternalEditorManager.swift # ⌘E editor detection + launch
 │   ├── WindowTabbing.swift         # Native macOS tab merging + window size memory
-│   ├── MermaidPDFRenderer.swift    # Mermaid → image rendering for PDF export
+│   ├── DiagramPDFRenderer.swift    # Cached SVG → PDF rendering for export
+│   ├── DiagramRenderer.swift       # Serial offline WebKit renderer + SVG cache
 │   ├── CustomThemeStore.swift      # User themes from disk (live reload + validation)
 │   ├── RecentDocumentsStore.swift  # Recent documents tracking
 │   ├── TipJarManager.swift         # StoreKit 2 IAP (App Store only)
@@ -225,13 +226,13 @@ QuickMD/
 │   ├── SwiftMath/                  # Vendored math rendering (Core Graphics)
 │   ├── Resources/
 │   │   ├── mermaid.min.js          # Bundled Mermaid.js
-│   │   └── mermaid-template.html   # HTML template for diagrams
+│   │   └── Diagrams/               # Renderer page, pinned vendor bundles, licenses
 │   ├── Views/
 │   │   ├── VirtualBlockList.swift  # NSScrollView + NSTableView host: one row per block, exact heights
 │   │   ├── TextBlockView.swift     # NSTextView-backed text blocks (native selection, inline math)
 │   │   ├── CodeBlockView.swift     # NSTextView-backed code blocks (+ copy button)
 │   │   ├── MathBlockView.swift     # LaTeX display math ($$...$$)
-│   │   ├── MermaidBlockView.swift  # Mermaid diagrams (WKWebView + zoom + snapshot cache)
+│   │   ├── DiagramBlockView.swift  # SVG display, text scaling, and vector previews
 │   │   ├── TableBlockView.swift    # Table rendering with alignment
 │   │   ├── ImageBlockView.swift    # Local + remote image rendering
 │   │   ├── BlockquoteView.swift    # Nested blockquotes

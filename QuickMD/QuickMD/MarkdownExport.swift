@@ -149,6 +149,9 @@ struct MarkdownPrintableView: View {
                     PrintableMathBlockView(latex: latex)
                         .padding(.vertical, 4)
 
+                case .diagram(let kind, let source):
+                    PrintableCodeBlockView(code: source, language: kind.rawValue).padding(.vertical, 4)
+
                 case .mermaidDiagram(let source):
                     // Graceful degradation: render as styled code block in PDF
                     PrintableCodeBlockView(code: source, language: "mermaid")
@@ -336,9 +339,9 @@ struct PrintableImageView: View {
 
 struct MarkdownPrintableBlockView: View {
     let block: MarkdownBlock
-    /// Pre-rendered Mermaid diagrams keyed by source (MermaidPDFRenderer).
+    /// Pre-rendered SVG diagrams keyed by language, source, and theme.
     /// Sources without an entry fall back to the styled-code representation.
-    var mermaidImages: [String: NSImage] = [:]
+    var diagramImages: [DiagramSource: NSImage] = [:]
     private let theme = MarkdownTheme.exportTheme(for: .light)
     private let renderer = MarkdownRenderer(colorScheme: .light)
 
@@ -371,8 +374,8 @@ struct MarkdownPrintableBlockView: View {
             case .mathBlock(let latex):
                 PrintableMathBlockView(latex: latex)
 
-            case .mermaidDiagram(let source):
-                if let image = mermaidImages[source] {
+            case .mermaidDiagram, .diagram:
+                if let key = block.diagramSource, let image = diagramImages[key] {
                     Image(nsImage: image)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
@@ -380,7 +383,8 @@ struct MarkdownPrintableBlockView: View {
                 } else {
                     // Graceful degradation: styled code block (no snapshot
                     // available within the render budget, or render failed)
-                    PrintableCodeBlockView(code: source, language: "mermaid")
+                    PrintableCodeBlockView(code: block.diagramSource?.source ?? "",
+                                           language: block.diagramSource?.kind.rawValue ?? "")
                 }
             }
         }
@@ -499,19 +503,12 @@ class PDFExportManager {
             guard response == .OK, let url = savePanel.url else { return }
 
             Task { @MainActor in
-                // Pre-render Mermaid diagrams (cached inline snapshot or
-                // offscreen WebView). Whatever fails within the time budget
-                // keeps the styled-code fallback — export never stalls on it.
                 let blocks = MarkdownBlockParser(colorScheme: .light).parse(documentText)
-                let mermaidSources = blocks.compactMap { block -> String? in
-                    if case .mermaidDiagram(let source) = block.content { return source }
-                    return nil
-                }
-                let mermaidImages = await MermaidPDFRenderer.renderAll(
-                    sources: mermaidSources, width: contentWidth)
+                let diagramImages = await DiagramPDFRenderer.renderAll(
+                    sources: blocks.compactMap(\.diagramSource), width: contentWidth)
 
                 guard let pdfData = Self.generateMultiPagePDF(blocks: blocks,
-                                                              mermaidImages: mermaidImages) else {
+                                                              diagramImages: diagramImages) else {
                     Self.showError("Failed to generate PDF")
                     return
                 }
@@ -541,7 +538,7 @@ class PDFExportManager {
     }
 
     static func generateMultiPagePDF(blocks: [MarkdownBlock],
-                                     mermaidImages: [String: NSImage] = [:]) -> Data? {
+                                     diagramImages: [DiagramSource: NSImage] = [:]) -> Data? {
         guard !blocks.isEmpty else {
             logger.error("No blocks parsed from document")
             return nil
@@ -551,7 +548,7 @@ class PDFExportManager {
         var measuredBlocks: [(block: MarkdownBlock, size: CGSize)] = []
 
         for block in blocks {
-            let blockView = MarkdownPrintableBlockView(block: block, mermaidImages: mermaidImages)
+            let blockView = MarkdownPrintableBlockView(block: block, diagramImages: diagramImages)
                 .frame(width: contentWidth)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -610,7 +607,7 @@ class PDFExportManager {
             // Draw each placed segment using the vector renderer
             for placed in pageSegments {
                 let segment = placed.segment
-                let blockView = MarkdownPrintableBlockView(block: segment.block, mermaidImages: mermaidImages)
+                let blockView = MarkdownPrintableBlockView(block: segment.block, diagramImages: diagramImages)
                     .frame(width: contentWidth)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -679,10 +676,15 @@ import PDFKit
 class PrintManager {
 
     static func printDocument(documentText: String) {
-        guard !documentText.isEmpty else { return }
+        Task { @MainActor in await printRenderedDocument(documentText: documentText) }
+    }
 
-        // Use the same multi-page PDF generation as export
-        guard let pdfData = PDFExportManager.generateMultiPagePDF(documentText: documentText) else {
+    private static func printRenderedDocument(documentText: String) async {
+        guard !documentText.isEmpty else { return }
+        let blocks = MarkdownBlockParser(colorScheme: .light).parse(documentText)
+        let images = await DiagramPDFRenderer.renderAll(sources: blocks.compactMap(\.diagramSource),
+                                                        width: PDFExportManager.contentWidth)
+        guard let pdfData = PDFExportManager.generateMultiPagePDF(blocks: blocks, diagramImages: images) else {
             showError("Failed to render document for printing")
             return
         }

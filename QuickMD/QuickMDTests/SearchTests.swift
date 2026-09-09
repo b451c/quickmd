@@ -9,6 +9,13 @@ final class SearchTests: XCTestCase {
         MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light)).parse(markdown)
     }
 
+    func testDiagramSourcesRemainSearchable() {
+        let markdown = ["bpmn", "plantuml", "svg"].map { "```\($0)\nneedle\n```" }.joined(separator: "\n\n")
+        let blocks = parse(markdown)
+        let results = DocumentSearch.computeMatches(in: blocks, term: "needle")
+        XCTAssertEqual(results.matchBlockIds, blocks.map(\.id))
+    }
+
     func testEmptyTermYieldsNoResults() {
         let results = DocumentSearch.computeMatches(in: parse("# Hello"), term: "")
         XCTAssertTrue(results.matchBlockIds.isEmpty)

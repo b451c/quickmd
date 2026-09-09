@@ -35,7 +35,11 @@ struct ImageBlockView: View {
     var body: some View {
         Group {
             if let imageURL = resolvedURL {
-                if imageURL.isFileURL {
+                if let kind = DiagramKind.linkedKind(for: imageURL) {
+                    LinkedDiagramBlockView(url: imageURL, kind: kind, isDark: theme.isDark,
+                                           fontScale: fontScale, contentWidth: contentWidth,
+                                       onEnlarge: onEnlarge)
+                } else if imageURL.isFileURL {
                     // Local file: use downsampled image
                     localImageView(for: imageURL)
                 } else {
@@ -230,7 +234,7 @@ struct ImageBlockView: View {
 // including sidebars, and survives virtualization of the originating row.
 enum GraphicPreview {
     case image(Image, title: String, fileURL: URL?)
-    case diagram(String, isDark: Bool)
+    case svg(RenderedDiagram, title: String, isBPMN: Bool, isDark: Bool)
 }
 
 struct GraphicPreviewOverlay: View {
@@ -269,11 +273,74 @@ struct GraphicPreviewOverlay: View {
                         detailedImage = NSImage(cgImage: loaded, size: NSSize(width: loaded.width, height: loaded.height))
                     }
                 }
-            case .diagram(let source, let isDark):
-                MermaidZoomView(source: source, isDark: isDark, onClose: onClose)
+            case .svg(let diagram, let title, let isBPMN, let isDark):
+                SVGPreviewView(diagram: diagram, title: title, isBPMN: isBPMN, isDark: isDark, onClose: onClose)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
+    }
+}
+
+/// Linked diagram sources use the same renderer and preview as fenced diagrams.
+private struct LinkedDiagramBlockView: View {
+    let url: URL
+    let kind: DiagramKind
+    let isDark: Bool
+    let fontScale: CGFloat
+    let contentWidth: CGFloat
+    let onEnlarge: (GraphicPreview) -> Void
+    @State private var source: String?
+    @State private var failure: String?
+
+    var body: some View {
+        Group {
+            if let source {
+                DiagramBlockView(source: DiagramSource(kind: kind, source: source, isDark: isDark), fontScale: fontScale,
+                                 contentWidth: contentWidth, onEnlarge: onEnlarge)
+            } else if let failure {
+                Text("\(kind.title): \(failure)").font(.system(size: 12)).foregroundColor(.secondary)
+            } else {
+                ProgressView().frame(height: BlockLayout.ImageBlock.placeholderHeight)
+            }
+        }
+        .task(id: url) {
+            source = nil
+            failure = nil
+            do {
+                let data: Data
+                if url.isFileURL {
+                    do { data = try await readLocal() }
+                    catch {
+                        guard FileManager.default.fileExists(atPath: url.path),
+                              await SandboxAccessManager.shared.ensureAccess(forParentOf: url) else { throw error }
+                        data = try await readLocal()
+                    }
+                } else {
+                    let (download, response) = try await URLSession.shared.data(from: url)
+                    if let response = response as? HTTPURLResponse, !(200..<300).contains(response.statusCode) {
+                        throw DiagramRenderError.failed("HTTP \(response.statusCode)")
+                    }
+                    data = download
+                }
+                guard data.count <= 2 * 1024 * 1024, let text = String(data: data, encoding: .utf8) else {
+                    throw DiagramRenderError.failed("Expected a UTF-8 diagram file no larger than 2 MB.")
+                }
+                guard !Task.isCancelled else { return }
+                source = text
+            } catch {
+                guard !Task.isCancelled else { return }
+                failure = error.localizedDescription
+            }
+        }
+    }
+
+    private func readLocal() async throws -> Data {
+        let file = url
+        return try await Task.detached {
+            let handle = try FileHandle(forReadingFrom: file)
+            defer { try? handle.close() }
+            return try handle.read(upToCount: 2 * 1024 * 1024 + 1) ?? Data()
+        }.value
     }
 }

@@ -1,0 +1,4 @@
+@startuml
+Reader -> QuickMD: Open linked diagram
+QuickMD -> Reader: Scalable preview
+@enduml

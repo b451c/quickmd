@@ -737,11 +737,15 @@ struct MarkdownView: View {
                     .padding(.vertical, Metrics.mathOuterVerticalPadding)
 
             case .mermaidDiagram(let source):
-                MermaidBlockView(blockId: block.id, source: source, theme: theme,
-                                 heightCache: heightCache, fontScale: scale,
-                                 contentWidth: contentWidth,
+                DiagramBlockView(source: DiagramSource(kind: .mermaid, source: source, isDark: theme.isDark),
+                                 fontScale: scale, contentWidth: contentWidth,
                                  onEnlarge: { graphicPreview = $0 })
-                    .id("\(block.id)|\(scale)|\(contentWidth)|\(theme.isDark)")
+                    .padding(.vertical, Metrics.mermaidOuterVerticalPadding)
+
+            case .diagram(let kind, let source):
+                DiagramBlockView(source: DiagramSource(kind: kind, source: source, isDark: theme.isDark),
+                                 fontScale: scale, contentWidth: contentWidth,
+                                 onEnlarge: { graphicPreview = $0 })
                     .padding(.vertical, Metrics.mermaidOuterVerticalPadding)
             }
         }

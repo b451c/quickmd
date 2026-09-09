@@ -1,0 +1,10 @@
+{
+  "name": "quickmd-diagram-vendors",
+  "private": true,
+  "scripts": { "vendor": "node vendor.mjs" },
+  "dependencies": {
+    "@plantuml/core": "1.2026.8",
+    "bpmn-js": "18.28.0",
+    "esbuild": "0.25.12"
+  }
+}

@@ -147,6 +147,10 @@ struct MarkdownBlockParser: Sendable {
                 // to the closing one.
                 if language.lowercased() == "mermaid" {
                     blocks.append(.mermaidDiagram(index: blockIndex, source: codeContent, sourceLine: sourceLine))
+                } else if let kind = DiagramKind(rawValue: language.lowercased() == "puml" ? "plantuml" : language.lowercased()) {
+                    blocks.append(MarkdownBlock(id: "\(kind.rawValue)-\(blockIndex)",
+                                                content: .diagram(kind: kind, source: codeContent),
+                                                sourceLine: sourceLine))
                 } else {
                     blocks.append(.codeBlock(index: blockIndex, code: codeContent, language: language, sourceLine: sourceLine))
                 }

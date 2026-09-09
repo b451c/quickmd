@@ -200,6 +200,19 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(source, "graph TD\nA-->B")
     }
 
+    func testAdditionalDiagramFencesPreserveSourceAndLine() {
+        for (fence, expected) in [("bpmn", DiagramKind.bpmn), ("plantuml", .plantuml),
+                                  ("puml", .plantuml), ("SVG", .svg)] {
+            let blocks = parse("Intro\n\n~~~\(fence)\nsource <with> symbols\n~~~")
+            guard let block = blocks.last, case .diagram(let kind, let source) = block.content else {
+                XCTFail("Expected diagram for \(fence)"); continue
+            }
+            XCTAssertEqual(kind, expected)
+            XCTAssertEqual(source, "source <with> symbols")
+            XCTAssertEqual(block.sourceLine, 2)
+        }
+    }
+
     // MARK: - Display math
 
     func testSingleLineDisplayMath() {

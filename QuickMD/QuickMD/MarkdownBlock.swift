@@ -87,6 +87,7 @@ struct MarkdownBlock: Identifiable, Sendable {
         case heading(level: Int, title: String, sourceLine: Int)
         case mathBlock(latex: String)
         case mermaidDiagram(source: String)
+        case diagram(kind: DiagramKind, source: String)
     }
 
     // Every factory takes `sourceLine` WITHOUT a default: the parser is the only
@@ -120,5 +121,45 @@ struct MarkdownBlock: Identifiable, Sendable {
     }
     static func mermaidDiagram(index: Int, source: String, sourceLine: Int) -> MarkdownBlock {
         MarkdownBlock(id: "mermaid-\(index)", content: .mermaidDiagram(source: source), sourceLine: sourceLine)
+    }
+}
+
+/// Languages rendered by the bundled WebKit service. Raw values are fence names.
+enum DiagramKind: String, Sendable, CaseIterable {
+    case mermaid, bpmn, plantuml, svg
+
+    /// File formats supported by Markdown image links.
+    static func linkedKind(for url: URL) -> DiagramKind? {
+        switch url.pathExtension.lowercased() {
+        case "bpmn": return .bpmn
+        case "puml", "plantuml": return .plantuml
+        case "svg": return .svg
+        default: return nil
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .mermaid: return "Mermaid diagram"
+        case .bpmn: return "BPMN diagram"
+        case .plantuml: return "PlantUML diagram"
+        case .svg: return "SVG image"
+        }
+    }
+}
+
+struct DiagramSource: Hashable, Sendable {
+    let kind: DiagramKind
+    let source: String
+    var isDark: Bool = false
+}
+
+extension MarkdownBlock {
+    var diagramSource: DiagramSource? {
+        switch content {
+        case .mermaidDiagram(let source): return DiagramSource(kind: .mermaid, source: source)
+        case .diagram(let kind, let source): return DiagramSource(kind: kind, source: source)
+        default: return nil
+        }
     }
 }

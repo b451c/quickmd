@@ -216,3 +216,6 @@ desktop.ini
 *.crash
 *.crashlog
 crash-*.txt
+
+# Diagram vendor build dependencies (bundled output is checked in)
+scripts/diagram-vendors/node_modules/
