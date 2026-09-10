@@ -5,7 +5,9 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.10.0] - 2026-09-10
+
+A community release with a native-layout cleanup: graphics now follow the document zoom and open in a window-filling preview (issue #28 and PR #29 by [@arvearve](https://github.com/arvearve)), ordered lists share one text edge (PR #27 by [@rosekanari](https://github.com/rosekanari)), fenced ```svg blocks render natively (suggested in #30), and the 1.8.0 layout fallback is gone. Thank you!
 
 ### Added
 - Fenced ```svg blocks render as images, decoded natively by macOS (no WebKit, no bundled libraries; scripts inside the markup are ignored). They scale with the document zoom at their declared size, never wider than the column, open in the window-filling preview on click, and print / export to PDF as vector images. Markup that does not decode shows a notice on screen and the source as a code block in PDF. Suggested by [@arvearve](https://github.com/arvearve) in #30.
