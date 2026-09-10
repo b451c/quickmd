@@ -137,6 +137,94 @@ final class RendererTests: XCTestCase {
                        "items of one list hang at \(indents.sorted()) instead of sharing one indent")
     }
 
+    /// X where the item TEXT (after "N. ") starts on each line of `markdown`,
+    /// laid out by TextKit exactly as the NSTextView pipeline does. This is the
+    /// visual truth: a shared `headIndent` alone only aligns wrapped lines,
+    /// while the first line starts wherever `firstLineHeadIndent` + the marker
+    /// glyphs put it.
+    private func textStartXs(_ markdown: String) throws -> [CGFloat] {
+        let r = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light), fontScale: 1)
+        let ns = try NSAttributedString(r.render(markdown), including: \.appKit)
+        let storage = NSTextStorage(attributedString: ns)
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: CGSize(width: 2000, height: CGFloat.greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        layout.ensureLayout(for: container)
+
+        let text = ns.string as NSString
+        var xs: [CGFloat] = []
+        for match in try NSRegularExpression(pattern: #"^ *\d+\. "#, options: .anchorsMatchLines)
+            .matches(in: ns.string, range: NSRange(location: 0, length: text.length)) {
+            let glyph = layout.glyphIndexForCharacter(at: match.range.upperBound)
+            let fragment = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            xs.append(fragment.minX + layout.location(forGlyphAt: glyph).x)
+        }
+        return xs
+    }
+
+    private func assertOneTextEdge(_ markdown: String, items: Int,
+                                   file: StaticString = #filePath, line: UInt = #line) throws {
+        let xs = try textStartXs(markdown)
+        XCTAssertEqual(xs.count, items, "items found", file: file, line: line)
+        for x in xs.dropFirst() {
+            XCTAssertEqual(x, xs[0], accuracy: 0.01,
+                           "item text edges \(xs.map { ($0 * 100).rounded() / 100 })", file: file, line: line)
+        }
+    }
+
+    /// The real requirement behind PR #27: the TEXT of every item of one list
+    /// starts at the same x, markers right-aligned under the widest one.
+    func testOrderedItemTextOfOneListStartsAtOneX() throws {
+        try assertOneTextEdge((1...12).map { "\($0). alpha" }.joined(separator: "\n"), items: 12)
+    }
+
+    /// "9. " is wider than "1. " in the body font although both are three
+    /// characters — the widest marker is measured, not counted.
+    func testWidestMarkerIsMeasuredNotCounted() throws {
+        try assertOneTextEdge((1...9).map { "\($0). alpha" }.joined(separator: "\n"), items: 9)
+    }
+
+    /// Blank lines (loose lists), nested bullets and continuation text between
+    /// the items keep them in one list.
+    func testLooseAndNestedContentKeepsOrderedListTogether() throws {
+        let markdown = """
+        1. alpha
+
+        2. beta
+           - nested bullet
+             continued
+        3. gamma
+            1. nested ordered
+            2. nested ordered
+        10. delta
+        """
+        let xs = try textStartXs(markdown)
+        XCTAssertEqual(xs.count, 6)
+        for i in [1, 2, 5] { XCTAssertEqual(xs[i], xs[0], accuracy: 0.01, "outer list at \(xs)") }
+        XCTAssertEqual(xs[3], xs[4], accuracy: 0.01, "nested list at \(xs)")
+        XCTAssertGreaterThan(xs[3], xs[0], "nested list must sit deeper than its parent")
+    }
+
+    /// A paragraph at the list's own margin ends the list: the next ordered
+    /// item is a new list and hangs under its own marker only.
+    func testParagraphAtListMarginEndsTheList() throws {
+        let xs = try textStartXs("1. alpha\n\nplain paragraph\n\n10. beta")
+        XCTAssertEqual(xs.count, 2)
+        XCTAssertGreaterThan(xs[1], xs[0], "separate lists keep their own marker widths")
+    }
+
+    /// The narrowest marker is pushed right, never left of the list gutter, and
+    /// the widest one stays at the gutter itself.
+    func testWidestMarkerStaysAtTheGutter() throws {
+        let styles = try listStyles((1...10).map { "\($0). alpha" }.joined(separator: "\n"))
+        let firstLines = styles.map { $0.firstLineHeadIndent }
+        XCTAssertEqual(firstLines.min() ?? -1, try listStyle("- alpha").firstLineHeadIndent, accuracy: 0.01)
+        XCTAssertEqual(firstLines.last ?? -1, firstLines.min() ?? -1, accuracy: 0.01, "item 10 is the widest")
+        XCTAssertGreaterThan(firstLines[0], firstLines[9], "item 1 is pushed right under 10")
+    }
+
     /// A wider marker has to hang further, or "10." would overlap its own text.
     func testWiderOrderedMarkerHangsFurther() throws {
         let single = try listStyle("1. alpha")

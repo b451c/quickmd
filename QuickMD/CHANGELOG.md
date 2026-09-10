@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Ordered lists: the items of one list now share a single text edge. Markers are right-aligned under the widest one of the list ("9." under "10."), measured in the body font, so the item text starts at the same x on the first line and on wrapped lines alike; blank lines and nested content between items no longer split the list. Contributed by [@rosekanari](https://github.com/rosekanari) (#27), with a follow-up for the first-line alignment.
+
 ### Removed
 - The 1.8.0 layout fallback (`defaults write pl.falami.studio.QuickMD QMDLegacyBlockLayout -bool YES`) kept for one release after the 1.9.0 native layout. The virtualized list is now the only document host; the key is ignored.
 

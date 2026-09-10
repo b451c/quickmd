@@ -112,12 +112,11 @@ struct MarkdownRenderer: Sendable {
         var result = AttributedString()
 
         let lines = Self.joinSoftBreaks(markdown.components(separatedBy: "\n"))
-        // The hanging indent of an ordered item must be the width of the WIDEST
-        // marker in its list, not of its own: the body font is not monospaced,
-        // so "1. " and "10. " have different widths and each item's text would
-        // start at a different x. The run is known before any rendering, so the
-        // widest prefix is too.
-        let hangs = Self.widestOrderedPrefixes(lines)
+        // Ordered items of one list line up on the WIDEST marker of that list:
+        // the body font is not monospaced, so "1. " and "10. " have different
+        // widths and each item's text would otherwise start at a different x.
+        // The run is known before any rendering, so the widest prefix is too.
+        let hangs = widestOrderedPrefixes(lines)
         for (index, line) in lines.enumerated() {
             result.append(renderLine(line, hangingPrefix: hangs[index]))
             result.append(AttributedString("\n"))
@@ -126,35 +125,62 @@ struct MarkdownRenderer: Sendable {
         return result
     }
 
-    /// For every line, the widest ordered-list prefix of the contiguous run it
-    /// belongs to — `nil` for lines that are not ordered items.
+    /// For every line, the widest marker prefix (indent spaces + "N. ") of the
+    /// ordered list the line belongs to — `nil` for lines that are not ordered
+    /// items. "Widest" is measured in the body font, not counted in characters:
+    /// "9. " is wider than "1. " although both are three characters.
     ///
-    /// A run ends at the first line that is not an ordered item at the same
-    /// indent level, which is what a reader sees as one list.
-    static func widestOrderedPrefixes(_ lines: [String]) -> [String?] {
+    /// A list is a run of ordered items at one indent level. Blank lines and
+    /// deeper-indented lines between its items (a loose list, a nested list, a
+    /// continuation paragraph) do not end it; any other line does. Nested
+    /// ordered lists form their own runs.
+    func widestOrderedPrefixes(_ lines: [String]) -> [String?] {
+        let items = lines.map(Self.orderedItem)
         var out = [String?](repeating: nil, count: lines.count)
-        var start = 0
-        while start < lines.count {
-            guard let first = orderedItem(lines[start]) else { start += 1; continue }
-            var end = start, widest = first.prefix
-            while end + 1 < lines.count,
-                  let next = orderedItem(lines[end + 1]), next.level == first.level {
-                end += 1
-                if next.prefix.count > widest.count { widest = next.prefix }
+        var widths: [String: CGFloat] = [:]
+        func measured(_ prefix: String) -> CGFloat {
+            if let w = widths[prefix] { return w }
+            let w = width(of: prefix)
+            widths[prefix] = w
+            return w
+        }
+        for start in lines.indices {
+            guard out[start] == nil, let first = items[start] else { continue }
+            var members = [start]
+            var widest = first.prefix
+            var i = start + 1
+            while i < lines.count {
+                if let item = items[i] {
+                    if item.level < first.level { break }
+                    if item.level == first.level {
+                        members.append(i)
+                        if measured(item.prefix) > measured(widest) { widest = item.prefix }
+                    }
+                } else if !Self.lineContinuesList(lines[i], atLevel: first.level) {
+                    break
+                }
+                i += 1
             }
-            for i in start...end { out[i] = widest }
-            start = end + 1
+            for m in members { out[m] = widest }
         }
         return out
     }
 
-    /// `(prefix, level)` of an ordered list item, prefix including its indent.
+    /// `(prefix, level)` of an ordered list item, prefix exactly as
+    /// `renderListItem` will emit it (indent spaces + normalised number).
     private static func orderedItem(_ line: String) -> (prefix: String, level: Int)? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard trimmed.range(of: #"^(\d+)\.\s"#, options: .regularExpression) != nil else { return nil }
+        let level = listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" }))
+        let number = Int(trimmed.prefix(while: { $0.isNumber })) ?? 1
+        return (indentSpaces(level) + "\(number). ", level)
+    }
+
+    /// A blank line or a line indented deeper than the list's own items keeps
+    /// a run of ordered items together (loose lists, nested content).
+    private static func lineContinuesList(_ line: String, atLevel level: Int) -> Bool {
         let indent = line.prefix(while: { $0 == " " || $0 == "\t" })
-        let number = trimmed.prefix(while: { $0.isNumber })
-        return (indentSpaces(listLevel(for: indent)) + "\(number). ", listLevel(for: indent))
+        return indent.count == line.count || listLevel(for: indent) > level
     }
 
     // MARK: - Soft Breaks
@@ -358,8 +384,13 @@ struct MarkdownRenderer: Sendable {
         attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         attr.append(renderInlineFormatting(text))
-        // Hang under the widest prefix of the list, not under this item's own.
-        applyListParagraphStyle(&attr, hangingUnder: hangingPrefix ?? prefix)
+        // Ordered items of one list hang under the WIDEST marker of the list and
+        // push their own, narrower marker right by the difference, so the markers
+        // are right-aligned and every item's text starts at the same x — on the
+        // first line and on wrapped lines alike.
+        let hangWidth = width(of: hangingPrefix ?? prefix)
+        applyHangingIndent(&attr, indent: scaled(Self.listGutter),
+                           firstLineLead: max(0, hangWidth - width(of: prefix)), hangWidth: hangWidth)
         return attr
     }
 
@@ -394,9 +425,17 @@ struct MarkdownRenderer: Sendable {
     /// marker, a definition's plain-text indent). Shared by list items and
     /// definition-list bodies so there is ONE hanging-indent mechanism.
     private func applyHangingIndent(_ attr: inout AttributedString, indent: CGFloat, hangingUnder prefix: String) {
+        applyHangingIndent(&attr, indent: indent, firstLineLead: 0, hangWidth: width(of: prefix))
+    }
+
+    /// First line starts at `indent + firstLineLead`, wrapped lines at
+    /// `indent + hangWidth`. `firstLineLead` is what right-aligns a narrow
+    /// marker under a wider one; it is 0 whenever the item hangs under itself.
+    private func applyHangingIndent(_ attr: inout AttributedString, indent: CGFloat,
+                                    firstLineLead: CGFloat, hangWidth: CGFloat) {
         let style = NSMutableParagraphStyle()
-        style.firstLineHeadIndent = indent
-        style.headIndent = indent + width(of: prefix)
+        style.firstLineHeadIndent = indent + firstLineLead
+        style.headIndent = indent + hangWidth
         attr[AttributeScopes.AppKitAttributes.ParagraphStyleAttribute.self] = style
     }
 
