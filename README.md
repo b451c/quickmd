@@ -39,7 +39,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Tables with proper column alignment (headerless `| | |` tables too)
 - Code blocks with syntax highlighting
 - **LaTeX math** — display (`$$...$$`) and inline (`$...$`) with TeX-quality rendering
-- **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more, with a pinch-to-zoom viewer
+- **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more; click any diagram or image for a window-filling preview with pinch-to-zoom
 - **Footnotes** — `[^id]` references with definitions at end of document
 - **Definition lists** — `Term` followed by `: definition` lines (PHP Markdown Extra / Pandoc `:` syntax); several terms per definition, several definitions per term, wrapped definitions hang under their text
 - Task lists with checkboxes (`- [ ]` / `- [x]`)

@@ -230,11 +230,12 @@ struct ImageBlockView: View {
 // including sidebars, and survives virtualization of the originating row.
 enum GraphicPreview {
     case image(Image, title: String, fileURL: URL?)
-    case diagram(String, isDark: Bool)
+    case diagram(String, theme: MarkdownTheme)
 }
 
 struct GraphicPreviewOverlay: View {
     let preview: GraphicPreview
+    let theme: MarkdownTheme
     let onClose: () -> Void
     @State private var detailedImage: NSImage?
 
@@ -244,7 +245,9 @@ struct GraphicPreviewOverlay: View {
             case .image(let image, let title, let fileURL):
                 VStack(spacing: 0) {
                     HStack {
-                        Text(title.isEmpty ? "Image" : title).lineLimit(1)
+                        Text(title.isEmpty ? "Image" : title)
+                            .lineLimit(1)
+                            .foregroundColor(theme.textColor)
                         Spacer()
                         Button("Done", action: onClose)
                             .keyboardShortcut(.cancelAction)
@@ -269,11 +272,13 @@ struct GraphicPreviewOverlay: View {
                         detailedImage = NSImage(cgImage: loaded, size: NSSize(width: loaded.width, height: loaded.height))
                     }
                 }
-            case .diagram(let source, let isDark):
-                MermaidZoomView(source: source, isDark: isDark, onClose: onClose)
+            case .diagram(let source, let diagramTheme):
+                MermaidZoomView(source: source, theme: diagramTheme, onClose: onClose)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.background)
+        // The document's theme, not the system background: a dark custom
+        // theme under a light appearance must not flash a white panel.
+        .background(theme.backgroundColor)
     }
 }

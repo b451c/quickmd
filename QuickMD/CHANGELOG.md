@@ -7,7 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Click an image or a Mermaid diagram to open it in a window-filling preview (Escape or Done to return; the diagram preview keeps its pinch and button zoom). Contributed by [@arvearve](https://github.com/arvearve) (#28, #29).
+
 ### Fixed
+- Images, image captions and Mermaid diagrams now scale with the document text (⌘+ / ⌘−), keeping their aspect ratio and staying inside the column; a graphic fitted to a narrow window also shrinks when the text gets smaller. Contributed by [@arvearve](https://github.com/arvearve) (#28, #29).
+- Mermaid: a diagram that first rendered below the fold could be cached with blank space under it and then keep an oversized row; snapshots are now taken only once the web view's frame matches the reported height.
 - Ordered lists: the items of one list now share a single text edge. Markers are right-aligned under the widest one of the list ("9." under "10."), measured in the body font, so the item text starts at the same x on the first line and on wrapped lines alike; blank lines and nested content between items no longer split the list. Contributed by [@rosekanari](https://github.com/rosekanari) (#27), with a follow-up for the first-line alignment.
 
 ### Removed

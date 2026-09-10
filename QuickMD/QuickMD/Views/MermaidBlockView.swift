@@ -101,8 +101,12 @@ struct MermaidBlockView: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadius))
 
-            // A transparent button also catches clicks over the embedded WKWebView.
-            Button { onEnlarge(.diagram(source, isDark: theme.isDark)) } label: {
+            // A transparent button over the whole diagram: WKWebView swallows
+            // mouse events, so a SwiftUI gesture on it would never fire. Wheel
+            // events still reach the document (the button has no scroll view;
+            // AppKit walks up to the table's), text selection INSIDE the inline
+            // diagram is given up on purpose — the preview has it.
+            Button { onEnlarge(.diagram(source, theme: theme)) } label: {
                 Color.clear.contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -110,7 +114,7 @@ struct MermaidBlockView: View {
             .help("Click to enlarge diagram")
 
             Button {
-                onEnlarge(.diagram(source, isDark: theme.isDark))
+                onEnlarge(.diagram(source, theme: theme))
             } label: {
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
                     .font(.system(size: 11))
@@ -139,8 +143,9 @@ struct MermaidBlockView: View {
 /// plain WKWebView, not the scroll-passthrough subclass used inline).
 struct MermaidZoomView: View {
     let source: String
-    let isDark: Bool
+    let theme: MarkdownTheme
     let onClose: () -> Void
+    private var isDark: Bool { theme.isDark }
     @State private var controller = ZoomWebViewController()
 
     var body: some View {
@@ -148,6 +153,7 @@ struct MermaidZoomView: View {
             HStack(spacing: 12) {
                 Text("Mermaid Diagram")
                     .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(theme.textColor)
                 Spacer()
                 Button { controller.zoom(by: 1 / 1.25) } label: {
                     Image(systemName: "minus.magnifyingglass")
@@ -336,6 +342,18 @@ private struct MermaidWebView: NSViewRepresentable {
             guard let webView = message.webView else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self, weak webView] in
                 guard let self, let webView else { return }
+                // Snapshot only a web view whose frame already matches the
+                // height it reported. A row that is not laid out yet (created
+                // below the fold, a cell AppKit has not placed) keeps its old
+                // frame — 200 pt default, or the previous zoom's height — and
+                // a snapshot taken then is the diagram plus blank space. That
+                // bitmap would be cached under this scale/width key, and every
+                // later re-creation of the block would seed its height from
+                // it (`cached.size.height`), pinning the row at the wrong
+                // height for good. When the frame catches up, the page's
+                // resize listener reports again and this fires with a frame
+                // that fits.
+                guard abs(webView.frame.height - self.parent.diagramHeight) < 1 else { return }
                 webView.takeSnapshot(with: WKSnapshotConfiguration()) { image, _ in
                     if let image {
                         self.parent.onSnapshot(image)

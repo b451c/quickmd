@@ -367,7 +367,7 @@ struct MarkdownView: View {
         .accessibilityHidden(graphicPreview != nil)
         .overlay {
             if let graphicPreview {
-                GraphicPreviewOverlay(preview: graphicPreview) { self.graphicPreview = nil }
+                GraphicPreviewOverlay(preview: graphicPreview, theme: theme) { self.graphicPreview = nil }
             }
         }
         .background(theme.backgroundColor)
@@ -656,6 +656,16 @@ struct MarkdownView: View {
             })
     }
 
+    /// Opens the window-filling image / diagram preview. Focus rings are drawn
+    /// by AppKit above every view, so a focused control under the overlay (the
+    /// sidebar collapse button is the first responder after launch with
+    /// keyboard navigation on) would keep its ring visible through the
+    /// preview — drop first responder before covering the document.
+    private func presentGraphicPreview(_ preview: GraphicPreview) {
+        hostWindow?.makeFirstResponder(nil)
+        graphicPreview = preview
+    }
+
     @ViewBuilder
     private func blockView(for block: MarkdownBlock) -> some View {
         #if DEBUG
@@ -697,7 +707,7 @@ struct MarkdownView: View {
             case .image(let url, let alt):
                 ImageBlockView(url: url, alt: alt, theme: theme, documentURL: documentURL,
                                fontScale: scale, contentWidth: contentWidth,
-                               onEnlarge: { graphicPreview = $0 })
+                               onEnlarge: presentGraphicPreview)
                     .padding(.vertical, Metrics.imageOuterVerticalPadding)
 
             case .blockquote(let content, let level):
@@ -740,7 +750,7 @@ struct MarkdownView: View {
                 MermaidBlockView(blockId: block.id, source: source, theme: theme,
                                  heightCache: heightCache, fontScale: scale,
                                  contentWidth: contentWidth,
-                                 onEnlarge: { graphicPreview = $0 })
+                                 onEnlarge: presentGraphicPreview)
                     .id("\(block.id)|\(scale)|\(contentWidth)|\(theme.isDark)")
                     .padding(.vertical, Metrics.mermaidOuterVerticalPadding)
             }
