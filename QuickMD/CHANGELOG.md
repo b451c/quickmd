@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Fenced ```svg blocks render as images, decoded natively by macOS (no WebKit, no bundled libraries; scripts inside the markup are ignored). They scale with the document zoom at their declared size, never wider than the column, open in the window-filling preview on click, and print / export to PDF as vector images. Markup that does not decode shows a notice on screen and the source as a code block in PDF. Suggested by [@arvearve](https://github.com/arvearve) in #30.
 - Click an image or a Mermaid diagram to open it in a window-filling preview (Escape or Done to return; the diagram preview keeps its pinch and button zoom). Contributed by [@arvearve](https://github.com/arvearve) (#28, #29).
 
 ### Fixed

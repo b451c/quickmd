@@ -82,6 +82,8 @@ private func blockSignature(_ block: MarkdownBlock) -> String {
         return "m|" + head(latex)
     case .mermaidDiagram(let source):
         return "d|" + head(source)
+    case .svgImage(let source):
+        return "s|" + head(source)
     }
 }
 

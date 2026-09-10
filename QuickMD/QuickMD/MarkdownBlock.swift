@@ -87,6 +87,9 @@ struct MarkdownBlock: Identifiable, Sendable {
         case heading(level: Int, title: String, sourceLine: Int)
         case mathBlock(latex: String)
         case mermaidDiagram(source: String)
+        /// Fenced ```svg block: the markup itself, decoded natively by NSImage
+        /// (CoreSVG) in `SVGBlockView` — never through WebKit.
+        case svgImage(source: String)
     }
 
     // Every factory takes `sourceLine` WITHOUT a default: the parser is the only
@@ -120,5 +123,8 @@ struct MarkdownBlock: Identifiable, Sendable {
     }
     static func mermaidDiagram(index: Int, source: String, sourceLine: Int) -> MarkdownBlock {
         MarkdownBlock(id: "mermaid-\(index)", content: .mermaidDiagram(source: source), sourceLine: sourceLine)
+    }
+    static func svgImage(index: Int, source: String, sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "svg-\(index)", content: .svgImage(source: source), sourceLine: sourceLine)
     }
 }

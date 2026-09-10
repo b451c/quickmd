@@ -109,6 +109,10 @@ enum DocumentSearch {
                 segments = [latex]
             case .mermaidDiagram(let source):
                 segments = [source]
+            case .svgImage:
+                // Markup, not prose: a hit inside `<path d="...">` could be
+                // neither shown nor highlighted, so SVG blocks are not searched.
+                segments = []
             }
 
             // Count individual occurrences across all segments

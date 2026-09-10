@@ -720,6 +720,13 @@ enum BlockHeightMeasurer {
                                + 2 * BlockLayout.Document.imageOuterVerticalPadding)
                 kinds.append(.reported)
 
+            case .svgImage:
+                // Same shape as `.image`: the decoded size only exists once the
+                // view is placed (decode is off-main), so the row is reported.
+                heights.append(BlockLayout.ImageBlock.placeholderHeight
+                               + 2 * BlockLayout.Document.imageOuterVerticalPadding)
+                kinds.append(.reported)
+
             case .mermaidDiagram:
                 heights.append((heightSeeds[block.id] ?? BlockLayout.Mermaid.defaultHeight)
                                + 2 * BlockLayout.Mermaid.verticalPadding

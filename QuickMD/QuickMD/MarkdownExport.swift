@@ -153,6 +153,10 @@ struct MarkdownPrintableView: View {
                     // Graceful degradation: render as styled code block in PDF
                     PrintableCodeBlockView(code: source, language: "mermaid")
                         .padding(.vertical, 4)
+
+                case .svgImage(let source):
+                    PrintableSVGView(source: source)
+                        .padding(.vertical, 4)
                 }
             }
         }
@@ -382,10 +386,34 @@ struct MarkdownPrintableBlockView: View {
                     // available within the render budget, or render failed)
                     PrintableCodeBlockView(code: source, language: "mermaid")
                 }
+
+            case .svgImage(let source):
+                PrintableSVGView(source: source)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.white)
+    }
+}
+
+// MARK: - Printable SVG View
+
+/// A fenced ```svg block in print/PDF: the same native NSImage decode as on
+/// screen (a plain SwiftUI `Image`, so `ImageRenderer` draws it — no
+/// representable involved), at its declared size capped to the page column;
+/// undecodable markup degrades to the styled code block like Mermaid does.
+struct PrintableSVGView: View {
+    let source: String
+
+    var body: some View {
+        if let image = SVGImageDecoder.decode(source) {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: image.size.width)
+        } else {
+            PrintableCodeBlockView(code: source, language: "svg")
+        }
     }
 }
 

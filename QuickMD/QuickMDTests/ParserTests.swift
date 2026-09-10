@@ -186,6 +186,42 @@ final class ParserTests: XCTestCase {
         XCTAssertTrue(code.contains("still code"))
     }
 
+    /// A ```svg fence is an image block (decoded natively by NSImage), not a
+    /// code block — case-insensitive like the mermaid fence, markup verbatim.
+    func testSvgFenceBecomesSvgImage() {
+        for lang in ["svg", "SVG"] {
+            let md = """
+            ```\(lang)
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
+              <rect width="20" height="10"/>
+            </svg>
+            ```
+            """
+            let blocks = parse(md)
+            guard case .svgImage(let source) = blocks[0].content else {
+                return XCTFail("expected svg image block for ```\(lang)")
+            }
+            XCTAssertTrue(source.hasPrefix("<svg"))
+            XCTAssertTrue(source.hasSuffix("</svg>"))
+            XCTAssertEqual(blocks[0].id, "svg-0")
+        }
+    }
+
+    /// The decode used on screen and in print: declared size, viewBox-only and
+    /// size-less markup all yield an image; a script element is inert; text
+    /// that is not SVG yields nil (the views then degrade to a notice / code).
+    func testSvgDecodeAcceptsMarkupAndRejectsGarbage() {
+        let sized = SVGImageDecoder.decode(#"<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120"><rect width="320" height="120"/></svg>"#)
+        XCTAssertEqual(sized?.size, CGSize(width: 320, height: 120))
+        let viewBox = SVGImageDecoder.decode(#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 50"><rect width="200" height="50"/></svg>"#)
+        XCTAssertEqual(viewBox?.size, CGSize(width: 200, height: 50))
+        XCTAssertNotNil(SVGImageDecoder.decode(#"<svg xmlns="http://www.w3.org/2000/svg"><circle cx="20" cy="20" r="10"/></svg>"#))
+        XCTAssertNotNil(SVGImageDecoder.decode(#"<svg width="10" height="10"><script>alert(1)</script><rect width="10" height="10"/></svg>"#))
+        XCTAssertNil(SVGImageDecoder.decode("not svg at all"))
+        XCTAssertNil(SVGImageDecoder.decode(""))
+        XCTAssertNil(SVGImageDecoder.decode("<div>html, not svg</div>"))
+    }
+
     func testMermaidFenceBecomesDiagram() {
         let md = """
         ```mermaid

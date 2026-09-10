@@ -40,6 +40,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Code blocks with syntax highlighting
 - **LaTeX math** — display (`$$...$$`) and inline (`$...$`) with TeX-quality rendering
 - **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more; click any diagram or image for a window-filling preview with pinch-to-zoom
+- **Inline SVG** — fenced ```svg blocks and `.svg` image links render natively (no web view), scale with the text and print as vectors
 - **Footnotes** — `[^id]` references with definitions at end of document
 - **Definition lists** — `Term` followed by `: definition` lines (PHP Markdown Extra / Pandoc `:` syntax); several terms per definition, several definitions per term, wrapped definitions hang under their text
 - Task lists with checkboxes (`- [ ]` / `- [x]`)
@@ -232,6 +233,7 @@ QuickMD/
 │   │   ├── CodeBlockView.swift     # NSTextView-backed code blocks (+ copy button)
 │   │   ├── MathBlockView.swift     # LaTeX display math ($$...$$)
 │   │   ├── MermaidBlockView.swift  # Mermaid diagrams (WKWebView + zoom + snapshot cache)
+│   │   ├── SVGBlockView.swift      # Fenced ```svg blocks via NSImage (CoreSVG)
 │   │   ├── TableBlockView.swift    # Table rendering with alignment
 │   │   ├── ImageBlockView.swift    # Local + remote image rendering
 │   │   ├── BlockquoteView.swift    # Nested blockquotes
@@ -317,6 +319,7 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Copy to clipboard (whole file + sections)
 - [x] LaTeX math rendering (`$$...$$`)
 - [x] Mermaid diagram rendering (flowcharts, sequence, pie, class, etc.)
+- [x] Inline SVG (fenced ```svg blocks, `.svg` image links)
 - [x] Security-Scoped Bookmarks for local images
 - [x] Persistent Table of Contents state
 - [x] Inline math (`$...$`)

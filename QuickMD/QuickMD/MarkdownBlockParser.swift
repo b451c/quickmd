@@ -147,6 +147,8 @@ struct MarkdownBlockParser: Sendable {
                 // to the closing one.
                 if language.lowercased() == "mermaid" {
                     blocks.append(.mermaidDiagram(index: blockIndex, source: codeContent, sourceLine: sourceLine))
+                } else if language.lowercased() == "svg" {
+                    blocks.append(.svgImage(index: blockIndex, source: codeContent, sourceLine: sourceLine))
                 } else {
                     blocks.append(.codeBlock(index: blockIndex, code: codeContent, language: language, sourceLine: sourceLine))
                 }

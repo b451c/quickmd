@@ -746,6 +746,11 @@ struct MarkdownView: View {
                 MathBlockView(latex: latex, theme: theme, fontScale: scale)
                     .padding(.vertical, Metrics.mathOuterVerticalPadding)
 
+            case .svgImage(let source):
+                SVGBlockView(source: source, theme: theme, fontScale: scale,
+                             contentWidth: contentWidth, onEnlarge: presentGraphicPreview)
+                    .padding(.vertical, Metrics.imageOuterVerticalPadding)
+
             case .mermaidDiagram(let source):
                 MermaidBlockView(blockId: block.id, source: source, theme: theme,
                                  heightCache: heightCache, fontScale: scale,
