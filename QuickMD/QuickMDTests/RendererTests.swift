@@ -115,6 +115,28 @@ final class RendererTests: XCTestCase {
         }
     }
 
+    /// Every paragraph style in `markdown`, in document order.
+    private func listStyles(_ markdown: String) throws -> [NSParagraphStyle] {
+        let r = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light), fontScale: 1)
+        let ns = try NSAttributedString(r.render(markdown), including: \.appKit)
+        var out: [NSParagraphStyle] = []
+        ns.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: ns.length)) { v, _, _ in
+            if let style = v as? NSParagraphStyle { out.append(style) }
+        }
+        return out
+    }
+
+    /// The items of ONE list must share a hanging indent, or their text starts
+    /// at a different x. The body font is not monospaced, so "1. " and "10. "
+    /// are 18.47 pt and 31.00 pt wide at a 21 pt body — a 12.5 pt step, visible
+    /// at a glance on any list that crosses ten items.
+    func testOrderedItemsOfOneListShareTheirHangingIndent() throws {
+        let markdown = (1...12).map { "\($0). alpha" }.joined(separator: "\n")
+        let indents = Set(try listStyles(markdown).map { $0.headIndent })
+        XCTAssertEqual(indents.count, 1,
+                       "items of one list hang at \(indents.sorted()) instead of sharing one indent")
+    }
+
     /// A wider marker has to hang further, or "10." would overlap its own text.
     func testWiderOrderedMarkerHangsFurther() throws {
         let single = try listStyle("1. alpha")
