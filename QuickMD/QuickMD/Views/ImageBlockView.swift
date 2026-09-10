@@ -14,6 +14,9 @@ struct ImageBlockView: View {
     let alt: String
     let theme: MarkdownTheme
     let documentURL: URL?
+    let fontScale: CGFloat
+    let contentWidth: CGFloat
+    var onEnlarge: (GraphicPreview) -> Void = { _ in }
 
     /// Display width cap and the pre-load placeholder height — see
     /// `BlockLayout.ImageBlock` (shared with `BlockHeightMeasurer`, which starts
@@ -43,11 +46,7 @@ struct ImageBlockView: View {
                             ProgressView()
                                 .frame(height: Metrics.placeholderHeight)
                         case .success(let image):
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(maxWidth: Metrics.maxDisplayWidth)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            graphicButton(image, fileURL: nil)
                         case .failure:
                             imageErrorView
                         @unknown default:
@@ -62,10 +61,24 @@ struct ImageBlockView: View {
 
         if !alt.isEmpty {
             Text(alt)
-                .font(.system(size: 12))
+                .font(.system(size: 12 * fontScale))
                 .foregroundColor(theme.secondaryTextColor)
                 .italic()
         }
+    }
+
+    private func graphicButton(_ image: Image, fileURL: URL?) -> some View {
+        Button {
+            onEnlarge(.image(image, title: alt, fileURL: fileURL))
+        } label: {
+            image.resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: Metrics.displayWidth(fontScale: fontScale, contentWidth: contentWidth))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .help("Click to enlarge image")
+        .accessibilityLabel(alt.isEmpty ? "Enlarge image" : "Enlarge image: \(alt)")
     }
 
     // MARK: - Local Image View
@@ -73,11 +86,7 @@ struct ImageBlockView: View {
     @ViewBuilder
     private func localImageView(for fileURL: URL) -> some View {
         if let image = localImage {
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: Metrics.maxDisplayWidth)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+            graphicButton(Image(nsImage: image), fileURL: fileURL)
         } else if isLoadingLocal {
             ProgressView()
                 .frame(height: Metrics.placeholderHeight)
@@ -109,7 +118,7 @@ struct ImageBlockView: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
         }
-        .frame(maxWidth: Metrics.maxDisplayWidth)
+        .frame(maxWidth: Metrics.displayWidth(fontScale: fontScale, contentWidth: contentWidth))
         .padding(.vertical, 12)
     }
 
@@ -162,25 +171,22 @@ struct ImageBlockView: View {
 
     /// Efficiently load and downsample image using ImageIO
     /// This prevents loading huge images (e.g., 4K) at full resolution
-    private static func loadDownsampledImage(from url: URL, maxPixelSize: Int) -> NSImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-            // Fallback to NSImage if CGImageSource fails
+    private nonisolated static func loadDownsampledImage(from url: URL, maxPixelSize: Int) -> NSImage? {
+        guard let cgImage = loadThumbnail(from: url, maxPixelSize: maxPixelSize) else {
             return NSImage(contentsOf: url)
         }
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }
 
+    fileprivate nonisolated static func loadThumbnail(from url: URL, maxPixelSize: Int) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: true
         ]
-
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-            // Fallback to NSImage if thumbnail creation fails
-            return NSImage(contentsOf: url)
-        }
-
-        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
     // MARK: - URL Resolution
@@ -217,5 +223,57 @@ struct ImageBlockView: View {
         .padding(12)
         .background(theme.codeBackgroundColor)
         .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+// The document owns presentation so the preview covers the whole window,
+// including sidebars, and survives virtualization of the originating row.
+enum GraphicPreview {
+    case image(Image, title: String, fileURL: URL?)
+    case diagram(String, isDark: Bool)
+}
+
+struct GraphicPreviewOverlay: View {
+    let preview: GraphicPreview
+    let onClose: () -> Void
+    @State private var detailedImage: NSImage?
+
+    var body: some View {
+        Group {
+            switch preview {
+            case .image(let image, let title, let fileURL):
+                VStack(spacing: 0) {
+                    HStack {
+                        Text(title.isEmpty ? "Image" : title).lineLimit(1)
+                        Spacer()
+                        Button("Done", action: onClose)
+                            .keyboardShortcut(.cancelAction)
+                    }
+                    .padding()
+                    GeometryReader { geometry in
+                        (detailedImage.map { Image(nsImage: $0) } ?? image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    }
+                    .padding(16)
+                }
+                .task(id: fileURL) {
+                    detailedImage = nil
+                    guard let fileURL else { return }
+                    let loaded = await Task.detached(priority: .userInitiated) {
+                        ImageBlockView.loadThumbnail(from: fileURL, maxPixelSize: 4096)
+                    }.value
+                    guard !Task.isCancelled else { return }
+                    if let loaded {
+                        detailedImage = NSImage(cgImage: loaded, size: NSSize(width: loaded.width, height: loaded.height))
+                    }
+                }
+            case .diagram(let source, let isDark):
+                MermaidZoomView(source: source, isDark: isDark, onClose: onClose)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background)
     }
 }

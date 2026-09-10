@@ -13,7 +13,12 @@
 <div id="output"></div>
 <script src="mermaid.min.js"></script>
 <script>
-  function renderDiagram(source, isDark) {
+  var resizeDiagram = null;
+  window.addEventListener('resize', function() {
+    if (resizeDiagram) resizeDiagram();
+  });
+
+  function renderDiagram(source, isDark, scale = 1, fitWindow = false) {
     // renderDiagram may run repeatedly on this page (theme switches re-render
     // in place). mermaid.render can leave its temp element behind after a
     // failed render — remove it or the next render throws on a duplicate id.
@@ -28,6 +33,7 @@
     });
 
     const container = document.getElementById('output');
+    resizeDiagram = null;
     container.innerHTML = '';
 
     // Report height back to Swift. The zoom viewer hosts this same template
@@ -44,7 +50,29 @@
 
     mermaid.render('diagram', source).then(function(result) {
       container.innerHTML = result.svg;
-      reportHeight();
+      const svg = container.querySelector('svg');
+      const bounds = svg.viewBox.baseVal;
+      const naturalWidth = bounds.width;
+      const naturalHeight = bounds.height;
+      if (fitWindow) {
+        document.body.style.display = 'flex';
+        document.body.style.alignItems = 'center';
+        document.body.style.minHeight = '100vh';
+        container.style.width = '100%';
+      }
+      resizeDiagram = function() {
+        if (naturalWidth > 0 && naturalHeight > 0) {
+          const factor = fitWindow
+            ? Math.min(window.innerWidth / naturalWidth, window.innerHeight / naturalHeight)
+            : Math.min(scale * Math.min(1, window.innerWidth / naturalWidth),
+                       window.innerWidth / naturalWidth);
+          svg.style.maxWidth = 'none';
+          svg.style.width = (naturalWidth * factor) + 'px';
+          svg.style.height = (naturalHeight * factor) + 'px';
+        }
+        reportHeight();
+      };
+      resizeDiagram();
     }).catch(function(err) {
       container.innerHTML = '<pre style="color:#e55;font-size:12px;padding:8px;">' +
         err.message.replace(/</g, '&lt;') + '</pre>';
