@@ -38,9 +38,14 @@ struct ExternalEditorPickerView: View {
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.secondary)
                 } footer: {
-                    Text("Tip: enable auto-save in your editor and QuickMD becomes a live preview — it reloads automatically whenever the file changes on disk.")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        // E-D4: which editors get the line link — from the
+                        // same table the URL builder uses. No toggle.
+                        Text(ExternalEditorManager.lineLinkExplanation)
+                        Text("Tip: enable auto-save in your editor and QuickMD becomes a live preview — it reloads automatically whenever the file changes on disk.")
+                    }
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
                 }
             }
             .formStyle(.grouped)
