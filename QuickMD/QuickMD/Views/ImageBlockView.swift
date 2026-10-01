@@ -3,12 +3,15 @@ import AppKit
 
 // MARK: - Image Block View
 
-/// Renders a markdown image with support for:
+/// Renders a markdown image from any source `ImageSource` understands:
 /// - Remote URLs (http://, https://)
-/// - Local absolute paths (/path/to/image.png)
+/// - Local absolute paths (/path/to/image.png) and file:// URLs
 /// - Relative paths (./images/photo.png) - resolved relative to document location
+/// - Inline `data:image/...` URLs (#32)
 ///
-/// Local images are downsampled to max 1200px to reduce memory usage
+/// Every source goes through `ImageLoader`: decoded off the main thread,
+/// downsampled to max 1200 px, and cached, so a row re-created by cell reuse
+/// starts from the cached bitmap at its real height.
 struct ImageBlockView: View {
     let url: String
     let alt: String
@@ -23,40 +26,59 @@ struct ImageBlockView: View {
     /// an image row at the placeholder height).
     typealias Metrics = BlockLayout.ImageBlock
 
-    /// Maximum pixel dimension for downsampling (2x for Retina)
-    private static let maxPixelDimension: Int = 1200
+    /// `url` resolved once per init. Pure (no I/O): for a `data:` URL it only
+    /// reads the header up to the first comma.
+    private let source: ImageSource?
 
-    /// Cached downsampled image for local files
-    @State private var localImage: NSImage?
-    @State private var isLoadingLocal = false
-    @State private var accessDenied = false
-    @State private var fileNotFound = false
+    @State private var image: NSImage?
+    @State private var failure: ImageLoadFailure?
+    /// The existing file the user declined folder access for (sandbox prompt).
+    @State private var accessDeniedURL: URL?
+
+    init(url: String, alt: String, theme: MarkdownTheme, documentURL: URL?,
+         fontScale: CGFloat, contentWidth: CGFloat,
+         onEnlarge: @escaping (GraphicPreview) -> Void = { _ in }) {
+        self.url = url
+        self.alt = alt
+        self.theme = theme
+        self.documentURL = documentURL
+        self.fontScale = fontScale
+        self.contentWidth = contentWidth
+        self.onEnlarge = onEnlarge
+        let source = ImageSource.resolve(url, documentURL: documentURL)
+        self.source = source
+        // Seed from the cache (precedent: `MermaidBlockView` seeding from
+        // `MermaidSnapshotStore`). NSTableView cell reuse re-creates this view
+        // and resets `@State`; without the seed every scroll-back would show
+        // the 100 pt placeholder, report it, then jump to the real height.
+        let cached = source.flatMap {
+            ImageLoader.cachedImage(for: url, source: $0, maxPixel: ImageLoader.displayMaxPixel)
+        }
+        _image = State(initialValue: cached)
+        // Same reasoning for failures known without I/O (a non-image or
+        // oversized `data:` URL, a recorded data:/remote failure): the row
+        // starts at the error view instead of the 100 pt spinner, so it reports
+        // one height, once.
+        _failure = State(initialValue: cached == nil
+                         ? source.flatMap { ImageLoader.knownFailure(for: url, source: $0) }
+                         : nil)
+    }
 
     var body: some View {
         Group {
-            if let imageURL = resolvedURL {
-                if imageURL.isFileURL {
-                    // Local file: use downsampled image
-                    localImageView(for: imageURL)
-                } else {
-                    // Remote URL: use AsyncImage
-                    AsyncImage(url: imageURL) { phase in
-                        switch phase {
-                        case .empty:
-                            ProgressView()
-                                .frame(height: Metrics.placeholderHeight)
-                        case .success(let image):
-                            graphicButton(image, fileURL: nil)
-                        case .failure:
-                            imageErrorView
-                        @unknown default:
-                            imageErrorView
-                        }
-                    }
-                }
-            } else {
+            if let image {
+                graphicButton(image)
+            } else if let accessDeniedURL {
+                accessDeniedView(for: accessDeniedURL)
+            } else if source == nil || failure != nil {
                 imageErrorView
+            } else {
+                ProgressView()
+                    .frame(height: Metrics.placeholderHeight)
             }
+        }
+        .task(id: url) {
+            await loadImage()
         }
 
         if !alt.isEmpty {
@@ -67,13 +89,13 @@ struct ImageBlockView: View {
         }
     }
 
-    private func graphicButton(_ image: Image, fileURL: URL?) -> some View {
+    private func graphicButton(_ image: NSImage) -> some View {
         Button {
-            onEnlarge(.image(image, title: alt, fileURL: fileURL))
+            onEnlarge(preview(for: image))
         } label: {
-            image.resizable()
+            Image(nsImage: image).resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: Metrics.displayWidth(fontScale: fontScale, contentWidth: contentWidth))
+                .frame(maxWidth: displayWidth(for: image))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
@@ -81,27 +103,40 @@ struct ImageBlockView: View {
         .accessibilityLabel(alt.isEmpty ? "Enlarge image" : "Enlarge image: \(alt)")
     }
 
-    // MARK: - Local Image View
+    /// GitHub parity (D4): the column cap from `ImageBlock.displayWidth`, but
+    /// never wider than the image's own width × zoom — the rule `SVGBlockView`
+    /// already used. A 90 px icon stays icon-sized instead of being blown up
+    /// (blurry) to 600 pt; large images are unchanged (the cap wins).
+    private func displayWidth(for image: NSImage) -> CGFloat {
+        let cap = Metrics.displayWidth(fontScale: fontScale, contentWidth: contentWidth)
+        guard image.size.width > 0 else { return cap }
+        return min(cap, image.size.width * fontScale)
+    }
 
-    @ViewBuilder
-    private func localImageView(for fileURL: URL) -> some View {
-        if let image = localImage {
-            graphicButton(Image(nsImage: image), fileURL: fileURL)
-        } else if isLoadingLocal {
-            ProgressView()
-                .frame(height: Metrics.placeholderHeight)
-        } else if accessDenied {
-            accessDeniedView(for: fileURL)
-        } else if fileNotFound {
-            imageErrorView
-        } else {
-            Color.clear
-                .frame(height: Metrics.placeholderHeight)
-                .task {
-                    await loadLocalImage(from: fileURL)
-                }
+    /// The window-filling preview re-decodes at 4096 px. Local files keep the
+    /// pre-existing path (`fileURL`, decoded by the overlay); `data:` and
+    /// remote images hand over a loader closure — the preview tier is not
+    /// cached, so it decodes (or re-fetches) on demand.
+    private func preview(for image: NSImage) -> GraphicPreview {
+        let shown = Image(nsImage: image)
+        switch source {
+        case .file(let fileURL):
+            // The undecoded `%` fallback, if that is the file that exists.
+            let existing = ImageLoader.fileCandidates(for: fileURL, raw: url)
+                .first { FileManager.default.fileExists(atPath: $0.path) } ?? fileURL
+            return .image(shown, title: alt, fileURL: existing)
+        case .some(let source):
+            let raw = url
+            return .image(shown, title: alt, fileURL: nil, loadDetail: {
+                try? await ImageLoader.load(raw: raw, source: source,
+                                            maxPixel: ImageLoader.previewMaxPixel).get()
+            })
+        case nil:
+            return .image(shown, title: alt, fileURL: nil)
         }
     }
+
+    // MARK: - Loading
 
     /// Placeholder shown when the user denied folder access for a local image.
     private func accessDeniedView(for fileURL: URL) -> some View {
@@ -113,7 +148,7 @@ struct ImageBlockView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(.secondary)
             Button("Grant Folder Access") {
-                Task { await retryWithAccess(for: fileURL) }
+                Task { await retryWithAccess() }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -122,93 +157,60 @@ struct ImageBlockView: View {
         .padding(.vertical, 12)
     }
 
-    /// Load and downsample local image off the main thread.
-    /// If loading fails (e.g. sandbox denies access), prompts the user
-    /// to grant folder access and retries once.
-    private func loadLocalImage(from url: URL) async {
-        isLoadingLocal = true
-        defer { isLoadingLocal = false }
-
-        // First attempt — try loading directly
-        let firstAttempt = await Task.detached(priority: .userInitiated) {
-            Self.loadDownsampledImage(from: url, maxPixelSize: Self.maxPixelDimension)
-        }.value
-
-        if let image = firstAttempt {
-            await MainActor.run { self.localImage = image }
+    /// Load through `ImageLoader` (decode off the main thread). A local file
+    /// that exists but can't be read is most likely the sandbox: prompt for
+    /// folder access and retry once — the pre-existing (1.x) flow, unchanged.
+    private func loadImage() async {
+        guard let source else { return }
+        if let known = ImageLoader.knownFailure(for: url, source: source) {
+            // Already showing it when seeded in `init`; no spinner in between.
+            image = nil
+            accessDeniedURL = nil
+            if failure != known { failure = known }
             return
         }
+        failure = nil
+        accessDeniedURL = nil
+        // Re-seed for the CURRENT url: `.task(id:)` also re-runs when the url
+        // of a live view changes, and the old bitmap must not linger.
+        let seeded = ImageLoader.cachedImage(for: url, source: source, maxPixel: ImageLoader.displayMaxPixel)
+        if image !== seeded { image = seeded }
 
-        // Check if the file actually exists before assuming sandbox denial.
-        // If it simply doesn't exist, there's nothing the user can do.
-        let fileExists = FileManager.default.fileExists(atPath: url.path)
-        guard fileExists else {
-            fileNotFound = true
+        let first = await ImageLoader.load(raw: url, source: source, maxPixel: ImageLoader.displayMaxPixel)
+        if case .failure(.unreadable(let fileURL)) = first {
+            // File exists but couldn't load — likely sandbox. Request access and retry.
+            let granted = SandboxAccessManager.shared.ensureAccess(forParentOf: fileURL)
+            guard granted else {
+                guard !Task.isCancelled else { return }
+                image = nil
+                accessDeniedURL = fileURL
+                return
+            }
+            let retry = await ImageLoader.load(raw: url, source: source, maxPixel: ImageLoader.displayMaxPixel)
+            guard !Task.isCancelled else { return }
+            apply(retry)
             return
         }
+        guard !Task.isCancelled else { return }
+        apply(first)
+    }
 
-        // File exists but couldn't load — likely sandbox. Request access and retry.
-        let granted = await SandboxAccessManager.shared.ensureAccess(forParentOf: url)
-        guard granted else {
-            accessDenied = true
-            return
-        }
-
-        let retryAttempt = await Task.detached(priority: .userInitiated) {
-            Self.loadDownsampledImage(from: url, maxPixelSize: Self.maxPixelDimension)
-        }.value
-
-        await MainActor.run {
-            self.localImage = retryAttempt
+    private func apply(_ result: Result<NSImage, ImageLoadFailure>) {
+        switch result {
+        case .success(let loaded):
+            if loaded !== image { image = loaded }
+        case .failure(let loadFailure):
+            // Terminal: shows the error placeholder. (Before, a retry that still
+            // failed fell back to the initial state and re-ran the load forever.)
+            image = nil
+            failure = loadFailure
         }
     }
 
     /// Retry loading after the user clicks "Grant Folder Access".
-    private func retryWithAccess(for url: URL) async {
-        accessDenied = false
-        await loadLocalImage(from: url)
-    }
-
-    /// Efficiently load and downsample image using ImageIO
-    /// This prevents loading huge images (e.g., 4K) at full resolution
-    private nonisolated static func loadDownsampledImage(from url: URL, maxPixelSize: Int) -> NSImage? {
-        guard let cgImage = loadThumbnail(from: url, maxPixelSize: maxPixelSize) else {
-            return NSImage(contentsOf: url)
-        }
-        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-    }
-
-    fileprivate nonisolated static func loadThumbnail(from url: URL, maxPixelSize: Int) -> CGImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true
-        ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-    }
-
-    // MARK: - URL Resolution
-
-    /// Resolve image URL based on type:
-    /// - http/https: Use as-is
-    /// - file://: Use as-is
-    /// - Absolute path (/...): Convert to file URL
-    /// - Relative path: Resolve relative to document directory
-    private var resolvedURL: URL? {
-        if url.hasPrefix("http://") || url.hasPrefix("https://") {
-            return URL(string: url)
-        } else if url.hasPrefix("file://") {
-            return URL(string: url)
-        } else if url.hasPrefix("/") {
-            return URL(fileURLWithPath: url)
-        } else if let docURL = documentURL {
-            // Relative path - resolve relative to document directory
-            return docURL.deletingLastPathComponent().appendingPathComponent(url)
-        } else {
-            return URL(string: url)
-        }
+    private func retryWithAccess() async {
+        accessDeniedURL = nil
+        await loadImage()
     }
 
     // MARK: - Error View
@@ -216,7 +218,8 @@ struct ImageBlockView: View {
     private var imageErrorView: some View {
         HStack {
             Image(systemName: "photo")
-            Text("Image: \(alt.isEmpty ? url : alt)")
+            // Never the raw url: a `data:` payload is megabytes (#32).
+            Text(ImageLabel.errorText(alt: alt, raw: url, source: source, failure: failure))
         }
         .font(.system(size: 13))
         .foregroundColor(theme.secondaryTextColor)
@@ -229,7 +232,9 @@ struct ImageBlockView: View {
 // The document owns presentation so the preview covers the whole window,
 // including sidebars, and survives virtualization of the originating row.
 enum GraphicPreview {
-    case image(Image, title: String, fileURL: URL?)
+    /// `fileURL`: a local image the overlay re-decodes at 4096 px.
+    /// `loadDetail`: the same for `data:` / remote images, through `ImageLoader`.
+    case image(Image, title: String, fileURL: URL?, loadDetail: (() async -> NSImage?)? = nil)
     case diagram(String, theme: MarkdownTheme)
 }
 
@@ -242,7 +247,7 @@ struct GraphicPreviewOverlay: View {
     var body: some View {
         Group {
             switch preview {
-            case .image(let image, let title, let fileURL):
+            case .image(let image, let title, let fileURL, let loadDetail):
                 VStack(spacing: 0) {
                     HStack {
                         Text(title.isEmpty ? "Image" : title)
@@ -263,13 +268,18 @@ struct GraphicPreviewOverlay: View {
                 }
                 .task(id: fileURL) {
                     detailedImage = nil
-                    guard let fileURL else { return }
-                    let loaded = await Task.detached(priority: .userInitiated) {
-                        ImageBlockView.loadThumbnail(from: fileURL, maxPixelSize: 4096)
-                    }.value
-                    guard !Task.isCancelled else { return }
-                    if let loaded {
-                        detailedImage = NSImage(cgImage: loaded, size: NSSize(width: loaded.width, height: loaded.height))
+                    if let fileURL {
+                        let loaded = await Task.detached(priority: .userInitiated) {
+                            ImageLoader.loadThumbnail(from: fileURL, maxPixelSize: ImageLoader.previewMaxPixel)
+                        }.value
+                        guard !Task.isCancelled else { return }
+                        if let loaded {
+                            detailedImage = NSImage(cgImage: loaded, size: NSSize(width: loaded.width, height: loaded.height))
+                        }
+                    } else if let loadDetail {
+                        let loaded = await loadDetail()
+                        guard !Task.isCancelled else { return }
+                        detailedImage = loaded
                     }
                 }
             case .diagram(let source, let diagramTheme):

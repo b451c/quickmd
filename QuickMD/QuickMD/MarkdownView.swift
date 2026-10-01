@@ -384,6 +384,8 @@ struct MarkdownView: View {
         })
         .focusedSceneValue(\.documentText, currentText)
         .focusedSceneValue(\.exportName, exportName)
+        // Print / PDF resolve relative image paths against the document folder.
+        .focusedSceneValue(\.exportDocumentLocation, ExportDocumentLocation(url: documentURL))
         .focusedSceneValue(\.searchAction, { toggleSearch() })
         .focusedSceneValue(\.toggleToCAction, {
             // No-op in reading mode: the sidebars are hidden and must come back
@@ -946,7 +948,10 @@ struct MarkdownView: View {
             // handing control to another application.
             let alert = NSAlert()
             alert.messageText = "Open \u{201C}\(scheme):\u{201D} link?"
-            alert.informativeText = "This link opens another application:\n\(url.absoluteString)"
+            // Middle-truncated: a document can carry a multi-megabyte URL
+            // (a `data:` link, #32) and an alert does not scroll.
+            alert.informativeText = "This link opens another application:\n"
+                + DisplayString.middleTruncated(url.absoluteString, maxLength: 200)
             alert.alertStyle = .warning
             alert.addButton(withTitle: "Open")
             alert.addButton(withTitle: "Cancel")
