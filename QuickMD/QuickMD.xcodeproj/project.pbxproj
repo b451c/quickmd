@@ -121,6 +121,7 @@
 		A1B2C3D401000110 /* DocumentReadingPosition.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000110 /* DocumentReadingPosition.swift */; };
 		A1B2C3D401000111 /* DocumentReadingPosition.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000110 /* DocumentReadingPosition.swift */; };
 		A1B2C3D401000112 /* ExternalEditorLineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000111 /* ExternalEditorLineTests.swift */; };
+		A1B2C3D4010000F0 /* HeadingLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000F0 /* HeadingLayoutTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -141,6 +142,7 @@
 		A1B2C3D4000000C1 /* DocumentSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentSelectionTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000110 /* DocumentReadingPosition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentReadingPosition.swift; sourceTree = "<group>"; };
 		A1B2C3D400000111 /* ExternalEditorLineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalEditorLineTests.swift; sourceTree = "<group>"; };
+		A1B2C3D4000000F0 /* HeadingLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadingLayoutTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000001 /* QuickMDApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickMDApp.swift; sourceTree = "<group>"; };
 		A1B2C3D400000002 /* MarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDocument.swift; sourceTree = "<group>"; };
 		A1B2C3D400000003 /* MarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownView.swift; sourceTree = "<group>"; };
@@ -265,6 +267,7 @@
 				A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */,
 				A1B2C3D400000082 /* ImageLoadingTests.swift */,
 				A1B2C3D4000000E1 /* HTMLImageTests.swift */,
+				A1B2C3D4000000F0 /* HeadingLayoutTests.swift */,
 				A1B2C3D4000000C1 /* DocumentSelectionTests.swift */,
 				A1B2C3D400000111 /* ExternalEditorLineTests.swift */,
 			);
@@ -611,6 +614,7 @@
 				A1B2C3D4010000C2 /* DocumentSelectionTests.swift in Sources */,
 				A1B2C3D401000111 /* DocumentReadingPosition.swift in Sources (Tests) */,
 				A1B2C3D401000112 /* ExternalEditorLineTests.swift in Sources */,
+				A1B2C3D4010000F0 /* HeadingLayoutTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

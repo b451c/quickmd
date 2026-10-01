@@ -314,12 +314,25 @@ struct MarkdownRenderer: Sendable {
 
     func renderHeader(_ text: String, level: Int) -> AttributedString {
         var attr = renderInlineFormatting(text)
+        attr.setDualFont(size: headerFontSize(level: level), bold: true, fonts: theme.fonts)
+        attr.setDualForeground(theme.textColor)
+        return attr
+    }
+
+    /// Point size of a level-`level` heading at this renderer's scale.
+    func headerFontSize(level: Int) -> CGFloat {
         let sizes: [CGFloat] = [32, 26, 22, 18, 16, 14]
         // Safety guard: ensure level is within bounds to prevent crash
         let safeLevel = max(1, min(level, 6))
-        attr.setDualFont(size: scaled(sizes[safeLevel - 1]), bold: true, fonts: theme.fonts)
-        attr.setDualForeground(theme.textColor)
-        return attr
+        return scaled(sizes[safeLevel - 1])
+    }
+
+    /// The AppKit font `renderHeader` sets on EVERY character of a heading
+    /// (the same `DocumentFonts.appKit` call `setDualFont(bold: true)` makes).
+    /// `HeadingBlockView` aligns its copy button to this font's first
+    /// baseline; read here rather than back from the AttributedString run.
+    func headerAppKitFont(level: Int) -> NSFont {
+        theme.fonts.appKit(size: headerFontSize(level: level), weight: .bold)
     }
 
     /// Inline-renders a quoted body — a blockquote or a GFM alert — into ONE

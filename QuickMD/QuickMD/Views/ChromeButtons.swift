@@ -4,36 +4,67 @@ import AppKit
 // MARK: - Heading Block View (hover-to-copy section)
 
 /// Heading with hover-to-reveal copy button that copies the section.
-/// NOTE: deliberately NO `.textSelection(.enabled)` — that modifier's internal
-/// SelectionOverlay is what makes LazyVStack freeze (constraints.md, bug B).
-/// Keeping plain Text preserves the inline copy-button layout; copying a
-/// heading is covered by the copy-section button itself.
+///
+/// Since v1.11 (S-D7) the title renders through `TextBlockView` — an NSTextView
+/// — so it is part of the document selection (drag, ⌘A, ⌘C), search hits are
+/// painted by `applyNSSearchHighlight`, and links go through the text view's
+/// delegate → `onLink`. Never `Text(...).textSelection(.enabled)`: its
+/// SelectionOverlay is constraints.md bug B.
+///
+/// The copy button is an OVERLAY in the trailing strip the title gives up
+/// (`Metrics.copyButtonReservedWidth`, the same width `BlockHeightMeasurer`
+/// wraps the title at), not an HStack sibling: an HStack re-negotiates an
+/// NSViewRepresentable child's width every pass (scroll-freeze rule 4). An
+/// overlay takes no space, so the old HStack's first-baseline union is
+/// reproduced with explicit insets — see `BlockLayout.Heading.titleGeometry`.
 struct HeadingBlockView: View {
     let id: String
     let level: Int
     let title: String
     let theme: MarkdownTheme
     var fontScale: CGFloat = 1.0
+    /// `TextBlockView`'s cache invalidation signal (bumped per parse).
+    var contentVersion: Int = 0
     let searchText: String
     let focusedOccurrence: Int?
+    let onLink: (URL) -> Void
     let onCopySection: () -> Void
     @State private var isHovered = false
     @State private var hideWorkItem: DispatchWorkItem?
 
-    /// Copy-button spacing and icon metrics — see `BlockLayout.Heading`
-    /// (shared with `BlockHeightMeasurer`, which subtracts the button from the
-    /// width the title wraps at).
+    /// Copy-button spacing, icon metrics and the title/button geometry — see
+    /// `BlockLayout.Heading` (shared with `BlockHeightMeasurer`, which
+    /// subtracts the button from the width the title wraps at).
     typealias Metrics = BlockLayout.Heading
 
     var body: some View {
-        let headingAttr = MarkdownRenderer(theme: theme, fontScale: fontScale).renderHeader(title, level: level)
-        HStack(alignment: .firstTextBaseline, spacing: Metrics.copyButtonSpacing) {
-            if searchText.isEmpty {
-                Text(headingAttr)
-            } else {
-                Text(searchHighlight(headingAttr, term: searchText, focusedOccurrence: focusedOccurrence))
-            }
+        // The same string the selection copies: `MarkdownView.selectableText`
+        // converts this exact `renderHeader` output through the same converter.
+        let renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
+        let headingAttr = renderer.renderHeader(title, level: level)
+        // Every character carries the heading font (`renderHeader` sets it over
+        // the whole string), so it is the font TextKit sets the first line in.
+        let geometry = Metrics.titleGeometry(
+            titleFirstBaseline: Metrics.titleFirstBaseline(font: renderer.headerAppKitFont(level: level)))
 
+        TextBlockView(
+            blockId: id,
+            attributed: headingAttr,
+            hasInlineMath: false,
+            theme: theme,
+            fontScale: fontScale,
+            contentVersion: contentVersion,
+            searchTerm: searchText,
+            focusedOccurrence: focusedOccurrence,
+            cacheScope: "\(level)|\(title)",
+            onLink: onLink
+        )
+        .padding(.trailing, Metrics.copyButtonReservedWidth)
+        .padding(.top, geometry.titleTopInset)
+        .frame(minHeight: geometry.minimumHeight, alignment: .top)
+        .overlay(alignment: .topTrailing) {
+            // `buttonTopInset` puts the icon's baseline on the title's first
+            // baseline, as the old `.firstTextBaseline` HStack did.
             Button {
                 onCopySection()
             } label: {
@@ -46,6 +77,7 @@ struct HeadingBlockView: View {
             .buttonStyle(.plain)
             .help("Copy section")
             .opacity(isHovered ? 1 : 0)
+            .padding(.top, geometry.buttonTopInset)
         }
         .contentShape(Rectangle())
         .onHover { hovering in
