@@ -35,6 +35,12 @@ struct CodeBlockView: View {
     var fontScale: CGFloat = 1.0
     var searchText: String = ""
     var focusedOccurrence: Int? = nil
+    /// The copy button's action: `MarkdownView.copyToClipboard`, which writes
+    /// through `DocumentClipboard` and shows the "Copied N characters" toast
+    /// in the tab that owns this block (S-D9). A closure rather than a
+    /// notification, because every open tab would observe a notification.
+    /// Nil (previews): the code is still copied, just without a toast.
+    var onCopy: ((String) -> Void)? = nil
 
     /// Cache of the highlighted NSAttributedString. Keyed by `cacheKey` so we
     /// only recompute when the code or theme actually changes — not on every
@@ -105,8 +111,13 @@ struct CodeBlockView: View {
             // block's height: see `BlockLayout.Code.copyButtonFloorHeight`,
             // which BlockHeightMeasurer applies from these same constants.
             Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(code, forType: .string)
+                if let onCopy {
+                    onCopy(code)
+                } else {
+                    DocumentClipboard.write(plain: code, rtf: nil)
+                }
+                // The checkmark stays: it is the feedback AT the button, the
+                // toast is the one every copy action shares.
                 justCopied = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                     justCopied = false

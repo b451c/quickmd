@@ -58,7 +58,7 @@ struct MarkdownView: View {
     @AppStorage("isDocumentListVisible") private var isDocumentListVisible: Bool = false
     @AppStorage("documentListWidth") private var documentListWidth: Double = 220
     @State private var headings: [ToCEntry] = []
-    /// Transient bottom toast ("Copied!", "Opened in …"). Nil = hidden.
+    /// Transient bottom toast ("Copied 12 characters", "Opened in …"). Nil = hidden.
     @State private var toastText: String?
     /// Pre-computed focused block ID — updated only in navigateMatch/updateMatchResults
     @State private var focusedBlockId: String? = nil
@@ -719,8 +719,11 @@ struct MarkdownView: View {
                     .padding(.vertical, Metrics.tableOuterVerticalPadding)
 
             case .codeBlock(let code, let language):
+                // The copy button's toast belongs to THIS tab: a closure, not a
+                // notification every open document would observe.
                 CodeBlockView(code: code, language: language, theme: theme,
-                              fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc)
+                              fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc,
+                              onCopy: { copyToClipboard($0) })
                     .padding(.vertical, Metrics.codeOuterVerticalPadding)
 
             case .image(let url, let alt, let width):
@@ -793,13 +796,16 @@ struct MarkdownView: View {
 
     // MARK: - Clipboard Helpers
 
+    /// Copy Markdown (⌘⇧C, the Copy pill), Copy section (heading button, ToC)
+    /// and the code block's copy button: plain text through the one clipboard
+    /// path, with the same "Copied N characters · M words" toast as a
+    /// selection copy (S-D9) — the count tells the reader WHAT was copied,
+    /// which "Copied!" never did (a section can be one line or fifty).
     private func copyToClipboard(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        showToast("Copied!")
+        showToast(DocumentClipboard.write(plain: text, rtf: nil))
     }
 
-    /// ⌘C / context-menu Copy of the document selection (v1.11 S-D8/S-D9):
+    /// ⌘C / context-menu Copy / auto-copy of the document selection (v1.11 S-D8/S-D9):
     /// plain text + RTF through `DocumentClipboard.write`, and the toast says
     /// what was copied ("Copied 1,234 characters · 210 words").
     private func copySelectionToClipboard(_ output: DocumentCopyOutput) {
