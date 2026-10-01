@@ -53,6 +53,19 @@ struct FocusedExportNameKey: FocusedValueKey {
     typealias Value = String
 }
 
+/// The focused document's file URL for print / PDF export, so relative image
+/// paths resolve against the document's folder (before #32 no document URL
+/// reached the export path and every relative image printed as a placeholder).
+/// Wrapped because the value is optional (untitled buffers) and the optional
+/// `focusedSceneValue(_:_:)` overload is macOS 14+ — see `FocusedExportNameKey`.
+struct ExportDocumentLocation {
+    let url: URL?
+}
+
+struct FocusedExportDocumentLocationKey: FocusedValueKey {
+    typealias Value = ExportDocumentLocation
+}
+
 extension FocusedValues {
     var documentText: String? {
         get { self[FocusedDocumentTextKey.self] }
@@ -61,6 +74,10 @@ extension FocusedValues {
     var exportName: String? {
         get { self[FocusedExportNameKey.self] }
         set { self[FocusedExportNameKey.self] = newValue }
+    }
+    var exportDocumentLocation: ExportDocumentLocation? {
+        get { self[FocusedExportDocumentLocationKey.self] }
+        set { self[FocusedExportDocumentLocationKey.self] = newValue }
     }
     var searchAction: (() -> Void)? {
         get { self[FocusedSearchActionKey.self] }
@@ -102,12 +119,15 @@ extension FocusedValues {
 
 struct MarkdownPrintableView: View {
     let documentText: String
+    /// Base for relative image paths (nil for an untitled buffer).
+    let documentURL: URL?
 
     /// Parsed blocks with light theme - computed once on init
     private let lightBlocks: [MarkdownBlock]
 
-    init(documentText: String) {
+    init(documentText: String, documentURL: URL? = nil) {
         self.documentText = documentText
+        self.documentURL = documentURL
         self.lightBlocks = MarkdownBlockParser(colorScheme: .light).parse(documentText)
     }
 
@@ -129,7 +149,7 @@ struct MarkdownPrintableView: View {
                         .padding(.vertical, 4)
 
                 case .image(let url, let alt):
-                    PrintableImageView(url: url, alt: alt)
+                    PrintableImageView(url: url, alt: alt, documentURL: documentURL)
                         .padding(.vertical, 8)
 
                 case .blockquote(let content, let level):
@@ -284,22 +304,36 @@ struct PrintableCodeBlockView: View {
 
 // MARK: - Printable Image View
 
+/// An image in print/PDF. Same resolution and decoder as the screen
+/// (`ImageSource` + `ImageLoader`), synchronously because `ImageRenderer`
+/// draws now: local files and `data:` URLs decode at 2000 px (cached — the
+/// export renders each block twice), remote images only if the screen already
+/// has them (PDF never touches the network). No sandbox prompt from here: an
+/// unreadable local file prints the placeholder.
 struct PrintableImageView: View {
     let url: String
     let alt: String
+    var documentURL: URL? = nil
+
+    /// Page column cap. The D4 rule applies as on screen: an image is never
+    /// drawn wider than its own width, so icons stay icon-sized.
+    private static let maxWidth: CGFloat = 500
+    private static let maxHeight: CGFloat = 700
 
     var body: some View {
+        let source = ImageSource.resolve(url, documentURL: documentURL)
         VStack(alignment: .leading, spacing: 4) {
-            if let imageURL = resolvedURL, let nsImage = loadImage(from: imageURL) {
+            if let source, let nsImage = Self.load(raw: url, source: source) {
                 Image(nsImage: nsImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: 500, maxHeight: 700)
+                    .frame(maxWidth: Self.width(for: nsImage), maxHeight: Self.maxHeight)
             } else {
                 HStack {
                     Image(systemName: "photo")
                         .foregroundColor(Color(white: 0.5))
-                    Text("Image: \(alt.isEmpty ? url : alt)")
+                    // Never the raw url: a `data:` payload is megabytes (#32).
+                    Text(ImageLabel.errorText(alt: alt, raw: url, source: source))
                         .foregroundColor(Color(white: 0.5))
                 }
                 .font(.system(size: 11))
@@ -317,22 +351,35 @@ struct PrintableImageView: View {
         }
     }
 
-    private var resolvedURL: URL? {
-        if url.hasPrefix("http://") || url.hasPrefix("https://") {
-            return URL(string: url)
-        } else if url.hasPrefix("file://") {
-            return URL(string: url)
-        } else if url.hasPrefix("/") {
-            return URL(fileURLWithPath: url)
-        } else {
-            return URL(string: url)
-        }
+    private static func width(for image: NSImage) -> CGFloat {
+        guard image.size.width > 0 else { return maxWidth }
+        return min(maxWidth, image.size.width)
     }
 
-    private func loadImage(from url: URL) -> NSImage? {
-        // Only load local file images - remote URLs would block main thread
-        guard url.isFileURL else { return nil }
-        return NSImage(contentsOf: url)
+    /// Local files first get the folder's SAVED bookmark restored, silently:
+    /// otherwise ⌘P right after launch prints every relative image the screen
+    /// has not loaded yet (below the fold) as a placeholder, although access
+    /// was granted in an earlier session. Never the prompting path — no
+    /// NSOpenPanel from print.
+    private static func load(raw: String, source: ImageSource) -> NSImage? {
+        if case .file(let fileURL) = source {
+            PrintFolderAccess.restoreSavedAccess(forParentOf: fileURL)
+        }
+        return ImageLoader.loadSync(raw: raw, source: source, maxPixel: ImageLoader.printMaxPixel)
+    }
+}
+
+/// Once per folder per session: `restoreAccess` starts a security-scoped
+/// access each time it succeeds, and `PrintableImageView.body` runs twice per
+/// image per export — the memo keeps that to one start per folder.
+@MainActor
+enum PrintFolderAccess {
+    private static var attempted: Set<String> = []
+
+    static func restoreSavedAccess(forParentOf fileURL: URL) {
+        let folder = fileURL.deletingLastPathComponent()
+        guard attempted.insert(folder.standardizedFileURL.path).inserted else { return }
+        SandboxAccessManager.shared.restoreAccess(for: folder)
     }
 }
 
@@ -343,6 +390,8 @@ struct MarkdownPrintableBlockView: View {
     /// Pre-rendered Mermaid diagrams keyed by source (MermaidPDFRenderer).
     /// Sources without an entry fall back to the styled-code representation.
     var mermaidImages: [String: NSImage] = [:]
+    /// Base for relative image paths (nil for an untitled buffer).
+    var documentURL: URL? = nil
     private let theme = MarkdownTheme.exportTheme(for: .light)
     private let renderer = MarkdownRenderer(colorScheme: .light)
 
@@ -360,7 +409,7 @@ struct MarkdownPrintableBlockView: View {
                 PrintableCodeBlockView(code: code, language: language)
 
             case .image(let url, let alt):
-                PrintableImageView(url: url, alt: alt)
+                PrintableImageView(url: url, alt: alt, documentURL: documentURL)
 
             case .blockquote(let content, let level):
                 PrintableBlockquoteView(content: content, level: level)
@@ -511,7 +560,8 @@ class PDFExportManager {
     static let contentWidth: CGFloat = pageWidth - (margin * 2)  // 532
     static let contentHeight: CGFloat = pageHeight - (margin * 2) // 712
 
-    static func exportToPDF(documentText: String, suggestedName: String = "document") {
+    static func exportToPDF(documentText: String, suggestedName: String = "document",
+                            documentURL: URL? = nil) {
         guard !documentText.isEmpty else {
             showError("No document content to export")
             return
@@ -539,7 +589,8 @@ class PDFExportManager {
                     sources: mermaidSources, width: contentWidth)
 
                 guard let pdfData = Self.generateMultiPagePDF(blocks: blocks,
-                                                              mermaidImages: mermaidImages) else {
+                                                              mermaidImages: mermaidImages,
+                                                              documentURL: documentURL) else {
                     Self.showError("Failed to generate PDF")
                     return
                 }
@@ -564,12 +615,17 @@ class PDFExportManager {
         let yOffset: CGFloat
     }
 
-    static func generateMultiPagePDF(documentText: String) -> Data? {
-        generateMultiPagePDF(blocks: MarkdownBlockParser(colorScheme: .light).parse(documentText))
+    static func generateMultiPagePDF(documentText: String, documentURL: URL? = nil) -> Data? {
+        generateMultiPagePDF(blocks: MarkdownBlockParser(colorScheme: .light).parse(documentText),
+                             documentURL: documentURL)
     }
 
+    /// `documentURL` is the base for relative image paths (nil = untitled).
     static func generateMultiPagePDF(blocks: [MarkdownBlock],
-                                     mermaidImages: [String: NSImage] = [:]) -> Data? {
+                                     mermaidImages: [String: NSImage] = [:],
+                                     documentURL: URL? = nil) -> Data? {
+        // The 2000 px image tier serves this export's two render passes only.
+        defer { ImageLoader.clearPrintCache() }
         guard !blocks.isEmpty else {
             logger.error("No blocks parsed from document")
             return nil
@@ -579,7 +635,8 @@ class PDFExportManager {
         var measuredBlocks: [(block: MarkdownBlock, size: CGSize)] = []
 
         for block in blocks {
-            let blockView = MarkdownPrintableBlockView(block: block, mermaidImages: mermaidImages)
+            let blockView = MarkdownPrintableBlockView(block: block, mermaidImages: mermaidImages,
+                                                       documentURL: documentURL)
                 .frame(width: contentWidth)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -638,7 +695,8 @@ class PDFExportManager {
             // Draw each placed segment using the vector renderer
             for placed in pageSegments {
                 let segment = placed.segment
-                let blockView = MarkdownPrintableBlockView(block: segment.block, mermaidImages: mermaidImages)
+                let blockView = MarkdownPrintableBlockView(block: segment.block, mermaidImages: mermaidImages,
+                                                           documentURL: documentURL)
                     .frame(width: contentWidth)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -706,11 +764,12 @@ import PDFKit
 @MainActor
 class PrintManager {
 
-    static func printDocument(documentText: String) {
+    static func printDocument(documentText: String, documentURL: URL? = nil) {
         guard !documentText.isEmpty else { return }
 
         // Use the same multi-page PDF generation as export
-        guard let pdfData = PDFExportManager.generateMultiPagePDF(documentText: documentText) else {
+        guard let pdfData = PDFExportManager.generateMultiPagePDF(documentText: documentText,
+                                                                  documentURL: documentURL) else {
             showError("Failed to render document for printing")
             return
         }
@@ -845,11 +904,13 @@ struct PrintableMathBlockView: View {
 struct ExportPDFCommand: View {
     @FocusedValue(\.documentText) private var documentText
     @FocusedValue(\.exportName) private var exportName
+    @FocusedValue(\.exportDocumentLocation) private var documentLocation
 
     var body: some View {
         Button("Export as PDF\u{2026}") {
             if let text = documentText {
-                PDFExportManager.exportToPDF(documentText: text, suggestedName: exportName ?? "document")
+                PDFExportManager.exportToPDF(documentText: text, suggestedName: exportName ?? "document",
+                                             documentURL: documentLocation?.url)
             }
         }
         .disabled(documentText?.isEmpty ?? true)
@@ -859,11 +920,12 @@ struct ExportPDFCommand: View {
 
 struct PrintCommand: View {
     @FocusedValue(\.documentText) private var documentText
+    @FocusedValue(\.exportDocumentLocation) private var documentLocation
 
     var body: some View {
         Button("Print\u{2026}") {
             if let text = documentText {
-                PrintManager.printDocument(documentText: text)
+                PrintManager.printDocument(documentText: text, documentURL: documentLocation?.url)
             }
         }
         .disabled(documentText?.isEmpty ?? true)
