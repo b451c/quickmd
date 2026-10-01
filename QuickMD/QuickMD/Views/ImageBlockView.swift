@@ -15,6 +15,8 @@ import AppKit
 struct ImageBlockView: View {
     let url: String
     let alt: String
+    /// HTML `<img width>` (nil for Markdown images) — see `ImageWidth`.
+    let width: ImageWidth?
     let theme: MarkdownTheme
     let documentURL: URL?
     let fontScale: CGFloat
@@ -35,11 +37,12 @@ struct ImageBlockView: View {
     /// The existing file the user declined folder access for (sandbox prompt).
     @State private var accessDeniedURL: URL?
 
-    init(url: String, alt: String, theme: MarkdownTheme, documentURL: URL?,
+    init(url: String, alt: String, width: ImageWidth? = nil, theme: MarkdownTheme, documentURL: URL?,
          fontScale: CGFloat, contentWidth: CGFloat,
          onEnlarge: @escaping (GraphicPreview) -> Void = { _ in }) {
         self.url = url
         self.alt = alt
+        self.width = width
         self.theme = theme
         self.documentURL = documentURL
         self.fontScale = fontScale
@@ -106,9 +109,11 @@ struct ImageBlockView: View {
     /// GitHub parity (D4): the column cap from `ImageBlock.displayWidth`, but
     /// never wider than the image's own width × zoom — the rule `SVGBlockView`
     /// already used. A 90 px icon stays icon-sized instead of being blown up
-    /// (blurry) to 600 pt; large images are unchanged (the cap wins).
+    /// (blurry) to 600 pt; large images are unchanged (the cap wins). An HTML
+    /// `<img width>` takes the place of the image's own width (T-C).
     private func displayWidth(for image: NSImage) -> CGFloat {
         let cap = Metrics.displayWidth(fontScale: fontScale, contentWidth: contentWidth)
+        if let width { return width.displayWidth(cap: cap, fontScale: fontScale) }
         guard image.size.width > 0 else { return cap }
         return min(cap, image.size.width * fontScale)
     }

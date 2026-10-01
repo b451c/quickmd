@@ -156,8 +156,9 @@ enum InlineSyntaxScanner {
             var images: [(alt: String, url: String, end: Int)] = []
             var i = 0
             while i < bytes.count {
-                // Extension point: further standalone forms (HTML `<img>`)
-                // slot in here as alternatives to the Markdown image scan.
+                // HTML `<img>` lines are a separate form (`HTMLImageSyntax`,
+                // checked by the parser right after this one); the two are
+                // not mixed on one line.
                 guard let image = scanImage(bytes, from: i, references: references, nil) else { return nil }
                 images.append(image)
                 i = skipWhitespace(bytes, from: image.end)

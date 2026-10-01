@@ -101,7 +101,7 @@ enum DocumentSearch {
                 segments = [content]
             case .alert(_, let content):
                 segments = [content]
-            case .image(_, let alt):
+            case .image(_, let alt, _):
                 segments = [alt]
             case .heading(_, let title, _):
                 segments = [title]

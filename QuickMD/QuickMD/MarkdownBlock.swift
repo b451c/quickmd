@@ -43,6 +43,32 @@ enum AlertKind: String, Sendable, CaseIterable {
     }
 }
 
+// MARK: - Image Width (HTML `<img width>`)
+
+/// The author's requested display width of an image block — only HTML
+/// `<img width="…">` can express one (`HTMLImageSyntax.width(from:)`).
+///
+/// Sizing (D4 + T-C): without a width an image is drawn at
+/// `min(column cap, image.size.width × zoom)`. With one, the requested width
+/// takes the place of `image.size.width` in that rule — so it may enlarge a
+/// small bitmap (as GitHub does) but never exceeds the column; the aspect
+/// ratio is always kept (`height` is ignored).
+enum ImageWidth: Sendable, Equatable {
+    /// `width="120"` / `"120px"`: points at 100 % zoom.
+    case points(CGFloat)
+    /// `width="50%"`: a fraction of the column cap (0.5).
+    case fraction(CGFloat)
+
+    /// Display width for a column cap that already includes the zoom
+    /// (`BlockLayout.ImageBlock.displayWidth`, or the 500 pt print cap).
+    func displayWidth(cap: CGFloat, fontScale: CGFloat) -> CGFloat {
+        switch self {
+        case .points(let points): return min(cap, points * fontScale)
+        case .fraction(let fraction): return cap * min(fraction, 1)
+        }
+    }
+}
+
 // MARK: - Content Block Types
 
 /// Represents different types of Markdown content blocks
@@ -76,7 +102,10 @@ struct MarkdownBlock: Identifiable, Sendable {
         case text(AttributedString)
         case table(headers: [String], rows: [[String]], alignments: [TextAlignment])
         case codeBlock(code: String, language: String)
-        case image(url: String, alt: String)
+        /// `width` comes from an HTML `<img width>` (nil for Markdown images,
+        /// which have no width syntax): it replaces the image's own width in
+        /// the D4 sizing rule — see `ImageWidth`.
+        case image(url: String, alt: String, width: ImageWidth?)
         case blockquote(content: String, level: Int)
         /// GFM alert: `> [!NOTE]` etc. `content` is the quote body without the
         /// marker line, still in raw Markdown (inline-rendered by the view).
@@ -104,8 +133,8 @@ struct MarkdownBlock: Identifiable, Sendable {
     static func codeBlock(index: Int, code: String, language: String, sourceLine: Int) -> MarkdownBlock {
         MarkdownBlock(id: "code-\(index)", content: .codeBlock(code: code, language: language), sourceLine: sourceLine)
     }
-    static func image(index: Int, url: String, alt: String, sourceLine: Int) -> MarkdownBlock {
-        MarkdownBlock(id: "image-\(index)", content: .image(url: url, alt: alt), sourceLine: sourceLine)
+    static func image(index: Int, url: String, alt: String, width: ImageWidth?, sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "image-\(index)", content: .image(url: url, alt: alt, width: width), sourceLine: sourceLine)
     }
     static func blockquote(index: Int, content: String, level: Int, sourceLine: Int) -> MarkdownBlock {
         MarkdownBlock(id: "blockquote-\(index)", content: .blockquote(content: content, level: level), sourceLine: sourceLine)

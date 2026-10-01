@@ -706,8 +706,8 @@ struct MarkdownView: View {
                               fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc)
                     .padding(.vertical, Metrics.codeOuterVerticalPadding)
 
-            case .image(let url, let alt):
-                ImageBlockView(url: url, alt: alt, theme: theme, documentURL: documentURL,
+            case .image(let url, let alt, let width):
+                ImageBlockView(url: url, alt: alt, width: width, theme: theme, documentURL: documentURL,
                                fontScale: scale, contentWidth: contentWidth,
                                onEnlarge: presentGraphicPreview)
                     .padding(.vertical, Metrics.imageOuterVerticalPadding)
