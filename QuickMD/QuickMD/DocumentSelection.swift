@@ -410,10 +410,14 @@ enum DocumentCopyBuilder {
 
 // MARK: - Clipboard + copy summary (S-D8 / S-D9)
 
-/// The ONE place a document copy reaches the pasteboard.
+/// The ONE place a copy reaches the pasteboard (S-D9): the selection (⌘C,
+/// context menu, auto-copy), Copy Markdown (⌘⇧C), Copy section (heading
+/// button, ToC) and the code block's copy button. One path, so every copy
+/// shows the same "Copied N characters · M words" toast for what was written.
 enum DocumentClipboard {
 
-    /// Writes plain text and, when given, RTF in one pasteboard transaction.
+    /// Writes plain text and, when given, RTF in one pasteboard transaction
+    /// (`rtf: nil` for Markdown source and code — plain text is what they are).
     /// Returns the toast text for this copy (`summary(for:)`), so the caller
     /// that owns the toast cannot show a different count than was copied.
     @discardableResult
@@ -452,5 +456,66 @@ enum DocumentClipboard {
             text += " \u{00B7} \(format(words)) words"
         }
         return text
+    }
+}
+
+// MARK: - Auto-copy (S-D10)
+
+/// How the document selection reached its current value — what decides
+/// whether "Copy selected text automatically" copies it.
+enum SelectionChange: Equatable {
+    /// The mouse went up after a drag from a plain press.
+    case drag
+    /// A double- (word) or triple-click (paragraph), with or without a drag
+    /// after it.
+    case multiClick
+    /// Shift-click (or Shift-drag) extending the existing selection.
+    case shiftClick
+    /// ⌘A, Edit ▸ Select All, the context menu's Select All.
+    case selectAll
+    /// A press and release without movement — it collapses the selection.
+    case click
+    /// Code changed it, not the reader (search, a model install, the AX
+    /// setter). Never copied: the reader did not ask for anything.
+    case programmatic
+
+    /// The gesture a finished mouse press was. Shift wins over the click
+    /// count (a Shift-double-click extends, like a native text view), and a
+    /// multi-click stays one even if the pointer moved afterwards.
+    static func mouseGesture(isExtending: Bool, isMultiClick: Bool, dragged: Bool) -> SelectionChange {
+        if isExtending { return .shiftClick }
+        if isMultiClick { return .multiClick }
+        return dragged ? .drag : .click
+    }
+}
+
+/// Settings ▸ General ▸ "Copy selected text automatically".
+///
+/// Off by default: an automatic copy REPLACES whatever the reader copied in
+/// another app, so it has to be something they chose. When on, the copy
+/// happens once, at the END of a gesture — never during a drag (dozens of
+/// pasteboard writes and toasts per second) and never for a change the
+/// reader did not make.
+enum SelectionAutoCopy {
+    /// `@AppStorage` key (Settings) and the defaults key the controller reads.
+    static let defaultsKey = "autoCopySelection"
+
+    /// Read at each gesture end rather than pushed into every open document:
+    /// `@AppStorage` writes `UserDefaults.standard` synchronously, so the
+    /// Settings toggle is in effect for the very next gesture in every tab.
+    static func isEnabled(in defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: defaultsKey)
+    }
+
+    /// Whether the selection left by `change` is copied.
+    static func shouldCopy(after change: SelectionChange, selection: DocumentSelection?,
+                           enabled: Bool) -> Bool {
+        guard enabled, let selection, !selection.isEmpty else { return false }
+        switch change {
+        case .drag, .multiClick, .shiftClick, .selectAll:
+            return true
+        case .click, .programmatic:
+            return false
+        }
     }
 }

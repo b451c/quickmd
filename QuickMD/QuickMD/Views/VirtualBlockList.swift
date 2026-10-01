@@ -172,7 +172,7 @@ struct VirtualBlockList: NSViewRepresentable {
     /// the block comes from, so the parent can tell whether its per-id caches
     /// belong to them (block ids are positional and are reused by every parse).
     let selectableText: (_ block: MarkdownBlock, _ contentVersion: Int) -> NSAttributedString?
-    /// ⌘C / context-menu Copy produced this output. The parent writes it to the
+    /// ⌘C / context-menu Copy / auto-copy (S-D10) produced this output. The parent writes it to the
     /// pasteboard and shows the toast (`MarkdownView.copySelectionToClipboard`).
     let onCopySelection: (DocumentCopyOutput) -> Void
     /// Bumped by the parent when the document should get the keyboard back
@@ -1734,6 +1734,18 @@ final class SelectionController: NSObject {
     /// ⌘A. Two points, so the cost does not depend on the document's size.
     func selectAll() {
         setSelection(DocumentSelection.selectAll(rowCount: blocks.count, lengths: rowLength))
+        selectionGestureEnded(.selectAll)
+    }
+
+    /// S-D10: the reader finished making a selection. With "Copy selected
+    /// text automatically" on, a non-empty one goes through `copySelection`
+    /// — the same builder, pasteboard path and toast as ⌘C. Called ONLY from
+    /// gesture ends (mouse-up, Select All); programmatic changes (install,
+    /// the AX setter, search) never reach it.
+    private func selectionGestureEnded(_ change: SelectionChange) {
+        guard SelectionAutoCopy.shouldCopy(after: change, selection: selection,
+                                           enabled: SelectionAutoCopy.isEnabled()) else { return }
+        copySelection()
     }
 
     /// `range` of `view`'s row becomes the document selection (AX setter).
@@ -2147,6 +2159,11 @@ final class SelectionController: NSObject {
         case .mouseUp:
             break
         }
+
+        // Only a completed gesture auto-copies — an abandoned one (re-parse,
+        // modal, window lost key) or a force click returned above.
+        selectionGestureEnded(.mouseGesture(isExtending: isExtending, isMultiClick: unit != nil,
+                                            dragged: dragged))
 
         // A plain click: the selection is already cleared; a link under the
         // pointer opens through the text view's delegate, i.e. the same

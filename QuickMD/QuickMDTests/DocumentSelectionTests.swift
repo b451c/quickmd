@@ -441,4 +441,81 @@ final class DocumentSelectionTests: XCTestCase {
             XCTAssertEqual(decoded?.string, "Copied text")
         }
     }
+
+    // MARK: - Every copy action's toast (S-D9)
+
+    func testPlainOnlyWriteDeclaresNoRTF() {
+        // Copy Markdown, Copy section and the code button write plain text only.
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("pl.falami.studio.QuickMD.tests.\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        let source = "# Title\n\nSome **bold** text.\n"
+        let toast = DocumentClipboard.write(plain: source, rtf: nil, to: pasteboard)
+        XCTAssertEqual(pasteboard.string(forType: .string), source)
+        XCTAssertNil(pasteboard.data(forType: .rtf))
+        // (AppKit adds the legacy NSStringPboardType alias itself — only RTF matters.)
+        XCTAssertFalse((pasteboard.types ?? []).contains(.rtf))
+        XCTAssertEqual(toast, DocumentClipboard.summary(for: source))
+    }
+
+    func testSummaryForSourceCopies() {
+        let english = Locale(identifier: "en_US")
+        // A one-word code block: the word count says nothing, so it is left out.
+        XCTAssertEqual(DocumentClipboard.summary(for: "ls", locale: english), "Copied 2 characters")
+        // Markdown source counts its markup characters too — it is what was copied.
+        XCTAssertEqual(DocumentClipboard.summary(for: "# Title\n\nSome **bold** text.", locale: english),
+                       "Copied 28 characters \u{00B7} 5 words")
+        XCTAssertEqual(DocumentClipboard.summary(for: "", locale: english), "Copied 0 characters")
+    }
+
+    // MARK: - Auto-copy decision (S-D10)
+
+    private func selection(_ from: Int, _ to: Int) -> DocumentSelection {
+        DocumentSelection(anchor: SelectionPoint(row: 0, offset: from), focus: SelectionPoint(row: 0, offset: to))
+    }
+
+    func testMouseGestureClassification() {
+        XCTAssertEqual(SelectionChange.mouseGesture(isExtending: false, isMultiClick: false, dragged: false), .click)
+        XCTAssertEqual(SelectionChange.mouseGesture(isExtending: false, isMultiClick: false, dragged: true), .drag)
+        XCTAssertEqual(SelectionChange.mouseGesture(isExtending: false, isMultiClick: true, dragged: false), .multiClick)
+        // A drag after a double/triple click is still that multi-click.
+        XCTAssertEqual(SelectionChange.mouseGesture(isExtending: false, isMultiClick: true, dragged: true), .multiClick)
+        // Shift wins: Shift-click and Shift-drag extend.
+        XCTAssertEqual(SelectionChange.mouseGesture(isExtending: true, isMultiClick: false, dragged: false), .shiftClick)
+        XCTAssertEqual(SelectionChange.mouseGesture(isExtending: true, isMultiClick: false, dragged: true), .shiftClick)
+    }
+
+    func testGestureEndsCopyANonEmptySelectionWhenEnabled() {
+        for change in [SelectionChange.drag, .multiClick, .shiftClick, .selectAll] {
+            XCTAssertTrue(SelectionAutoCopy.shouldCopy(after: change, selection: selection(0, 5), enabled: true),
+                          "\(change)")
+            // Backwards (upward drag) is just as non-empty.
+            XCTAssertTrue(SelectionAutoCopy.shouldCopy(after: change, selection: selection(5, 0), enabled: true),
+                          "\(change)")
+        }
+    }
+
+    func testAutoCopyNeverFiresWhenOffEmptyOrNotAGesture() {
+        let all: [SelectionChange] = [.drag, .multiClick, .shiftClick, .selectAll, .click, .programmatic]
+        for change in all {
+            // Off (the default).
+            XCTAssertFalse(SelectionAutoCopy.shouldCopy(after: change, selection: selection(0, 5), enabled: false))
+            // Nothing selected: a click in a gap, a drag that stayed inside an
+            // atomic row, ⌘A on an empty document.
+            XCTAssertFalse(SelectionAutoCopy.shouldCopy(after: change, selection: selection(3, 3), enabled: true))
+            XCTAssertFalse(SelectionAutoCopy.shouldCopy(after: change, selection: nil, enabled: true))
+        }
+        // Not the reader's doing, or no selection made.
+        XCTAssertFalse(SelectionAutoCopy.shouldCopy(after: .programmatic, selection: selection(0, 5), enabled: true))
+        XCTAssertFalse(SelectionAutoCopy.shouldCopy(after: .click, selection: selection(0, 5), enabled: true))
+    }
+
+    func testAutoCopySettingDefaultsToOff() {
+        let suite = "pl.falami.studio.QuickMD.tests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else { return XCTFail("no defaults suite") }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertFalse(SelectionAutoCopy.isEnabled(in: defaults))
+        defaults.set(true, forKey: SelectionAutoCopy.defaultsKey)
+        XCTAssertTrue(SelectionAutoCopy.isEnabled(in: defaults))
+        XCTAssertEqual(SelectionAutoCopy.defaultsKey, "autoCopySelection")
+    }
 }
