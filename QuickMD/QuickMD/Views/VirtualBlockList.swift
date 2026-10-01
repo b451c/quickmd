@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import AVFoundation
+import AVFAudio
 #if DEBUG
 import os
 #endif
@@ -179,6 +179,9 @@ struct VirtualBlockList: NSViewRepresentable {
     /// (the graphic preview closed after resigning first responder). Acted on
     /// only when nothing else is focused — see `takeFocusIfWindowHasNone`.
     var focusRequest: Int = 0
+    /// True while something covers the document (the graphic preview): the
+    /// list then never takes keyboard focus on its own.
+    var isCovered: Bool = false
 
     typealias Metrics = BlockLayout.Document
 
@@ -279,6 +282,7 @@ struct VirtualBlockList: NSViewRepresentable {
         coordinator.setContentWidth = { width in contentWidth = width }
         coordinator.selection.selectableText = selectableText
         coordinator.selection.onCopy = onCopySelection
+        coordinator.setDocumentCovered(isCovered)
         if focusRequest != coordinator.lastFocusRequest {
             coordinator.lastFocusRequest = focusRequest
             coordinator.restoreDocumentFocus()
@@ -404,6 +408,16 @@ struct VirtualBlockList: NSViewRepresentable {
             DispatchQueue.main.async { [weak self] in
                 self?.tableView?.takeFocusIfWindowHasNone()
             }
+            // Again a moment later: a disappearing text field (the search bar)
+            // can hold first responder until SwiftUI has torn it down. A no-op
+            // when the first attempt worked or anything else took focus.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.tableView?.takeFocusIfWindowHasNone()
+            }
+        }
+
+        func setDocumentCovered(_ covered: Bool) {
+            tableView?.isDocumentCovered = covered
         }
 
         // MARK: - Model installation (D7 anchor preservation)
@@ -1309,11 +1323,26 @@ final class BlockTableView: NSTableView {
         DispatchQueue.main.async { [weak self] in self?.takeFocusIfWindowHasNone() }
     }
 
+    /// Something is drawn OVER the document (the graphic preview): taking
+    /// focus then would send Space/arrows/⌘A to a document the reader cannot
+    /// see. Set by the coordinator from `VirtualBlockList.isCovered`.
+    var isDocumentCovered = false
+
     func takeFocusIfWindowHasNone() {
-        guard let window, window.isKeyWindow, window.attachedSheet == nil else { return }
-        let current = window.firstResponder
-        guard current == nil || current === window else { return }
+        guard !isDocumentCovered, let window, window.isKeyWindow, window.attachedSheet == nil,
+              Self.isNothingFocused(window.firstResponder, in: window) else { return }
         window.makeFirstResponder(self)
+    }
+
+    /// "Nothing" = no responder, the window itself, or the SwiftUI hosting
+    /// view at the root of the window (where focus lands when a focused SwiftUI
+    /// control — e.g. the search field — disappears). A text field, a text
+    /// view or any other control is something, and keeps its focus.
+    static func isNothingFocused(_ responder: NSResponder?, in window: NSWindow) -> Bool {
+        guard let responder else { return true }
+        if responder === window || responder === window.contentView { return true }
+        if responder is NSText || responder is NSControl || responder is BlockTableView { return false }
+        return NSStringFromClass(type(of: responder)).contains("HostingView")
     }
 
     override func keyDown(with event: NSEvent) {
@@ -1755,18 +1784,24 @@ final class SelectionController: NSObject {
 
     // MARK: Speech (Edit ▸ Speech)
 
-    private lazy var speech = AVSpeechSynthesizer()
+    /// ONE synthesizer for the app, like the system voice itself: Stop
+    /// Speaking in any tab stops what another tab started. Created on the
+    /// first Start Speaking — menu validation must not spin up the speech
+    /// engine just to grey out an item.
+    private static var speech: AVSpeechSynthesizer?
 
-    var isSpeaking: Bool { speech.isSpeaking }
+    var isSpeaking: Bool { Self.speech?.isSpeaking ?? false }
 
     func startSpeaking() {
         guard let text = selectionOutput()?.plain else { return }
-        speech.stopSpeaking(at: .immediate)
-        speech.speak(AVSpeechUtterance(string: text))
+        let synthesizer = Self.speech ?? AVSpeechSynthesizer()
+        Self.speech = synthesizer
+        synthesizer.stopSpeaking(at: .immediate)
+        synthesizer.speak(AVSpeechUtterance(string: text))
     }
 
     func stopSpeaking() {
-        speech.stopSpeaking(at: .immediate)
+        Self.speech?.stopSpeaking(at: .immediate)
     }
 
     /// Plain text + RTF of the selection — the ONE builder behind ⌘C, the
@@ -2013,6 +2048,9 @@ final class SelectionController: NSObject {
 
         let clickCount = event.clickCount
         let isExtending = event.modifierFlags.contains(.shift) && selection != nil
+        // Captured BEFORE the press edits the selection: a force click is not
+        // a click, and restores exactly this.
+        let selectionBeforePress = selection
         var anchor = start.point
         var anchorIsAtomic = start.isAtomic
         var unit: (start: SelectionPoint, end: SelectionPoint)?
@@ -2040,7 +2078,6 @@ final class SelectionController: NSObject {
         }
 
         let pressLocation = event.locationInWindow
-        let selectionBeforePress = selection
         let installedVersion = contentVersion
         let wasKey = window.isKeyWindow
         var dragged = false
@@ -2088,8 +2125,16 @@ final class SelectionController: NSObject {
             guard let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .periodic, .pressure],
                                               until: Date(timeIntervalSinceNow: 0.25),
                                               inMode: .eventTracking, dequeue: true) else {
-                if NSEvent.pressedMouseButtons & 1 == 0 { break trackingLoop }
-                continue
+                guard NSEvent.pressedMouseButtons & 1 == 0 else { continue }
+                // The button is up but no mouse-up was seen: give a queued one
+                // (a slow click, a busy main thread) a short grace period, and
+                // treat it as a normal release — a slow click on a link opens
+                // it. Only when none arrives was the mouse-up swallowed.
+                if window.nextEvent(matching: .leftMouseUp, until: Date(timeIntervalSinceNow: 0.1),
+                                    inMode: .eventTracking, dequeue: true) != nil {
+                    ending = .mouseUp
+                }
+                break trackingLoop
             }
             if isVoid() { break trackingLoop }
             switch next.type {
@@ -2098,7 +2143,9 @@ final class SelectionController: NSObject {
                 break trackingLoop
             case .pressure:
                 // Force click (stage 2): Quick Look / Look Up, not a click.
-                if next.stage >= 2 {
+                // Once a drag has started the pressure is the user pressing
+                // harder while selecting, not a Quick Look gesture.
+                if next.stage >= 2, !dragged {
                     ending = .forceClick(next)
                     break trackingLoop
                 }
@@ -2136,10 +2183,10 @@ final class SelectionController: NSObject {
             // gesture left it (a re-parse has already cleared it).
             return
         case .forceClick(let pressure):
-            // Not a click: undo what the press did to the selection (unless the
-            // pointer had already started a drag) and let the text view under
-            // the pointer show its Quick Look / Look Up panel.
-            if !dragged, contentVersion == installedVersion { setSelection(selectionBeforePress) }
+            // Not a click (and never after a drag — see `.pressure`): undo what
+            // the press did to the selection and let the text view under the
+            // pointer show its Quick Look / Look Up panel.
+            if contentVersion == installedVersion { setSelection(selectionBeforePress) }
             if let target = hit(atWindowPoint: pressure.locationInWindow)?.textView {
                 target.quickLook(with: pressure)
             }

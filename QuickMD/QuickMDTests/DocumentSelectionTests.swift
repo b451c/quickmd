@@ -283,27 +283,37 @@ final class DocumentSelectionTests: XCTestCase {
 
     // MARK: - Selection over opaque text backgrounds (inline code chips)
 
+    /// Paints the document selection exactly as `SelfSizingTextView` does
+    /// (that class is not compiled into this target).
+    private final class SelectionDrawingTextView: NSTextView {
+        override func drawBackground(in rect: NSRect) {
+            super.drawBackground(in: rect)
+            (layoutManager as? DocumentSelectionLayoutManager)?.drawSelection(in: rect, of: self)
+        }
+    }
+
     private let chipGray = NSColor(srgbRed: 0.8, green: 0.8, blue: 0.8, alpha: 1)
 
-    /// A text view set up like a document block, with the selection-aware
-    /// layout manager, showing "plain CHIPCHIP tail" where CHIPCHIP has an
-    /// opaque background like an inline `code` run.
-    private func chipTextView() -> (NSTextView, DocumentSelectionLayoutManager, NSRange) {
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 60))
+    /// "plain CHIPCHIP tail", where CHIPCHIP has an opaque background like an
+    /// inline `code` run, in a document-configured text view.
+    private func chipTextView(appearance: NSAppearance.Name)
+        -> (NSTextView, DocumentSelectionLayoutManager, chip: NSRange, plain: NSRange) {
+        let textView = SelectionDrawingTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 60))
+        textView.appearance = NSAppearance(named: appearance)
         textView.configureForSelfSizing()
-        let layoutManager = DocumentSelectionLayoutManager()
-        textView.textContainer?.replaceLayoutManager(layoutManager)
+        textView.installDocumentSelectionLayoutManager()
         let font = NSFont.systemFont(ofSize: 24)
         let text = NSMutableAttributedString(string: "plain ", attributes: [.font: font])
         let chip = NSRange(location: text.length, length: 8)
         text.append(NSAttributedString(string: "CHIPCHIP", attributes: [.font: font, .backgroundColor: chipGray]))
         text.append(NSAttributedString(string: " tail", attributes: [.font: font]))
         textView.textStorage?.setAttributedString(text)
-        return (textView, layoutManager, chip)
+        return (textView, textView.layoutManager as! DocumentSelectionLayoutManager,
+                chip, NSRange(location: 0, length: 1))
     }
 
-    /// Colour of the pixel just inside the top-left corner of `range`'s
-    /// background — the run's background, clear of glyph ink.
+    /// Colour of the pixel just inside the top-left corner of `range`'s line
+    /// box — background, clear of glyph ink.
     private func backgroundPixel(of range: NSRange, in textView: NSTextView) -> NSColor? {
         guard let layoutManager = textView.layoutManager, let container = textView.textContainer,
               let rep = textView.bitmapImageRepForCachingDisplay(in: textView.bounds) else { return nil }
@@ -315,45 +325,60 @@ final class DocumentSelectionTests: XCTestCase {
             .usingColorSpace(.sRGB)
     }
 
-    private func assertColor(_ color: NSColor?, _ expected: NSColor, appearance: NSAppearance,
-                             _ message: String, file: StaticString = #filePath, line: UInt = #line) {
-        var resolved: NSColor?
-        appearance.performAsCurrentDrawingAppearance { resolved = expected.usingColorSpace(.sRGB) }
-        guard let color, let resolved else { return XCTFail("no colour — \(message)", file: file, line: line) }
-        let distance = abs(color.redComponent - resolved.redComponent)
-            + abs(color.greenComponent - resolved.greenComponent)
-            + abs(color.blueComponent - resolved.blueComponent)
-        XCTAssertLessThan(distance, 0.06, "\(message): got \(color), expected \(resolved)", file: file, line: line)
+    private func distance(_ a: NSColor?, _ b: NSColor?) -> CGFloat {
+        guard let a, let b else { return .infinity }
+        return abs(a.redComponent - b.redComponent) + abs(a.greenComponent - b.greenComponent)
+            + abs(a.blueComponent - b.blueComponent) + abs(a.alphaComponent - b.alphaComponent)
     }
 
-    func testCoveredCodeChipShowsTheSelectionColour() {
-        let (textView, layoutManager, chip) = chipTextView()
-        // Not selected: the chip's own background.
-        assertColor(backgroundPixel(of: chip, in: textView), chipGray,
-                    appearance: textView.effectiveAppearance, "uncovered chip")
+    func testCoveredCodeChipShowsTheSameSelectionAsPlainText() {
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let (textView, layoutManager, chip, plain) = chipTextView(appearance: appearance)
+            let uncoveredChip = backgroundPixel(of: chip, in: textView)
+            XCTAssertLessThan(distance(uncoveredChip, chipGray), 0.05, "\(appearance.rawValue): chip background")
 
-        // Covered: the selection colour (unemphasized — no key window here),
-        // not the opaque chip grey that used to hide the selection.
-        layoutManager.selectionCoveredRange = NSRange(location: 0, length: textView.string.utf16.count)
-        assertColor(backgroundPixel(of: chip, in: textView), .unemphasizedSelectedTextBackgroundColor,
-                    appearance: textView.effectiveAppearance, "covered chip")
+            layoutManager.selectionCoveredRange = NSRange(location: 0, length: textView.string.utf16.count)
+            let selectedText = backgroundPixel(of: plain, in: textView)
+            let selectedChip = backgroundPixel(of: chip, in: textView)
+            XCTAssertGreaterThan(distance(selectedText, chipGray), 0.05,
+                                 "\(appearance.rawValue): the selection is visible at all")
+            XCTAssertLessThan(distance(selectedChip, selectedText), 0.02,
+                              "\(appearance.rawValue): a selected chip looks exactly like selected text")
 
-        // Partly covered: only the covered half changes.
-        layoutManager.selectionCoveredRange = NSRange(location: chip.location + 4, length: 20)
-        assertColor(backgroundPixel(of: NSRange(location: chip.location, length: 1), in: textView), chipGray,
-                    appearance: textView.effectiveAppearance, "uncovered half of the chip")
-        assertColor(backgroundPixel(of: NSRange(location: chip.location + 4, length: 1), in: textView),
-                    .unemphasizedSelectedTextBackgroundColor,
-                    appearance: textView.effectiveAppearance, "covered half of the chip")
+            // Partly covered: only the covered half of the chip changes.
+            layoutManager.selectionCoveredRange = NSRange(location: chip.location + 4,
+                                                          length: textView.string.utf16.count - chip.location - 4)
+            XCTAssertLessThan(distance(backgroundPixel(of: NSRange(location: chip.location, length: 1), in: textView),
+                                       chipGray), 0.05, "\(appearance.rawValue): uncovered half")
+            XCTAssertLessThan(distance(backgroundPixel(of: NSRange(location: chip.location + 4, length: 1), in: textView),
+                                       selectedText), 0.02, "\(appearance.rawValue): covered half")
+        }
     }
 
     func testSearchHighlightStillDrawsOverASelectedChip() {
-        let (textView, layoutManager, chip) = chipTextView()
+        let (textView, layoutManager, chip, _) = chipTextView(appearance: .aqua)
         layoutManager.selectionCoveredRange = NSRange(location: 0, length: textView.string.utf16.count)
         let yellow = NSColor(srgbRed: 1, green: 0.85, blue: 0, alpha: 1)
         layoutManager.addTemporaryAttribute(.backgroundColor, value: yellow, forCharacterRange: chip)
-        assertColor(backgroundPixel(of: chip, in: textView), yellow,
-                    appearance: textView.effectiveAppearance, "search hit on a selected chip")
+        XCTAssertLessThan(distance(backgroundPixel(of: chip, in: textView), yellow), 0.05)
+    }
+
+    func testLayoutManagerSwapKeepsTheReadOnlyConfiguration() {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 50))
+        textView.configureForSelfSizing()
+        textView.installDocumentSelectionLayoutManager()
+        XCTAssertTrue(textView.layoutManager is DocumentSelectionLayoutManager)
+        XCTAssertFalse(textView.isEditable)
+        XCTAssertTrue(textView.isSelectable)
+        XCTAssertFalse(textView.allowsUndo)
+        XCTAssertFalse(textView.usesFindBar)
+        XCTAssertFalse(textView.drawsBackground)
+        XCTAssertFalse(textView.isVerticallyResizable)
+        XCTAssertEqual(textView.textContainer?.lineFragmentPadding, 0)
+        // Idempotent: a second call does not replace it again.
+        let installed = textView.layoutManager
+        textView.installDocumentSelectionLayoutManager()
+        XCTAssertTrue(textView.layoutManager === installed)
     }
 
     func testSelectionLayoutManagerKeepsLayout() {
@@ -362,7 +387,7 @@ final class DocumentSelectionTests: XCTestCase {
         for width in [180, 333, 640] as [CGFloat] {
             let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: width, height: 10))
             textView.configureForSelfSizing()
-            textView.textContainer?.replaceLayoutManager(DocumentSelectionLayoutManager())
+            textView.installDocumentSelectionLayoutManager()
             textView.textStorage?.setAttributedString(paragraph)
             guard let layoutManager = textView.layoutManager, let container = textView.textContainer else {
                 return XCTFail("no TextKit 1 stack")

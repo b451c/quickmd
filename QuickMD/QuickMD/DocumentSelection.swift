@@ -161,16 +161,19 @@ enum SelectionAutoscroll {
     }
 }
 
-// MARK: - Drawing under opaque text backgrounds
+// MARK: - Drawing the selection in a text view
 
-/// The layout manager of a document text view (`SelfSizingTextView`).
+/// The layout manager of a document text view (`SelfSizingTextView`), and the
+/// one place the document selection is painted inside text.
 ///
-/// The view paints the document selection in `drawBackground(in:)`, i.e.
-/// BEFORE the layout manager draws the text's own `.backgroundColor` runs — and
-/// an inline `code` chip's background is opaque, so a covered chip showed no
-/// selection at all. This subclass swaps the selection colour in for the
-/// covered part of such a run. Search highlights are layout-manager TEMPORARY
-/// attributes and are left alone, so they still draw on top of the selection.
+/// The view paints the selection in `drawBackground(in:)` (`drawSelection`),
+/// i.e. BEFORE the layout manager draws the text's own `.backgroundColor`
+/// runs — and an inline `code` chip's background is opaque, so it covered the
+/// selection. `fillBackgroundRectArray` therefore leaves the selected part of
+/// such a run UNPAINTED (the selection's rects are clipped out of it): the
+/// selection shows through with exactly its own colour, alpha and rects.
+/// Search highlights are TEMPORARY attributes and are filled normally, so
+/// they still draw on top of the selection.
 ///
 /// Drawing only: nothing here touches glyph generation or layout, so a view
 /// with this layout manager wraps exactly like the measurer's plain stack
@@ -180,35 +183,82 @@ final class DocumentSelectionLayoutManager: NSLayoutManager {
     /// The part of the text the document selection covers (set by the view).
     var selectionCoveredRange: NSRange?
 
-    override func fillBackgroundRectArray(_ rectArray: UnsafePointer<NSRect>, count rectCount: Int,
-                                          forCharacterRange charRange: NSRange, color: NSColor) {
-        super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
-        guard let covered = selectionCoveredRange,
-              let container = textContainers.first else { return }
-        let overlap = NSIntersectionRange(covered, charRange)
-        guard overlap.length > 0 else { return }
-        // A temporary background (search highlight) wins over the selection.
-        if temporaryAttribute(.backgroundColor, atCharacterIndex: charRange.location,
-                              effectiveRange: nil) != nil { return }
-        let glyphs = glyphRange(forCharacterRange: overlap, actualCharacterRange: nil)
-        guard glyphs.length > 0 else { return }
-        let origin = firstTextView?.textContainerOrigin ?? .zero
-        let isKey = firstTextView?.window?.isKeyWindow ?? false
-        let selection = isKey ? NSColor.selectedTextBackgroundColor
-                              : NSColor.unemphasizedSelectedTextBackgroundColor
-        // Clip to the run's own rects: the chip keeps its shape, only its
-        // colour becomes the selection's.
-        guard let context = NSGraphicsContext.current else { return }
-        context.saveGraphicsState()
-        let clip = NSBezierPath()
-        for index in 0..<rectCount { clip.appendRect(rectArray[index]) }
-        clip.addClip()
-        selection.setFill()
+    /// Emphasized in the key window, unemphasized otherwise — like a native
+    /// selection.
+    static func selectionColor(for view: NSView) -> NSColor {
+        (view.window?.isKeyWindow ?? false) ? .selectedTextBackgroundColor
+                                            : .unemphasizedSelectedTextBackgroundColor
+    }
+
+    /// The selection's rects in `textView` coordinates (empty when nothing of
+    /// this text is covered). `withinSelectedGlyphRange` = the same range, so
+    /// wrapped lines extend to the container edge as a native selection does.
+    func selectionRects(in textView: NSTextView) -> [NSRect] {
+        guard let covered = selectionCoveredRange, covered.length > 0,
+              let storage = textStorage, NSMaxRange(covered) <= storage.length,
+              let container = textView.textContainer else { return [] }
+        let glyphs = glyphRange(forCharacterRange: covered, actualCharacterRange: nil)
+        guard glyphs.length > 0 else { return [] }
+        let origin = textView.textContainerOrigin
+        var rects: [NSRect] = []
         enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: glyphs,
                                 in: container) { rect, _ in
-            rect.offsetBy(dx: origin.x, dy: origin.y).fill(using: .sourceOver)
+            rects.append(rect.offsetBy(dx: origin.x, dy: origin.y))
         }
+        return rects
+    }
+
+    /// Paints the selection under the text. Call from `drawBackground(in:)`.
+    func drawSelection(in dirtyRect: NSRect, of textView: NSTextView) {
+        let rects = selectionRects(in: textView).filter { $0.intersects(dirtyRect) }
+        guard !rects.isEmpty else { return }
+        Self.selectionColor(for: textView).setFill()
+        for rect in rects { rect.fill(using: .sourceOver) }
+    }
+
+    override func fillBackgroundRectArray(_ rectArray: UnsafePointer<NSRect>, count rectCount: Int,
+                                          forCharacterRange charRange: NSRange, color: NSColor) {
+        guard let covered = selectionCoveredRange,
+              NSIntersectionRange(covered, charRange).length > 0,
+              // A temporary background (search highlight) is drawn as is.
+              temporaryAttribute(.backgroundColor, atCharacterIndex: charRange.location,
+                                 effectiveRange: nil) == nil,
+              let textView = firstTextView,
+              let context = NSGraphicsContext.current else {
+            super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+            return
+        }
+        let selected = selectionRects(in: textView)
+        guard !selected.isEmpty else {
+            super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+            return
+        }
+        // Everything EXCEPT the selection's rects (even-odd: an outer rect
+        // around the whole view, the selection rects as holes).
+        context.saveGraphicsState()
+        let outside = NSBezierPath(rect: textView.bounds.insetBy(dx: -1_000, dy: -1_000))
+        for rect in selected { outside.appendRect(rect) }
+        outside.windingRule = .evenOdd
+        outside.addClip()
+        super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
         context.restoreGraphicsState()
+    }
+}
+
+extension NSTextView {
+    /// Swaps in `DocumentSelectionLayoutManager`, keeping text storage and
+    /// container. Call once, right after `configureForSelfSizing()` and before
+    /// the first measurement.
+    ///
+    /// The read-only configuration is applied AGAIN afterwards: `isEditable`,
+    /// `isSelectable`, `allowsUndo` and `usesFindBar` live in state that
+    /// belongs to the layout-manager group, so a replacement must not be
+    /// trusted to carry them over (pinned by
+    /// `DocumentSelectionTests.testLayoutManagerSwapKeepsTheReadOnlyConfiguration`).
+    func installDocumentSelectionLayoutManager() {
+        guard !(layoutManager is DocumentSelectionLayoutManager), let textContainer else { return }
+        textContainer.replaceLayoutManager(DocumentSelectionLayoutManager())
+        configureForSelfSizing()
     }
 }
 

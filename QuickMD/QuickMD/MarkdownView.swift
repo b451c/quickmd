@@ -47,8 +47,8 @@ struct MarkdownView: View {
     @State private var matchBlockIds: [String] = []
     @State private var scrollTrigger: Int = 0
     @State private var graphicPreview: GraphicPreview?
-    /// Bumped when the graphic preview closes: `presentGraphicPreview` resigned
-    /// first responder, and the document list takes it back (⌘C/⌘A/arrows).
+    /// Bumped when the graphic preview or the search bar closes: the document
+    /// list takes keyboard focus back (⌘C/⌘A/arrows) if nothing else has it.
     @State private var documentFocusRequest = 0
     @State private var keyMonitor: Any?
     /// The NSWindow hosting this view (set by `WindowConfigurator`); the key
@@ -231,7 +231,8 @@ struct MarkdownView: View {
                         selectableText(for: block, installedVersion: version)
                     },
                     onCopySelection: { output in copySelectionToClipboard(output) },
-                    focusRequest: documentFocusRequest
+                    focusRequest: documentFocusRequest,
+                    isCovered: graphicPreview != nil
                 )
                 .onChange(of: scrollTrigger) { _ in
                     scrollFocusedMatchIntoView()
@@ -374,6 +375,11 @@ struct MarkdownView: View {
         .disabled(graphicPreview != nil)
         .onChange(of: graphicPreview == nil) { closed in
             if closed { documentFocusRequest += 1 }
+        }
+        .onChange(of: isSearchVisible) { visible in
+            // Esc or the close button: the search field goes away with focus,
+            // and ⌘A/⌘C should reach the document without a click.
+            if !visible { documentFocusRequest += 1 }
         }
         .accessibilityHidden(graphicPreview != nil)
         .overlay {

@@ -405,15 +405,6 @@ final class SelfSizingTextView: NSTextView {
         }
     }
 
-    /// Swap in the layout manager that paints the selection over opaque text
-    /// backgrounds (inline `code` chips) — see `DocumentSelectionLayoutManager`.
-    /// Call once, right after `configureForSelfSizing()` and before the first
-    /// measurement (the measuring layout manager joins the same text storage
-    /// lazily). Drawing-only subclass: layout is unchanged.
-    func installDocumentSelectionLayoutManager() {
-        guard !(layoutManager is DocumentSelectionLayoutManager), let textContainer else { return }
-        textContainer.replaceLayoutManager(DocumentSelectionLayoutManager())
-    }
 
     /// UTF-16 length of the displayed string — the row length the selection's
     /// offsets index into.
@@ -487,25 +478,7 @@ final class SelfSizingTextView: NSTextView {
     /// (`applyNSSearchHighlight` needs no change and still wins visually).
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
-        guard let covered = selectionCoveredRange, covered.length > 0,
-              let layoutManager, let textContainer,
-              NSMaxRange(covered) <= selectionTextLength else { return }
-        let glyphs = layoutManager.glyphRange(forCharacterRange: covered, actualCharacterRange: nil)
-        guard glyphs.length > 0 else { return }
-        let color = (window?.isKeyWindow ?? false)
-            ? NSColor.selectedTextBackgroundColor
-            : NSColor.unemphasizedSelectedTextBackgroundColor
-        color.setFill()
-        let origin = textContainerOrigin
-        // `withinSelectedGlyphRange` = the same range: TextKit then extends the
-        // rects of wrapped lines to the container edge, exactly as it does for
-        // a native selection.
-        layoutManager.enumerateEnclosingRects(forGlyphRange: glyphs,
-                                              withinSelectedGlyphRange: glyphs,
-                                              in: textContainer) { enclosing, _ in
-            let box = enclosing.offsetBy(dx: origin.x, dy: origin.y)
-            if box.intersects(rect) { box.fill(using: .sourceOver) }
-        }
+        (layoutManager as? DocumentSelectionLayoutManager)?.drawSelection(in: rect, of: self)
     }
 
     // Accessibility reports the DOCUMENT selection's part in this view, so
