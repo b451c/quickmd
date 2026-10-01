@@ -286,10 +286,6 @@ struct MarkdownTheme: Sendable, Identifiable {
     /// Matches horizontal rules: ***, ---, ___ (3 or more)
     static let horizontalRulePattern = #"^(\*{3,}|-{3,}|_{3,})\s*$"#
 
-    /// Matches standalone image on its own line: ![alt](url)
-    /// Captures: (1) alt text, (2) URL
-    static let imagePattern = #"^!\[(.*?)\]\((.*?)\)\s*$"#
-
     /// Matches task list items: - [ ] or - [x] with optional indentation
     /// Captures: (1) indent whitespace, (2) check state (space or x), (3) content
     static let taskListPattern = #"^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$"#

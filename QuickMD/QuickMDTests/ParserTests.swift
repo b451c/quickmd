@@ -365,6 +365,179 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(alt, "alt text")
     }
 
+    /// `(url, alt)` of every `.image` block, in order.
+    private func images(_ blocks: [MarkdownBlock]) -> [(url: String, alt: String)] {
+        blocks.compactMap {
+            if case .image(let url, let alt) = $0.content { return (url, alt) }
+            return nil
+        }
+    }
+
+    /// D8 — the CommonMark destination helper shared by links, inline images
+    /// and standalone image lines.
+    func testLinkDestinationParsingTable() {
+        let cases: [(inner: String, expected: String)] = [
+            ("image.png", "image.png"),
+            ("  image.png  ", "image.png"),
+            ("", ""),
+            ("<p q.png>", "p q.png"),                    // pointy: spaces allowed
+            ("<p q.png> \"title\"", "p q.png"),
+            ("<>", ""),
+            ("u \"t\"", "u"),                            // three title styles, discarded
+            ("u 't'", "u"),
+            ("u (t)", "u"),
+            ("u\t\"t\"", "u"),
+            ("a\\(b\\).png", "a(b).png"),                // escapes unescaped
+            ("<a\\>b.png>", "a>b.png"),
+            ("snake\\_case.png", "snake_case.png"),
+            ("C:\\dir\\x.png", "C:\\dir\\x.png"),        // backslash before a letter is literal
+            ("https://x.org/Foo_(bar).png", "https://x.org/Foo_(bar).png"),
+            ("<unterminated", "<unterminated"),          // not the pointy form
+            ("u \"a\\\"b\"", "u"),                      // escaped quote inside the title
+            // Lenient: not exactly one title after the space → the whole
+            // trimmed text is the destination (pre-D8 behaviour).
+            ("Screenshot 2024-10-01 at 10.00.00.png", "Screenshot 2024-10-01 at 10.00.00.png"),
+            ("  My Notes.md ", "My Notes.md"),
+            ("u \"t\" extra", "u \"t\" extra"),
+            ("u \"unclosed", "u \"unclosed"),
+            ("u (a(b))", "u (a(b))"),
+            ("data:image/png;base64,AAAA BBBB\tCCCC", "data:image/png;base64,AAAA BBBB\tCCCC"),
+        ]
+        for (inner, expected) in cases {
+            XCTAssertEqual(InlineSyntaxScanner.linkDestination(inner[...]), expected, "inner: \(inner)")
+        }
+    }
+
+    func testStandaloneImageKeepsNestedParensInDestination() {
+        XCTAssertEqual(images(parse("![a](https://x.org/Foo_(bar).png)")).map(\.url),
+                       ["https://x.org/Foo_(bar).png"])
+    }
+
+    /// D9 — the old lazy regex made this ONE image with url `x.png) ![b](y.png`.
+    func testTwoImagesOnOneLineAreTwoImageBlocks() {
+        let blocks = parse("Intro\n\n![a](x.png) ![b](y.png)\n\nOutro")
+        let found = images(blocks)
+        XCTAssertEqual(found.map(\.url), ["x.png", "y.png"])
+        XCTAssertEqual(found.map(\.alt), ["a", "b"])
+        let imageBlocks = blocks.filter { $0.id.hasPrefix("image-") }
+        XCTAssertEqual(imageBlocks.map(\.sourceLine), [2, 2], "both images belong to line 2")
+        XCTAssertEqual(Set(blocks.map(\.id)).count, blocks.count, "ids stay unique")
+    }
+
+    func testAdjacentImagesWithoutSpaceAreStillAnImageLine() {
+        XCTAssertEqual(images(parse("  ![a](x.png)![b](y.png)  ")).map(\.url), ["x.png", "y.png"])
+    }
+
+    func testImageFollowedByTextIsNotStandalone() {
+        let blocks = parse("![a](x.png) caption")
+        XCTAssertTrue(images(blocks).isEmpty)
+        XCTAssertEqual(blocks.count, 1)
+        XCTAssertEqual(plainText(blocks[0])?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       "[Image: a] caption")
+    }
+
+    func testNestedBracketsInAltText() {
+        let found = images(parse("![a [b] c](x.png)"))
+        XCTAssertEqual(found.map(\.alt), ["a [b] c"])
+        XCTAssertEqual(found.map(\.url), ["x.png"])
+    }
+
+    func testEscapedBracketInAltDoesNotCountTowardDepth() {
+        let found = images(parse(#"![a \] b](x.png)"#))
+        XCTAssertEqual(found.map(\.url), ["x.png"])
+        XCTAssertEqual(found.map(\.alt), [#"a \] b"#], "alt stays raw text")
+    }
+
+    func testImageTitleIsNotPartOfTheURL() {
+        XCTAssertEqual(images(parse(#"![a](u "t")"#)).map(\.url), ["u"])
+        XCTAssertEqual(images(parse("![a](u 't')")).map(\.url), ["u"])
+        XCTAssertEqual(images(parse("![a](u (t))")).map(\.url), ["u"])
+    }
+
+    func testScreenshotNameWithSpacesIsTheWholeDestination() {
+        XCTAssertEqual(images(parse("![shot](Screenshot 2024-10-01 at 10.00.00.png)")).map(\.url),
+                       ["Screenshot 2024-10-01 at 10.00.00.png"])
+    }
+
+    /// DataImageURI tolerates whitespace in the payload, so the parser must
+    /// hand over all of it.
+    func testDataURIWithSpacesKeepsTheWholePayload() {
+        let url = "data:image/png;base64,iVBORw0K GgoAAAAN SUhEUgAA"
+        XCTAssertEqual(images(parse("![a](\(url))")).map(\.url), [url])
+    }
+
+    func testUnicodeWhitespaceAroundAnImageLineIsTrimmed() {
+        XCTAssertEqual(images(parse("![a](x.png)\u{00A0}")).map(\.url), ["x.png"])
+        XCTAssertEqual(images(parse("\u{3000}![a](x.png) \u{00A0}")).map(\.url), ["x.png"])
+    }
+
+    func testPointyDestinationKeepsSpaces() {
+        XCTAssertEqual(images(parse("![a](<p q.png>)")).map(\.url), ["p q.png"])
+    }
+
+    /// D10 — full, collapsed and shortcut reference images resolve through the
+    /// document's definitions (case-insensitively, like links).
+    func testReferenceImagesBecomeImageBlocks() {
+        let blocks = parse("""
+        [Logo]: https://x.org/logo.png
+
+        ![The logo][logo]
+
+        ![Logo][]
+
+        ![logo]
+        """)
+        let found = images(blocks)
+        XCTAssertEqual(found.map(\.url), Array(repeating: "https://x.org/logo.png", count: 3))
+        XCTAssertEqual(found.map(\.alt), ["The logo", "Logo", "logo"])
+        XCTAssertEqual(blocks.filter { $0.id.hasPrefix("image-") }.map(\.sourceLine), [2, 4, 6])
+    }
+
+    func testUndefinedReferenceImageIsNotAnImageBlock() {
+        let blocks = parse("""
+        [other]: https://x.org/o.png
+
+        ![a][nope]
+
+        ![nope]
+
+        ![nope][]
+        """)
+        XCTAssertTrue(images(blocks).isEmpty)
+        XCTAssertEqual(blocks.count, 1, "all three lines stay paragraph text")
+    }
+
+    func testShortcutImageWithoutAnyDefinitionsStaysText() {
+        XCTAssertTrue(images(parse("![logo]")).isEmpty)
+    }
+
+    /// A multi-MB `data:` URL on one line is scanned once, linearly.
+    func testHugeDataURIImageLineParsesInLinearTime() {
+        let payload = String(repeating: "QUJD", count: 512 * 1024)   // 2 MiB of base64
+        let url = "data:image/png;base64," + payload
+        let markdown = "# Title\n\n![embedded](\(url))\n\nAfter."
+        let start = Date()
+        let blocks = parse(markdown)
+        let elapsed = Date().timeIntervalSince(start)
+        let found = images(blocks)
+        XCTAssertEqual(found.count, 1)
+        XCTAssertEqual(found.first?.url.utf8.count, url.utf8.count)
+        XCTAssertEqual(found.first?.url == url, true)
+        XCTAssertLessThan(elapsed, 1.0, "2 MB data: line took \(elapsed) s")
+    }
+
+    /// D11 — a badge line is a paragraph of linked placeholders, never image
+    /// blocks (real inline pictures are deferred).
+    func testBadgeLineStaysAParagraphOfLinks() {
+        let blocks = parse("[![ci](https://x.org/ci.svg)](https://x.org/ci) [![v](https://x.org/v.svg)](https://x.org/rel)")
+        XCTAssertTrue(images(blocks).isEmpty)
+        XCTAssertEqual(blocks.count, 1)
+        guard case .text(let attr) = blocks[0].content else { return XCTFail("expected text") }
+        XCTAssertEqual(Set(attr.runs.compactMap(\.link).map(\.absoluteString)),
+                       ["https://x.org/ci", "https://x.org/rel"])
+        XCTAssertFalse(String(attr.characters).contains("]("))
+    }
+
     // MARK: - Text chunking (constraint: ≤30 lines per text block)
 
     func testLongListsAreChunkedAtBlankLineBoundaries() {
@@ -832,6 +1005,31 @@ final class ParserTests: XCTestCase {
         // With no term above it the `: ` line is just paragraph text.
         XCTAssertEqual(blocks.count, 2, "\(blocks.map(\.id))")
         XCTAssertFalse(hasBoldRun(blocks[1]))
+    }
+
+    /// The term / lazy-continuation predicate uses the SAME standalone-image
+    /// test as the block loop: an image line (several images, or a shortcut
+    /// reference image) ends the list instead of being swallowed into it.
+    func testStandaloneImageLinesEndADefinitionList() {
+        let kinds: (String) -> [String] = { md in
+            self.parse(md).map { String($0.id.split(separator: "-")[0]) }
+        }
+        XCTAssertEqual(kinds("Term\n: definition\n![a](x.png) ![b](y.png)"), ["text", "image", "image"])
+        XCTAssertEqual(kinds("[logo]: https://x.org/l.png\n\nTerm\n: definition\n![logo]"), ["text", "image"])
+    }
+
+    /// Non-image lines keep their old role: text after an image is a lazy
+    /// continuation, and a plain term still opens a list.
+    func testDefinitionListPredicateUnchangedForNonImageLines() {
+        let continued = parse("Term\n: definition\n![a](x.png) caption")
+        XCTAssertEqual(continued.count, 1, "\(continued.map(\.id))")
+        XCTAssertTrue(textLines(continued[0]).contains("definition [Image: a] caption"),
+                      "\(textLines(continued[0]))")
+
+        let term = parse("![a](x.png) caption\n: definition")
+        XCTAssertEqual(term.count, 1, "\(term.map(\.id))")
+        XCTAssertTrue(hasBoldRun(term[0]), "a line that is not ONLY images can be a term")
+        XCTAssertEqual(textLines(term[0]), ["[Image: a] caption", "definition"])
     }
 
     /// Blank lines between two non-text blocks used to flush an EMPTY `.text`

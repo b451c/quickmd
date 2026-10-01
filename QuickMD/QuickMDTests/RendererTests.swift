@@ -78,6 +78,137 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(attr.runs.compactMap(\.link).first?.absoluteString, "https://example.com")
     }
 
+    func testInlineLinkTitleIsNotPartOfTheURL() {
+        let attr = renderer.renderInline(#"[text](https://example.com "Title")"#)
+        XCTAssertEqual(String(attr.characters), "text")
+        XCTAssertEqual(attr.runs.compactMap(\.link).map(\.absoluteString), ["https://example.com"])
+    }
+
+    func testLinkTextMayContainBalancedBrackets() {
+        let attr = renderer.renderInline("[a [b] c](https://example.com)")
+        XCTAssertEqual(String(attr.characters), "a [b] c")
+        XCTAssertEqual(attr.runs.compactMap(\.link).first?.absoluteString, "https://example.com")
+    }
+
+    func testLinkDestinationWithSpacesIsKeptWhole() {
+        let attr = renderer.renderInline("[doc](My Notes.md)")
+        XCTAssertEqual(String(attr.characters), "doc")
+        XCTAssertEqual(attr.runs.compactMap(\.link).first?.absoluteString, "My%20Notes.md")
+    }
+
+    /// Runs `body` on a thread with the parse task's small (512 KB) stack, so
+    /// unbounded recursion crashes here instead of passing on the 8 MB main stack.
+    private func onSmallStack(_ body: @escaping () -> Void) {
+        let done = DispatchSemaphore(value: 0)
+        let thread = Thread { body(); done.signal() }
+        thread.stackSize = 512 * 1024
+        thread.start()
+        XCTAssertEqual(done.wait(timeout: .now() + 10), .success)
+    }
+
+    /// Links cannot contain links: link text renders with links disabled, so
+    /// nesting is bounded at one level however many brackets there are.
+    func testDeeplyNestedLinkBracketsDoNotRecurse() {
+        let n = 5000
+        let markdown = String(repeating: "[", count: n) + "![a](b)" + String(repeating: "](u)", count: n)
+        var text = ""
+        var elapsed: TimeInterval = 0
+        _ = renderer.render("warm *up* [x](y) ![i](j)")   // first-use font/regex setup is not the scan
+        onSmallStack {
+            let start = Date()
+            text = String(self.renderer.render(markdown).characters)
+            elapsed = Date().timeIntervalSince(start)
+        }
+        XCTAssertTrue(text.contains("[Image: a]"))
+        XCTAssertLessThan(elapsed, 1.0, "took \(elapsed) s")
+    }
+
+    /// Unclosed brackets are matched once per text (pair table), not rescanned
+    /// to the end of the line at every `[`.
+    func testUnclosedBracketsRenderInLinearTime() {
+        let line = String(repeating: "[[a] ", count: 20_000)
+        _ = renderer.render("warm *up* [x](y) ![i](j)")
+        let start = Date()
+        let text = String(renderer.render(line).characters)
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertTrue(text.hasPrefix("[[a] [[a]"))
+        XCTAssertLessThan(elapsed, 1.0, "took \(elapsed) s")
+    }
+
+    func testInlineScreenshotImageWithSpaces() {
+        XCTAssertEqual(rendered("see ![shot](Screenshot 2024-10-01 at 10.00.00.png) here"),
+                       "see [Image: shot] here")
+    }
+
+    // MARK: - Inline images (D10 / D11)
+
+    private var refRenderer: MarkdownRenderer {
+        MarkdownRenderer(theme: MarkdownTheme.cached(for: .light),
+                         referenceDefinitions: ["ref": "https://x.org/ref.png"])
+    }
+
+    func testInlineHttpImageCarriesItsLink() {
+        let attr = renderer.renderInline("see ![pic](https://x.org/p.png) here")
+        XCTAssertEqual(String(attr.characters), "see [Image: pic] here")
+        XCTAssertEqual(attr.runs.compactMap(\.link).map(\.absoluteString), ["https://x.org/p.png"])
+    }
+
+    /// Clicking an embedded image used to open a multi-MB "Open data: link?" alert.
+    func testInlineDataImageHasNoLink() {
+        let attr = renderer.renderInline("see ![pic](data:image/png;base64,iVBORw0KGgo=) and ![x](DATA:image/gif;base64,R0lG)")
+        XCTAssertEqual(String(attr.characters), "see [Image: pic] and [Image: x]")
+        XCTAssertTrue(attr.runs.compactMap(\.link).isEmpty)
+    }
+
+    func testInlineImageWithEmptyAlt() {
+        XCTAssertEqual(rendered("![](https://x.org/p.png)"), "[Image]")
+    }
+
+    func testInlineImageTitleAndPointyDestination() {
+        let titled = renderer.renderInline(#"![a](https://x.org/p.png "t")"#)
+        XCTAssertEqual(titled.runs.compactMap(\.link).map(\.absoluteString), ["https://x.org/p.png"])
+        XCTAssertEqual(String(titled.characters), "[Image: a]")
+        XCTAssertEqual(rendered("![a](<p q.png>) after"), "[Image: a] after")
+    }
+
+    func testInlineReferenceImagesResolve() {
+        for markdown in ["![b][ref]", "![ref][]", "![ref]", "![b][REF]"] {
+            let attr = refRenderer.renderInline(markdown)
+            XCTAssertTrue(String(attr.characters).hasPrefix("[Image: "), "\(markdown) → \(String(attr.characters))")
+            XCTAssertFalse(String(attr.characters).contains("!"), markdown)
+            XCTAssertEqual(attr.runs.compactMap(\.link).map(\.absoluteString), ["https://x.org/ref.png"], markdown)
+        }
+    }
+
+    func testUndefinedReferenceImageStaysLiteral() {
+        XCTAssertEqual(String(refRenderer.renderInline("![b][nope]").characters), "![b][nope]")
+        XCTAssertEqual(rendered("![b]"), "![b]")
+    }
+
+    /// The badge idiom: the link text holds an image. The placeholder carries
+    /// the OUTER link; nothing of the syntax leaks into the text.
+    func testLinkWrappedImageCarriesTheOuterLink() {
+        let attr = renderer.renderInline("[![b](https://x.org/img.svg)](https://x)")
+        let text = String(attr.characters)
+        XCTAssertTrue(text.contains("Image: b"), text)
+        XCTAssertFalse(text.contains("]("), text)
+        XCTAssertEqual(Set(attr.runs.compactMap(\.link).map(\.absoluteString)), ["https://x"])
+    }
+
+    func testLinkWrappedReferenceImageCarriesTheOuterLink() {
+        let attr = refRenderer.renderInline("[![b][ref]](https://x) and [![b][ref]][ref]")
+        let text = String(attr.characters)
+        XCTAssertEqual(text, "[Image: b] and [Image: b]")
+        XCTAssertEqual(attr.runs.compactMap(\.link).map(\.absoluteString),
+                       ["https://x", "https://x.org/ref.png"])
+    }
+
+    func testLinkWrappedDataImageCarriesTheOuterLinkOnly() {
+        let attr = renderer.renderInline("[![b](data:image/png;base64,AAAA)](https://x)")
+        XCTAssertEqual(String(attr.characters), "[Image: b]")
+        XCTAssertEqual(Set(attr.runs.compactMap(\.link).map(\.absoluteString)), ["https://x"])
+    }
+
     func testAutolink() {
         let attr = renderer.renderInline("see https://example.com/page now")
         XCTAssertEqual(attr.runs.compactMap(\.link).first?.absoluteString, "https://example.com/page")

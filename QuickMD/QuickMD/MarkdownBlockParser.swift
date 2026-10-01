@@ -13,7 +13,6 @@ struct MarkdownBlockParser: Sendable {
     private let renderer: MarkdownRenderer
 
     // Static precompiled regex (avoid recompilation per parse call)
-    private static let imageRegex = try! NSRegularExpression(pattern: MarkdownTheme.imagePattern)
     private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
     private static let refLinkDefRegex = try! NSRegularExpression(pattern: MarkdownTheme.referenceLinkDefinitionPattern)
     private static let footnoteDefRegex = try! NSRegularExpression(pattern: MarkdownTheme.footnoteDefinitionPattern)
@@ -210,11 +209,15 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
-            // Standalone image (on its own line)
-            if let imageMatch = parseStandaloneImage(line) {
+            // Standalone image line: one OR MORE images and nothing else. Each
+            // becomes its own `.image` block, all on this line's `sourceLine`
+            // (`![a](x.png) ![b](y.png)` is two pictures, not one bogus url).
+            if let images = InlineSyntaxScanner.standaloneImages(in: line[...], references: referenceDefinitions) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
-                blocks.append(.image(index: blockIndex, url: imageMatch.url, alt: imageMatch.alt, sourceLine: sourceLine))
-                blockIndex += 1
+                for image in images {
+                    blocks.append(.image(index: blockIndex, url: image.url, alt: image.alt, sourceLine: sourceLine))
+                    blockIndex += 1
+                }
                 i += 1
                 continue
             }
@@ -354,7 +357,7 @@ struct MarkdownBlockParser: Sendable {
             // a term is only ever a line that is not itself a block start
             // (`isTermCandidate`).
             if let firstDefinition = Self.definitionText(of: line),
-               let run = trailingTermRun(in: textBuffer) {
+               let run = trailingTermRun(in: textBuffer, references: referenceDefinitions) {
                 // Whatever sat above the terms is a paragraph of its own — the
                 // term line is NOT part of it (PHP Markdown Extra reads
                 // "para line\n: def" as term + definition).
@@ -364,7 +367,8 @@ struct MarkdownBlockParser: Sendable {
                 textBuffer.removeAll()
 
                 let list = scanDefinitionList(lines, terms: run.terms,
-                                              firstDefinition: firstDefinition, from: i + 1)
+                                              firstDefinition: firstDefinition, from: i + 1,
+                                              references: referenceDefinitions)
                 blocks.append(.text(index: blockIndex,
                                     activeRenderer.renderDefinitionList(groups: list.groups),
                                     sourceLine: termSourceLine))
@@ -414,19 +418,6 @@ struct MarkdownBlockParser: Sendable {
         }
 
         return blocks
-    }
-
-    // MARK: - Image Parsing
-
-    private func parseStandaloneImage(_ line: String) -> (url: String, alt: String)? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        let nsRange = NSRange(trimmed.startIndex..., in: trimmed)
-
-        guard let match = Self.imageRegex.firstMatch(in: trimmed, range: nsRange),
-              let altRange = Range(match.range(at: 1), in: trimmed),
-              let urlRange = Range(match.range(at: 2), in: trimmed) else { return nil }
-
-        return (url: String(trimmed[urlRange]), alt: String(trimmed[altRange]))
     }
 
     // MARK: - Table Helpers
@@ -539,8 +530,10 @@ struct MarkdownBlockParser: Sendable {
     ///
     /// It is also the test for a definition's lazy continuation lines: a
     /// continuation is exactly "a line that could have been a term", which is
-    /// why one predicate serves both.
-    private func isTermCandidate(_ line: String) -> Bool {
+    /// why one predicate serves both. `references` are the document's link
+    /// definitions: a shortcut-reference image line (`![logo]`) is an image
+    /// block, so it must not be a term either.
+    private func isTermCandidate(_ line: String, references: [String: String]) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, Self.definitionText(of: line) == nil else { return false }
 
@@ -561,10 +554,11 @@ struct MarkdownBlockParser: Sendable {
         if trimmed.range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil { return false }
         if trimmed.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil { return false }
 
-        // ATX headings and standalone images
+        // ATX headings and standalone image lines — the SAME predicate the
+        // block loop uses, so a line is never both an image and a term.
         let nsRange = NSRange(line.startIndex..., in: line)
         if Self.headerRegex.firstMatch(in: line, range: nsRange) != nil { return false }
-        if parseStandaloneImage(line) != nil { return false }
+        if InlineSyntaxScanner.standaloneImages(in: line[...], references: references) != nil { return false }
 
         return true
     }
@@ -578,14 +572,15 @@ struct MarkdownBlockParser: Sendable {
     /// PHP Markdown Extra behaviour, so the run is taken greedily — a prose line
     /// directly above a term, with no blank line between them, becomes a term
     /// too, exactly as it does there.
-    private func trailingTermRun(in buffer: [(line: String, originalIndex: Int)]) -> (terms: [String], bufferStart: Int)? {
+    private func trailingTermRun(in buffer: [(line: String, originalIndex: Int)],
+                                 references: [String: String]) -> (terms: [String], bufferStart: Int)? {
         var end = buffer.count
         // At most ONE blank line may sit between the terms and the definition;
         // two means the term is too far away to be one.
         if end > 0, Self.isBlank(buffer[end - 1].line) { end -= 1 }
 
         var start = end
-        while start > 0, isTermCandidate(buffer[start - 1].line) { start -= 1 }
+        while start > 0, isTermCandidate(buffer[start - 1].line, references: references) { start -= 1 }
         guard start < end else { return nil }
 
         return (buffer[start..<end].map { $0.line.trimmingCharacters(in: .whitespaces) }, start)
@@ -600,10 +595,11 @@ struct MarkdownBlockParser: Sendable {
         let next: Int
     }
 
-    private func scanTermHead(_ lines: [String], from start: Int) -> DefinitionHead? {
+    private func scanTermHead(_ lines: [String], from start: Int,
+                              references: [String: String]) -> DefinitionHead? {
         var terms: [String] = []
         var index = start
-        while index < lines.count, isTermCandidate(lines[index]) {
+        while index < lines.count, isTermCandidate(lines[index], references: references) {
             terms.append(lines[index].trimmingCharacters(in: .whitespaces))
             index += 1
         }
@@ -617,7 +613,8 @@ struct MarkdownBlockParser: Sendable {
     /// already known, from `start` — the line AFTER that `: definition` line.
     /// Returns the groups and the first line index that is NOT part of the list.
     private func scanDefinitionList(_ lines: [String], terms firstTerms: [String],
-                                    firstDefinition: String, from start: Int)
+                                    firstDefinition: String, from start: Int,
+                                    references: [String: String])
         -> (groups: [MarkdownRenderer.DefinitionGroup], end: Int) {
         var groups: [MarkdownRenderer.DefinitionGroup] = []
         var terms = firstTerms
@@ -659,7 +656,7 @@ struct MarkdownBlockParser: Sendable {
                     index += 2
                     continue
                 }
-                if let head = scanTermHead(lines, from: index + 1) {
+                if let head = scanTermHead(lines, from: index + 1, references: references) {
                     closeGroup()
                     terms = head.terms
                     current = [head.firstDefinition]
@@ -671,7 +668,7 @@ struct MarkdownBlockParser: Sendable {
 
             // Lazy continuation — but a new block start (fence, heading, table,
             // quote, list, image, math) ends the list instead.
-            guard isTermCandidate(line) else { break }
+            guard isTermCandidate(line, references: references) else { break }
             current.append(line)
             index += 1
         }

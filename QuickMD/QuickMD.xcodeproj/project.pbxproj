@@ -88,6 +88,8 @@
 		A1B2C3D40100004A /* TextBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000047 /* TextBlockView.swift */; };
 		A1B2C3D40100004B /* InlineMathSegmenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000048 /* InlineMathSegmenter.swift */; };
 		A1B2C3D40100004C /* InlineMathSegmenter.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000048 /* InlineMathSegmenter.swift */; };
+		A1B2C3D4010000A0 /* InlineSyntaxScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000A0 /* InlineSyntaxScanner.swift */; };
+		A1B2C3D4010000A1 /* InlineSyntaxScanner.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000A0 /* InlineSyntaxScanner.swift */; };
 		A1B2C3D40100004D /* FileWatchManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000049 /* FileWatchManager.swift */; };
 		A1B2C3D40100004E /* ExternalEditorManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000004A /* ExternalEditorManager.swift */; };
 		A1B2C3D40100004F /* ExternalEditorPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000004B /* ExternalEditorPickerView.swift */; };
@@ -189,6 +191,7 @@
 		A1B2C3D400000046 /* SearchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000047 /* TextBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextBlockView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000048 /* InlineMathSegmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineMathSegmenter.swift; sourceTree = "<group>"; };
+		A1B2C3D4000000A0 /* InlineSyntaxScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineSyntaxScanner.swift; sourceTree = "<group>"; };
 		A1B2C3D400000049 /* FileWatchManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileWatchManager.swift; sourceTree = "<group>"; };
 		A1B2C3D40000004A /* ExternalEditorManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalEditorManager.swift; sourceTree = "<group>"; };
 		A1B2C3D40000004B /* ExternalEditorPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalEditorPickerView.swift; sourceTree = "<group>"; };
@@ -257,6 +260,7 @@
 				A1B2C3D40000003E /* DocumentSearch.swift */,
 				A1B2C3D40000003F /* WindowTabbing.swift */,
 				A1B2C3D400000048 /* InlineMathSegmenter.swift */,
+				A1B2C3D4000000A0 /* InlineSyntaxScanner.swift */,
 				A1B2C3D400000049 /* FileWatchManager.swift */,
 				A1B2C3D40000004A /* ExternalEditorManager.swift */,
 				A1B2C3D403000004 /* Views */,
@@ -518,6 +522,7 @@
 				A1B2C3D401000060 /* AlertBlockView.swift in Sources */,
 				A1B2C3D401000061 /* MermaidPDFRenderer.swift in Sources */,
 				A1B2C3D40100004B /* InlineMathSegmenter.swift in Sources */,
+				A1B2C3D4010000A0 /* InlineSyntaxScanner.swift in Sources */,
 				A1B2C3D40100004D /* FileWatchManager.swift in Sources */,
 				A1B2C3D40100004E /* ExternalEditorManager.swift in Sources */,
 				A1B2C3D40100004F /* ExternalEditorPickerView.swift in Sources */,
@@ -549,6 +554,7 @@
 				A1B2C3D401000048 /* SectionExtractor.swift in Sources (Tests) */,
 				A1B2C3D401000049 /* DocumentSearch.swift in Sources (Tests) */,
 				A1B2C3D40100004C /* InlineMathSegmenter.swift in Sources (Tests) */,
+				A1B2C3D4010000A1 /* InlineSyntaxScanner.swift in Sources (Tests) */,
 				A1B2C3D401000051 /* FileWatcherTests.swift in Sources */,
 				A1B2C3D401000052 /* FileWatchManager.swift in Sources (Tests) */,
 				A1B2C3D401000053 /* ExternalEditorManager.swift in Sources (Tests) */,

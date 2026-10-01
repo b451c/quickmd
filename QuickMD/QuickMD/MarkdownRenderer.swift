@@ -82,6 +82,12 @@ struct MarkdownRenderer: Sendable {
     let fontScale: CGFloat
     let referenceDefinitions: [String: String]
     let footnoteDefinitions: [(id: String, content: String)]
+    /// True while rendering a LINK'S TEXT: links cannot contain links
+    /// (CommonMark), so `tryParseLink` declines and nesting stays at depth 1.
+    /// Without it `[[[…![a](b)…](u)](u)](u)` recursed once per bracket level
+    /// (makeLink → renderInlineFormatting → tryParseLink → makeLink …) and
+    /// overflowed the parse task's stack at a few hundred levels.
+    private var linksDisabled = false
 
     // Static precompiled regex for parsing (avoid recompilation per line)
     private static let taskListRegex = try! NSRegularExpression(pattern: MarkdownTheme.taskListPattern)
@@ -579,7 +585,16 @@ struct MarkdownRenderer: Sendable {
 
     private func renderInlineFormatting(_ text: String) -> AttributedString {
         var result = AttributedString()
+        // Native contiguous UTF-8 storage up front (a no-op unless the line is
+        // a lazily bridged NSString, e.g. from `components(separatedBy:)`):
+        // `InlineSyntaxScanner` reads that storage directly, and would
+        // otherwise copy the rest of the line at every `[` / `![`.
+        var text = text
+        text.makeContiguousUTF8()
         var remaining = text[...]
+        // Bracket/paren matches of this text, computed once (lazily) so every
+        // `[` is a lookup, not a forward scan — O(n) per call, not O(n²).
+        let pairs = InlineSyntaxScanner.PairTable(text)
         var plainTextBuffer = ""
 
         // Helper to flush buffered plain text
@@ -603,8 +618,8 @@ struct MarkdownRenderer: Sendable {
             if parsed == nil { parsed = tryParseBold(&remaining) }
             if parsed == nil { parsed = tryParseItalic(&remaining) }
             if parsed == nil { parsed = tryParseStrikethrough(&remaining) }
-            if parsed == nil { parsed = tryParseImage(&remaining) }
-            if parsed == nil { parsed = tryParseLink(&remaining) }
+            if parsed == nil { parsed = tryParseImage(&remaining, pairs: pairs) }
+            if parsed == nil { parsed = tryParseLink(&remaining, pairs: pairs) }
             if parsed == nil { parsed = tryParseAutolink(&remaining) }
 
             if let (attr, newRemaining) = parsed {
@@ -748,32 +763,23 @@ struct MarkdownRenderer: Sendable {
         return (attr, afterMarker[endRange.upperBound...])
     }
 
-    private func tryParseLink(_ remaining: inout Substring) -> (AttributedString, Substring)? {
-        guard remaining.hasPrefix("["),
-              let closeBracket = remaining.firstIndex(of: "]"),
-              let afterBracket = remaining.index(closeBracket, offsetBy: 1, limitedBy: remaining.endIndex) else { return nil }
+    private func tryParseLink(_ remaining: inout Substring,
+                              pairs: InlineSyntaxScanner.PairTable) -> (AttributedString, Substring)? {
+        // The link text's `]` is found by bracket DEPTH (escaped brackets don't
+        // count), so the text may itself contain an image — `[![b](img)](link)`,
+        // the badge idiom. A first-`]` scan stopped inside the image and printed
+        // `![b` as the link followed by a literal `](link)`.
+        guard !linksDisabled, remaining.hasPrefix("["),
+              let closeBracket = InlineSyntaxScanner.closingBracket(in: remaining, pairs: pairs) else { return nil }
+        let afterBracket = remaining.index(after: closeBracket)
 
         let linkText = String(remaining[remaining.index(after: remaining.startIndex)..<closeBracket])
 
-        // 1. Standard inline link: [text](url)
+        // 1. Standard inline link: [text](url "title") — CommonMark destination,
+        //    title discarded (InlineSyntaxScanner.linkDestination).
         if remaining[afterBracket...].hasPrefix("(") {
-            guard let urlStart = remaining.index(closeBracket, offsetBy: 2, limitedBy: remaining.endIndex) else { return nil }
-
-            // Scan for closing ')' with parenthesis depth tracking
-            var depth = 1
-            var urlEndIdx = urlStart
-            while urlEndIdx < remaining.endIndex {
-                if remaining[urlEndIdx] == "(" { depth += 1 }
-                else if remaining[urlEndIdx] == ")" {
-                    depth -= 1
-                    if depth == 0 { break }
-                }
-                urlEndIdx = remaining.index(after: urlEndIdx)
-            }
-            guard depth == 0 else { return nil }
-
-            let urlText = String(remaining[urlStart..<urlEndIdx])
-            return makeLink(text: linkText, url: urlText, remaining: remaining[remaining.index(after: urlEndIdx)...])
+            guard let inline = InlineSyntaxScanner.parenthesizedDestination(remaining[afterBracket...], pairs: pairs) else { return nil }
+            return makeLink(text: linkText, url: inline.url, remaining: remaining[inline.end...])
         }
 
         // 2. Reference link: [text][id] or [text][] (collapsed)
@@ -799,8 +805,21 @@ struct MarkdownRenderer: Sendable {
     }
 
     private func makeLink(text: String, url: String, remaining: Substring) -> (AttributedString, Substring) {
-        var attr = AttributedString(text)
-        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
+        var attr: AttributedString
+        if text.contains("![") {
+            // Link-wrapped image (`[![b](img)](link)`): the text is rendered
+            // inline so the image becomes its "[Image: b]" placeholder, and the
+            // whole run carries the OUTER link (set below, over the image's
+            // own). Only for text holding an image, so every other link keeps
+            // its exact plain-text rendering. Rendered with links disabled:
+            // a link inside a link is literal text (bounds the recursion).
+            var linkText = self
+            linkText.linksDisabled = true
+            attr = linkText.renderInlineFormatting(text)
+        } else {
+            attr = AttributedString(text)
+            attr.setDualFont(size: scaled(14), fonts: theme.fonts)
+        }
         attr.setDualForeground(theme.linkColor)
         attr.setDualUnderline()
 
@@ -813,37 +832,26 @@ struct MarkdownRenderer: Sendable {
         return (attr, remaining)
     }
 
-    private func tryParseImage(_ remaining: inout Substring) -> (AttributedString, Substring)? {
+    /// Inline images stay text — an italic "[Image: alt]" placeholder (real
+    /// pictures inside a paragraph would break the `.exact` text rows). Same
+    /// grammar as standalone image blocks (`InlineSyntaxScanner`): inline
+    /// destinations with titles / `<…>`, and reference images through the
+    /// document's definitions.
+    private func tryParseImage(_ remaining: inout Substring,
+                               pairs: InlineSyntaxScanner.PairTable) -> (AttributedString, Substring)? {
         guard remaining.hasPrefix("!["),
-              let closeBracket = remaining.dropFirst(2).firstIndex(of: "]"),
-              let afterBracket = remaining.index(closeBracket, offsetBy: 1, limitedBy: remaining.endIndex),
-              remaining[afterBracket...].hasPrefix("(") else { return nil }
+              let image = InlineSyntaxScanner.image(atStartOf: remaining, references: referenceDefinitions,
+                                                    pairs: pairs) else { return nil }
 
-        guard let urlStart = remaining.index(closeBracket, offsetBy: 2, limitedBy: remaining.endIndex) else { return nil }
-
-        // Scan for closing ')' with parenthesis depth tracking
-        var depth = 1
-        var urlEndIdx = urlStart
-        while urlEndIdx < remaining.endIndex {
-            if remaining[urlEndIdx] == "(" { depth += 1 }
-            else if remaining[urlEndIdx] == ")" {
-                depth -= 1
-                if depth == 0 { break }
-            }
-            urlEndIdx = remaining.index(after: urlEndIdx)
-        }
-        guard depth == 0 else { return nil }
-
-        let altText = String(remaining[remaining.index(remaining.startIndex, offsetBy: 2)..<closeBracket])
-        let urlText = String(remaining[urlStart..<urlEndIdx])
-
-        var attr = AttributedString("[Image: \(altText)]")
+        var attr = AttributedString(image.alt.isEmpty ? "[Image]" : "[Image: \(image.alt)]")
         attr.setDualFont(size: scaled(14), italic: true, fonts: theme.fonts)
         attr.setDualForeground(theme.secondaryTextColor)
-        if let url = URL(string: urlText) {
+        // No link for an embedded `data:` image: clicking it would hand a
+        // multi-megabyte URL to the "Open link?" alert.
+        if !InlineSyntaxScanner.isDataURI(image.url), let url = URL(string: image.url) {
             attr.link = url
         }
-        return (attr, remaining[remaining.index(after: urlEndIdx)...])
+        return (attr, remaining[image.end...])
     }
 
     private func tryParseEscape(_ remaining: inout Substring) -> (AttributedString, Substring)? {
