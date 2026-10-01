@@ -5,6 +5,33 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-10-01
+
+Selection, images and the editor handoff, shaped by your reports: text can now be selected and copied across the whole document ([@ssstraub](https://github.com/ssstraub), #33), embedded and HTML images render ([@filmo](https://github.com/filmo), #32), and ⌘E opens your editor right where you are reading (an answer to [@KillSwitchSIG](https://github.com/KillSwitchSIG)'s #31). Thank you!
+
+### Added
+- Select text across the whole document: drag from one block into the next (paragraphs, headings, lists, quotes, alerts, code, tables and graphics), with autoscroll at the window edge; Shift-click extends, double- and triple-click select a word or a paragraph, ⌘A selects everything and ⌘C copies exactly what is highlighted. Copies are clean plain text plus formatted text without theme colours (no white text pasted from a dark theme), tables as tab-separated values, math as LaTeX. The highlight survives scrolling and window resizes. Reported by [@ssstraub](https://github.com/ssstraub) (#33).
+- Headings can be selected and copied like any other text.
+- Every copy (⌘C, Copy Markdown, Copy section, the code-block button) shows a small toast with the number of characters and words copied.
+- Settings → General (new first tab): "Copy selected text automatically", off by default.
+- Embedded images: `data:` URIs (base64 PNG, JPEG and the other formats macOS decodes, plus SVG, base64 or percent-encoded) render like any other image, on screen and in PDF. Reported by [@filmo](https://github.com/filmo) (#32).
+- HTML images: lines made of `<img>` tags, optionally wrapped in `<p align="center">`, `<div>`, `<a>` or `<picture>` (the GitHub README idiom), render as images; `width="120"` and `width="50%"` are honoured, `alt` becomes the caption. Wrapper-only lines no longer show as literal tags, and a `<br>` line inside a paragraph is a line break. Other HTML stays text, and nothing goes through a web view.
+- ⌘E (and the pencil button) opens the document at the line you are reading — the top of the view, or the start of the selection — in Visual Studio Code, VS Code Insiders, BBEdit, TextMate and Nova (editors whose URL schemes accept a line number). Other editors open the file as before.
+- Reference-style images (`![alt][ref]`, `![alt][]`, `![alt]`) as blocks and inline.
+
+### Fixed
+- An image whose source could not be shown printed its whole URL — megabytes of base64 for an embedded image. Placeholders now show the alt text or a short label, never the data (#32).
+- `![a](x.png) ![b](y.png)` on one line became a single broken image; it is now two images.
+- Image and link destinations follow CommonMark: titles (`"…"`, `'…'`, `(…)`) are no longer part of the URL, `<path with spaces>` and `%20` work, and a file name with spaces (`Screenshot 2026-10-01 at 10.00.00.png`) still loads.
+- Link-wrapped badges (`[![badge](img)](link)`) no longer break into stray text; the placeholder carries the outer link.
+- Clicking an inline embedded image no longer opens a confirmation dialog containing its whole data.
+- Images are shown at their own width × zoom, capped by the column, so small icons and badges are no longer blown up and blurred; large images are unchanged.
+- PDF/print: images referenced by a relative path now appear (they always printed as a placeholder); embedded images print too.
+- Remote images are downsampled and cached (no re-download when scrolling back), and remote SVGs such as shields.io badges render.
+- Selection inside a block could disappear after scrolling away and back, or right after a code block finished highlighting; clicking between blocks left Copy disabled; ⌘A selected a single block.
+- The external-editor toast named the app's bundle file ("Visual Studio Code.app") when Finder shows all extensions.
+- Homebrew: the cask drops the deprecated `url verified:` parameter, which made every `brew` command warn. Contributed by [@donbeave](https://github.com/donbeave) (tap #4).
+
 ## [1.10.0] - 2026-09-10
 
 A community release with a native-layout cleanup: graphics now follow the document zoom and open in a window-filling preview (issue #28 and PR #29 by [@arvearve](https://github.com/arvearve)), ordered lists share one text edge (PR #27 by [@rosekanari](https://github.com/rosekanari)), fenced ```svg blocks render natively (suggested in #30), and the 1.8.0 layout fallback is gone. Thank you!

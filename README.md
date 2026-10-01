@@ -30,7 +30,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ### Companion to Your Editor
 - **Auto-reload** — the document refreshes the moment your editor saves it. Enable auto-save in VS Code/Cursor/Zed and QuickMD becomes a live preview
-- **Open in External Editor (`⌘E`)** — one-click handoff to VS Code, Cursor, Sublime, Zed, Typora, Obsidian and more (auto-detected; configurable in Settings)
+- **Open in External Editor (`⌘E`)** — one-click handoff to VS Code, Cursor, Sublime, Zed, Typora, Obsidian and more (auto-detected; configurable in Settings). In VS Code, BBEdit, TextMate and Nova it opens at the line you are reading
 - **Copy button on code blocks** — hover and click, like on GitHub
 
 ### Complete Markdown Support
@@ -45,7 +45,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - **Definition lists** — `Term` followed by `: definition` lines (PHP Markdown Extra / Pandoc `:` syntax); several terms per definition, several definitions per term, wrapped definitions hang under their text
 - Task lists with checkboxes (`- [ ]` / `- [x]`)
 - Nested lists (ordered and unordered)
-- Images (local and remote URLs)
+- Images — local files, remote URLs, embedded `data:` images (base64 or SVG), reference-style `![alt][ref]`, and HTML `<img>` tags with `width` (the logo/screenshot idiom of GitHub READMEs, `<p align="center">` wrappers included); small images keep their own size
 - Links (inline, reference-style, autolinks)
 - Nested blockquotes with level indicators
 - Horizontal rules
@@ -59,6 +59,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Word-level highlighting across all block types (text, code, tables, blockquotes)
 - Table of Contents sidebar (`⌘⇧T`) — auto-generated from headings
 - Reading mode (`⌘⇧R`) — hides both sidebars and the hover buttons and centres the text in a 720 pt column; `Esc` brings everything back
+- **Select across the whole document** — drag through paragraphs, headings, lists, quotes, tables and code (it scrolls for you), Shift-click to extend, `⌘A` / `⌘C` to copy clean text (tables as tab-separated values, math as LaTeX). Every copy shows how many characters and words were copied; optional auto-copy of selections in Settings → General
 - Copy entire document (`⌘⇧C`) or individual sections (hover heading → copy icon)
 - Export to PDF (`⌘⇧E`) — **vector text** (selectable, searchable) with **rendered Mermaid diagrams** — and Print (`⌘P`)
 
@@ -115,16 +116,20 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ## Installation
 
-### Mac App Store (Recommended)
-
-Available on the [Mac App Store](https://apps.apple.com/app/quickmd/id6757681819).
-
-### Homebrew
+### Homebrew (Recommended)
 
 ```bash
 brew tap b451c/quickmd
 brew install --cask quickmd
 ```
+
+### Direct Download
+
+Download the latest notarized `QuickMD-vX.Y.Z.zip` from [GitHub Releases](https://github.com/b451c/quickmd/releases/latest), unzip, and move QuickMD to Applications.
+
+### Mac App Store
+
+The [Mac App Store version](https://apps.apple.com/app/quickmd/id6757681819) is unavailable from 6 October 2026 until the Apple Developer membership is renewed. The GitHub and Homebrew versions are the same app and keep receiving updates.
 
 ### Build from Source
 
@@ -161,9 +166,10 @@ Now all your Markdown files will open instantly with QuickMD!
 |----------|--------|
 | `⌘O` | Open file |
 | `⌘W` | Close tab (or window if last tab) |
-| `⌘E` | Open in External Editor |
+| `⌘E` | Open in External Editor (at the line you are reading, where supported) |
 | `⌘F` | Find in document |
 | `⌘G` / `⇧⌘G` | Next / previous match |
+| `⌘A` / `⌘C` | Select the whole document / copy the selection |
 | `⌘⇧C` | Copy Markdown source |
 | `⌘⇧T` | Toggle Table of Contents |
 | `⌘⇧D` | Toggle Recent Documents sidebar |
@@ -347,6 +353,10 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Zoom indicator + reset pill, typeset math in PDF/print
 - [x] Definition lists
 - [x] Reading mode (distraction-free)
+- [x] Graphics scale with the zoom + click-to-enlarge preview, fenced ```svg blocks
+- [x] Select and copy across the whole document, with a copied-characters toast ([#33](https://github.com/b451c/quickmd/issues/33))
+- [x] Embedded `data:` images and HTML `<img>` tags ([#32](https://github.com/b451c/quickmd/issues/32))
+- [x] `⌘E` opens your editor at the line you are reading
 
 Have a feature request? [Open an issue!](https://github.com/b451c/quickmd/issues)
 
