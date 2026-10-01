@@ -108,6 +108,7 @@
 		A1B2C3D4010000C0 /* DocumentSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000C0 /* DocumentSelection.swift */; };
 		A1B2C3D4010000C1 /* DocumentSelection.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000C0 /* DocumentSelection.swift */; };
 		A1B2C3D4010000C2 /* DocumentSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000C1 /* DocumentSelectionTests.swift */; };
+		A1B2C3D4010000F0 /* HeadingLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000F0 /* HeadingLayoutTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -123,6 +124,7 @@
 		A1B2C3D40000006E /* SVGImageDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SVGImageDecoder.swift; sourceTree = "<group>"; };
 		A1B2C3D4000000C0 /* DocumentSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentSelection.swift; sourceTree = "<group>"; };
 		A1B2C3D4000000C1 /* DocumentSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentSelectionTests.swift; sourceTree = "<group>"; };
+		A1B2C3D4000000F0 /* HeadingLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadingLayoutTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000001 /* QuickMDApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickMDApp.swift; sourceTree = "<group>"; };
 		A1B2C3D400000002 /* MarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDocument.swift; sourceTree = "<group>"; };
 		A1B2C3D400000003 /* MarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownView.swift; sourceTree = "<group>"; };
@@ -242,6 +244,7 @@
 				A1B2C3D400000064 /* FontTests.swift */,
 				A1B2C3D400000067 /* ChromeHoverTests.swift */,
 				A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */,
+				A1B2C3D4000000F0 /* HeadingLayoutTests.swift */,
 				A1B2C3D4000000C1 /* DocumentSelectionTests.swift */,
 			);
 			path = QuickMDTests;
@@ -569,6 +572,7 @@
 				A1B2C3D40100006F /* SVGImageDecoder.swift in Sources (Tests) */,
 				A1B2C3D4010000C1 /* DocumentSelection.swift in Sources (Tests) */,
 				A1B2C3D4010000C2 /* DocumentSelectionTests.swift in Sources */,
+				A1B2C3D4010000F0 /* HeadingLayoutTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

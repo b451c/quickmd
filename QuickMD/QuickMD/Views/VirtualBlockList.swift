@@ -1551,7 +1551,7 @@ final class SelectionController: NSObject {
     private var rowForBlockId: [String: Int] = [:]
     private var contentVersion = Int.min
     /// Selectable-string length per row, for rows measured without a view
-    /// (headings today, any off-screen row). Valid for one content version.
+    /// (any off-screen row). Valid for one content version.
     private var lengthCache: [Int: Int] = [:]
 
     var hasSelection: Bool { !(selection?.isEmpty ?? true) }
@@ -1645,9 +1645,10 @@ final class SelectionController: NSObject {
 
     /// Whether `row`'s cell shows the AppKit tint: the selection covers it and
     /// the row has no text view to draw the selection in — atomic rows
-    /// (S-D3), and text-kind rows whose text is not an NSTextView (headings
-    /// until they become one, S-D7). A row that gains a registered text view
-    /// drops the tint by itself (`register`).
+    /// (S-D3), and a text-kind row whose text view has not registered (yet).
+    /// Since S-D7 every text kind, headings included, draws through an
+    /// NSTextView, so a materialized text row drops the tint as soon as its
+    /// view registers (`register`).
     func wantsTint(row: Int) -> Bool {
         guard let selection, !selection.isEmpty, row >= 0, row < blocks.count else { return false }
         let block = blocks[row]
@@ -1950,8 +1951,8 @@ final class SelectionController: NSObject {
                        textView: textView, pointInTextView: local)
         }
 
-        // A text-kind row with no text view to ask (a heading today): its
-        // whole string, by half.
+        // A text-kind row with no registered text view to ask (not yet
+        // registered): its whole string, by half.
         return Hit(point: SelectionPoint(row: row, offset: point.y < rowRect.midY ? 0 : rowLength(row)),
                    isAtomic: false, textView: nil, pointInTextView: nil)
     }

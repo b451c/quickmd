@@ -654,8 +654,8 @@ struct MarkdownView: View {
     ///
     /// `NSViewRepresentable` is an environment boundary: nothing applied to the
     /// SwiftUI tree AROUND `VirtualBlockList` reaches the views inside its cells.
-    /// The link action matters — table cells and headings render their links as
-    /// SwiftUI `Text` with a Foundation `.link` attribute, which SwiftUI opens
+    /// The link action matters — table cells render their links as SwiftUI
+    /// `Text` with a Foundation `.link` attribute, which SwiftUI opens
     /// through `openURL`; without this they would bypass
     /// `handleLinkActivation` (relative paths unresolved, `.md` files opened by
     /// whatever app claims them, no confirmation for exotic schemes).
@@ -743,8 +743,10 @@ struct MarkdownView: View {
                     title: title,
                     theme: theme,
                     fontScale: scale,
+                    contentVersion: contentVersion,
                     searchText: searchText,
                     focusedOccurrence: focusedOcc,
+                    onLink: { handleLinkActivation($0) },
                     onCopySection: {
                         if let entry = headings.first(where: { $0.id == block.id }),
                            let section = SectionExtractor.extractSection(from: currentText, entry: entry, headings: headings) {
@@ -841,9 +843,12 @@ struct MarkdownView: View {
             // highlight changes colours only, never characters.
             return BlockTextConverter.plainCode(code, theme: theme, fontScale: scale)
         case .heading(let level, let title, _):
-            let rendered = MarkdownRenderer(theme: theme, fontScale: scale).renderHeader(title, level: level)
-            return (try? NSAttributedString(rendered, including: \.appKit))
-                ?? NSAttributedString(string: String(rendered.characters))
+            // Exactly what `HeadingBlockView` hands its `TextBlockView`: the
+            // same `renderHeader` output through the same converter (no
+            // inline math — a heading shows `$…$` literally, as before).
+            return TextBlockView.makeNSAttributedString(
+                from: MarkdownRenderer(theme: theme, fontScale: scale).renderHeader(title, level: level),
+                hasInlineMath: false, theme: theme, fontScale: scale)
         case .table, .image, .svgImage, .mathBlock, .mermaidDiagram:
             return nil
         }

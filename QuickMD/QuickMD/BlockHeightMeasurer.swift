@@ -222,6 +222,56 @@ enum BlockLayout {
         /// `NSHostingView` (constant across zoom — the icon font is not scaled).
         static let copyButtonWidth: CGFloat = 21
         static let copyButtonHeight: CGFloat = 24
+        /// The button's first text baseline, from its top edge (4 pt padding +
+        /// the SF Symbol's ascent at 11 pt), measured with `NSHostingView`.
+        /// Constant across zoom for the same reason as the size.
+        static let copyButtonBaselineOffset: CGFloat = 16
+
+        /// Trailing room the title gives up for the button. The title's text
+        /// view is padded by this much and the button lives in that strip
+        /// (an overlay, never an HStack sibling of the NSViewRepresentable —
+        /// constraints.md, scroll-freeze rule 4); `headingEstimate` wraps the
+        /// title at the same reduced width.
+        static let copyButtonReservedWidth: CGFloat = copyButtonSpacing + copyButtonWidth
+
+        /// Vertical placement of a heading's title and its copy button.
+        ///
+        /// Until v1.11 the heading was `HStack(alignment: .firstTextBaseline)
+        /// { Text(title); button }`, so the row was the UNION of the two views
+        /// aligned on their first baselines. The title is now an NSTextView and
+        /// the button an overlay (which takes no space), so that union is
+        /// reproduced here explicitly:
+        /// - the shared baseline sits at `max(titleBaseline, buttonBaseline)`;
+        /// - the title is pushed down by `titleTopInset` (non-zero only for
+        ///   small headings whose ascent is below the button's baseline, H4–H6);
+        /// - the button is pushed down by `buttonTopInset` (large headings);
+        /// - the row is at least `minimumHeight` — the button's bottom edge.
+        /// With TextKit's first-line baseline this matches the old SwiftUI
+        /// heading to the point for every single-line heading H1–H6 at 100 %
+        /// and 150 % (pinned by `HeadingLayoutTests`).
+        struct TitleGeometry: Equatable {
+            let titleTopInset: CGFloat
+            let buttonTopInset: CGFloat
+            let minimumHeight: CGFloat
+        }
+
+        static func titleGeometry(titleFirstBaseline: CGFloat) -> TitleGeometry {
+            let baseline = max(titleFirstBaseline, copyButtonBaselineOffset)
+            let buttonTop = baseline - copyButtonBaselineOffset
+            return TitleGeometry(titleTopInset: baseline - titleFirstBaseline,
+                                 buttonTopInset: buttonTop,
+                                 minimumHeight: buttonTop + copyButtonHeight)
+        }
+
+        /// TextKit 1's baseline offset for a first line set in `font` — where
+        /// the title's NSTextView draws its first baseline (zero insets, no
+        /// paragraph spacing). nil font (an empty title) aligns the title's
+        /// top with the button's baseline, i.e. no insets at all.
+        static func titleFirstBaseline(font: NSFont?) -> CGFloat {
+            guard let font else { return copyButtonBaselineOffset }
+            // A fresh layout manager, same reason as `singleLineHeight`.
+            return NSLayoutManager().defaultBaselineOffset(for: font)
+        }
     }
 
     // MARK: Tables
@@ -849,12 +899,13 @@ enum BlockHeightMeasurer {
 
     // MARK: - Estimates for the reported kinds
 
-    /// `.heading` — the title is a SwiftUI `Text`, so this is TextKit's height
-    /// for the same string at the same width (they agreed to the point for every
-    /// heading level sampled, except a 1 pt-per-line difference at 16 pt),
-    /// floored at the hover-to-copy button's own height. The HStack is
-    /// `.firstTextBaseline`-aligned, which can add another point or two for
-    /// single-line H4–H6; the placed view corrects it.
+    /// `.heading` — TextKit's height for the title string at the title's width
+    /// (since v1.11 the title IS an NSTextView laid out with this string),
+    /// floored at the hover-to-copy button's own height. The view also
+    /// reproduces the old first-baseline alignment with the button
+    /// (`BlockLayout.Heading.titleGeometry`), which can add another point or
+    /// two for single-line H2–H6; the placed view corrects it (the row stays
+    /// `.reported`).
     private static func headingEstimate(title: String, level: Int,
                                         renderer: MarkdownRenderer,
                                         contentWidth: CGFloat) -> CGFloat {
@@ -862,8 +913,7 @@ enum BlockHeightMeasurer {
         let ns = (try? NSAttributedString(attributed, including: \.appKit))
             ?? NSAttributedString(string: title)
         let textWidth = BlockLayout.clampedWidth(contentWidth
-                                                 - BlockLayout.Heading.copyButtonSpacing
-                                                 - BlockLayout.Heading.copyButtonWidth)
+                                                 - BlockLayout.Heading.copyButtonReservedWidth)
         return max(exactHeight(text: ns, width: textWidth), BlockLayout.Heading.copyButtonHeight)
     }
 

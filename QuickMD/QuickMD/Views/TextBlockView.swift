@@ -97,6 +97,14 @@ struct TextBlockView: View {
     /// That fallback is load-bearing, not a leftover: without it text blocks
     /// go blank in that window.
     var preconverted: NSAttributedString? = nil
+    /// Extra component of the `cachedNS` key, for callers that are never
+    /// `preconverted` and whose block id does not pin the content within one
+    /// version. Headings: ids are positional (`heading-3`), and in the window
+    /// described above a cell can render the PREVIOUS parse's `heading-3` under
+    /// the NEW version — keyed on version + id alone, that stale title would
+    /// then be a cache hit once the new blocks land. Empty for every other
+    /// caller (their `preconverted` string wins over the cache anyway).
+    var cacheScope: String = ""
     let onLink: (URL) -> Void
 
     @State private var cachedNS: NSAttributedString?
@@ -106,6 +114,7 @@ struct TextBlockView: View {
          theme: MarkdownTheme, fontScale: CGFloat = 1.0, contentVersion: Int = 0,
          searchTerm: String = "", focusedOccurrence: Int? = nil,
          preconverted: NSAttributedString? = nil,
+         cacheScope: String = "",
          onLink: @escaping (URL) -> Void) {
         self.blockId = blockId
         self.attributed = attributed
@@ -116,6 +125,7 @@ struct TextBlockView: View {
         self.searchTerm = searchTerm
         self.focusedOccurrence = focusedOccurrence
         self.preconverted = preconverted
+        self.cacheScope = cacheScope
         self.onLink = onLink
     }
 
@@ -126,7 +136,7 @@ struct TextBlockView: View {
     /// previous render (that is what made zoom lag one step behind). The
     /// version counter changes exactly when a new `attributed` arrives.
     private var cacheKey: String {
-        "\(contentVersion)|\(blockId)"
+        "\(contentVersion)|\(blockId)|\(cacheScope)"
     }
 
     var body: some View {
@@ -221,8 +231,8 @@ private struct BlockTextView: NSViewRepresentable {
 
         // The row's block id comes from the hosting cell's environment, not
         // from a parameter: any text view inside a cell joins the document
-        // selection the same way (paragraphs, quote/alert bodies — and
-        // headings once they are NSTextView-backed).
+        // selection the same way (paragraphs, quote/alert bodies, heading
+        // titles).
         textView.attachSelection(context.environment.blockSelection)
     }
 
