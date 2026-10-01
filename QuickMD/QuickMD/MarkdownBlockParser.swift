@@ -215,10 +215,42 @@ struct MarkdownBlockParser: Sendable {
             if let images = InlineSyntaxScanner.standaloneImages(in: line[...], references: referenceDefinitions) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
                 for image in images {
-                    blocks.append(.image(index: blockIndex, url: image.url, alt: image.alt, sourceLine: sourceLine))
+                    blocks.append(.image(index: blockIndex, url: image.url, alt: image.alt, width: nil, sourceLine: sourceLine))
                     blockIndex += 1
                 }
                 i += 1
+                continue
+            }
+
+            // HTML image line (T-C): nothing but `<img>` tags and layout
+            // wrappers (`<p align="center">`, `</p>`, `<a …>`, …), possibly an
+            // `<img` tag spread over several lines. Each `<img>` is an
+            // `.image` block on the line its tag STARTS on.
+            //
+            // A wrapper-only line produces no block and — deliberately — does
+            // NOT flush the text buffer either: it is a no-op, as if the line
+            // were not there. So a `</p>` between two list items or two
+            // paragraph lines does not split them, and it never shows up as
+            // literal text. The one exception is a `<br>`-only line right
+            // after buffered text: GitHub renders it as a line break, so it
+            // becomes a CommonMark hard break (two trailing spaces) on that
+            // line. At a block boundary (empty buffer, or a blank line last)
+            // it stays a no-op. The definition-list forward scans skip
+            // wrapper lines the same way (`wrapperOnlyLine`).
+            if let html = htmlImageLine(lines, at: i) {
+                if html.images.isEmpty {
+                    if html.lineBreakOnly, let last = textBuffer.indices.last, !Self.isBlank(textBuffer[last].line) {
+                        textBuffer[last].line += "  "
+                    }
+                } else {
+                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+                    for tag in html.images {
+                        blocks.append(.image(index: blockIndex, url: tag.url, alt: tag.alt, width: tag.width,
+                                             sourceLine: lineMap[i + tag.lineOffset]))
+                        blockIndex += 1
+                    }
+                }
+                i = html.end
                 continue
             }
 
@@ -526,7 +558,8 @@ struct MarkdownBlockParser: Sendable {
 
     /// Can this line be a definition-list TERM? Non-blank, not a definition
     /// line, and not the start of any other block this parser recognises
-    /// (heading, list item, table row, fence, quote, image, `$$`, rule).
+    /// (heading, list item, table row, fence, quote, image — Markdown or
+    /// HTML `<img>`/wrapper line —, `$$`, rule).
     ///
     /// It is also the test for a definition's lazy continuation lines: a
     /// continuation is exactly "a line that could have been a term", which is
@@ -559,8 +592,71 @@ struct MarkdownBlockParser: Sendable {
         let nsRange = NSRange(line.startIndex..., in: line)
         if Self.headerRegex.firstMatch(in: line, range: nsRange) != nil { return false }
         if InlineSyntaxScanner.standaloneImages(in: line[...], references: references) != nil { return false }
+        // Single-line HTML image / wrapper lines (the multi-line `<img` form
+        // needs the following lines — `isTermCandidate(in:at:)`).
+        if case .tags? = HTMLImageSyntax.scan(line[...]) { return false }
 
         return true
+    }
+
+    /// `isTermCandidate` for a line in context: also false when the line
+    /// opens a multi-line `<img` tag the block loop would assemble into an
+    /// image — the same `htmlImageLine` test, so the forward scans of a
+    /// definition list never swallow a tag the block loop shows as a picture.
+    /// (Buffered lines need no context: a line only lands in the text buffer
+    /// after `htmlImageLine` already said no.)
+    private func isTermCandidate(in lines: [String], at index: Int, references: [String: String]) -> Bool {
+        isTermCandidate(lines[index], references: references) && htmlImageLine(lines, at: index) == nil
+    }
+
+    // MARK: - HTML image lines (T-C)
+
+    /// A single-line wrapper-only HTML line (`<p align="center">`, `</p>`,
+    /// `<br>`, …) — the lines the block loop skips without a block. Nil when
+    /// the line is anything else; otherwise whether it is `<br>`-only.
+    private static func wrapperOnlyLine(_ line: String) -> Bool? {
+        guard case .tags(let images, let lineBreakOnly)? = HTMLImageSyntax.scan(line[...]),
+              images.isEmpty else { return nil }
+        return lineBreakOnly
+    }
+
+    /// How many lines AFTER an unterminated `<img` line may complete the tag.
+    private static let htmlImageContinuationLimit = 10
+
+    /// The HTML image line starting at `index` (see `HTMLImageSyntax`): its
+    /// `<img>` tags (EMPTY for a wrapper-only line) and the index of the first
+    /// line after it. When the line ends inside an `<img` tag, following lines
+    /// are joined until the tag closes — at most `htmlImageContinuationLimit`
+    /// of them, and never across a blank line; if it does not close, nil, and
+    /// every one of those lines is ordinary text again.
+    private func htmlImageLine(_ lines: [String], at index: Int)
+        -> (images: [HTMLImageSyntax.Tag], lineBreakOnly: Bool, end: Int)? {
+        switch HTMLImageSyntax.scan(lines[index][...]) {
+        case nil:
+            return nil
+        case .tags(let images, let lineBreakOnly)?:
+            return (images, lineBreakOnly, index + 1)
+        case .unterminatedImage?:
+            var joined = lines[index]
+            var end = index + 1
+            let limit = min(lines.count, end + Self.htmlImageContinuationLimit)
+            while end < limit {
+                let next = lines[end]
+                if Self.isBlank(next) { return nil }
+                joined += "\n" + next
+                end += 1
+                // No `>` on this line → the tag cannot have closed; skip the
+                // re-scan (keeps a long unterminated tag from being scanned
+                // once per line).
+                guard next.utf8.contains(UInt8(ascii: ">")) else { continue }
+                switch HTMLImageSyntax.scan(joined[...]) {
+                case .tags(let images, _)?: return (images, false, end)
+                case .unterminatedImage?: continue   // the `>` was inside a quoted value
+                case nil: return nil
+                }
+            }
+            return nil
+        }
     }
 
     /// The trailing lines of the text buffer that are the TERM(s) of the
@@ -599,12 +695,17 @@ struct MarkdownBlockParser: Sendable {
                               references: [String: String]) -> DefinitionHead? {
         var terms: [String] = []
         var index = start
-        while index < lines.count, isTermCandidate(lines[index], references: references) {
+        // Wrapper-only lines are skipped as the block loop skips them (it
+        // never buffers them, so `trailingTermRun` never sees one either).
+        while index < lines.count {
+            if Self.wrapperOnlyLine(lines[index]) != nil { index += 1; continue }
+            guard isTermCandidate(in: lines, at: index, references: references) else { break }
             terms.append(lines[index].trimmingCharacters(in: .whitespaces))
             index += 1
         }
         guard !terms.isEmpty, index < lines.count else { return nil }
         if Self.isBlank(lines[index]) { index += 1 }   // one blank line is allowed
+        while index < lines.count, Self.wrapperOnlyLine(lines[index]) != nil { index += 1 }
         guard index < lines.count, let text = Self.definitionText(of: lines[index]) else { return nil }
         return DefinitionHead(terms: terms, firstDefinition: text, next: index + 1)
     }
@@ -666,9 +767,17 @@ struct MarkdownBlockParser: Sendable {
                 break
             }
 
+            // A wrapper-only line is skipped, exactly as in the block loop: a
+            // `<br>`-only one is a hard break of the definition so far.
+            if let isLineBreak = Self.wrapperOnlyLine(line) {
+                if isLineBreak, let last = current.indices.last { current[last] += "  " }
+                index += 1
+                continue
+            }
+
             // Lazy continuation — but a new block start (fence, heading, table,
             // quote, list, image, math) ends the list instead.
-            guard isTermCandidate(line, references: references) else { break }
+            guard isTermCandidate(in: lines, at: index, references: references) else { break }
             current.append(line)
             index += 1
         }

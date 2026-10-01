@@ -70,7 +70,7 @@ private func blockSignature(_ block: MarkdownBlock) -> String {
         return "b|\(rows.count)|" + head(headers.joined(separator: "\u{1F}"))
     case .codeBlock(let code, let language):
         return "c|\(language)|" + head(code)
-    case .image(let url, let alt):
+    case .image(let url, let alt, _):
         return "i|\(head(url))|" + head(alt)
     case .blockquote(let content, let level):
         return "q|\(level)|" + head(content)

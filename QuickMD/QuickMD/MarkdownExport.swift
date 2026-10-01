@@ -148,8 +148,8 @@ struct MarkdownPrintableView: View {
                     PrintableCodeBlockView(code: code, language: language)
                         .padding(.vertical, 4)
 
-                case .image(let url, let alt):
-                    PrintableImageView(url: url, alt: alt, documentURL: documentURL)
+                case .image(let url, let alt, let width):
+                    PrintableImageView(url: url, alt: alt, width: width, documentURL: documentURL)
                         .padding(.vertical, 8)
 
                 case .blockquote(let content, let level):
@@ -313,6 +313,8 @@ struct PrintableCodeBlockView: View {
 struct PrintableImageView: View {
     let url: String
     let alt: String
+    /// HTML `<img width>`; replaces the image's own width in the D4 rule.
+    var width: ImageWidth? = nil
     var documentURL: URL? = nil
 
     /// Page column cap. The D4 rule applies as on screen: an image is never
@@ -327,7 +329,7 @@ struct PrintableImageView: View {
                 Image(nsImage: nsImage)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: Self.width(for: nsImage), maxHeight: Self.maxHeight)
+                    .frame(maxWidth: Self.displayWidth(for: nsImage, requested: width), maxHeight: Self.maxHeight)
             } else {
                 HStack {
                     Image(systemName: "photo")
@@ -351,7 +353,10 @@ struct PrintableImageView: View {
         }
     }
 
-    private static func width(for image: NSImage) -> CGFloat {
+    /// Same rule as `ImageBlockView.displayWidth`, with the page cap and no
+    /// zoom: a requested `<img width>` wins over the image's own width.
+    private static func displayWidth(for image: NSImage, requested: ImageWidth?) -> CGFloat {
+        if let requested { return requested.displayWidth(cap: maxWidth, fontScale: 1) }
         guard image.size.width > 0 else { return maxWidth }
         return min(maxWidth, image.size.width)
     }
@@ -408,8 +413,8 @@ struct MarkdownPrintableBlockView: View {
             case .codeBlock(let code, let language):
                 PrintableCodeBlockView(code: code, language: language)
 
-            case .image(let url, let alt):
-                PrintableImageView(url: url, alt: alt, documentURL: documentURL)
+            case .image(let url, let alt, let width):
+                PrintableImageView(url: url, alt: alt, width: width, documentURL: documentURL)
 
             case .blockquote(let content, let level):
                 PrintableBlockquoteView(content: content, level: level)

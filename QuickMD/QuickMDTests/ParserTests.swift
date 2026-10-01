@@ -358,7 +358,7 @@ final class ParserTests: XCTestCase {
 
     func testStandaloneImageBlock() {
         let blocks = parse("![alt text](image.png)")
-        guard case .image(let url, let alt) = blocks[0].content else {
+        guard case .image(let url, let alt, _) = blocks[0].content else {
             return XCTFail("expected image block")
         }
         XCTAssertEqual(url, "image.png")
@@ -368,7 +368,7 @@ final class ParserTests: XCTestCase {
     /// `(url, alt)` of every `.image` block, in order.
     private func images(_ blocks: [MarkdownBlock]) -> [(url: String, alt: String)] {
         blocks.compactMap {
-            if case .image(let url, let alt) = $0.content { return (url, alt) }
+            if case .image(let url, let alt, _) = $0.content { return (url, alt) }
             return nil
         }
     }
