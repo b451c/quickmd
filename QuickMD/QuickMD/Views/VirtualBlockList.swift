@@ -1841,7 +1841,7 @@ final class SelectionController: NSObject {
                 let showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
                 pieces.append(.table(headers: showsHeader ? headers.map(renderedCell) : nil,
                                      rows: rows.map { $0.map(renderedCell) }))
-            case .image(_, let alt):
+            case .image(_, let alt, _):
                 guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
                 pieces.append(.image(alt: alt))
             case .svgImage:
