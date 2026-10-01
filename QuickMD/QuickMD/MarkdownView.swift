@@ -47,6 +47,9 @@ struct MarkdownView: View {
     @State private var matchBlockIds: [String] = []
     @State private var scrollTrigger: Int = 0
     @State private var graphicPreview: GraphicPreview?
+    /// Bumped when the graphic preview closes: `presentGraphicPreview` resigned
+    /// first responder, and the document list takes it back (⌘C/⌘A/arrows).
+    @State private var documentFocusRequest = 0
     @State private var keyMonitor: Any?
     /// The NSWindow hosting this view (set by `WindowConfigurator`); the key
     /// monitor uses it to ignore events addressed to other tabs' windows.
@@ -223,7 +226,12 @@ struct MarkdownView: View {
                     onHeightReport: { blockId, row, height in
                         applyHeightReport(blockId: blockId, row: row, height: height)
                     },
-                    content: { block in AnyView(hostedBlockView(for: block)) }
+                    content: { block in AnyView(hostedBlockView(for: block)) },
+                    selectableText: { block, version in
+                        selectableText(for: block, installedVersion: version)
+                    },
+                    onCopySelection: { output in copySelectionToClipboard(output) },
+                    focusRequest: documentFocusRequest
                 )
                 .onChange(of: scrollTrigger) { _ in
                     scrollFocusedMatchIntoView()
@@ -364,6 +372,9 @@ struct MarkdownView: View {
     private var configuredDocumentStack: some View {
         documentStack
         .disabled(graphicPreview != nil)
+        .onChange(of: graphicPreview == nil) { closed in
+            if closed { documentFocusRequest += 1 }
+        }
         .accessibilityHidden(graphicPreview != nil)
         .overlay {
             if let graphicPreview {
@@ -778,6 +789,64 @@ struct MarkdownView: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         showToast("Copied!")
+    }
+
+    /// ⌘C / context-menu Copy of the document selection (v1.11 S-D8/S-D9):
+    /// plain text + RTF through `DocumentClipboard.write`, and the toast says
+    /// what was copied ("Copied 1,234 characters · 210 words").
+    private func copySelectionToClipboard(_ output: DocumentCopyOutput) {
+        showToast(DocumentClipboard.write(plain: output.plain, rtf: output.rtf))
+    }
+
+    // MARK: - Selectable strings (v1.11 S-D2)
+
+    /// The string `block`'s text view displays — the string the document
+    /// selection's offsets index into — or nil for atomic rows (tables,
+    /// images, math, diagrams), which are selected whole.
+    ///
+    /// Built WITHOUT the view, so ⌘A + ⌘C works for rows that were never
+    /// materialized. Each case is the same construction the block's view uses
+    /// (same converter, same renderer, same theme and scale), so offsets and
+    /// characters agree with what is drawn.
+    ///
+    /// `installedVersion` is the content version of the blocks the list is
+    /// SHOWING. `measured.converted` and `textBlockMeta` are keyed by block id,
+    /// and ids are positional (`text-3` exists in every parse), so the cache is
+    /// only used when it belongs to the same parse; otherwise the string is
+    /// converted from the block itself.
+    private func selectableText(for block: MarkdownBlock, installedVersion: Int) -> NSAttributedString? {
+        let scale = CGFloat(renderedFontScale)
+        let cached = installedVersion == contentVersion ? measured.converted[block.id] : nil
+        switch block.content {
+        case .text(let attributed):
+            if let cached { return cached }
+            return TextBlockView.makeNSAttributedString(
+                from: attributed,
+                hasInlineMath: BlockTextConverter.containsInlineMath(String(attributed.characters)),
+                theme: theme, fontScale: scale)
+        case .blockquote(let content, _):
+            if let cached { return cached }
+            return TextBlockView.makeNSAttributedString(
+                from: MarkdownRenderer(theme: theme, fontScale: scale).renderQuotedBody(content),
+                hasInlineMath: false, theme: theme, fontScale: scale)
+        case .alert(_, let content):
+            // The alert's TITLE is chrome, not text: only the body is selectable.
+            guard !content.isEmpty else { return nil }
+            if let cached { return cached }
+            return TextBlockView.makeNSAttributedString(
+                from: MarkdownRenderer(theme: theme, fontScale: scale).renderQuotedBody(content),
+                hasInlineMath: false, theme: theme, fontScale: scale)
+        case .codeBlock(let code, _):
+            // The plain string the view shows until the highlight lands; the
+            // highlight changes colours only, never characters.
+            return BlockTextConverter.plainCode(code, theme: theme, fontScale: scale)
+        case .heading(let level, let title, _):
+            let rendered = MarkdownRenderer(theme: theme, fontScale: scale).renderHeader(title, level: level)
+            return (try? NSAttributedString(rendered, including: \.appKit))
+                ?? NSAttributedString(string: String(rendered.characters))
+        case .table, .image, .svgImage, .mathBlock, .mermaidDiagram:
+            return nil
+        }
     }
 
     /// ⌘+ / ⌘− / ⌘0 (menu, shortcuts, the zoom pill). Announces the resulting

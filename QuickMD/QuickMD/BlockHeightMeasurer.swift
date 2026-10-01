@@ -417,7 +417,13 @@ enum BlockTextConverter {
                     let yOffset = (bodyFont.capHeight - image.size.height) / 2
                     attachment.bounds = CGRect(x: 0, y: yOffset,
                                                width: image.size.width, height: image.size.height)
-                    result.append(NSAttributedString(attachment: attachment))
+                    // Tagged with its source so a copy can write `$latex$`
+                    // instead of U+FFFC (DocumentCopyBuilder). Draws nothing,
+                    // lays out nothing — the measured height is unchanged.
+                    let embedded = NSMutableAttributedString(attachment: attachment)
+                    embedded.addAttribute(.qmdInlineMathSource, value: latex,
+                                          range: NSRange(location: 0, length: embedded.length))
+                    result.append(embedded)
                 } else {
                     // Fallback: italic literal, same as the legacy pipeline
                     var attr = AttributedString(latex)
