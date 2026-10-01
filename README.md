@@ -308,7 +308,12 @@ CI runs the test suite plus Release builds of both flavors on every push and pul
 
 ### Support Development
 
-QuickMD is **free and open source**. If you find it useful, consider supporting development:
+QuickMD is **free and open source**. If you find it useful, consider supporting development.
+
+**Help bring QuickMD back to the Mac App Store:** the Apple Developer Program membership ($99 a year) expires on 6 October 2026. Donations go to renewing it - [see the goal on qmd.app](https://qmd.app/#support-goal).
+
+[![App Store goal](https://qmd.app/api/donation-goal.svg)](https://qmd.app/#support-goal)
+
 
 <a href="https://buymeacoffee.com/bsroczynskh" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 40px !important;width: 145px !important;" ></a>
 <a href="https://ko-fi.com/quickmd" target="_blank"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=6" alt="Support on Ko-fi" style="height: 40px !important;width: 145px !important;" ></a>
