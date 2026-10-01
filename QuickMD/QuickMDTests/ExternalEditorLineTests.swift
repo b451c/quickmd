@@ -218,4 +218,15 @@ final class ExternalEditorLineTests: XCTestCase {
         handle.provider = { 17 }
         XCTAssertEqual(handle.editorLine(), 17)
     }
+
+    /// The toast names the app, never its bundle file ("Visual Studio Code",
+    /// not "Visual Studio Code.app" when Finder shows all extensions).
+    func testAppDisplayNameHasNoAppExtension() {
+        let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
+        let name = ExternalEditorManager.appDisplayName(at: textEdit)
+        XCTAssertEqual(name, "TextEdit")
+        XCTAssertFalse(name.hasSuffix(".app"))
+        let missing = URL(fileURLWithPath: "/nonexistent/Some Editor.app")
+        XCTAssertEqual(ExternalEditorManager.appDisplayName(at: missing), "Some Editor")
+    }
 }

@@ -157,8 +157,19 @@ enum ExternalEditorManager {
     /// picked an app outside the known list via "Other…").
     static func displayName(for bundleID: String) -> String? {
         guard let url = appURL(for: bundleID) else { return nil }
-        return (try? url.resourceValues(forKeys: [.localizedNameKey]).localizedName)
-            ?? url.deletingPathExtension().lastPathComponent
+        return appDisplayName(at: url)
+    }
+
+    /// The app's own name ("Visual Studio Code"), never the bundle's file name:
+    /// `localizedNameKey` keeps the ".app" extension when Finder is set to show
+    /// all filename extensions ("Opened in Visual Studio Code.app").
+    static func appDisplayName(at appURL: URL) -> String {
+        let bundle = Bundle(url: appURL)
+        let declared = (bundle?.localizedInfoDictionary?["CFBundleDisplayName"] as? String)
+            ?? (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String)
+        if let declared, !declared.isEmpty { return declared }
+        return appURL.deletingPathExtension().lastPathComponent
     }
 
     /// Opens the file in the configured editor.
@@ -205,8 +216,7 @@ enum ExternalEditorManager {
             editorURL = appURL(for: "com.apple.TextEdit")
         }
         guard let editorURL else { return nil }
-        let appName = (try? editorURL.resourceValues(forKeys: [.localizedNameKey]).localizedName)
-            ?? editorURL.deletingPathExtension().lastPathComponent
+        let appName = appDisplayName(at: editorURL)
 
         if let line, let bundleID = Bundle(url: editorURL)?.bundleIdentifier,
            openLineLink(bundleID: bundleID, fileURL: fileURL, line: line) {
