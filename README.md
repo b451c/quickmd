@@ -11,6 +11,10 @@
 
 [Features](#features) • [Installation](#installation) • [Usage](#usage) • [Tech Stack](#tech-stack) • [Support](#support)
 
+[![App Store goal](https://qmd.app/api/donation-goal.svg)](https://qmd.app/#support-goal)
+
+**QuickMD needs its Apple Developer membership renewed ($99 a year, due 6 October 2026) to stay on the Mac App Store and keep every release notarized. [Chip in on Buy Me a Coffee or Ko-fi](#support-development).**
+
 </div>
 
 ---
@@ -219,9 +223,16 @@ QuickMD/
 │   ├── DocumentSearch.swift        # Find-in-document match engine
 │   ├── SectionExtractor.swift      # "Copy section" boundaries from parser source lines
 │   ├── InlineMathSegmenter.swift   # $...$ segmentation
+│   ├── InlineSyntaxScanner.swift   # Link/image syntax scanner shared by parser and renderer (CommonMark destinations)
+│   ├── HTMLImageSyntax.swift       # Standalone HTML <img> lines (+ <p align>/<div>/<a> wrappers, width)
+│   ├── DataImageURI.swift          # Embedded data: image URIs (base64 / percent-encoded)
+│   ├── ImageLoader.swift           # One image loader + cache for local, remote and data: images (screen + PDF)
+│   ├── SVGImageDecoder.swift       # SVG decoding via NSImage (CoreSVG) for svg blocks and images
+│   ├── DocumentSelection.swift     # Document-wide selection model, copy builder (plain + RTF), clipboard toast
 │   ├── BlockHeightMeasurer.swift   # Off-main exact block heights (TextKit) + BlockLayout metrics
 │   ├── FileWatchManager.swift      # Auto-reload file watcher (DispatchSource)
-│   ├── ExternalEditorManager.swift # ⌘E editor detection + launch
+│   ├── ExternalEditorManager.swift # ⌘E editor detection + launch (opens at the reading line where supported)
+│   ├── DocumentReadingPosition.swift # ⌘E reading position (selection start or top visible block)
 │   ├── WindowTabbing.swift         # Native macOS tab merging + window size memory
 │   ├── MermaidPDFRenderer.swift    # Mermaid → image rendering for PDF export
 │   ├── CustomThemeStore.swift      # User themes from disk (live reload + validation)
@@ -234,14 +245,14 @@ QuickMD/
 │   │   ├── mermaid.min.js          # Bundled Mermaid.js
 │   │   └── mermaid-template.html   # HTML template for diagrams
 │   ├── Views/
-│   │   ├── VirtualBlockList.swift  # NSScrollView + NSTableView host: one row per block, exact heights
+│   │   ├── VirtualBlockList.swift  # NSScrollView + NSTableView host: one row per block, exact heights, document-wide selection
 │   │   ├── TextBlockView.swift     # NSTextView-backed text blocks (native selection, inline math)
 │   │   ├── CodeBlockView.swift     # NSTextView-backed code blocks (+ copy button)
 │   │   ├── MathBlockView.swift     # LaTeX display math ($$...$$)
 │   │   ├── MermaidBlockView.swift  # Mermaid diagrams (WKWebView + zoom + snapshot cache)
 │   │   ├── SVGBlockView.swift      # Fenced ```svg blocks via NSImage (CoreSVG)
 │   │   ├── TableBlockView.swift    # Table rendering with alignment
-│   │   ├── ImageBlockView.swift    # Local + remote image rendering
+│   │   ├── ImageBlockView.swift    # Local, remote and embedded image rendering + click-to-enlarge preview
 │   │   ├── BlockquoteView.swift    # Nested blockquotes
 │   │   ├── AlertBlockView.swift    # GitHub-flavored alerts ([!NOTE], [!TIP], ...)
 │   │   ├── ChromeButtons.swift     # Heading copy, source copy, edit, zoom, support pills
@@ -249,7 +260,7 @@ QuickMD/
 │   │   ├── SearchBar.swift         # Find in document (⌘F)
 │   │   ├── TableOfContentsView.swift # ToC sidebar (⌘⇧T)
 │   │   ├── RecentDocumentsSidebar.swift # Recent docs sidebar (⌘⇧D)
-│   │   ├── SettingsView.swift      # Settings window (⌘,): Themes + Fonts + Editor tabs
+│   │   ├── SettingsView.swift      # Settings window (⌘,): General + Themes + Fonts + Editor tabs
 │   │   ├── FontPickerView.swift    # Body / code font family pickers
 │   │   ├── ExternalEditorPickerView.swift # Editor selection
 │   │   └── ThemePickerView.swift   # Theme picker + import/reload
