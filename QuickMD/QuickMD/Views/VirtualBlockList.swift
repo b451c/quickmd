@@ -182,6 +182,9 @@ struct VirtualBlockList: NSViewRepresentable {
     /// True while something covers the document (the graphic preview): the
     /// list then never takes keyboard focus on its own.
     var isCovered: Bool = false
+    /// ⌘E's reading-position handle (v1.11 E-D1). The coordinator installs a
+    /// provider that is evaluated only when asked — no per-scroll publishing.
+    var readingPosition: DocumentReadingPosition?
 
     typealias Metrics = BlockLayout.Document
 
@@ -283,6 +286,7 @@ struct VirtualBlockList: NSViewRepresentable {
         coordinator.selection.selectableText = selectableText
         coordinator.selection.onCopy = onCopySelection
         coordinator.setDocumentCovered(isCovered)
+        readingPosition?.provider = { [weak coordinator] in coordinator?.readingEditorLine() }
         if focusRequest != coordinator.lastFocusRequest {
             coordinator.lastFocusRequest = focusRequest
             coordinator.restoreDocumentFocus()
@@ -582,6 +586,15 @@ struct VirtualBlockList: NSViewRepresentable {
                                   offsetWithinRow: top - tableView.rect(ofRow: row).minY,
                                   sourceLine: blocks[row].sourceLine,
                                   signature: blockSignature(blocks[row]))
+        }
+
+        /// ⌘E's target line (E-D1): the selection's first row, else the row the
+        /// scroll anchor would be captured from — so a hidden / un-laid-out tab
+        /// answers nil (plain file open) instead of a placeholder row.
+        func readingEditorLine() -> Int? {
+            DocumentReadingPosition.editorLine(selection: selection.selection,
+                                               topRow: captureAnchor()?.row,
+                                               blocks: blocks)
         }
 
         private func restore(_ anchor: CapturedAnchor, previousCount: Int) {

@@ -110,6 +110,10 @@ struct MarkdownView: View {
     /// Current programmatic scroll target for the virtualized list (ToC, search).
     @State private var scrollRequest: VirtualBlockList.ScrollRequest?
     @State private var scrollRequestToken: Int = 0
+    /// ⌘E's "where is the reader" question, answered by the list's coordinator
+    /// on demand. A reference in @State on purpose: the coordinator fills it,
+    /// nothing observes it, so scrolling never re-evaluates this body (E-D1).
+    @State private var readingPosition = DocumentReadingPosition()
 
     /// File name suggested by the PDF export save panel (`ExportPDFCommand`).
     private var exportName: String {
@@ -232,7 +236,8 @@ struct MarkdownView: View {
                     },
                     onCopySelection: { output in copySelectionToClipboard(output) },
                     focusRequest: documentFocusRequest,
-                    isCovered: graphicPreview != nil
+                    isCovered: graphicPreview != nil,
+                    readingPosition: readingPosition
                 )
                 .onChange(of: scrollTrigger) { _ in
                     scrollFocusedMatchIntoView()
@@ -647,11 +652,13 @@ struct MarkdownView: View {
         }
     }
 
-    /// ⌘E — hand the document off to the user's configured editor.
+    /// ⌘E — hand the document off to the user's configured editor, at the line
+    /// the reader is at when that editor documents a line link (v1.11 E-D1).
     private func openInExternalEditor() {
         guard let url = documentURL else { return }
-        if let appName = ExternalEditorManager.openInEditor(url) {
-            showToast("Opened in \(appName)")
+        let line = readingPosition.editorLine()
+        if let result = ExternalEditorManager.openInEditor(url, line: line) {
+            showToast(ExternalEditorManager.toastText(for: result))
         }
     }
 
