@@ -115,6 +115,9 @@
 		A1B2C3D401000082 /* ImageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000081 /* ImageLoader.swift */; };
 		A1B2C3D401000083 /* ImageLoader.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000081 /* ImageLoader.swift */; };
 		A1B2C3D401000084 /* ImageLoadingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000082 /* ImageLoadingTests.swift */; };
+		A1B2C3D4010000C0 /* DocumentSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000C0 /* DocumentSelection.swift */; };
+		A1B2C3D4010000C1 /* DocumentSelection.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000C0 /* DocumentSelection.swift */; };
+		A1B2C3D4010000C2 /* DocumentSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000C1 /* DocumentSelectionTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -131,6 +134,8 @@
 		A1B2C3D400000080 /* DataImageURI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataImageURI.swift; sourceTree = "<group>"; };
 		A1B2C3D400000081 /* ImageLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoader.swift; sourceTree = "<group>"; };
 		A1B2C3D400000082 /* ImageLoadingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoadingTests.swift; sourceTree = "<group>"; };
+		A1B2C3D4000000C0 /* DocumentSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentSelection.swift; sourceTree = "<group>"; };
+		A1B2C3D4000000C1 /* DocumentSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentSelectionTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000001 /* QuickMDApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickMDApp.swift; sourceTree = "<group>"; };
 		A1B2C3D400000002 /* MarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDocument.swift; sourceTree = "<group>"; };
 		A1B2C3D400000003 /* MarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownView.swift; sourceTree = "<group>"; };
@@ -255,6 +260,7 @@
 				A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */,
 				A1B2C3D400000082 /* ImageLoadingTests.swift */,
 				A1B2C3D4000000E1 /* HTMLImageTests.swift */,
+				A1B2C3D4000000C1 /* DocumentSelectionTests.swift */,
 			);
 			path = QuickMDTests;
 			sourceTree = "<group>";
@@ -273,6 +279,7 @@
 				A1B2C3D40000006E /* SVGImageDecoder.swift */,
 				A1B2C3D400000080 /* DataImageURI.swift */,
 				A1B2C3D400000081 /* ImageLoader.swift */,
+				A1B2C3D4000000C0 /* DocumentSelection.swift */,
 				A1B2C3D40000003D /* SectionExtractor.swift */,
 				A1B2C3D40000003E /* DocumentSearch.swift */,
 				A1B2C3D40000003F /* WindowTabbing.swift */,
@@ -554,6 +561,7 @@
 				A1B2C3D40100006E /* SVGImageDecoder.swift in Sources */,
 				A1B2C3D401000080 /* DataImageURI.swift in Sources */,
 				A1B2C3D401000082 /* ImageLoader.swift in Sources */,
+				A1B2C3D4010000C0 /* DocumentSelection.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -591,6 +599,8 @@
 				A1B2C3D401000083 /* ImageLoader.swift in Sources (Tests) */,
 				A1B2C3D401000084 /* ImageLoadingTests.swift in Sources */,
 				A1B2C3D4010000E2 /* HTMLImageTests.swift in Sources */,
+				A1B2C3D4010000C1 /* DocumentSelection.swift in Sources (Tests) */,
+				A1B2C3D4010000C2 /* DocumentSelectionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

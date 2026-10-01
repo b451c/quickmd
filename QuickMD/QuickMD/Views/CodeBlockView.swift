@@ -15,8 +15,9 @@ import os
 //     ASCII art / tree diagrams. Combined with LazyVStack create/destroy cycles
 //     this caused 890MB freezes (v1.3.3 incident).
 //  2. NSTextView has native line-fragment layout, no Text-AttributedString trap.
-//  3. Native NSTextView selection supports cross-line drag with auto-scroll
-//     (SwiftUI textSelection lacks this in lazy contexts).
+//  3. NSTextView lays the text out with TextKit, so the document selection
+//     (v1.11, `SelectionController`) can map points to characters and draw
+//     itself under the glyphs — SwiftUI `Text` offers neither.
 
 #if DEBUG
 // MARK: - Debug instrumentation (DEBUG builds only — stripped from Release)
@@ -238,6 +239,7 @@ private struct CodeTextView: NSViewRepresentable {
 
         let textView = SelfSizingTextView()
         textView.configureForSelfSizing()
+        textView.installDocumentSelectionLayoutManager()
         #if DEBUG
         codeLog.debug("makeNSView: created NSTextView, attr length=\(attributed.length)")
         #endif
@@ -279,6 +281,13 @@ private struct CodeTextView: NSViewRepresentable {
             textView.lastFocusedOccurrence = focusedOccurrence
         }
 
+        // After the string: the async highlight replaces it with one of the
+        // same characters, and the document selection must be redrawn on it.
+        textView.attachSelection(context.environment.blockSelection)
+    }
+
+    static func dismantleNSView(_ textView: SelfSizingTextView, coordinator: ()) {
+        textView.detachSelection()
     }
 
     // Search highlighting shared with TextBlockView — see applyNSSearchHighlight
@@ -367,5 +376,149 @@ final class SelfSizingTextView: NSTextView {
             return CGSize(width: width, height: measuredHeight(forWidth: width))
         }
         return measuredWidth > 0 ? CGSize(width: measuredWidth, height: measuredHeight) : nil
+    }
+
+    // MARK: - Document selection (v1.11 S-D4 / S-D5 / S-D6)
+    //
+    // The selection belongs to the DOCUMENT (`SelectionController`), not to this
+    // view: one selection spans many rows, and a row's text view is created and
+    // destroyed with its table cell. So this view never owns a native selection
+    // — its `selectedRange` stays empty, it refuses first responder (the table
+    // is the document's responder for ⌘C/⌘A), and it draws whatever part of
+    // the document selection falls inside it. A native selection would render
+    // grey in every view but the one first responder, and would vanish with
+    // the view on cell reuse.
+
+    /// Set while this view is registered with a document's controller. Weak:
+    /// the coordinator owns the controller, a recycled view must not keep it.
+    private(set) weak var selectionController: SelectionController?
+    /// The block this view displays, as registered with the controller.
+    private(set) var selectionBlockId: String?
+
+    /// The part of `textStorage` the document selection covers, or nil. Set by
+    /// the controller; drawing reads it in `drawBackground(in:)`.
+    var selectionCoveredRange: NSRange? {
+        didSet {
+            guard selectionCoveredRange != oldValue else { return }
+            (layoutManager as? DocumentSelectionLayoutManager)?.selectionCoveredRange = selectionCoveredRange
+            needsDisplay = true
+        }
+    }
+
+
+    /// UTF-16 length of the displayed string — the row length the selection's
+    /// offsets index into.
+    var selectionTextLength: Int { textStorage?.length ?? 0 }
+
+    /// Join (or move to) the document selection named by the environment the
+    /// hosting cell injects. Called from every `updateNSView` — i.e. after
+    /// creation, after every string replacement (zoom, theme, the async code
+    /// highlight, cell reuse) — and ALWAYS re-reads the covered range, which is
+    /// what makes the highlight survive all of those.
+    func attachSelection(_ context: BlockSelectionContext?) {
+        let controller = context?.controller
+        let blockId = context?.blockId
+        if controller !== selectionController || blockId != selectionBlockId {
+            detachSelection()
+            if let controller, let blockId {
+                selectionController = controller
+                selectionBlockId = blockId
+                controller.register(self, blockId: blockId)
+            }
+        }
+        selectionCoveredRange = selectionController?.coveredRange(for: self)
+    }
+
+    /// Leave the document selection (the representable is being dismantled).
+    func detachSelection() {
+        if let controller = selectionController, let blockId = selectionBlockId {
+            controller.unregister(self, blockId: blockId)
+        }
+        selectionController = nil
+        selectionBlockId = nil
+        selectionCoveredRange = nil
+    }
+
+    /// The table is the document's first responder while a controller is
+    /// attached (S-D4); a text view taking focus would split ⌘C/⌘A between
+    /// two responders. Without a controller (none today, but e.g. a future
+    /// standalone use) the view behaves like any selectable NSTextView.
+    override var acceptsFirstResponder: Bool {
+        selectionController == nil ? super.acceptsFirstResponder : false
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let controller = selectionController else {
+            super.mouseDown(with: event)
+            return
+        }
+        // ONE tracking loop for the whole document, hit-testing through the
+        // table — never through `self`, which may be recycled mid-drag.
+        controller.mouseDown(with: event)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        guard let controller = selectionController else {
+            super.rightMouseDown(with: event)
+            return
+        }
+        // Not `super`: NSTextView's right-click adjusts its own selection and
+        // offers the editing menu (Fonts, Spelling, Substitutions…).
+        NSMenu.popUpContextMenu(controller.contextMenu(for: event), with: event, for: self)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let controller = selectionController else { return super.menu(for: event) }
+        return controller.contextMenu(for: event)
+    }
+
+    /// The document selection is painted UNDER the text, like a native
+    /// selection, and under the search highlights: those are layout-manager
+    /// temporary attributes, which NSTextView draws after this method returns
+    /// (`applyNSSearchHighlight` needs no change and still wins visually).
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        (layoutManager as? DocumentSelectionLayoutManager)?.drawSelection(in: rect, of: self)
+    }
+
+    // Accessibility reports the DOCUMENT selection's part in this view, so
+    // VoiceOver and AX-driven tests see what is highlighted (the native
+    // `selectedRange` is always empty here).
+
+    override func accessibilitySelectedText() -> String? {
+        guard selectionController != nil else { return super.accessibilitySelectedText() }
+        guard let covered = selectionCoveredRange, NSMaxRange(covered) <= selectionTextLength,
+              let storage = textStorage else { return "" }
+        return (storage.string as NSString).substring(with: covered)
+    }
+
+    override func accessibilitySelectedTextRange() -> NSRange {
+        guard selectionController != nil else { return super.accessibilitySelectedTextRange() }
+        return selectionCoveredRange ?? NSRange(location: 0, length: 0)
+    }
+
+    override func accessibilitySelectedTextRanges() -> [NSValue]? {
+        guard selectionController != nil else { return super.accessibilitySelectedTextRanges() }
+        return [NSValue(range: accessibilitySelectedTextRange())]
+    }
+
+    /// An AX client (VoiceOver, an automation tool) setting the selection here
+    /// selects that range of THIS row in the document selection — never the
+    /// native one, which would draw grey and be invisible to ⌘C.
+    override func setAccessibilitySelectedTextRange(_ range: NSRange) {
+        guard let controller = selectionController else {
+            super.setAccessibilitySelectedTextRange(range)
+            return
+        }
+        controller.select(range, in: self)
+    }
+
+    override func setAccessibilitySelectedTextRanges(_ ranges: [NSValue]?) {
+        guard let controller = selectionController else {
+            super.setAccessibilitySelectedTextRanges(ranges)
+            return
+        }
+        // One document selection is contiguous: the first range wins.
+        controller.select(ranges?.first?.rangeValue ?? NSRange(location: 0, length: 0), in: self)
     }
 }

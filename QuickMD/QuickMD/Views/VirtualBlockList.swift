@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import AVFAudio
 #if DEBUG
 import os
 #endif
@@ -164,6 +165,23 @@ struct VirtualBlockList: NSViewRepresentable {
     /// evaluation, so a fresh closure always carries the current theme, search
     /// term and focus.
     let content: (MarkdownBlock) -> AnyView
+    /// The string a row's text view displays, for rows that have one (S-D2) —
+    /// nil for atomic rows. Lets the document selection measure and copy rows
+    /// that were never materialized (⌘A + ⌘C on a 10K-line document must not
+    /// need the views). `contentVersion` is the version of the INSTALLED blocks
+    /// the block comes from, so the parent can tell whether its per-id caches
+    /// belong to them (block ids are positional and are reused by every parse).
+    let selectableText: (_ block: MarkdownBlock, _ contentVersion: Int) -> NSAttributedString?
+    /// ⌘C / context-menu Copy produced this output. The parent writes it to the
+    /// pasteboard and shows the toast (`MarkdownView.copySelectionToClipboard`).
+    let onCopySelection: (DocumentCopyOutput) -> Void
+    /// Bumped by the parent when the document should get the keyboard back
+    /// (the graphic preview closed after resigning first responder). Acted on
+    /// only when nothing else is focused — see `takeFocusIfWindowHasNone`.
+    var focusRequest: Int = 0
+    /// True while something covers the document (the graphic preview): the
+    /// list then never takes keyboard focus on its own.
+    var isCovered: Bool = false
 
     typealias Metrics = BlockLayout.Document
 
@@ -262,6 +280,13 @@ struct VirtualBlockList: NSViewRepresentable {
         coordinator.content = content
         coordinator.onHeightReport = onHeightReport
         coordinator.setContentWidth = { width in contentWidth = width }
+        coordinator.selection.selectableText = selectableText
+        coordinator.selection.onCopy = onCopySelection
+        coordinator.setDocumentCovered(isCovered)
+        if focusRequest != coordinator.lastFocusRequest {
+            coordinator.lastFocusRequest = focusRequest
+            coordinator.restoreDocumentFocus()
+        }
         // Before anything that builds a root view or reads a width: entering or
         // leaving reading mode changes both.
         coordinator.applyLayoutStyle(layoutStyle)
@@ -326,6 +351,7 @@ struct VirtualBlockList: NSViewRepresentable {
         var focusedBlockId: String?
         var focusedOccInBlock: Int?
         var lastScrollToken: Int = .min
+        var lastFocusRequest: Int = 0
         /// Column cap + end padding currently in force. Adopted in
         /// `makeCoordinator` and changed only through `applyLayoutStyle`, which is
         /// what keeps the cells' layout width, the published `contentWidth` and
@@ -336,6 +362,10 @@ struct VirtualBlockList: NSViewRepresentable {
 
         private weak var scrollView: BlockScrollView?
         private weak var tableView: BlockTableView?
+
+        /// The document selection (v1.11 S-D4). Owned here — one per list, i.e.
+        /// one per tab — so it lives exactly as long as the rows it indexes.
+        let selection = SelectionController()
 
         // MARK: contentWidth reporting state
 
@@ -358,6 +388,9 @@ struct VirtualBlockList: NSViewRepresentable {
         func attach(scrollView: BlockScrollView, tableView: BlockTableView) {
             self.scrollView = scrollView
             self.tableView = tableView
+            selection.attach(tableView: tableView)
+            tableView.selectionController = selection
+            scrollView.selectionController = selection
             scrollView.onEndLiveResize = { [weak self] in
                 self?.clipFrameChanged(afterLiveResize: true)
             }
@@ -367,6 +400,24 @@ struct VirtualBlockList: NSViewRepresentable {
             ) { [weak self] _ in
                 self?.clipFrameChanged(afterLiveResize: false)
             }
+        }
+
+        /// One turn later: the request arrives in the same SwiftUI update that
+        /// removes the overlay, whose views may still hold focus until then.
+        func restoreDocumentFocus() {
+            DispatchQueue.main.async { [weak self] in
+                self?.tableView?.takeFocusIfWindowHasNone()
+            }
+            // Again a moment later: a disappearing text field (the search bar)
+            // can hold first responder until SwiftUI has torn it down. A no-op
+            // when the first attempt worked or anything else took focus.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.tableView?.takeFocusIfWindowHasNone()
+            }
+        }
+
+        func setDocumentCovered(_ covered: Bool) {
+            tableView?.isDocumentCovered = covered
         }
 
         // MARK: - Model installation (D7 anchor preservation)
@@ -403,6 +454,11 @@ struct VirtualBlockList: NSViewRepresentable {
             rowForBlockId = [:]
             rowForBlockId.reserveCapacity(newBlocks.count)
             for (index, block) in newBlocks.enumerated() { rowForBlockId[block.id] = index }
+            // Before `reloadData`, which configures cells (atomic-row tints)
+            // from it. Clears the selection on a new content version and keeps
+            // it across width-only reinstalls (S-D11).
+            selection.install(blocks: newBlocks, rowForBlockId: rowForBlockId,
+                              contentVersion: newVersion)
 
             // `reloadData()` re-queries `heightOfRow` for every row (verified on
             // macOS 15 for both an unchanged and a changed row count), so no
@@ -945,6 +1001,12 @@ struct VirtualBlockList: NSViewRepresentable {
             let base = VStack(alignment: .leading, spacing: Metrics.blockSpacing) {
                 content(block)
             }
+            // The hosting view is an environment boundary (same reason
+            // `\.openURL` is re-injected in `MarkdownView.hostedBlockView`):
+            // this is how a text view inside the cell finds the document
+            // selection and learns which row it is, with no parameter threaded
+            // through every block view.
+            .environment(\.blockSelection, BlockSelectionContext(controller: selection, blockId: block.id))
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .fixedSize(horizontal: false, vertical: true)
 
@@ -965,8 +1027,7 @@ struct VirtualBlockList: NSViewRepresentable {
             // wrap taller than their (still wide) rows and bleed into the block
             // below. Leaving lifts the cap at once — that only creates slack
             // inside rows, never overlap — and the re-measure closes it.
-            let styleCap = layoutStyle.maxContentWidth ?? .infinity
-            let cellCap = table.contentWidth > 0 ? max(styleCap, table.contentWidth) : styleCap
+            let cellCap = cellColumnCap
             let column = base
                 .frame(maxWidth: cellCap, alignment: .topLeading)
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -992,6 +1053,21 @@ struct VirtualBlockList: NSViewRepresentable {
             )
         }
 
+        /// The widest the block column may lay out in a cell — see the reading-
+        /// mode comment in `rootView(for:)`. Also the width of an atomic row's
+        /// selection tint, so the tint covers the column and not the margins.
+        private var cellColumnCap: CGFloat {
+            let styleCap = layoutStyle.maxContentWidth ?? .infinity
+            return table.contentWidth > 0 ? max(styleCap, table.contentWidth) : styleCap
+        }
+
+        /// Hands a cell everything about the document selection it draws itself:
+        /// the column its tint spans and whether its row is tinted right now.
+        private func configureSelectionTint(_ cell: BlockHostingCell, row: Int) {
+            cell.selectionTintColumnCap = cellColumnCap
+            cell.isSelectionTinted = selection.wantsTint(row: row)
+        }
+
         /// D11 — re-host the MATERIALIZED rows with a freshly built root view.
         /// Rows AppKit has not built a cell for yet pick up the new closure when
         /// it does.
@@ -1011,6 +1087,7 @@ struct VirtualBlockList: NSViewRepresentable {
                 guard let cell = tableView.view(atColumn: 0, row: row,
                                                 makeIfNecessary: false) as? BlockHostingCell else { continue }
                 cell.hostingView.rootView = rootView(for: row)
+                configureSelectionTint(cell, row: row)
             }
         }
 
@@ -1031,9 +1108,12 @@ struct VirtualBlockList: NSViewRepresentable {
             if let cell = tableView.makeView(withIdentifier: BlockHostingCell.reuseIdentifier,
                                              owner: self) as? BlockHostingCell {
                 cell.hostingView.rootView = root
+                configureSelectionTint(cell, row: row)
                 return cell
             }
-            return BlockHostingCell(rootView: root)
+            let cell = BlockHostingCell(rootView: root)
+            configureSelectionTint(cell, row: row)
+            return cell
         }
 
         /// Rows are content, not choices — nothing is ever selected (D10).
@@ -1100,10 +1180,23 @@ private struct RowHeightReporter: ViewModifier {
 /// or two of the user letting go instead of waiting out the debounce.
 final class BlockScrollView: NSScrollView {
     var onEndLiveResize: (() -> Void)?
+    /// Clicks in the content insets above the first / below the last row land
+    /// on the clip view, whose responder chain ends here, not at the table —
+    /// they still belong to the document (a click there clears the selection,
+    /// a drag from there selects).
+    weak var selectionController: SelectionController?
 
     override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
         onEndLiveResize?()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let selectionController else {
+            super.mouseDown(with: event)
+            return
+        }
+        selectionController.mouseDown(with: event)
     }
 }
 
@@ -1127,12 +1220,130 @@ final class BlockScrollView: NSScrollView {
 /// step) and the clip view is moved through `constrainBoundsRect`, which is the
 /// same clamp AppKit applies to a wheel scroll.
 ///
-/// This runs only when the key event reaches the table: a click inside a block
-/// makes that block's `NSTextView` the first responder, and text views handle
-/// these keys themselves — exactly as in 1.8.0.
+/// Since v1.11 the table is THE document's first responder (S-D4): a click
+/// anywhere in the document — text included, because the text views refuse
+/// first responder — lands focus here, so these keys, ⌘C and ⌘A all reach it.
 final class BlockTableView: NSTableView {
 
     override var acceptsFirstResponder: Bool { true }
+
+    /// The document selection. Weak: the coordinator owns it.
+    weak var selectionController: SelectionController?
+
+    // MARK: Document selection (S-D4 / S-D6)
+
+    /// Clicks in the inter-row gaps and margins, and clicks on rows whose
+    /// SwiftUI content does not consume them (`NSHostingView` forwards an
+    /// unhandled `mouseDown` up the responder chain to here — verified). The
+    /// same tracking loop as a click on text. Never `super`: NSTableView's own
+    /// tracking would run row selection, which this table never has (D10).
+    override func mouseDown(with event: NSEvent) {
+        guard let selectionController else {
+            super.mouseDown(with: event)
+            return
+        }
+        selectionController.mouseDown(with: event)
+    }
+
+    /// Not `super`: NSTableView outlines the clicked row while a context menu
+    /// is open ("menu row highlighting") — a list affordance, not a document's.
+    override func rightMouseDown(with event: NSEvent) {
+        guard let selectionController else {
+            super.rightMouseDown(with: event)
+            return
+        }
+        NSMenu.popUpContextMenu(selectionController.contextMenu(for: event), with: event, for: self)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let selectionController else { return super.menu(for: event) }
+        return selectionController.contextMenu(for: event)
+    }
+
+    /// Edit ▸ Copy (⌘C) and the context menu's Copy: the document selection.
+    @objc func copy(_ sender: Any?) {
+        selectionController?.copySelection()
+    }
+
+    /// Edit ▸ Select All (⌘A): the whole document, not every row of a list.
+    override func selectAll(_ sender: Any?) {
+        guard let selectionController else {
+            super.selectAll(sender)
+            return
+        }
+        selectionController.selectAll()
+    }
+
+    /// Edit ▸ Speech ▸ Start Speaking: reads the document selection.
+    @objc func startSpeaking(_ sender: Any?) {
+        selectionController?.startSpeaking()
+    }
+
+    @objc func stopSpeaking(_ sender: Any?) {
+        selectionController?.stopSpeaking()
+    }
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        guard let selectionController else { return super.validateUserInterfaceItem(item) }
+        switch item.action {
+        case #selector(copy(_:)), #selector(startSpeaking(_:)):
+            return selectionController.hasSelection
+        case #selector(stopSpeaking(_:)):
+            return selectionController.isSpeaking
+        case #selector(selectAll(_:)):
+            return numberOfRows > 0
+        default:
+            return super.validateUserInterfaceItem(item)
+        }
+    }
+
+    // MARK: Services (app menu ▸ Services on the selection)
+
+    /// Offers the selection to services that take text and return nothing
+    /// (Look Up in Dictionary, New Note, Search with …). Read-only document:
+    /// services that REPLACE the selection are not offered.
+    override func validRequestor(forSendType sendType: NSPasteboard.PasteboardType?,
+                                 returnType: NSPasteboard.PasteboardType?) -> Any? {
+        if let selectionController, selectionController.hasSelection, returnType == nil,
+           let sendType, sendType == .string || sendType == .rtf {
+            return self
+        }
+        return super.validRequestor(forSendType: sendType, returnType: returnType)
+    }
+
+    // MARK: Initial focus (S-D4)
+
+    /// A freshly opened (or re-hosted) document has nothing focused — the
+    /// window itself is first responder — so ⌘A/⌘C would be dead until the
+    /// first click. Take focus then, and only then: never from the search
+    /// field or any other control that already has it.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        DispatchQueue.main.async { [weak self] in self?.takeFocusIfWindowHasNone() }
+    }
+
+    /// Something is drawn OVER the document (the graphic preview): taking
+    /// focus then would send Space/arrows/⌘A to a document the reader cannot
+    /// see. Set by the coordinator from `VirtualBlockList.isCovered`.
+    var isDocumentCovered = false
+
+    func takeFocusIfWindowHasNone() {
+        guard !isDocumentCovered, let window, window.isKeyWindow, window.attachedSheet == nil,
+              Self.isNothingFocused(window.firstResponder, in: window) else { return }
+        window.makeFirstResponder(self)
+    }
+
+    /// "Nothing" = no responder, the window itself, or the SwiftUI hosting
+    /// view at the root of the window (where focus lands when a focused SwiftUI
+    /// control — e.g. the search field — disappears). A text field, a text
+    /// view or any other control is something, and keeps its focus.
+    static func isNothingFocused(_ responder: NSResponder?, in window: NSWindow) -> Bool {
+        guard let responder else { return true }
+        if responder === window || responder === window.contentView { return true }
+        if responder is NSText || responder is NSControl || responder is BlockTableView { return false }
+        return NSStringFromClass(type(of: responder)).contains("HostingView")
+    }
 
     override func keyDown(with event: NSEvent) {
         guard enclosingScrollView != nil else {
@@ -1181,7 +1392,7 @@ final class BlockTableView: NSTableView {
         enclosingScrollView?.verticalLineScroll ?? 10
     }
 
-    private func scrollVertically(by dy: CGFloat) {
+    func scrollVertically(by dy: CGFloat) {
         guard let scrollView = enclosingScrollView else { return }
         let clipView = scrollView.contentView
         let proposed = NSRect(origin: NSPoint(x: clipView.bounds.origin.x,
@@ -1191,6 +1402,26 @@ final class BlockTableView: NSTableView {
         guard abs(target.y - clipView.bounds.origin.y) > 0.01 else { return }
         clipView.scroll(to: target)
         scrollView.reflectScrolledClipView(clipView)
+    }
+}
+
+extension BlockTableView: NSServicesMenuRequestor {
+    /// Services receive the same plain text + RTF as ⌘C (one builder).
+    func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard let output = selectionController?.selectionOutput() else { return false }
+        let wanted = types.filter { $0 == .string || $0 == .rtf }
+        guard !wanted.isEmpty else { return false }
+        pboard.declareTypes(wanted, owner: nil)
+        var wrote = false
+        if wanted.contains(.string) {
+            wrote = pboard.setString(output.plain, forType: .string) || wrote
+        }
+        if wanted.contains(.rtf),
+           let data = try? output.rtf.data(from: NSRange(location: 0, length: output.rtf.length),
+                                           documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]) {
+            wrote = pboard.setData(data, forType: .rtf) || wrote
+        }
+        return wrote
     }
 }
 
@@ -1206,6 +1437,34 @@ final class BlockHostingCell: NSTableCellView {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("QMDBlockCell")
 
     let hostingView: NSHostingView<AnyView>
+    /// Created on first use: most rows are never tinted.
+    private var tintView: SelectionTintView?
+
+    /// Whether the document selection covers this row and the row cannot draw
+    /// the selection itself (atomic rows — S-D3 — and text rows with no text
+    /// view to draw in). Set by the coordinator / selection controller.
+    var isSelectionTinted = false {
+        didSet {
+            guard isSelectionTinted != oldValue else { return }
+            if isSelectionTinted {
+                if tintView == nil {
+                    let tint = SelectionTintView()
+                    addSubview(tint, positioned: .above, relativeTo: hostingView)
+                    tintView = tint
+                }
+                tintView?.isHidden = false
+                needsLayout = true
+            } else {
+                tintView?.isHidden = true
+            }
+        }
+    }
+
+    /// The widest the block column gets (reading mode caps it; `.infinity`
+    /// otherwise) — the tint covers the column, not the side margins.
+    var selectionTintColumnCap: CGFloat = .infinity {
+        didSet { if selectionTintColumnCap != oldValue { needsLayout = true } }
+    }
 
     init(rootView: AnyView) {
         hostingView = NSHostingView(rootView: rootView)
@@ -1223,5 +1482,759 @@ final class BlockHostingCell: NSTableCellView {
     override func layout() {
         super.layout()
         hostingView.frame = bounds
+        if let tintView, !tintView.isHidden {
+            // Same geometry `rootView(for:)` gives the content: the horizontal
+            // padding on both sides, then the column cap, centred.
+            let padding = BlockLayout.Document.contentHorizontalPadding
+            let width = max(0, min(bounds.width - 2 * padding, selectionTintColumnCap))
+            tintView.frame = NSRect(x: (bounds.width - width) / 2, y: 0,
+                                    width: width, height: bounds.height)
+        }
+    }
+
+    /// Repaint after the window's key state changed (emphasized ⇄ unemphasized).
+    func redrawSelectionTint() {
+        tintView?.needsDisplay = true
+    }
+}
+
+/// The highlight over a selected atomic row (S-D3): the selection colour at a
+/// third of its strength, so the table / image / diagram stays readable under it.
+///
+/// Drawn in AppKit, above the hosted SwiftUI content — and invisible to the
+/// mouse: `hitTest` answers nil, so the Mermaid diagram's transparent preview
+/// button and an image's click-to-enlarge receive their clicks exactly as
+/// without a selection.
+final class SelectionTintView: NSView {
+    static let alpha: CGFloat = 0.35
+
+    override var isOpaque: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let base = (window?.isKeyWindow ?? false)
+            ? NSColor.selectedTextBackgroundColor
+            : NSColor.unemphasizedSelectedTextBackgroundColor
+        base.withAlphaComponent(Self.alpha).setFill()
+        dirtyRect.intersection(bounds).fill(using: .sourceOver)
+    }
+}
+
+// MARK: - Document selection (v1.11 S-D2 … S-D6, S-D11)
+
+/// What a text view inside a cell needs to join the document selection: the
+/// controller, and the block its row shows.
+///
+/// Travels through the SwiftUI environment (`rootView(for:)` injects it at the
+/// hosting view, an environment boundary), so the block views need no new
+/// parameters — any `SelfSizingTextView` in a cell registers itself under the
+/// cell's block id, whatever block view hosts it.
+struct BlockSelectionContext: Equatable {
+    weak var controller: SelectionController?
+    let blockId: String
+
+    /// Identity, not value: a root view rebuilt for the same row (search
+    /// highlighting, reading mode) must not look like a change to SwiftUI.
+    static func == (lhs: BlockSelectionContext, rhs: BlockSelectionContext) -> Bool {
+        lhs.controller === rhs.controller && lhs.blockId == rhs.blockId
+    }
+}
+
+private struct BlockSelectionKey: EnvironmentKey {
+    static let defaultValue: BlockSelectionContext? = nil
+}
+
+extension EnvironmentValues {
+    /// Set per row by `VirtualBlockList.Coordinator.rootView(for:)`; nil outside
+    /// the document list (print/PDF views, previews).
+    var blockSelection: BlockSelectionContext? {
+        get { self[BlockSelectionKey.self] }
+        set { self[BlockSelectionKey.self] = newValue }
+    }
+}
+
+/// The document's ONE selection and everything that edits, draws and copies it
+/// (S-D4). Owned by `VirtualBlockList.Coordinator`; main-thread only (every
+/// entry point is an AppKit event, a menu action or a representable update).
+///
+/// Why one controller and not N native selections: a selection spans rows,
+/// rows are cells that come and go, and only one view can be first responder
+/// — so a native selection lives in one view, dies with it on reuse, and
+/// renders inactive (grey) everywhere else. Here the selection is a value
+/// (`DocumentSelection`), the table is the first responder, and each
+/// materialized text view draws the part of the selection that falls inside it.
+final class SelectionController: NSObject {
+
+    // MARK: Inputs (refreshed by every `updateNSView`)
+
+    /// See `VirtualBlockList.selectableText`.
+    var selectableText: (MarkdownBlock, Int) -> NSAttributedString? = { _, _ in nil }
+    /// See `VirtualBlockList.onCopySelection`.
+    var onCopy: (DocumentCopyOutput) -> Void = { _ in }
+
+    // MARK: Model
+
+    private(set) var selection: DocumentSelection?
+    private var blocks: [MarkdownBlock] = []
+    private var rowForBlockId: [String: Int] = [:]
+    private var contentVersion = Int.min
+    /// Selectable-string length per row, for rows measured without a view
+    /// (headings today, any off-screen row). Valid for one content version.
+    private var lengthCache: [Int: Int] = [:]
+
+    var hasSelection: Bool { !(selection?.isEmpty ?? true) }
+
+    // MARK: AppKit
+
+    private weak var tableView: BlockTableView?
+
+    private final class WeakTextView {
+        weak var view: SelfSizingTextView?
+        init(_ view: SelfSizingTextView) { self.view = view }
+    }
+
+    /// blockId → the text view currently showing that block. Only MATERIALIZED
+    /// rows are here, which is what bounds every redraw to the rows on (or
+    /// just off) screen.
+    private var registry: [String: WeakTextView] = [:]
+    private var keyObservers: [NSObjectProtocol] = []
+
+    deinit {
+        keyObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+
+    func attach(tableView: BlockTableView) {
+        self.tableView = tableView
+        guard keyObservers.isEmpty else { return }
+        // Emphasized (key window) ⇄ unemphasized selection colour. Filtered by
+        // window: tabs are separate windows, each with its own controller.
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            keyObservers.append(NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: nil
+            ) { [weak self] note in
+                guard let self, let window = note.object as? NSWindow,
+                      window === self.tableView?.window else { return }
+                self.redrawForKeyChange()
+                if note.name == NSWindow.didBecomeKeyNotification {
+                    // A tab brought to the front with nothing focused: give the
+                    // document the keyboard (never taken from a control).
+                    self.tableView?.takeFocusIfWindowHasNone()
+                }
+            })
+        }
+    }
+
+    /// A new model was installed in the list (before `reloadData`).
+    ///
+    /// S-D11: a new content version (re-parse — reload, zoom, theme, fonts)
+    /// clears the selection, because its offsets point into the OLD strings.
+    /// A width-only reinstall (resize, reading mode, sidebars) keeps it: same
+    /// blocks, same strings, the offsets are still valid — only the wrap moved.
+    func install(blocks newBlocks: [MarkdownBlock], rowForBlockId newRows: [String: Int],
+                 contentVersion newVersion: Int) {
+        let sameContent = newVersion == contentVersion && newBlocks.count == blocks.count
+        blocks = newBlocks
+        rowForBlockId = newRows
+        contentVersion = newVersion
+        guard !sameContent else { return }
+        lengthCache = [:]
+        guard selection != nil else { return }
+        selection = nil
+        // Text views only: the cells' tints are reconfigured by the
+        // `reloadData` that follows (the table's row geometry is still the old
+        // one at this point, so it is not asked about rows here).
+        refreshTextViews()
+    }
+
+    // MARK: - Registry (S-D5)
+
+    func register(_ view: SelfSizingTextView, blockId: String) {
+        if registry.count > 256 { registry = registry.filter { $0.value.view != nil } }
+        registry[blockId] = WeakTextView(view)
+        // The row may have been tinted while it had no view to draw in. With
+        // nothing selected no cell is tinted, so the table is not even asked —
+        // this runs inside SwiftUI updates that the table's own tiling drives.
+        if hasSelection, let row = rowForBlockId[blockId] { refreshTint(row: row) }
+    }
+
+    func unregister(_ view: SelfSizingTextView, blockId: String) {
+        guard registry[blockId]?.view === view else { return }
+        registry[blockId] = nil
+        if hasSelection, let row = rowForBlockId[blockId] { refreshTint(row: row) }
+    }
+
+    /// The part of `view`'s string the selection covers (S-D5). Asked by the
+    /// view itself whenever it is created or its string is replaced.
+    func coveredRange(for view: SelfSizingTextView) -> NSRange? {
+        guard let selection, let blockId = view.selectionBlockId,
+              let row = rowForBlockId[blockId] else { return nil }
+        return selection.range(inRow: row, rowLength: view.selectionTextLength)
+    }
+
+    /// Whether `row`'s cell shows the AppKit tint: the selection covers it and
+    /// the row has no text view to draw the selection in — atomic rows
+    /// (S-D3), and text-kind rows whose text is not an NSTextView (headings
+    /// until they become one, S-D7). A row that gains a registered text view
+    /// drops the tint by itself (`register`).
+    func wantsTint(row: Int) -> Bool {
+        guard let selection, !selection.isEmpty, row >= 0, row < blocks.count else { return false }
+        let block = blocks[row]
+        if Self.isAtomic(block) { return selection.range(inRow: row, rowLength: 1) != nil }
+        if let view = registry[block.id]?.view, view.selectionController === self { return false }
+        return selection.range(inRow: row, rowLength: rowLength(row)) != nil
+    }
+
+    // MARK: - Editing the selection
+
+    private func setSelection(_ newValue: DocumentSelection?) {
+        guard newValue != selection else { return }
+        selection = newValue
+        refreshTextViews()
+        refreshTints()
+    }
+
+    /// Hands every registered text view its covered range. A view whose range
+    /// did not change does not redraw (`selectionCoveredRange.didSet`), so a
+    /// drag repaints only the rows whose coverage actually moved.
+    private func refreshTextViews() {
+        for box in registry.values {
+            guard let view = box.view else { continue }
+            view.selectionCoveredRange = coveredRange(for: view)
+        }
+    }
+
+    /// Materialized cells only — `preparedContentRect` included, because AppKit
+    /// keeps cells above and below the viewport that scroll in without being
+    /// configured again (same reason as `refreshMaterializedRootViews`).
+    private func refreshTints() {
+        forEachMaterializedCell { cell, row in cell.isSelectionTinted = wantsTint(row: row) }
+    }
+
+    private func refreshTint(row: Int) {
+        guard let tableView, row >= 0, row < tableView.numberOfRows, row < blocks.count,
+              let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? BlockHostingCell
+        else { return }
+        cell.isSelectionTinted = wantsTint(row: row)
+    }
+
+    private func forEachMaterializedCell(_ body: (BlockHostingCell, Int) -> Void) {
+        guard let tableView, tableView.numberOfRows > 0 else { return }
+        let range = tableView.rows(in: tableView.preparedContentRect.union(tableView.visibleRect))
+        guard range.length > 0 else { return }
+        for row in range.location..<NSMaxRange(range) where row >= 0 && row < blocks.count {
+            guard let cell = tableView.view(atColumn: 0, row: row,
+                                            makeIfNecessary: false) as? BlockHostingCell else { continue }
+            body(cell, row)
+        }
+    }
+
+    private func redrawForKeyChange() {
+        guard hasSelection else { return }
+        for box in registry.values where box.view?.selectionCoveredRange != nil {
+            box.view?.needsDisplay = true
+        }
+        forEachMaterializedCell { cell, _ in cell.redrawSelectionTint() }
+    }
+
+    // MARK: - Rows
+
+    /// Rows selected whole, with no text of their own to select (S-D3).
+    static func isAtomic(_ block: MarkdownBlock) -> Bool {
+        switch block.content {
+        case .table, .image, .svgImage, .mathBlock, .mermaidDiagram: return true
+        case .text, .codeBlock, .blockquote, .alert, .heading: return false
+        }
+    }
+
+    /// UTF-16 length of `row`'s selectable string (1 for an atomic row).
+    private func rowLength(_ row: Int) -> Int {
+        guard row >= 0, row < blocks.count else { return 0 }
+        let block = blocks[row]
+        if Self.isAtomic(block) { return 1 }
+        if let cached = lengthCache[row] { return cached }
+        let length = selectableText(block, contentVersion)?.length ?? 0
+        lengthCache[row] = length
+        return length
+    }
+
+    // MARK: - Keyboard / menu (S-D4)
+
+    /// ⌘A. Two points, so the cost does not depend on the document's size.
+    func selectAll() {
+        setSelection(DocumentSelection.selectAll(rowCount: blocks.count, lengths: rowLength))
+    }
+
+    /// `range` of `view`'s row becomes the document selection (AX setter).
+    func select(_ range: NSRange, in view: SelfSizingTextView) {
+        guard let blockId = view.selectionBlockId, let row = rowForBlockId[blockId] else { return }
+        let length = view.selectionTextLength
+        let lower = min(max(0, range.location), length)
+        let upper = min(max(lower, NSMaxRange(range)), length)
+        setSelection(DocumentSelection(anchor: SelectionPoint(row: row, offset: lower),
+                                       focus: SelectionPoint(row: row, offset: upper)))
+    }
+
+    /// ⌘C: exactly what is highlighted, built from the selectable strings — not
+    /// from the views, most of which do not exist for a large selection.
+    func copySelection() {
+        guard let output = selectionOutput() else { return }
+        onCopy(output)
+    }
+
+    // MARK: Speech (Edit ▸ Speech)
+
+    /// ONE synthesizer for the app, like the system voice itself: Stop
+    /// Speaking in any tab stops what another tab started. Created on the
+    /// first Start Speaking — menu validation must not spin up the speech
+    /// engine just to grey out an item.
+    private static var speech: AVSpeechSynthesizer?
+
+    var isSpeaking: Bool { Self.speech?.isSpeaking ?? false }
+
+    func startSpeaking() {
+        guard let text = selectionOutput()?.plain else { return }
+        let synthesizer = Self.speech ?? AVSpeechSynthesizer()
+        Self.speech = synthesizer
+        synthesizer.stopSpeaking(at: .immediate)
+        synthesizer.speak(AVSpeechUtterance(string: text))
+    }
+
+    func stopSpeaking() {
+        Self.speech?.stopSpeaking(at: .immediate)
+    }
+
+    /// Plain text + RTF of the selection — the ONE builder behind ⌘C, the
+    /// context menu, Services and Speech. Nil when nothing is selected.
+    func selectionOutput() -> DocumentCopyOutput? {
+        guard let selection, let span = selection.rowSpan else { return nil }
+        var pieces: [SelectionPiece] = []
+        pieces.reserveCapacity(span.count)
+        // Table cells: their rendered characters (no `**`). The characters do
+        // not depend on the theme, so any theme will do.
+        var cellRenderer: MarkdownRenderer?
+        func renderedCell(_ markdown: String) -> String {
+            let renderer = cellRenderer ?? MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
+            cellRenderer = renderer
+            return String(renderer.renderInline(markdown).characters)
+        }
+
+        for row in span where row < blocks.count {
+            let block = blocks[row]
+            switch block.content {
+            case .table(let headers, let rows, _):
+                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
+                // Same rule as `TableBlockView.showsHeader`: an all-blank header
+                // row is not shown, so it is not copied either.
+                let showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                pieces.append(.table(headers: showsHeader ? headers.map(renderedCell) : nil,
+                                     rows: rows.map { $0.map(renderedCell) }))
+            case .image(_, let alt):
+                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
+                pieces.append(.image(alt: alt))
+            case .svgImage:
+                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
+                pieces.append(.image(alt: ""))
+            case .mathBlock(let latex):
+                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
+                pieces.append(.displayMath(latex: latex))
+            case .mermaidDiagram(let source):
+                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
+                pieces.append(.mermaid(source: source))
+            case .codeBlock, .text, .blockquote, .alert, .heading:
+                guard let text = selectableText(block, contentVersion),
+                      let covered = selection.range(inRow: row, rowLength: text.length) else { continue }
+                let part = text.attributedSubstring(from: covered)
+                if case .codeBlock = block.content {
+                    pieces.append(.code(part))
+                } else {
+                    pieces.append(.text(part))
+                }
+            }
+        }
+        let output = DocumentCopyBuilder.build(pieces)
+        return output.plain.isEmpty ? nil : output
+    }
+
+    /// Right-click / Control-click anywhere in the document (S-D6): the
+    /// document's Copy and Select All — not NSTextView's editing menu, whose
+    /// Copy would only know about one row.
+    func contextMenu(for event: NSEvent) -> NSMenu {
+        if let tableView, let window = tableView.window, window.firstResponder !== tableView {
+            window.makeFirstResponder(tableView)
+        }
+        let menu = NSMenu()
+        if let lookUp = lookUpItem(for: event) {
+            menu.addItem(lookUp)
+            menu.addItem(.separator())
+        }
+        // Explicit target: validation then asks the table (Copy is enabled iff
+        // the selection is non-empty), whatever else is first responder.
+        let copy = NSMenuItem(title: "Copy", action: #selector(BlockTableView.copy(_:)), keyEquivalent: "")
+        copy.target = tableView
+        menu.addItem(copy)
+        let all = NSMenuItem(title: "Select All", action: #selector(BlockTableView.selectAll(_:)), keyEquivalent: "")
+        all.target = tableView
+        menu.addItem(all)
+        return menu
+    }
+
+    private final class LookUpRequest {
+        weak var textView: SelfSizingTextView?
+        let range: NSRange
+        init(textView: SelfSizingTextView, range: NSRange) {
+            self.textView = textView
+            self.range = range
+        }
+    }
+
+    /// "Look Up “word”" for the word under the pointer, when it is over text.
+    private func lookUpItem(for event: NSEvent) -> NSMenuItem? {
+        guard let hit = hit(atWindowPoint: event.locationInWindow),
+              let textView = hit.textView, let local = hit.pointInTextView,
+              let index = Self.characterIndex(in: textView, at: local, requireInside: true),
+              let storage = textView.textStorage else { return nil }
+        let word = textView.selectionRange(forProposedRange: NSRange(location: index, length: 0),
+                                           granularity: .selectByWord)
+        guard word.length > 0, NSMaxRange(word) <= storage.length else { return nil }
+        let text = (storage.string as NSString).substring(with: word)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.count <= 64,
+              !text.unicodeScalars.contains(where: { $0 == "\u{FFFC}" }) else { return nil }
+        let item = NSMenuItem(title: "Look Up \u{201C}\(text)\u{201D}",
+                              action: #selector(lookUp(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = LookUpRequest(textView: textView, range: word)
+        return item
+    }
+
+    @objc private func lookUp(_ sender: NSMenuItem) {
+        guard let request = sender.representedObject as? LookUpRequest,
+              let textView = request.textView, let storage = textView.textStorage,
+              let layoutManager = textView.layoutManager,
+              NSMaxRange(request.range) <= storage.length else { return }
+        let glyphs = layoutManager.glyphRange(forCharacterRange: request.range, actualCharacterRange: nil)
+        guard glyphs.length > 0 else { return }
+        let line = layoutManager.lineFragmentRect(forGlyphAt: glyphs.location, effectiveRange: nil)
+        let location = layoutManager.location(forGlyphAt: glyphs.location)
+        let origin = textView.textContainerOrigin
+        textView.showDefinition(for: storage.attributedSubstring(from: request.range),
+                                at: NSPoint(x: origin.x + line.minX + location.x,
+                                            y: origin.y + line.minY + location.y))
+    }
+
+    // MARK: - Hit testing (S-D6)
+
+    private struct Hit {
+        let point: SelectionPoint
+        /// The press landed inside an atomic row (see `DocumentSelection.dragging`).
+        let isAtomic: Bool
+        /// The row's text view, when the point maps through one.
+        let textView: SelfSizingTextView?
+        let pointInTextView: NSPoint?
+    }
+
+    /// Maps a window point to a document position THROUGH THE TABLE: row under
+    /// the point → that row's registered text view → insertion index. Never
+    /// through the view that received the mouse-down, which a drag can scroll
+    /// out of the prepared area and the table can recycle for another row.
+    ///
+    /// Points between rows belong to a row (`rect(ofRow:)` includes half the
+    /// intercell spacing on each side); points above or below a row's text
+    /// (the gap, an alert's title, a code block's padding) map to the start or
+    /// the end of that text; points left or right of it to the line's start or
+    /// end. Above the first row / below the last: the document's ends.
+    private func hit(atWindowPoint windowPoint: NSPoint) -> Hit? {
+        guard let tableView, !blocks.isEmpty, tableView.numberOfRows == blocks.count else { return nil }
+        let point = tableView.convert(windowPoint, from: nil)
+        let probeX = min(max(point.x, 0), max(0, tableView.bounds.width - 1))
+        let row = tableView.row(at: NSPoint(x: probeX, y: point.y))
+        guard row >= 0, row < blocks.count else {
+            if point.y < tableView.rect(ofRow: 0).minY {
+                return Hit(point: SelectionPoint(row: 0, offset: 0), isAtomic: false,
+                           textView: nil, pointInTextView: nil)
+            }
+            let last = blocks.count - 1
+            return Hit(point: SelectionPoint(row: last, offset: rowLength(last)), isAtomic: false,
+                       textView: nil, pointInTextView: nil)
+        }
+
+        let block = blocks[row]
+        let rowRect = tableView.rect(ofRow: row)
+        if Self.isAtomic(block) {
+            // Upper half = before the row, lower half = after it: dragging
+            // DOWN selects the row once the pointer is past its middle, and so
+            // does dragging UP — symmetrical, like a very tall character.
+            return Hit(point: SelectionPoint(row: row, offset: point.y < rowRect.midY ? 0 : 1),
+                       isAtomic: true, textView: nil, pointInTextView: nil)
+        }
+
+        if let textView = registeredTextView(for: block.id, in: tableView) {
+            let local = textView.convert(windowPoint, from: nil)  // flipped
+            let length = textView.selectionTextLength
+            let offset: Int
+            if local.y < 0 {
+                offset = 0
+            } else if local.y > textView.bounds.height {
+                offset = length
+            } else {
+                let clamped = NSPoint(x: min(max(local.x, 0), textView.bounds.width), y: local.y)
+                offset = min(max(0, textView.characterIndexForInsertion(at: clamped)), length)
+            }
+            return Hit(point: SelectionPoint(row: row, offset: offset), isAtomic: false,
+                       textView: textView, pointInTextView: local)
+        }
+
+        // A text-kind row with no text view to ask (a heading today): its
+        // whole string, by half.
+        return Hit(point: SelectionPoint(row: row, offset: point.y < rowRect.midY ? 0 : rowLength(row)),
+                   isAtomic: false, textView: nil, pointInTextView: nil)
+    }
+
+    /// The registered view for `blockId` — if it is really on display in THIS
+    /// table (a recycled view can outlive its registration by a layout pass).
+    private func registeredTextView(for blockId: String, in tableView: NSTableView) -> SelfSizingTextView? {
+        guard let view = registry[blockId]?.view, view.selectionController === self,
+              view.window === tableView.window, !view.isHiddenOrHasHiddenAncestor,
+              view.isDescendant(of: tableView) else { return nil }
+        return view
+    }
+
+    /// The character whose glyph is under `local` (text-view coordinates), or
+    /// nil past the end. With `requireInside`, only when the point is ON the
+    /// glyph — a click in the empty space after a link must not open it.
+    private static func characterIndex(in textView: SelfSizingTextView, at local: NSPoint,
+                                       requireInside: Bool) -> Int? {
+        guard let layoutManager = textView.layoutManager, let container = textView.textContainer,
+              textView.selectionTextLength > 0 else { return nil }
+        let origin = textView.textContainerOrigin
+        let point = NSPoint(x: local.x - origin.x, y: local.y - origin.y)
+        var fraction: CGFloat = 0
+        let glyph = layoutManager.glyphIndex(for: point, in: container,
+                                             fractionOfDistanceThroughGlyph: &fraction)
+        guard glyph < layoutManager.numberOfGlyphs else { return nil }
+        if requireInside {
+            let box = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1),
+                                                 in: container)
+            guard box.contains(point) else { return nil }
+        }
+        let index = layoutManager.characterIndexForGlyph(at: glyph)
+        return index < textView.selectionTextLength ? index : nil
+    }
+
+    // MARK: - Mouse (S-D6)
+
+    /// Pointer travel below which a press-release is a click, not a drag.
+    private static let dragThreshold: CGFloat = 3
+
+    /// The ONE tracking loop, for a press anywhere in the document: on text
+    /// (`SelfSizingTextView.mouseDown`), in a gap, a margin or a row whose
+    /// content did not consume the click (`BlockTableView.mouseDown`), or in
+    /// the content insets (`BlockScrollView.mouseDown`).
+    ///
+    /// Everything it touches is re-resolved per event through `tableView`
+    /// (weak) and the registry: the view that received the press may be
+    /// recycled for another row by an autoscroll halfway through the drag.
+    func mouseDown(with event: NSEvent) {
+        guard let tableView, let window = tableView.window else { return }
+        // S-D4: a click anywhere makes the table the first responder, so ⌘C
+        // works after clicking a gap (it used to be disabled there).
+        if window.firstResponder !== tableView { window.makeFirstResponder(tableView) }
+        if event.modifierFlags.contains(.control) {
+            NSMenu.popUpContextMenu(contextMenu(for: event), with: event, for: tableView)
+            return
+        }
+        guard let start = hit(atWindowPoint: event.locationInWindow) else { return }
+
+        let clickCount = event.clickCount
+        let isExtending = event.modifierFlags.contains(.shift) && selection != nil
+        // Captured BEFORE the press edits the selection: a force click is not
+        // a click, and restores exactly this.
+        let selectionBeforePress = selection
+        var anchor = start.point
+        var anchorIsAtomic = start.isAtomic
+        var unit: (start: SelectionPoint, end: SelectionPoint)?
+
+        if isExtending, let existing = selection {
+            // Shift-click: the focus moves, the anchor stays where it was.
+            anchor = existing.anchor
+            anchorIsAtomic = false
+            setSelection(DocumentSelection(anchor: anchor, focus: start.point))
+        } else if clickCount >= 2, let textView = start.textView, let local = start.pointInTextView,
+                  let index = Self.characterIndex(in: textView, at: local, requireInside: false) {
+            // Double-click = word, triple-click = paragraph, in that row.
+            let granularity: NSSelectionGranularity = clickCount == 2 ? .selectByWord : .selectByParagraph
+            let range = textView.selectionRange(forProposedRange: NSRange(location: index, length: 0),
+                                                granularity: granularity)
+            let row = start.point.row
+            let selected = (start: SelectionPoint(row: row, offset: range.location),
+                            end: SelectionPoint(row: row, offset: NSMaxRange(range)))
+            unit = selected
+            setSelection(DocumentSelection(anchor: selected.start, focus: selected.end))
+        } else {
+            // A press clears the old selection at once (like a native one) and
+            // parks an empty one here, for a later Shift-click to extend from.
+            setSelection(DocumentSelection(collapsedAt: start.point))
+        }
+
+        let pressLocation = event.locationInWindow
+        let installedVersion = contentVersion
+        let wasKey = window.isKeyWindow
+        var dragged = false
+        var lastDrag = event
+        var periodicRunning = false
+        defer { if periodicRunning { NSEvent.stopPeriodicEvents() } }
+
+        func track(_ windowPoint: NSPoint) {
+            guard let focus = hit(atWindowPoint: windowPoint) else { return }
+            if let unit {
+                setSelection(.extending(unit: unit, to: focus.point))
+            } else {
+                setSelection(.dragging(from: anchor, anchorIsAtomic: anchorIsAtomic, to: focus.point))
+            }
+        }
+
+        /// Scrolls if the pointer asks for it; true when it did.
+        func autoscrollIfNeeded(_ drag: NSEvent) -> Bool {
+            switch autoscrollRequest(at: drag.locationInWindow) {
+            case .none:
+                return false
+            case .outside:
+                self.tableView?.autoscroll(with: drag)
+            case .screenEdge(let direction):
+                self.tableView?.scrollVertically(by: direction * Self.edgeAutoscrollStep)
+            }
+            return true
+        }
+
+        enum Ending { case mouseUp, forceClick(NSEvent), abandoned }
+        var ending = Ending.abandoned
+
+        trackingLoop: while true {
+            // The gesture is void when the model under it changed (auto-reload
+            // re-parsed: anchor and unit index the old strings) or when
+            // something modal took over (a sandbox open panel triggered by a
+            // row that autoscroll brought in, the window losing key).
+            func isVoid() -> Bool {
+                contentVersion != installedVersion || NSApp.modalWindow != nil
+                    || (wasKey && !window.isKeyWindow)
+            }
+            if isVoid() { break trackingLoop }
+            // A timeout rather than `.distantFuture`: a nested modal session
+            // can swallow the mouse-up, and nothing else would end the loop.
+            guard let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .periodic, .pressure],
+                                              until: Date(timeIntervalSinceNow: 0.25),
+                                              inMode: .eventTracking, dequeue: true) else {
+                guard NSEvent.pressedMouseButtons & 1 == 0 else { continue }
+                // The button is up but no mouse-up was seen: give a queued one
+                // (a slow click, a busy main thread) a short grace period, and
+                // treat it as a normal release — a slow click on a link opens
+                // it. Only when none arrives was the mouse-up swallowed.
+                if window.nextEvent(matching: .leftMouseUp, until: Date(timeIntervalSinceNow: 0.1),
+                                    inMode: .eventTracking, dequeue: true) != nil {
+                    ending = .mouseUp
+                }
+                break trackingLoop
+            }
+            if isVoid() { break trackingLoop }
+            switch next.type {
+            case .leftMouseUp:
+                ending = .mouseUp
+                break trackingLoop
+            case .pressure:
+                // Force click (stage 2): Quick Look / Look Up, not a click.
+                // Once a drag has started the pressure is the user pressing
+                // harder while selecting, not a Quick Look gesture.
+                if next.stage >= 2, !dragged {
+                    ending = .forceClick(next)
+                    break trackingLoop
+                }
+            case .leftMouseDragged:
+                lastDrag = next
+                if !dragged {
+                    let dx = next.locationInWindow.x - pressLocation.x
+                    let dy = next.locationInWindow.y - pressLocation.y
+                    guard (dx * dx + dy * dy).squareRoot() >= Self.dragThreshold else { continue }
+                    dragged = true
+                }
+                // Autoscroll now, then on every periodic tick while the pointer
+                // stays put (no drag events arrive then).
+                if autoscrollIfNeeded(next) {
+                    if !periodicRunning {
+                        NSEvent.startPeriodicEvents(afterDelay: 0.05, withPeriod: 0.05)
+                        periodicRunning = true
+                    }
+                } else if periodicRunning {
+                    NSEvent.stopPeriodicEvents()
+                    periodicRunning = false
+                }
+                track(next.locationInWindow)
+            case .periodic:
+                guard dragged, autoscrollIfNeeded(lastDrag) else { continue }
+                track(lastDrag.locationInWindow)
+            default:
+                continue
+            }
+        }
+
+        switch ending {
+        case .abandoned:
+            // No click semantics: nothing opens, the selection stays as the
+            // gesture left it (a re-parse has already cleared it).
+            return
+        case .forceClick(let pressure):
+            // Not a click (and never after a drag — see `.pressure`): undo what
+            // the press did to the selection and let the text view under the
+            // pointer show its Quick Look / Look Up panel.
+            if contentVersion == installedVersion { setSelection(selectionBeforePress) }
+            if let target = hit(atWindowPoint: pressure.locationInWindow)?.textView {
+                target.quickLook(with: pressure)
+            }
+            return
+        case .mouseUp:
+            break
+        }
+
+        // A plain click: the selection is already cleared; a link under the
+        // pointer opens through the text view's delegate, i.e. the same
+        // `clickedOnLink` → `onLink` → `handleLinkActivation` path as before
+        // (including the confirmation for non-web schemes).
+        if !dragged, clickCount == 1, !isExtending,
+           let release = hit(atWindowPoint: event.locationInWindow),
+           let textView = release.textView, let local = release.pointInTextView,
+           let index = Self.characterIndex(in: textView, at: local, requireInside: true),
+           let link = textView.textStorage?.attribute(.link, at: index, effectiveRange: nil) {
+            textView.clicked(onLink: link, at: index)
+        }
+    }
+
+    /// Points per periodic tick when autoscrolling from a screen-edge zone,
+    /// where there is no "distance outside the view" to scale by.
+    private static let edgeAutoscrollStep: CGFloat = 16
+
+    private enum AutoscrollRequest {
+        /// Above/below the clip view: AppKit's proportional `autoscroll(with:)`.
+        case outside
+        /// In the edge zone of a clip view that touches the screen edge
+        /// (full screen, zoomed window): −1 = up, +1 = down.
+        case screenEdge(CGFloat)
+    }
+
+    /// Whether a drag at `windowPoint` should scroll the document. Strictly
+    /// outside the clip view vertically (sideways never counts — the document
+    /// does not scroll horizontally), or — when the clip's edge sits on the
+    /// screen's edge, so the pointer cannot get past it — inside a thin zone
+    /// along that edge (`SelectionAutoscroll.screenEdgeDirection`).
+    private func autoscrollRequest(at windowPoint: NSPoint) -> AutoscrollRequest? {
+        guard let clipView = tableView?.enclosingScrollView?.contentView,
+              let window = clipView.window else { return nil }
+        let point = clipView.convert(windowPoint, from: nil)
+        if point.y < clipView.bounds.minY || point.y > clipView.bounds.maxY { return .outside }
+        guard let screen = window.screen else { return nil }
+        let clipOnScreen = window.convertToScreen(clipView.convert(clipView.bounds, to: nil))
+        let pointer = window.convertPoint(toScreen: windowPoint)
+        return SelectionAutoscroll.screenEdgeDirection(clipOnScreen: clipOnScreen,
+                                                       screenFrame: screen.frame,
+                                                       pointer: pointer).map { .screenEdge($0) }
     }
 }

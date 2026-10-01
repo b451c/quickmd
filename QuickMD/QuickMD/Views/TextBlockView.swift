@@ -71,9 +71,11 @@ func applyNSSearchHighlight(in textView: NSTextView, term: String, focusedOccurr
 /// NSTextView-backed rendering for text-bearing blocks (paragraphs, headings,
 /// blockquote bodies, the footnote block). Replaces SwiftUI
 /// `Text(...).textSelection(.enabled)`, whose internal SelectionOverlay made
-/// LazyVStack unusable (constraints.md, bug B). NSTextView gives native
-/// selection, native link handling, and — unlike SwiftUI Text — renders
-/// NSTextAttachment, so inline math embeds directly.
+/// LazyVStack unusable (constraints.md, bug B). NSTextView gives TextKit
+/// geometry for the document-wide selection (v1.11 — the selection itself is
+/// owned by `SelectionController`, not by this view), native link handling,
+/// and — unlike SwiftUI Text — renders NSTextAttachment, so inline math embeds
+/// directly.
 struct TextBlockView: View {
     let blockId: String
     let attributed: AttributedString
@@ -187,6 +189,7 @@ private struct BlockTextView: NSViewRepresentable {
     func makeNSView(context: Context) -> SelfSizingTextView {
         let textView = SelfSizingTextView()
         textView.configureForSelfSizing()
+        textView.installDocumentSelectionLayoutManager()
         textView.delegate = context.coordinator
         // Keep the renderer's link color/underline — only add the pointer cursor.
         // (NSTextView's default linkTextAttributes would repaint links blue.)
@@ -216,6 +219,15 @@ private struct BlockTextView: NSViewRepresentable {
             textView.lastFocusedOccurrence = focusedOccurrence
         }
 
+        // The row's block id comes from the hosting cell's environment, not
+        // from a parameter: any text view inside a cell joins the document
+        // selection the same way (paragraphs, quote/alert bodies — and
+        // headings once they are NSTextView-backed).
+        textView.attachSelection(context.environment.blockSelection)
+    }
+
+    static func dismantleNSView(_ textView: SelfSizingTextView, coordinator: Coordinator) {
+        textView.detachSelection()
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
