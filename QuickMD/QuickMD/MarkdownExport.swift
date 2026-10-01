@@ -361,6 +361,9 @@ struct PrintableImageView: View {
     /// has not loaded yet (below the fold) as a placeholder, although access
     /// was granted in an earlier session. Never the prompting path — no
     /// NSOpenPanel from print.
+    /// `@MainActor` because `PrintFolderAccess` is; called from `body` only
+    /// (main actor on every SDK — older ones annotate nothing else in a View).
+    @MainActor
     private static func load(raw: String, source: ImageSource) -> NSImage? {
         if case .file(let fileURL) = source {
             PrintFolderAccess.restoreSavedAccess(forParentOf: fileURL)

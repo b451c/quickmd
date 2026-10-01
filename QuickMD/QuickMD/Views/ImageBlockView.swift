@@ -160,6 +160,11 @@ struct ImageBlockView: View {
     /// Load through `ImageLoader` (decode off the main thread). A local file
     /// that exists but can't be read is most likely the sandbox: prompt for
     /// folder access and retry once — the pre-existing (1.x) flow, unchanged.
+    ///
+    /// Explicitly `@MainActor`: `SandboxAccessManager` is main-actor isolated,
+    /// and on older SDKs (the CI toolchain) a View's methods are nonisolated —
+    /// only `body` is annotated — so the call would not compile there.
+    @MainActor
     private func loadImage() async {
         guard let source else { return }
         if let known = ImageLoader.knownFailure(for: url, source: source) {
