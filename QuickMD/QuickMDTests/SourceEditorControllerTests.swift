@@ -663,4 +663,86 @@ final class SourceEditorControllerTests: XCTestCase {
         controller.focus()
         XCTAssertTrue(window.firstResponder === controller.textView)
     }
+
+    // MARK: - Reload (S-D9 clean adopt)
+
+    func testReloadReplacesEverythingWithoutUndoOrChange() {
+        let (controller, _, _) = makeEditor("one\ntwo\n")
+        var changes = 0
+        controller.onChange = { changes += 1 }
+        controller.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        type(controller, "!")
+        XCTAssertEqual(changes, 1)
+        controller.reload("ONE\r\nTWO\r\n")
+        XCTAssertEqual(controller.text, "ONE\nTWO\n")
+        XCTAssertFalse(controller.undoManager.canUndo, "reload clears the stack")
+        XCTAssertEqual(changes, 1, "reload never fires onChange")
+    }
+
+    func testReloadKeepsTheCaretsLineAndColumn() {
+        let (controller, _, _) = makeEditor("first\nsecond line\nthird\n")
+        // Line 1, column 4.
+        controller.textView.setSelectedRange(NSRange(location: 6 + 4, length: 0))
+        // Line 0 grew: the offset moves, the line and column do not.
+        controller.reload("a much longer first line\nsecond line\nthird\n")
+        let storage = controller.textView.textStorage!.mutableString
+        XCTAssertEqual(controller.caretLine, 1)
+        XCTAssertEqual(controller.textView.selectedRange(),
+                       NSRange(location: SourceEditSupport.lineStart(1, in: storage) + 4, length: 0))
+    }
+
+    func testReloadClampsTheCaretToTheNewText() {
+        let (controller, _, _) = makeEditor("one\ntwo\nthree is long\n")
+        controller.textView.setSelectedRange(NSRange(location: 8 + 10, length: 0))  // line 2, column 10
+        controller.reload("one\nx")
+        XCTAssertEqual(controller.textView.selectedRange(), NSRange(location: 5, length: 0),
+                       "the last line, at its end")
+        controller.reload("")
+        XCTAssertEqual(controller.textView.selectedRange(), NSRange(location: 0, length: 0))
+    }
+
+    func testReloadKeepsTheTopLine() {
+        let (controller, scrollView, _) = makeEditor(numberedLines(2_000))
+        controller.scroll(toLine: 1_200)
+        let before = scrollView.contentView.bounds.minY
+        XCTAssertGreaterThan(before, 0)
+        // Same line count, one line above the top rewritten.
+        let edited = numberedLines(2_000).replacingOccurrences(of: "line 5 ", with: "LINE 5 ")
+        controller.reload(edited)
+        let storage = controller.textView.textStorage!.mutableString
+        XCTAssertEqual(SourceEditSupport.line(containing: topCharacter(controller, scrollView), in: storage), 1_200)
+        XCTAssertEqual(scrollView.contentView.bounds.minY, before, accuracy: 0.5)
+    }
+
+    func testReloadWithShorterTextScrollsAsFarAsItCan() {
+        let (controller, scrollView, _) = makeEditor(numberedLines(2_000))
+        controller.scroll(toLine: 1_500)
+        controller.reload(numberedLines(10))
+        // Ten lines fit on screen: the clip sits at the deepest origin it
+        // can reach (AppKit may keep a few points of bottom inset).
+        let clip = scrollView.contentView
+        var deepest = clip.bounds
+        deepest.origin.y = 1_000_000
+        XCTAssertEqual(clip.bounds.minY, clip.constrainBoundsRect(deepest).minY)
+        XCTAssertLessThan(clip.bounds.minY, 20)
+        XCTAssertEqual(controller.caretLine, 0)
+    }
+
+    func testReloadBeforeTheFirstLayoutKeepsThePendingLine() {
+        let controller = SourceEditorController()
+        controller.load(numberedLines(1_000))
+        let scrollView = controller.makeScrollView(style: style())
+        controller.placeCaret(atLine: 600)
+        controller.reload("inserted\n" + numberedLines(1_000))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        windows.append(window)
+        scrollView.frame = window.contentView!.bounds
+        window.contentView!.addSubview(scrollView)
+        window.contentView!.layoutSubtreeIfNeeded()
+        let offset = SourceEditSupport.lineStart(600, in: controller.textView.textStorage!.mutableString)
+        XCTAssertEqual(scrollView.contentView.bounds.minY, exactLineTop(controller, offset: offset), accuracy: 0.01)
+        XCTAssertEqual(controller.caretLine, 600)
+    }
 }

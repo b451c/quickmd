@@ -414,6 +414,52 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
         scrollClip(toY: 0)
     }
 
+    /// `load` for a buffer the user is looking at: adopting a clean external
+    /// change, or reverting after Don't Save on close (S-D9). Same contract —
+    /// no undo entry, no `onChange`, the undo stack is cleared — but the
+    /// caret keeps its line and column and the line at the top of the visible
+    /// area stays there, each clamped to the new text: an external rewrite of
+    /// a paragraph elsewhere must not throw the user back to line 0.
+    /// Positions are carried as (line, column), not as offsets — an edit
+    /// above the caret shifts every offset below it.
+    func reload(_ text: String) {
+        let normalized = MarkdownDocument.normalizeLineEndings(text)
+        let old = textStorage.mutableString
+        func lineAndColumn(_ offset: Int) -> (line: Int, column: Int) {
+            let line = SourceEditSupport.line(containing: offset, in: old)
+            return (line, offset - SourceEditSupport.lineStart(line, in: old))
+        }
+        let caret = lineAndColumn(textView.selectedRange().location)
+        let top = topVisibleAnchor().map { (position: lineAndColumn($0.character), offset: $0.offset) }
+        let pendingTopLine = pendingTopOffset.map { SourceEditSupport.line(containing: $0, in: old) }
+
+        textStorage.beginEditing()
+        textStorage.replaceCharacters(in: NSRange(location: 0, length: textStorage.length),
+                                      with: NSAttributedString(string: normalized, attributes: baseAttributes))
+        textStorage.endEditing()
+        cachedIndentUnit = nil
+        undoManager.removeAllActions()
+        dropPendingAnchor()
+
+        let new = textStorage.mutableString
+        func offset(line: Int, column: Int) -> Int {
+            // `lineRange` clamps a line past the end to the last line.
+            let range = SourceEditSupport.lineRange(line, in: new)
+            return range.location + min(column, range.length)
+        }
+        textView.setSelectedRange(NSRange(location: offset(line: caret.line, column: caret.column), length: 0))
+        if let pendingTopLine {
+            // Not laid out yet: the entry scroll still has to happen, now in
+            // the new text.
+            pendingTopOffset = SourceEditSupport.lineStart(pendingTopLine, in: new)
+        } else if let top {
+            restore(TopAnchor(character: offset(line: top.position.line, column: top.position.column),
+                              offset: top.offset))
+        } else {
+            scrollClip(toY: 0)
+        }
+    }
+
     /// Replaces everything as ONE undoable edit (Discard Changes, Load Disk
     /// Version — ⌘Z brings the previous text back). Fires `onChange`. The
     /// caret keeps its offset where the new text is long enough.
