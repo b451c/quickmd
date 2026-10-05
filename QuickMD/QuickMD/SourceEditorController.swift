@@ -18,23 +18,58 @@ import SwiftUI
 // callbacks that create/drive this are nonisolated on the older SDK the CI
 // runner builds with (constraints "CI builds on an OLDER SDK").
 
-/// The editor's text view. A subclass only so it has its own type in the view
-/// hierarchy (accessibility, debugging); all behaviour lives in the
-/// controller, which is its delegate.
-final class SourceTextView: NSTextView {}
+/// The editor's text view. Behaviour lives in the controller (its delegate);
+/// the subclass holds the two things that must not depend on that delegate.
+final class SourceTextView: NSTextView {
+    /// The editor's own undo stack, held STRONGLY here. `delegate` is weak:
+    /// were the controller gone while the view is still in a window, the
+    /// delegate's `undoManager(for:)` would no longer be asked and AppKit
+    /// would fall back to `window.undoManager` — the viewer NSDocument's,
+    /// which autosaves in place (spec S-D1). The delegate method stays as a
+    /// second layer.
+    var editorUndoManager: UndoManager?
+    /// Called once the view is in a window (a deferred `focus()`).
+    var onMoveToWindow: (() -> Void)?
+
+    override var undoManager: UndoManager? {
+        editorUndoManager ?? super.undoManager
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { onMoveToWindow?() }
+    }
+}
 
 /// The editor's scroll view. Reports `tile()` — the one place AppKit lays out
 /// the clip view after a resize, a scroller change or the find bar appearing —
 /// so the column geometry is recomputed from the clip width it just set; the
 /// end of a live resize, when the deferred exact scroll position lands; and
-/// the wheel, which cancels that deferred position (the user moved on).
+/// the wheel and the start of a live scroll (scroller drag, trackpad), which
+/// cancel that deferred position: the user moved on.
 final class SourceEditorScrollView: NSScrollView {
     var onTile: (() -> Void)?
     var onEndLiveResize: (() -> Void)?
-    var onScrollWheel: (() -> Void)?
+    var onUserScroll: (() -> Void)?
+    private var liveScrollObserver: NSObjectProtocol?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        liveScrollObserver = NotificationCenter.default.addObserver(
+            forName: NSScrollView.willStartLiveScrollNotification, object: self, queue: nil
+        ) { [weak self] _ in self?.onUserScroll?() }
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+
+    deinit {
+        if let liveScrollObserver { NotificationCenter.default.removeObserver(liveScrollObserver) }
+    }
 
     override func scrollWheel(with event: NSEvent) {
-        onScrollWheel?()
+        onUserScroll?()
         super.scrollWheel(with: event)
     }
 
@@ -52,8 +87,8 @@ final class SourceEditorScrollView: NSScrollView {
 /// Owns the editor's text view and everything about it the session needs:
 /// the buffer, the caret, scrolling, find, style and its own undo stack.
 ///
-/// An `NSObject` because it is the text view's delegate.
-final class SourceEditorController: NSObject, NSTextViewDelegate {
+/// An `NSObject` because it is the text view's and the storage's delegate.
+final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
 
     /// Everything the editor's look depends on. Equal styles are a no-op in
     /// `apply(style:)`, so SwiftUI may hand the same one on every update.
@@ -121,6 +156,22 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
     /// the rendered list's width debounce (`VirtualBlockList`), for the same
     /// reason: sidebars animate over 0.2 s and every frame changes the width.
     private static let exactRestoreDelay: TimeInterval = 0.1
+    /// The exact restore re-lays out everything above the anchor, so its cost
+    /// grows with the anchor's offset. Measured headlessly (Debug app; the
+    /// cost is all AppKit layout), 2026-10-05: an anchor 400 000 UTF-16 units
+    /// in costs ~160 ms with short 25-character lines (the worst case: one
+    /// line fragment per 25 units) and ~85 ms with long wrapping lines; at the
+    /// end of a 2 MB buffer it would be ~700 / ~400 ms — per zoom step or
+    /// sidebar toggle. Below the limit the pause passes for part of the
+    /// resize / zoom; beyond it the estimate is kept (the right text stays on
+    /// screen within a line or two, only the scroller is approximate). The
+    /// explicit jumps (`placeCaret`, `scroll(toLine:)`) are exact at any offset.
+    static let exactRestoreCharacterLimit = 400_000
+    /// `focus()` asked for before the view had a window (the session mounts
+    /// and focuses in one pass); honoured when it gets one.
+    private var focusRequested = false
+    /// Re-entrancy guard for the attribute fix-up in `didProcessEditing`.
+    private var isFixingAttributes = false
 
     override init() {
         // An explicit TextKit 1 stack: an NSTextView created with a container
@@ -141,6 +192,9 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
         layoutManager.addTextContainer(textContainer)
         textView = SourceTextView(frame: .zero, textContainer: textContainer)
         super.init()
+        textView.editorUndoManager = undoManager
+        textView.onMoveToWindow = { [weak self] in self?.focusIfRequested() }
+        textStorage.delegate = self
         configureTextView()
     }
 
@@ -189,12 +243,18 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
     /// Builds the scroll view once and returns it on every later call (the
     /// representable's `makeNSView`). The text view exists from `init`, so
     /// `load` / `text` work before this is ever called.
+    ///
+    /// ONE live `SourceEditorView` per controller: there is one view, and an
+    /// NSView has one superview. If SwiftUI briefly keeps two representables
+    /// (a removal transition, an identity change), the view is detached from
+    /// the old host before the new one gets it, never shared between them.
     func makeScrollView(style: Style) -> NSScrollView {
         if let scrollView {
+            scrollView.removeFromSuperview()
             apply(style: style)
             return scrollView
         }
-        let scrollView = SourceEditorScrollView()
+        let scrollView = SourceEditorScrollView(frame: .zero)
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         // Same as the rendered list: a scroller that autohides changes the
@@ -207,7 +267,7 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
         scrollView.documentView = textView
         scrollView.onTile = { [weak self] in self?.updateGeometry() }
         scrollView.onEndLiveResize = { [weak self] in self?.finishRelayout() }
-        scrollView.onScrollWheel = { [weak self] in self?.dropPendingAnchor() }
+        scrollView.onUserScroll = { [weak self] in self?.dropPendingAnchor() }
         self.scrollView = scrollView
         apply(style: style)
         return scrollView
@@ -351,12 +411,12 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
         }
         let glyph = layoutManager.glyphIndexForCharacter(at: min(anchor.character, textStorage.length - 1))
         let estimatedTop = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY
-        scrollLaidOut(toY: estimatedTop - anchor.offset)
+        scrollLaidOut(toY: clipY(forLineTop: estimatedTop, anchor))
         // Laying out the screen around it can refine the line's estimate;
         // follow it once so the same text is really at the top.
         let refinedTop = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil,
                                                         withoutAdditionalLayout: true).minY
-        if refinedTop != estimatedTop { scrollClip(toY: refinedTop - anchor.offset) }
+        if refinedTop != estimatedTop { scrollClip(toY: clipY(forLineTop: refinedTop, anchor)) }
         pendingAnchor = anchor
         pendingAnchorClipY = scrollView?.contentView.bounds.minY ?? 0
         exactRestoreWork?.cancel()
@@ -375,15 +435,19 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
         exactRestoreWork = nil
         guard let anchor = pendingAnchor else { return }
         pendingAnchor = nil
+        guard anchor.character < Self.exactRestoreCharacterLimit else { return }
         // AppKit itself nudges the clip by a line or two while background
         // layout refines the estimate; more than half a screen is a scroll
-        // by the user (scroller drag, keyboard paging — the wheel already
-        // dropped the anchor), and their position wins.
+        // that slipped past the explicit cancels (wheel, live scroll,
+        // keyboard commands), and the user's position wins.
         guard let scrollView else { return }
         let clip = scrollView.contentView.bounds
         guard abs(clip.minY - pendingAnchorClipY) <= clip.height / 2 else { return }
         restore(anchor)
     }
+
+    /// A relayout's exact top-line restore is still to come (tests wait on it).
+    var isRestorePending: Bool { pendingAnchor != nil }
 
     /// An explicit scroll supersedes a top line still being kept.
     private func dropPendingAnchor() {
@@ -408,6 +472,7 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
         textStorage.endEditing()
         cachedIndentUnit = nil
         undoManager.removeAllActions()
+        textView.breakUndoCoalescing()
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         pendingTopOffset = nil
         dropPendingAnchor()
@@ -506,8 +571,20 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
         scrollToTop(characterOffset: SourceEditSupport.lineStart(line, in: textStorage.mutableString))
     }
 
+    /// Makes the text view first responder — now, or as soon as it is in a
+    /// window (the session mounts the editor and focuses it in one pass).
     func focus() {
-        textView.window?.makeFirstResponder(textView)
+        guard let window = textView.window else {
+            focusRequested = true
+            return
+        }
+        focusRequested = false
+        window.makeFirstResponder(textView)
+    }
+
+    private func focusIfRequested() {
+        guard focusRequested else { return }
+        focus()
     }
 
     /// Scrolls so the line containing `offset` starts `verticalInset` below
@@ -523,13 +600,14 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
         scrollLaidOut(toY: lineTop(atCharacter: offset))
     }
 
-    /// Scrolls the clip to container-y `y` after laying out the screenful it
-    /// will show: near the end of the buffer the rest of the text decides how
-    /// far the clip may scroll, and an estimated remainder would leave the
-    /// clip past the view's real end once layout catches up.
+    /// Scrolls the clip to `y` (view coordinates) after laying out the
+    /// screenful it will show: near the end of the buffer the rest of the
+    /// text decides how far the clip may scroll, and an estimated remainder
+    /// would leave the clip past the view's real end once layout catches up.
     private func scrollLaidOut(toY y: CGFloat) {
         guard let scrollView else { return }
-        let visible = NSRect(x: 0, y: max(y, 0), width: textContainer.size.width,
+        let visible = NSRect(x: 0, y: max(y - textView.textContainerOrigin.y, 0),
+                             width: textContainer.size.width,
                              height: scrollView.contentView.bounds.height)
         layoutManager.ensureLayout(forBoundingRect: visible, in: textContainer)
         textView.sizeToFit()
@@ -573,18 +651,25 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
         scrollView.reflectScrolledClipView(clip)
     }
 
-    /// The character at the top of the visible area and how far its line
-    /// starts above that top — what `apply(style:)` puts back.
+    /// The line at the top edge of the visible area and how far its top is
+    /// from that edge — what a relayout puts back.
+    ///
+    /// Measured in CONTAINER coordinates on both sides (the clip's origin
+    /// minus `textContainerOrigin.y`), so a change of the vertical inset —
+    /// Reading Mode, 24 ⇄ 48 pt — leaves the line exactly where it was on
+    /// screen instead of shifting it by the inset delta.
     private struct TopAnchor {
         let character: Int
+        /// The line's top minus the visible top, container coordinates.
         let offset: CGFloat
     }
 
     private func topVisibleAnchor() -> TopAnchor? {
         guard let scrollView, textStorage.length > 0, textContainer.size.width > 0 else { return nil }
-        let top = scrollView.contentView.bounds.minY
-        guard top > 0 else { return nil }
-        let glyph = layoutManager.glyphIndex(for: NSPoint(x: 0, y: top), in: textContainer)
+        let clipTop = scrollView.contentView.bounds.minY
+        guard clipTop > 0 else { return nil }
+        let top = clipTop - textView.textContainerOrigin.y
+        let glyph = layoutManager.glyphIndex(for: NSPoint(x: 0, y: max(top, 0)), in: textContainer)
         var line = NSRange()
         let lineTop = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &line).minY
         // The fragment's FIRST character: after a rewrap that is the
@@ -593,9 +678,15 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
         return TopAnchor(character: character, offset: lineTop - top)
     }
 
+    /// The clip origin that puts `anchor`'s line, now at container-y
+    /// `lineTop`, back at its distance from the visible top.
+    private func clipY(forLineTop lineTop: CGFloat, _ anchor: TopAnchor) -> CGFloat {
+        lineTop - anchor.offset + textView.textContainerOrigin.y
+    }
+
     private func restore(_ anchor: TopAnchor) {
         guard textContainer.size.width > 0 else { return }
-        scrollLaidOut(toY: lineTop(atCharacter: anchor.character) - anchor.offset)
+        scrollLaidOut(toY: clipY(forLineTop: lineTop(atCharacter: anchor.character), anchor))
     }
 
     // MARK: - Find (S-D6)
@@ -652,25 +743,37 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
     }
 
     /// The buffer never contains U+000D. A change carrying a CR (paste, drop,
-    /// Services, an input method) is refused and re-inserted LF-normalised
-    /// through the normal insertion path, so undo records exactly what landed
-    /// in the buffer. Scalar check (constraint 14): Swift hides "\r" inside
-    /// "\r\n" from Character-based `contains`. Per keystroke this looks at the
-    /// typed characters only.
+    /// Services, an input method) is refused and re-applied LF-normalised as
+    /// an edit of its own (`perform`: own undo group, coalescing broken on
+    /// both sides) — through `insertText` it would count as typing and merge
+    /// with the keystrokes around it into one undo step. Scalar check
+    /// (constraint 14): Swift hides "\r" inside "\r\n" from Character-based
+    /// `contains`. Per keystroke this looks at the typed characters only.
     func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange,
                   replacementString: String?) -> Bool {
         guard let replacementString, replacementString.unicodeScalars.contains("\r") else { return true }
-        textView.insertText(MarkdownDocument.normalizeLineEndings(replacementString),
-                            replacementRange: affectedCharRange)
+        let normalized = MarkdownDocument.normalizeLineEndings(replacementString)
+        let end = affectedCharRange.location + (normalized as NSString).length
+        perform(range: affectedCharRange, replacement: normalized,
+                selection: NSRange(location: end, length: 0))
         return false
     }
 
     /// Return keeps the line's indentation, Tab / Shift-Tab indent and outdent
     /// (S-D5); Escape goes to the session and never opens completion.
+    /// Shift-Return (`insertLineBreak:`, which would insert U+2028 — a line
+    /// separator the parser does not split on) and Option-Return
+    /// (`insertNewlineIgnoringFieldEditor:`) are plain Returns here: the
+    /// buffer's only line break is "\n".
+    ///
+    /// Any other command (arrows, paging, Home / End) is the user moving:
+    /// it cancels a pending exact top-line restore, then runs as usual.
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
         let selection = textView.selectedRange()
         switch commandSelector {
-        case #selector(NSResponder.insertNewline(_:)):
+        case #selector(NSResponder.insertNewline(_:)),
+             #selector(NSResponder.insertLineBreak(_:)),
+             #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
             perform(SourceEditSupport.newlineEdit(in: textStorage.mutableString, selection: selection))
             return true
         case #selector(NSResponder.insertTab(_:)):
@@ -689,8 +792,29 @@ final class SourceEditorController: NSObject, NSTextViewDelegate {
             onEscape?()
             return true
         default:
+            dropPendingAnchor()
             return false
         }
+    }
+
+    // MARK: - NSTextStorageDelegate
+
+    /// Plain text has ONE style. Restyling (`apply(style:)`) rewrites the
+    /// storage's attributes, but undo operations keep the text they removed
+    /// with the attributes it had — undoing a deletion after a zoom would
+    /// bring back a run in the old font. Every character edit is therefore
+    /// stamped with the current base attributes; attribute changes are left
+    /// alone (they are ours). Changing attributes, not characters, is what
+    /// `didProcessEditing` allows. Per keystroke this touches the typed range.
+    func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
+                     range editedRange: NSRange, changeInLength delta: Int) {
+        guard editedMask.contains(.editedCharacters), !isFixingAttributes,
+              editedRange.length > 0, NSMaxRange(editedRange) <= textStorage.length else { return }
+        let attributes = baseAttributes
+        guard !attributes.isEmpty else { return }
+        isFixingAttributes = true
+        defer { isFixingAttributes = false }
+        textStorage.setAttributes(attributes, range: editedRange)
     }
 
     func textDidChange(_ notification: Notification) {
