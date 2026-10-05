@@ -182,10 +182,19 @@ final class SourceEditSession: ObservableObject {
     /// through a non-atomic save (truncate, then write): adopting it at once
     /// would show a clean, empty buffer for a moment and lose the caret.
     /// Looked at again after this long.
-    static let emptyFileRecheckDelay: TimeInterval = 0.3
+    static let defaultEmptyFileRecheckDelay: TimeInterval = 0.3
+    /// `defaultEmptyFileRecheckDelay`; tests set 0 so they do not depend on
+    /// wall-clock time.
+    var emptyFileRecheckDelay = SourceEditSession.defaultEmptyFileRecheckDelay
 
-    /// The beep for a close request that arrives while a prompt is up.
-    /// Replaced in tests (no sound from a test run).
+    /// What the session last asked the view to show (`commit`) — nil before
+    /// the first entry. Lets a disk event that brings back the base bytes
+    /// repair a rendered text that was left showing something else.
+    private var lastCommittedText: String?
+
+    /// The beep for a request that arrives while a prompt is up (a close or
+    /// quit, a banner or menu action). Replaced in tests (no sound from a
+    /// test run).
     static var beep: () -> Void = { NSSound.beep() }
 
     init() {
@@ -214,6 +223,13 @@ final class SourceEditSession: ObservableObject {
     }
 
     private var bufferMatchesSaved: Bool { Self.isSameText(editor.text, savedText) }
+
+    /// Every "make the rendered view show this" goes through here, so the
+    /// session knows what the view shows.
+    private func commit(_ text: String) {
+        lastCommittedText = text
+        environment.commitText(text)
+    }
 
     /// Enters the editor with the caret at the start of 0-based `line` (nil:
     /// the top), scrolled to the top of the visible area — the view converts
@@ -246,8 +262,10 @@ final class SourceEditSession: ObservableObject {
         hasSavedOnce = false
         externalChange = false
         isDirty = false
-        if !(environment.renderedText().map { Self.isSameText($0, decoded.text) } ?? false) {
-            environment.commitText(decoded.text)
+        if environment.renderedText().map({ Self.isSameText($0, decoded.text) }) ?? false {
+            lastCommittedText = decoded.text
+        } else {
+            commit(decoded.text)
         }
         editor.load(decoded.text)
         installGuardIfNeeded()
@@ -296,6 +314,11 @@ final class SourceEditSession: ObservableObject {
     /// The exact check: the flag only says "something was typed". Clears the
     /// flag (and the close button's dot) when the buffer is back to the saved
     /// text. Cheap while clean — the comparison runs only once flagged.
+    ///
+    /// Once flagged it compares the whole buffer: up to tens of ms on a 2 MB
+    /// buffer. For a user action (save, leave, close) — anything evaluated
+    /// often (menu enabling, a view's `body`) must read the published
+    /// `isDirty` and never call this.
     @discardableResult
     func checkDirty() -> Bool {
         guard isActive, isDirty else { return false }
@@ -450,7 +473,7 @@ final class SourceEditSession: ObservableObject {
         externalChange = false
         let unified = hasMixedLineEndings
         hasMixedLineEndings = false
-        environment.commitText(text)
+        commit(text)
         syncDirtyWithBuffer()
         environment.toast(unified ? "Saved · line endings unified to \(Self.displayName(of: target.lineEnding))"
                                   : "Saved")
@@ -460,7 +483,7 @@ final class SourceEditSession: ObservableObject {
     /// rendered text equal to it and show the banner. Base and saved text stay.
     private func noteExternalChange(_ data: Data) {
         guard let decoded = DocumentFileFormat.decode(data) else { return }
-        environment.commitText(decoded.text)
+        commit(decoded.text)
         externalChange = true
     }
 
@@ -555,7 +578,8 @@ final class SourceEditSession: ObservableObject {
     /// mode. With the banner up the saved text is no longer what is on disk —
     /// "drop my edits" then means the disk version (`loadDiskVersion`).
     func discardChanges() {
-        guard isActive, !isPrompting else { return }
+        guard isActive else { return }
+        guard !isPrompting else { return Self.beep() }
         if externalChange { return applyDiskVersion() }
         if !bufferMatchesSaved {
             replaceBufferAsOwnEdit { editor.replaceAll(with: savedText) }
@@ -577,16 +601,20 @@ final class SourceEditSession: ObservableObject {
               let data = try? Data(contentsOf: url) else { return }
         guard data != baseBytes else {
             // Our own save's echo, a touch — or the file went back to the
-            // version the buffer is based on, after a change the banner showed.
-            if externalChange {
-                externalChange = false
-                environment.commitText(savedText)
+            // version the buffer is based on: after a change the banner
+            // showed, or after a moment of emptiness (a non-atomic writer
+            // re-saving the same content between truncate and write — the ""
+            // was committed, the recheck is now cancelled). Either way the
+            // rendered text must be the saved text again.
+            externalChange = false
+            if !(lastCommittedText.map { Self.isSameText($0, savedText) } ?? true) {
+                commit(savedText)
             }
             return
         }
         guard let decoded = DocumentFileFormat.decode(data) else { return }
         // Rendered == disk, whatever the buffer holds.
-        environment.commitText(decoded.text)
+        commit(decoded.text)
         // A prompt is up (its chain is deciding about the buffer), or the
         // buffer holds unsaved text: the banner, never a replaced buffer.
         if isPrompting || checkDirty() {
@@ -607,7 +635,7 @@ final class SourceEditSession: ObservableObject {
                 self.handleDiskChange(adoptingEmpty: true)
             }
             emptyFileRecheck = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + Self.emptyFileRecheckDelay, execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + emptyFileRecheckDelay, execute: work)
             return
         }
         adopt(decoded, bytes: data)
@@ -648,7 +676,8 @@ final class SourceEditSession: ObservableObject {
     /// that cannot be read or entered keeps the banner (base and saved text
     /// never get out of step).
     func keepMyVersion() {
-        guard isActive, !isPrompting else { return }
+        guard isActive else { return }
+        guard !isPrompting else { return Self.beep() }
         guard let disk = readDiskForAdoption() else { return }
         adopt(disk.decoded, bytes: disk.bytes)
         externalChange = false
@@ -659,7 +688,8 @@ final class SourceEditSession: ObservableObject {
     /// — ⌘Z brings the user's text back, dirty again — and adopts the disk as
     /// the clean state.
     func loadDiskVersion() {
-        guard isActive, !isPrompting else { return }
+        guard isActive else { return }
+        guard !isPrompting else { return Self.beep() }
         applyDiskVersion()
     }
 
@@ -669,7 +699,7 @@ final class SourceEditSession: ObservableObject {
         guard isActive, let disk = readDiskForAdoption() else { return }
         adopt(disk.decoded, bytes: disk.bytes)
         externalChange = false
-        environment.commitText(disk.decoded.text)
+        commit(disk.decoded.text)
         if !bufferMatchesSaved {
             replaceBufferAsOwnEdit { editor.replaceAll(with: disk.decoded.text) }
         }

@@ -884,10 +884,6 @@ final class SourceEditSessionTests: XCTestCase {
 
     // MARK: - Review round (2026-10-05)
 
-    private func spin(_ seconds: TimeInterval) {
-        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
-    }
-
     // 1. Save Anyway never advances the base ahead of the write.
     func testSaveAnywayThenAFailedWriteKeepsEverythingConsistent() throws {
         let url = try fixture("base\n")
@@ -1165,41 +1161,100 @@ final class SourceEditSessionTests: XCTestCase {
     }
 
     // 11. An empty file is adopted only if it is still empty a moment later.
-    func testEmptyFileIsAdoptedAfterTheRecheck() throws {
-        let url = try fixture("abc\n")
+    /// Runs everything already queued on the main queue: the recheck is
+    /// queued with delay 0 before this marker, and timers fire in deadline
+    /// order — no wall-clock waiting.
+    private func drainMainQueue() {
+        var drained = false
+        DispatchQueue.main.asyncAfter(deadline: .now()) { drained = true }
+        while !drained { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    }
+
+    private func enteredWithoutRecheckDelay(_ url: URL) -> SourceEditSession {
         let (session, _) = entered(url)
+        session.emptyFileRecheckDelay = 0
+        return session
+    }
+
+    func testEmptyFileIsAdoptedAfterTheRecheck() throws {
+        XCTAssertEqual(SourceEditSession.defaultEmptyFileRecheckDelay, 0.3)
+        let url = try fixture("abc\n")
+        let session = enteredWithoutRecheckDelay(url)
         try Data().write(to: url)
         session.diskDidChange()
         XCTAssertEqual(view.rendered, "", "rendered == disk at once")
         XCTAssertEqual(session.editor.text, "abc\n", "not adopted yet")
-        spin(SourceEditSession.emptyFileRecheckDelay + 0.3)
+        drainMainQueue()
         XCTAssertEqual(session.editor.text, "")
         XCTAssertEqual(session.savedText, "")
     }
 
     func testEmptyFileFollowedByContentAdoptsTheContent() throws {
         let url = try fixture("abc\n")
-        let (session, _) = entered(url)
+        let session = enteredWithoutRecheckDelay(url)
         try Data().write(to: url)
         session.diskDidChange()
         try Data("rewritten\n".utf8).write(to: url)
         session.diskDidChange()
         XCTAssertEqual(session.editor.text, "rewritten\n")
-        spin(SourceEditSession.emptyFileRecheckDelay + 0.3)
+        drainMainQueue()
         XCTAssertEqual(session.editor.text, "rewritten\n")
         XCTAssertEqual(session.savedText, "rewritten\n")
     }
 
+    /// A slow non-atomic writer re-saving the SAME content: the watcher sees
+    /// the empty file, then the base bytes again. The rendered text must end
+    /// as the saved text; nothing else may change.
+    func testEmptyFileThenTheSameBytesRestoresTheRenderedText() throws {
+        let url = try fixture("one\ntwo\n")
+        let session = enteredWithoutRecheckDelay(url)
+        type(session, "x", at: 0)
+        session.editor.undoManager.undo()
+        session.editor.textView.setSelectedRange(NSRange(location: 5, length: 0))
+        let commitsBefore = view.commits.count
+        try Data().write(to: url)
+        session.diskDidChange()
+        XCTAssertEqual(view.rendered, "")
+        try Data("one\ntwo\n".utf8).write(to: url)
+        session.diskDidChange()
+        drainMainQueue()
+        XCTAssertEqual(view.commits.count, commitsBefore + 2, "\"\", then the saved text")
+        XCTAssertEqual(view.commits.last, "one\ntwo\n")
+        XCTAssertEqual(view.rendered, session.savedText)
+        XCTAssertEqual(session.editor.text, "one\ntwo\n")
+        XCTAssertEqual(session.baseBytes, Data("one\ntwo\n".utf8))
+        XCTAssertTrue(session.editor.undoManager.canRedo, "undo stack untouched (no reload)")
+        XCTAssertEqual(session.editor.textView.selectedRange(), NSRange(location: 5, length: 0))
+        XCTAssertFalse(session.externalChange)
+        XCTAssertFalse(session.isDirty)
+        // A plain echo afterwards commits nothing more.
+        session.diskDidChange()
+        XCTAssertEqual(view.commits.count, commitsBefore + 2)
+    }
+
     func testLeavingCancelsTheEmptyFileRecheck() throws {
         let url = try fixture("abc\n")
-        let (session, _) = entered(url)
+        let session = enteredWithoutRecheckDelay(url)
         try Data().write(to: url)
         session.diskDidChange()
         session.requestLeave()
         let commits = view.commits.count
-        spin(SourceEditSession.emptyFileRecheckDelay + 0.3)
+        drainMainQueue()
         XCTAssertEqual(view.commits.count, commits)
         XCTAssertEqual(session.savedText, "abc\n")
+    }
+
+    func testBannerAndMenuActionsBeepWhileAPromptIsUp() throws {
+        let (session, _) = entered(try fixture("abc\n"))
+        type(session, "x", at: 0)
+        prompts.holdUnsaved = true
+        session.requestLeave()
+        session.discardChanges()
+        session.keepMyVersion()
+        session.loadDiskVersion()
+        XCTAssertEqual(beeps, 3)
+        XCTAssertEqual(session.editor.text, "xabc\n")
+        prompts.heldUnsaved?(.cancel)
     }
 
     // 12. The standard alerts, built but never shown.
