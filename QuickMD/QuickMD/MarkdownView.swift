@@ -114,6 +114,20 @@ struct MarkdownView: View {
     /// on demand. A reference in @State on purpose: the coordinator fills it,
     /// nothing observes it, so scrolling never re-evaluates this body (E-D1).
     @State private var readingPosition = DocumentReadingPosition()
+    /// Source Edit (v1.12): the raw-Markdown editor over the rendered list, its
+    /// buffer, saving and the close guard's answers. One per window, lives with
+    /// the tab. Publishes only rare events (enter / leave, dirty, banner) — the
+    /// body never reads anything per keystroke from it.
+    @StateObject private var editSession = SourceEditSession()
+    /// The editor's find bar height (0 = hidden): the bar sits where the pills
+    /// and banners float, so they move below it (`topChromeInset`).
+    @State private var editorFindBarHeight: CGFloat = 0
+    /// The text `cachedBlocks` were parsed from. Block ids are positional, so a
+    /// scroll by id is only meaningful against the blocks of the text it was
+    /// computed for — the landing after Source Edit checks this (S-D10).
+    @State private var installedText: String?
+    /// A landing waiting for the parse of the just-saved text.
+    @State private var landing = SourceEditLanding()
 
     /// File name suggested by the PDF export save panel (`ExportPDFCommand`).
     private var exportName: String {
@@ -188,7 +202,7 @@ struct MarkdownView: View {
             // Table of Contents sidebar
             if isToCVisible && !headings.isEmpty && !isReadingMode {
                 TableOfContentsView(headings: headings, onSelect: { targetId in
-                    requestScroll(to: targetId, anchor: .top, animated: true)
+                    selectHeading(targetId)
                 }, onCopy: { entry in
                     if let section = SectionExtractor.extractSection(from: currentText, entry: entry, headings: headings) {
                         copyToClipboard(section)
@@ -236,12 +250,33 @@ struct MarkdownView: View {
                     },
                     onCopySelection: { output in copySelectionToClipboard(output) },
                     focusRequest: documentFocusRequest,
-                    isCovered: graphicPreview != nil,
+                    // Stays mounted under the editor (its anchor and offset
+                    // survive; a remount would park at the top) but never takes
+                    // the focus back while covered, and leaves the
+                    // accessibility tree meanwhile (set on the AppKit view).
+                    isCovered: graphicPreview != nil || editSession.isActive,
                     readingPosition: readingPosition
                 )
                 .onChange(of: scrollTrigger) { _ in
                     scrollFocusedMatchIntoView()
                 }
+            }
+            .overlay {
+                // Source Edit (S-D4). The FIRST overlay, so the pills, banners
+                // and toast below stay above the editor. No transition and no
+                // changing identity: one live `SourceEditorView` per controller
+                // (an outgoing copy would take the scroll view from the new
+                // one). Theme, zoom and Reading Mode reach it through `style`.
+                Group {
+                    if editSession.isActive {
+                        SourceEditorView(controller: editSession.editor,
+                                         style: .init(theme: theme, fontScale: fontScale,
+                                                      isReadingLayout: isReadingMode))
+                    }
+                }
+                // An animated transaction from elsewhere (a toast, a sidebar)
+                // must not turn the mount or unmount into a fade.
+                .transaction { $0.animation = nil }
             }
             .overlay(alignment: .topLeading) {
                 // Reveal sidebar when hidden (sits at top-leading; out of the way
@@ -265,62 +300,49 @@ struct MarkdownView: View {
                     .focusable(false)
                     .opacity(0.5)
                     .help("Show recent documents (⇧⌘D)")
-                    .padding(.top, isSearchVisible ? 44 : 8)
+                    .padding(.top, topChromeInset)
                     .padding(.leading, 8)
                 }
             }
             .overlay(alignment: .topTrailing) {
-                // The zoom / Edit / Copy cluster. Gone in reading mode — its
-                // shortcuts (⌘0, ⌘E, ⌘⇧C) all still work, so nothing is lost
-                // except the thing hovering over the text.
-                if !isReadingMode {
-                    HStack(spacing: 8) {
-                        if fontScale != 1.0 {
-                            ZoomResetButton(theme: theme, fontScale: fontScale) {
-                                applyZoom(.actualSize)
-                            }
-                            .transition(.opacity)
-                        }
-                        if documentURL != nil {
-                            EditInEditorButton(theme: theme) {
-                                openInExternalEditor()
-                            }
-                        }
-                        CopySourceButton(theme: theme) {
-                            copyToClipboard(currentText)
-                        }
-                    }
-                    .animation(.easeInOut(duration: 0.15), value: fontScale != 1.0)
-                    .chromeHoverCluster()
-                    .padding(.top, isSearchVisible ? 44 : 8)
-                    .padding(.trailing, 24)
-                    .transition(.opacity)
-                }
+                chromeCluster
             }
             .overlay(alignment: .top) {
-                if fileMissing {
-                    HStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.yellow)
-                        Text("File no longer exists at \(documentURL?.path ?? "this location")")
-                            .font(.system(size: 12))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Button("Close Tab") {
-                            NSApp.keyWindow?.close()
+                // The missing-file and changed-on-disk banners can be up at
+                // once (a change the buffer has not acknowledged, then the file
+                // goes): stacked, never on top of each other.
+                VStack(spacing: 8) {
+                    if fileMissing {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.yellow)
+                            Text("File no longer exists at \(documentURL?.path ?? "this location")")
+                                .font(.system(size: 12))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Button("Close Tab") {
+                                EditCloseGuard.requestClose(NSApp.keyWindow)
+                            }
+                            .controlSize(.small)
                         }
-                        .controlSize(.small)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.regularMaterial)
+                        .clipShape(Capsule())
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.regularMaterial)
-                    .clipShape(Capsule())
-                    .padding(.top, isSearchVisible ? 44 : 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    if editSession.externalChange {
+                        changedOnDiskBanner
+                    }
                 }
+                .padding(.top, topChromeInset)
             }
             .overlay(alignment: .bottomTrailing) {
-                if !isReadingMode {
+                // The Support / Tip Jar button is hidden while editing as well
+                // as in Reading Mode: it would float over the text being
+                // edited (bottom-right is where a long line ends), and a
+                // misclick there opens a menu or a window mid-edit.
+                if !isReadingMode && !editSession.isActive {
                     Group {
                         #if APPSTORE
                         TipJarButton(theme: theme)
@@ -333,7 +355,9 @@ struct MarkdownView: View {
                 }
             }
             .overlay(alignment: .center) {
-                if isRenderPending {
+                // The hidden list re-parses after every save; the editor is
+                // what is on screen, and it is not waiting for anything.
+                if isRenderPending && !editSession.isActive {
                     HStack(spacing: 8) {
                         ProgressView()
                             .controlSize(.small)
@@ -367,6 +391,91 @@ struct MarkdownView: View {
                 }
             }
         }
+    }
+
+    /// Where the top chrome (pills, banners, the sidebar button) floats: below
+    /// the search bar, or below the editor's find bar while that is showing —
+    /// the find bar's own buttons sit exactly under the Save / Done pills.
+    private var topChromeInset: CGFloat {
+        if isSearchVisible { return 44 }
+        if editSession.isActive && editorFindBarHeight > 0 { return editorFindBarHeight + 8 }
+        return 8
+    }
+
+    /// The top-right pill cluster.
+    ///
+    /// Reading: zoom reset (while zoomed), Edit (Source Edit, ⌥⌘E), Open in
+    /// editor (⌘E), Copy source — gone in Reading Mode, whose shortcuts (⌘0,
+    /// ⌥⌘E, ⌘E, ⌘⇧C) all still work, so nothing is lost except the thing
+    /// hovering over the text.
+    ///
+    /// Editing: ONLY Save and Done, also in Reading Mode — a mode you can only
+    /// leave by shortcut is not acceptable (S-D12).
+    @ViewBuilder
+    private var chromeCluster: some View {
+        if editSession.isActive {
+            HStack(spacing: 8) {
+                SourceSaveButton(theme: theme, isEnabled: editSession.isDirty) {
+                    editSession.save()
+                }
+                SourceDoneButton(theme: theme) {
+                    editSession.requestLeave()
+                }
+            }
+            .chromeHoverCluster()
+            .padding(.top, topChromeInset)
+            .padding(.trailing, 24)
+        } else if !isReadingMode {
+            HStack(spacing: 8) {
+                if fontScale != 1.0 {
+                    ZoomResetButton(theme: theme, fontScale: fontScale) {
+                        applyZoom(.actualSize)
+                    }
+                    .transition(.opacity)
+                }
+                if documentURL != nil {
+                    EditSourceButton(theme: theme) {
+                        toggleSourceEdit()
+                    }
+                }
+                CopySourceButton(theme: theme) {
+                    copyToClipboard(currentText)
+                }
+            }
+            .animation(.easeInOut(duration: 0.15), value: fontScale != 1.0)
+            .chromeHoverCluster()
+            .padding(.top, topChromeInset)
+            .padding(.trailing, 24)
+            .transition(.opacity)
+        }
+    }
+
+    /// S-D9: the file changed on disk while the buffer holds unsaved text. The
+    /// rendered view (hidden) already shows the disk; the user decides about
+    /// the buffer. Same look and place as the missing-file banner.
+    private var changedOnDiskBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundColor(.yellow)
+            Text("This file changed on disk while you were editing.")
+                .font(.system(size: 12))
+                .lineLimit(1)
+            Button("Keep My Version") {
+                editSession.keepMyVersion()
+            }
+            .controlSize(.small)
+            .accessibilityIdentifier("source-keep-mine")
+            Button("Load Disk Version") {
+                editSession.loadDiskVersion()
+            }
+            .controlSize(.small)
+            .accessibilityIdentifier("source-load-disk")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.regularMaterial)
+        .clipShape(Capsule())
+        .transition(.move(edge: .top).combined(with: .opacity))
     }
 
     /// `documentStack` plus the window configuration and every value the app's
@@ -408,7 +517,7 @@ struct MarkdownView: View {
         .focusedSceneValue(\.exportName, exportName)
         // Print / PDF resolve relative image paths against the document folder.
         .focusedSceneValue(\.exportDocumentLocation, ExportDocumentLocation(url: documentURL))
-        .focusedSceneValue(\.searchAction, { toggleSearch() })
+        .focusedSceneValue(\.searchAction, { findCommand() })
         .focusedSceneValue(\.toggleToCAction, {
             // No-op in reading mode: the sidebars are hidden and must come back
             // exactly as they were, so their flags are not touched meanwhile.
@@ -428,8 +537,32 @@ struct MarkdownView: View {
         .focusedSceneValue(\.isReadingMode, isReadingMode)
     }
 
-    var body: some View {
+    /// `configuredDocumentStack` plus Source Edit's menu values and its leave
+    /// handling — one more split for the type-checker's budget.
+    private var sourceEditStack: some View {
         configuredDocumentStack
+        .focusedSceneValue(\.sourceEditState,
+                           SourceEditMenuState(isEditing: editSession.isActive, isDirty: editSession.isDirty))
+        .focusedSceneValue(\.toggleSourceEditAction, { toggleSourceEdit() })
+        .focusedSceneValue(\.saveSourceAction, { editSession.save() })
+        .focusedSceneValue(\.discardSourceChangesAction, { editSession.discardChanges() })
+        // A document can be moved or renamed while open: the session's URL
+        // and the watcher follow the view's (both set on appear too). A
+        // "file missing" from the old path no longer applies.
+        .onChange(of: documentURL) { url in
+            editSession.environment.documentURL = url
+            startWatching(url)
+            if fileMissing {
+                withAnimation(.easeInOut(duration: 0.2)) { fileMissing = false }
+            }
+        }
+        .onChange(of: editSession.lastLeave) { leave in
+            if let leave { didLeaveSourceEdit(leave) }
+        }
+    }
+
+    var body: some View {
+        sourceEditStack
         .environment(\.openURL, OpenURLAction { url in
             handleLinkActivation(url)
             return .handled
@@ -489,6 +622,7 @@ struct MarkdownView: View {
             renderedFontScale = Double(scale)
             contentVersion += 1
             textBlockMeta = parsed.textMeta
+            installedText = text
             // Inline `$…$` paragraphs and display-math rows were deferred by the
             // off-main pass; finish them here, on the main actor, before the
             // table is used for layout.
@@ -503,6 +637,13 @@ struct MarkdownView: View {
                     return ToCEntry(id: block.id, level: level, title: title, sourceLine: sourceLine)
                 }
                 return nil
+            }
+            // A landing that waited for THIS parse (Source Edit saved, then
+            // left before the re-parse arrived): requested in the transaction
+            // that installs the blocks, so it wins over the list's own anchor
+            // restore and resolves against the new ids.
+            if let target = landing.blocksInstalled(parsed.blocks) {
+                requestScroll(to: target, anchor: .top, animated: false)
             }
             isParsing = false
         }
@@ -554,18 +695,11 @@ struct MarkdownView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
         }
         .onAppear {
+            configureEditSession()
             if let url = documentURL {
                 RecentDocumentsStore.shared.register(url)
-                // Auto-reload: watch this document's file and refresh on save.
-                // Silent by default — pro users expect the viewer to be current.
-                let watcher = FileWatcher()
-                watcher.onChange = { reloadFromDisk() }
-                watcher.onFileMissing = {
-                    withAnimation(.easeInOut(duration: 0.2)) { fileMissing = true }
-                }
-                watcher.start(watching: url)
-                fileWatcher = watcher
             }
+            startWatching(documentURL)
             // NSEvent.addLocalMonitorForEvents is GLOBAL for the app process —
             // every visible MarkdownView (one per open tab) registers its own
             // monitor, and ALL of them fire on every keypress. So we can't
@@ -574,9 +708,10 @@ struct MarkdownView: View {
             // in QuickMDApp.swift, which correctly targets the active tab.
             //
             // Only handle the search-bar-specific keys here (⌘G next match,
-            // ⇧⌘G previous, Escape close) and Escape for reading mode. These
-            // already gate on per-view state (`isSearchVisible`, `isReadingMode`),
-            // so inactive tabs return the event unchanged and the active tab
+            // ⇧⌘G previous, Escape close), Escape for reading mode and ⌘G / ⇧⌘G
+            // for the Source Edit find bar. These already gate on per-view state
+            // (`isSearchVisible`, `isReadingMode`, `editSession.isActive`), so
+            // inactive tabs return the event unchanged and the active tab
             // consumes it. ⌘⇧R itself is a menu shortcut, routed through
             // `@FocusedValue` like ⌘F/⌘⇧T/⌘⇧D — a monitor would toggle every
             // open tab at once.
@@ -597,6 +732,35 @@ struct MarkdownView: View {
                     return event
                 }
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+                if editSession.isActive {
+                    // ⌘G / ⇧⌘G — exactly those, not ⌥⌘G / ⌃⌘G — go to the
+                    // editor's text finder (S-D6).
+                    let finderFlags = flags.intersection([.command, .shift, .option, .control])
+                    if finderFlags == .command || finderFlags == [.command, .shift],
+                       event.charactersIgnoringModifiers?.lowercased() == "g" {
+                        if finderFlags.contains(.shift) {
+                            editSession.editor.findPrevious()
+                        } else {
+                            editSession.editor.findNext()
+                        }
+                        return nil
+                    }
+                    // Escape: in a text view (the editor, or the find bar's
+                    // field editor) it is theirs — the editor reports it to the
+                    // session, the field closes the bar. With the focus
+                    // anywhere else (a banner or sidebar button, nothing) the
+                    // session gets it here, so Esc works wherever focus is —
+                    // and never reaches Reading Mode or the search first.
+                    if event.keyCode == 53 {
+                        let responder = event.window?.firstResponder ?? hostWindow?.firstResponder
+                        if !(responder is NSText) {
+                            editSession.escape()
+                            return nil
+                        }
+                    }
+                    return event
+                }
 
                 if flags.contains(.command) && event.charactersIgnoringModifiers == "g" {
                     if isSearchVisible {
@@ -632,15 +796,43 @@ struct MarkdownView: View {
             }
             fileWatcher?.stop()
             fileWatcher = nil
+            releaseEditSession()
         }
     }
 
     // MARK: - Auto-Reload & External Editor
 
+    /// Auto-reload: watch this document's file and refresh on save. Silent by
+    /// default — pro users expect the viewer to be current. Replaces any
+    /// watcher bound to a previous path (the document was moved or renamed).
+    private func startWatching(_ url: URL?) {
+        fileWatcher?.stop()
+        fileWatcher = nil
+        guard let url else { return }
+        let watcher = FileWatcher()
+        watcher.onChange = { reloadFromDisk() }
+        watcher.onFileMissing = {
+            withAnimation(.easeInOut(duration: 0.2)) { fileMissing = true }
+        }
+        watcher.start(watching: url)
+        fileWatcher = watcher
+    }
+
     /// Re-reads the watched file and swaps the displayed text if it changed.
     /// Same decode + line-ending normalization as the initial document load.
     private func reloadFromDisk() {
         guard let url = documentURL else { return }
+        if editSession.isActive {
+            // The session reads the disk itself and keeps the rendered text
+            // equal to it through `commitText` (S-D9) — or shows the banner
+            // when the buffer holds unsaved text. Touching `currentText` here
+            // would race it.
+            editSession.diskDidChange()
+            if fileMissing && FileManager.default.fileExists(atPath: url.path) {
+                withAnimation(.easeInOut(duration: 0.2)) { fileMissing = false }
+            }
+            return
+        }
         guard let data = try? Data(contentsOf: url),
               let decoded = MarkdownDocument.decode(data) else { return }
         let text = MarkdownDocument.normalizeLineEndings(decoded)
@@ -655,11 +847,100 @@ struct MarkdownView: View {
     /// ⌘E — hand the document off to the user's configured editor, at the line
     /// the reader is at when that editor documents a line link (v1.11 E-D1).
     private func openInExternalEditor() {
-        guard let url = documentURL else { return }
+        // Two editors on one file: not while Source Edit is showing.
+        guard !editSession.isActive, let url = documentURL else { return }
         let line = readingPosition.editorLine()
         if let result = ExternalEditorManager.openInEditor(url, line: line) {
             showToast(ExternalEditorManager.toastText(for: result))
         }
+    }
+
+    // MARK: - Source Edit (v1.12)
+
+    /// Hands the session what it needs from this view. The closures capture
+    /// the view — and with it the @StateObject's storage, a cycle — so they
+    /// are dropped in `onDisappear` (`releaseEditSession`) and set again here.
+    /// Nothing that saves depends on them: a save uses `documentURL` and the
+    /// window the close guard hands in (or the text view's own window).
+    private func configureEditSession() {
+        editSession.environment = SourceEditSession.Environment(
+            documentURL: documentURL,
+            window: { hostWindow },
+            renderedText: { currentText },
+            commitText: { text in
+                if !SourceEditSession.isSameText(text, currentText) { currentText = text }
+            },
+            toast: { showToast($0) }
+        )
+        editSession.editor.onFindBarHeightChange = { height in
+            // Reported from the scroll view's `tile()`, i.e. inside an AppKit
+            // layout pass: published on the next turn, not during it.
+            DispatchQueue.main.async { editorFindBarHeight = height }
+        }
+    }
+
+    private func releaseEditSession() {
+        editSession.environment = SourceEditSession.Environment(documentURL: documentURL)
+        editSession.editor.onFindBarHeightChange = nil
+    }
+
+    /// ⌥⌘E, File ▸ Edit Source / Done Editing, the Edit pill. Entering starts
+    /// at the source line being read — the selection's first row, else the
+    /// top visible row (`editorLine()` is 1-based, the session 0-based).
+    private func toggleSourceEdit() {
+        if editSession.isActive {
+            editSession.requestLeave()
+            return
+        }
+        guard graphicPreview == nil else { return }
+        // A rendered selection whose text is literally in its source lines is
+        // selected in the editor (S-D14b); otherwise the caret goes to the line.
+        if let refusal = editSession.enter(atLine: readingPosition.editorLine().map { $0 - 1 },
+                                           selection: { readingPosition.selectionHint() }) {
+            showToast(refusal.message)
+            return
+        }
+        // A landing still waiting for a parse belongs to the previous session.
+        landing.cancel()
+        isSearchVisible = false
+        searchText = ""
+        editSession.focusEditor()
+    }
+
+    /// The session left (Done, Esc, the command; after Save or Don't Save).
+    /// The list gets the keyboard back; if the session saved or the caret
+    /// moved off the entry line, the list lands on the block holding the
+    /// caret's line — against the blocks of the CURRENT text (S-D10).
+    private func didLeaveSourceEdit(_ leave: SourceEditSession.LeaveInfo) {
+        documentFocusRequest += 1
+        // `==`, as `DocumentIdentity` compares: text it calls equal is never
+        // re-parsed, so waiting for a parse of it would wait forever.
+        let current = installedText.map { $0 == currentText } ?? false
+        if let target = landing.leave(leave, installedBlocksAreCurrent: current, blocks: cachedBlocks) {
+            requestScroll(to: target, anchor: .top, animated: false)
+        }
+    }
+
+    /// ⌘F: the editor's find bar while editing (S-D6), the search bar otherwise.
+    private func findCommand() {
+        if editSession.isActive {
+            editSession.editor.showFind()
+        } else {
+            toggleSearch()
+        }
+    }
+
+    /// A ToC click. While editing, the EDITOR scrolls to the heading's source
+    /// line (S-D13) — best effort until the next save, since the headings come
+    /// from the last saved parse; the hidden list stays where the reader was.
+    private func selectHeading(_ targetId: String) {
+        if editSession.isActive {
+            if let entry = headings.first(where: { $0.id == targetId }) {
+                editSession.editor.scroll(toLine: entry.sourceLine)
+            }
+            return
+        }
+        requestScroll(to: targetId, anchor: .top, animated: true)
     }
 
     // MARK: - Block Rendering
@@ -799,6 +1080,8 @@ struct MarkdownView: View {
     // MARK: - Search Helpers
 
     private func toggleSearch() {
+        // The document search cannot open over the editor (S-D6).
+        guard !editSession.isActive else { return }
         isSearchVisible.toggle()
         if !isSearchVisible { searchText = "" }
     }
@@ -907,7 +1190,9 @@ struct MarkdownView: View {
         // could animate the AppKit column's re-wrap. The sidebars and pills
         // animate through their own `.animation(value: isReadingMode)`.
         isReadingMode = on
-        if on { showToast("Reading Mode (Esc to exit)") }
+        // While editing the first Esc leaves the editor, not Reading Mode —
+        // the hint would be wrong there.
+        if on { showToast(editSession.isActive ? "Reading Mode" : "Reading Mode (Esc to exit)") }
     }
 
     private func showToast(_ message: String) {

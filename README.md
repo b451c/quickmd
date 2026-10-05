@@ -9,7 +9,7 @@
 [![Build & Test](https://github.com/b451c/quickmd/actions/workflows/build.yml/badge.svg)](https://github.com/b451c/quickmd/actions/workflows/build.yml)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-[Features](#features) • [Installation](#installation) • [Usage](#usage) • [Tech Stack](#tech-stack) • [Support](#support)
+[Features](#features) • [Installation](#installation) • [Usage](#usage) • [Under the Hood](#under-the-hood) • [Support](#support)
 
 [![App Store goal](https://qmd.app/api/donation-goal.svg)](https://qmd.app/#support-goal)
 
@@ -35,27 +35,27 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 ### Companion to Your Editor
 - **Auto-reload** — the document refreshes the moment your editor saves it. Enable auto-save in VS Code/Cursor/Zed and QuickMD becomes a live preview
 - **Open in External Editor (`⌘E`)** — one-click handoff to VS Code, Cursor, Sublime, Zed, Typora, Obsidian and more (auto-detected; configurable in Settings). In VS Code, BBEdit, TextMate and Nova it opens at the line you are reading
-- **Copy button on code blocks** — hover and click, like on GitHub
+
+### Fix It in Place
+- **Source Edit (`⌥⌘E`)** — switch the window to the raw Markdown at the line you are reading, fix it, `⌘S`, `Esc`, and you are back in the rendered view at the same place. Select a word first and it is already selected in the source
+- **Byte-faithful saves** — the file keeps its encoding (UTF-8, UTF-8 with BOM, UTF-16, Latin-1), line endings, permissions, Finder tags and symlinks; only what you typed changes
+- **Nothing lost, nothing overwritten** — closing a tab, a window or the app with unsaved text always asks; if another app changes the file while you edit, QuickMD offers both versions instead of picking one
+- **A real text editor underneath** — undo, system find and replace, indentation that follows the line, a light syntax tint from the same parser that renders the document
+- Still a viewer first: no WYSIWYG, no split panes. For longer writing sessions `⌘E` hands the file to your editor
 
 ### Complete Markdown Support
-- Headers, bold, italic, strikethrough (ATX `#` and setext underline styles)
-- **GitHub-flavored alerts** — `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]` render as native callouts in GitHub's palette
-- Tables with proper column alignment (headerless `| | |` tables too)
-- Code blocks with syntax highlighting
+- Headings (ATX `#` and setext), bold, italic, strikethrough, horizontal rules
+- Lists — nested, ordered, task lists (`- [ ]` / `- [x]`), definition lists (`Term` + `: definition`)
+- Tables with column alignment (headerless `| | |` tables too)
+- Code blocks with lightweight syntax highlighting (keywords, strings, comments, numbers, types) and a copy button
+- **GitHub-flavored alerts** — `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]` as native callouts in GitHub's palette
 - **LaTeX math** — display (`$$...$$`) and inline (`$...$`) with TeX-quality rendering
 - **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more; click any diagram or image for a window-filling preview with pinch-to-zoom
 - **Inline SVG** — fenced ```svg blocks and `.svg` image links render natively (no web view), scale with the text and print as vectors
-- **Footnotes** — `[^id]` references with definitions at end of document
-- **Definition lists** — `Term` followed by `: definition` lines (PHP Markdown Extra / Pandoc `:` syntax); several terms per definition, several definitions per term, wrapped definitions hang under their text
-- Task lists with checkboxes (`- [ ]` / `- [x]`)
-- Nested lists (ordered and unordered)
-- Images — local files, remote URLs, embedded `data:` images (base64 or SVG), reference-style `![alt][ref]`, and HTML `<img>` tags with `width` (the logo/screenshot idiom of GitHub READMEs, `<p align="center">` wrappers included); small images keep their own size
-- Links (inline, reference-style, autolinks)
-- Nested blockquotes with level indicators
-- Horizontal rules
+- Images — local files, remote URLs, embedded `data:` images, reference-style `![alt][ref]`, and HTML `<img>` tags with `width` (the logo/screenshot idiom of GitHub READMEs, `<p align="center">` wrappers included)
+- Links (inline, reference-style, autolinks), footnotes (`[^id]`), nested blockquotes
 - YAML frontmatter (rendered as a neutral code block)
-- Windows (CRLF) and legacy line endings, UTF-16/Latin-1 fallbacks
-- CommonMark soft breaks — a single newline inside a paragraph reads as a space; two trailing spaces or a trailing `\` make a hard break
+- CommonMark soft breaks; Windows (CRLF) and legacy line endings; UTF-16 and Latin-1 files
 
 ### Navigation & Search
 - Zoom the whole document (`⌘+` / `⌘-` / `⌘0`) — per window, everything scales
@@ -69,16 +69,10 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ### Custom Themes & Fonts
 - 7 built-in themes: Auto, Solarized Light/Dark, Dracula, GitHub, Gruvbox Dark, Nord
-- **User themes from disk** — drop a JSON file into `~/Library/Containers/pl.falami.studio.QuickMD/Data/Library/Application Support/QuickMD/Themes/` (or use the **Import Theme…** button in Settings). Live reload, no restart. See [docs/themes/](docs/themes/) for the schema and examples.
+- **User themes from disk** — drop a JSON file into `~/Library/Application Support/QuickMD/Themes/` (GitHub and Homebrew builds; the Mac App Store build keeps the same folder inside its container, `~/Library/Containers/pl.falami.studio.QuickMD/Data/`), or use the **Import Theme…** button in Settings. Live reload, no restart. See [docs/themes/](docs/themes/) for the schema and examples.
 - **Custom font families** — pick any installed font for body text and another for code in Settings → Fonts (JetBrains Mono for code, a serif for reading…). Applies to the document, print and PDF; size and zoom are unaffected. Themes can set their own with `bodyFontFamily` / `codeFontFamily`.
 - Settings panel (`⌘,`) with color and font previews
-- Theme and fonts persist across app restarts
-
-### Developer-Friendly
-- Lightweight syntax highlighting (keywords, strings, comments, numbers, types) that works across common languages — Swift, Python, JavaScript, Go, Rust and more
-- Perfect for README files and documentation
-- Handles AI-generated Markdown well — GFM tables, nested and task lists, code fences, alerts, math
-- Dark mode that follows system settings (or choose a fixed theme)
+- Dark mode follows the system, or pick a fixed theme; theme and fonts persist across restarts
 
 ### Privacy Focused
 - No analytics, no tracking
@@ -137,21 +131,7 @@ The [Mac App Store version](https://apps.apple.com/app/quickmd/id6757681819) is 
 
 ### Build from Source
 
-```bash
-# Clone the repository
-git clone https://github.com/b451c/quickmd.git
-cd quickmd/QuickMD
-
-# Open in Xcode
-open QuickMD.xcodeproj
-
-# Build and run (⌘R)
-```
-
-**Requirements:**
-- macOS 13.0 (Ventura) or later
-- Xcode 15.0+
-- Swift 5.9+
+Requires macOS 13.0 (Ventura) or later and Xcode 15+. See [Development](#development).
 
 ## Usage
 
@@ -170,6 +150,8 @@ Now all your Markdown files will open instantly with QuickMD!
 |----------|--------|
 | `⌘O` | Open file |
 | `⌘W` | Close tab (or window if last tab) |
+| `⌥⌘E` | Edit the Markdown source in place / done editing |
+| `⌘S` | Save (while editing the source) |
 | `⌘E` | Open in External Editor (at the line you are reading, where supported) |
 | `⌘F` | Find in document |
 | `⌘G` / `⇧⌘G` | Next / previous match |
@@ -184,102 +166,40 @@ Now all your Markdown files will open instantly with QuickMD!
 | `⌘,` | Settings (themes, fonts, external editor) |
 | `⌘+` / `⌘-` / `⌘0` | Zoom in / out / actual size |
 
-## Tech Stack
+## Under the Hood
 
-- **Language:** Swift 5.9
-- **Framework:** SwiftUI + AppKit
-- **Minimum OS:** macOS 13.0 (Ventura)
-- **Architecture:** Native Apple Silicon + Intel
-
-### Key Components
-
-- Custom Markdown parser with block-level parsing, YAML frontmatter and reference link pre-pass
-- Native `NSTextView` text pipeline hosted in a virtualized `NSTableView` — native selection, native links, exact row heights measured off the main thread, no SwiftUI text bottlenecks on huge documents
-- Per-document file watcher (`DispatchSource`) powering auto-reload, including atomic editor saves
-- Regex-based syntax highlighting for code blocks (computed off the main thread)
-- LaTeX math rendering via vendored [SwiftMath](https://github.com/mgriebling/SwiftMath) (Core Graphics, no network); inline math as native text attachments
-- Mermaid diagram rendering via bundled [Mermaid.js](https://mermaid.js.org/) (offline, no CDN), with snapshot caching and a zoom viewer
-- 7 built-in themes + user themes from disk, with `@AppStorage` persistence; document font families resolved through `NSFontDescriptor` with a small cache and system-font fallback
-- `AsyncImage` for remote image rendering
-- Security-Scoped Bookmarks for local image access in sandbox
+- Swift 5.9, SwiftUI + AppKit, macOS 13.0+, Apple Silicon and Intel. Zero package dependencies: math rendering is vendored ([SwiftMath](https://github.com/mgriebling/SwiftMath)), [Mermaid.js](https://mermaid.js.org/) is bundled and runs offline
+- Its own Markdown parser (block-level, with a YAML frontmatter and reference-link pre-pass) and a single inline scanner shared by parser and renderer
+- Text is drawn by native `NSTextView`s hosted in a virtualized `NSTableView`; row heights are measured exactly, off the main thread, so scrolling and jumps stay exact on documents of any size
+- A per-document file watcher (`DispatchSource`) drives auto-reload, including editors that save atomically
+- One image loader and cache for local, remote and embedded images, on screen and in PDF
 - Per-block **vector PDF export** — selectable text, embedded fonts, Mermaid diagrams as images, multi-page pagination
-- Zero external package dependencies — everything is vendored or bundled
-- Unit test suite (186 tests) + GitHub Actions CI building every flavor on each push
+- Source Edit writes the file in place (inode, permissions and extended attributes survive) and re-encodes exactly what it decoded; the unsaved-changes guard sits in front of the window's own delegate, so the system's document machinery is untouched
+- App Sandbox with security-scoped bookmarks for local images
+- 688 unit tests; GitHub Actions builds every flavor on each push
 
-## Project Structure
+### Where Things Live
 
 ```
 QuickMD/
-├── QuickMD/
-│   ├── QuickMDApp.swift            # App entry point + menu commands
-│   ├── MarkdownDocument.swift      # FileDocument model (encoding + line-ending normalization)
-│   ├── MarkdownView.swift          # Main document view (parse + measure pipeline, overlays)
-│   ├── MarkdownBlock.swift         # Block type enum
-│   ├── MarkdownBlockParser.swift   # Line-by-line block parser (+ YAML frontmatter)
-│   ├── MarkdownRenderer.swift      # Inline markdown → AttributedString (SwiftUI + AppKit scopes)
-│   ├── MarkdownTheme.swift         # Built-in themes (+ font family merging)
-│   ├── DocumentFonts.swift         # Body/code font families: resolution, cache, Settings + theme merge
-│   ├── MarkdownExport.swift        # PDF export + print support
-│   ├── DocumentSearch.swift        # Find-in-document match engine
-│   ├── SectionExtractor.swift      # "Copy section" boundaries from parser source lines
-│   ├── InlineMathSegmenter.swift   # $...$ segmentation
-│   ├── InlineSyntaxScanner.swift   # Link/image syntax scanner shared by parser and renderer (CommonMark destinations)
-│   ├── HTMLImageSyntax.swift       # Standalone HTML <img> lines (+ <p align>/<div>/<a> wrappers, width)
-│   ├── DataImageURI.swift          # Embedded data: image URIs (base64 / percent-encoded)
-│   ├── ImageLoader.swift           # One image loader + cache for local, remote and data: images (screen + PDF)
-│   ├── SVGImageDecoder.swift       # SVG decoding via NSImage (CoreSVG) for svg blocks and images
-│   ├── DocumentSelection.swift     # Document-wide selection model, copy builder (plain + RTF), clipboard toast
-│   ├── BlockHeightMeasurer.swift   # Off-main exact block heights (TextKit) + BlockLayout metrics
-│   ├── FileWatchManager.swift      # Auto-reload file watcher (DispatchSource)
-│   ├── ExternalEditorManager.swift # ⌘E editor detection + launch (opens at the reading line where supported)
-│   ├── DocumentReadingPosition.swift # ⌘E reading position (selection start or top visible block)
-│   ├── WindowTabbing.swift         # Native macOS tab merging + window size memory
-│   ├── MermaidPDFRenderer.swift    # Mermaid → image rendering for PDF export
-│   ├── CustomThemeStore.swift      # User themes from disk (live reload + validation)
-│   ├── RecentDocumentsStore.swift  # Recent documents tracking
-│   ├── TipJarManager.swift         # StoreKit 2 IAP (App Store only)
-│   ├── TipJarView.swift            # Tip Jar UI (App Store only)
-│   ├── SandboxAccessManager.swift  # Security-scoped bookmarks
-│   ├── SwiftMath/                  # Vendored math rendering (Core Graphics)
-│   ├── Resources/
-│   │   ├── mermaid.min.js          # Bundled Mermaid.js
-│   │   └── mermaid-template.html   # HTML template for diagrams
-│   ├── Views/
-│   │   ├── VirtualBlockList.swift  # NSScrollView + NSTableView host: one row per block, exact heights, document-wide selection
-│   │   ├── TextBlockView.swift     # NSTextView-backed text blocks (native selection, inline math)
-│   │   ├── CodeBlockView.swift     # NSTextView-backed code blocks (+ copy button)
-│   │   ├── MathBlockView.swift     # LaTeX display math ($$...$$)
-│   │   ├── MermaidBlockView.swift  # Mermaid diagrams (WKWebView + zoom + snapshot cache)
-│   │   ├── SVGBlockView.swift      # Fenced ```svg blocks via NSImage (CoreSVG)
-│   │   ├── TableBlockView.swift    # Table rendering with alignment
-│   │   ├── ImageBlockView.swift    # Local, remote and embedded image rendering + click-to-enlarge preview
-│   │   ├── BlockquoteView.swift    # Nested blockquotes
-│   │   ├── AlertBlockView.swift    # GitHub-flavored alerts ([!NOTE], [!TIP], ...)
-│   │   ├── ChromeButtons.swift     # Heading copy, source copy, edit, zoom, support pills
-│   │   ├── ChromeHoverState.swift  # Hover-cluster state for the top-right pills
-│   │   ├── SearchBar.swift         # Find in document (⌘F)
-│   │   ├── TableOfContentsView.swift # ToC sidebar (⌘⇧T)
-│   │   ├── RecentDocumentsSidebar.swift # Recent docs sidebar (⌘⇧D)
-│   │   ├── SettingsView.swift      # Settings window (⌘,): General + Themes + Fonts + Editor tabs
-│   │   ├── FontPickerView.swift    # Body / code font family pickers
-│   │   ├── ExternalEditorPickerView.swift # Editor selection
-│   │   └── ThemePickerView.swift   # Theme picker + import/reload
-│   └── Assets.xcassets/            # App icon + assets
-├── QuickMDTests/                   # Unit tests (parser, renderer, search, watcher, ...)
-├── docs/themes/                    # Schema + starter custom themes
-├── CHANGELOG.md                    # Version history
-└── demo.md                         # Demo file for testing
+├── QuickMD/                    # App sources
+│   ├── MarkdownBlockParser, MarkdownRenderer, InlineSyntaxScanner   # parsing and inline rendering
+│   ├── MarkdownView, Views/VirtualBlockList                         # document window and the virtualized list
+│   ├── Views/                                                       # block views, sidebars, settings, hover buttons
+│   ├── SourceEdit*, DocumentFile*, EditCloseGuard                   # Source Edit (session, editor, file format, close guard)
+│   ├── MarkdownExport, ImageLoader, FileWatchManager, ...           # PDF/print, images, auto-reload
+│   ├── SwiftMath/                                                   # vendored math rendering
+│   └── Resources/                                                   # bundled Mermaid.js + template
+├── QuickMDTests/               # Unit tests
+├── docs/themes/                # Custom theme schema + starter themes
+└── CHANGELOG.md                # Version history
 ```
 
 ## Development
 
-### Running the App
-
 ```bash
-# Open in Xcode
-open QuickMD/QuickMD.xcodeproj
-
-# Run with ⌘R
+git clone https://github.com/b451c/quickmd.git
+open quickmd/QuickMD/QuickMD.xcodeproj   # then ⌘R
 ```
 
 ### Building for Release
@@ -331,54 +251,11 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 
 ## Roadmap
 
-- [x] Export to PDF (`⌘⇧E`) and Print (`⌘P`)
-- [x] Syntax highlighting for code blocks
-- [x] Find & search within document (`⌘F`)
-- [x] Nested blockquotes with level indicators
-- [x] Table of Contents sidebar (`⌘⇧T`)
-- [x] Reference-style links (`[text][id]`)
-- [x] Custom color themes (7 built-in)
-- [x] Copy to clipboard (whole file + sections)
-- [x] LaTeX math rendering (`$$...$$`)
-- [x] Mermaid diagram rendering (flowcharts, sequence, pie, class, etc.)
-- [x] Inline SVG (fenced ```svg blocks, `.svg` image links)
-- [x] Security-Scoped Bookmarks for local images
-- [x] Persistent Table of Contents state
-- [x] Inline math (`$...$`)
-- [x] Footnotes (`[^id]` references with definitions)
-- [x] Homebrew Cask formula
-- [x] User-defined themes loaded from disk (JSON drop-in)
-- [x] Recent Documents sidebar (`⌘⇧D`)
-- [x] Native macOS tabs (every doc opens as a tab in one window)
-- [x] NSTextView-backed code blocks (native selection, no SwiftUI Text trap)
-- [x] Large-document fast-load — NSTextView text blocks + lazy rendering ([#10](https://github.com/b451c/quickmd/issues/10), [#11](https://github.com/b451c/quickmd/issues/11))
-- [x] File auto-reload — live preview with your editor's auto-save
-- [x] Open in External Editor (`⌘E`) with auto-detected editor picker
-- [x] Copy button on code blocks
-- [x] Mermaid diagram zoom ([#12](https://github.com/b451c/quickmd/issues/12))
-- [x] YAML frontmatter + setext headings + CRLF line endings
-- [x] Unit test suite + GitHub Actions CI
-- [x] Per-window zoom (`⌘+` / `⌘-` / `⌘0`) — contributed by [@shmuelzon](https://github.com/shmuelzon)
-- [x] Vector PDF export (selectable, searchable text) — contributed by [@weiykong](https://github.com/weiykong)
-- [x] Mermaid diagram PDF export (full fidelity)
-- [x] GFM alerts/admonitions (NOTE, TIP, IMPORTANT, WARNING, CAUTION)
-- [x] Remember last window size
-- [x] CommonMark soft breaks — contributed by [@shmuelzon](https://github.com/shmuelzon)
-- [x] Custom font families for body text and code ([#18](https://github.com/b451c/quickmd/issues/18))
-- [x] Native document layout with exact, pre-measured block heights (AppKit-hosted virtualized list) — smooth scrolling for every document size, exact ToC/search jumps, reading position kept across zoom/reload/resize
-- [x] Zoom indicator + reset pill, typeset math in PDF/print
-- [x] Definition lists
-- [x] Reading mode (distraction-free)
-- [x] Graphics scale with the zoom + click-to-enlarge preview, fenced ```svg blocks
-- [x] Select and copy across the whole document, with a copied-characters toast ([#33](https://github.com/b451c/quickmd/issues/33))
-- [x] Embedded `data:` images and HTML `<img>` tags ([#32](https://github.com/b451c/quickmd/issues/32))
-- [x] `⌘E` opens your editor at the line you are reading
-
-Have a feature request? [Open an issue!](https://github.com/b451c/quickmd/issues)
+What has shipped, release by release, is in the [CHANGELOG](QuickMD/CHANGELOG.md). What comes next is shaped by [issues](https://github.com/b451c/quickmd/issues) — if something is missing for you, open one.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please feel free to submit a Pull Request. Everyone who has contributed code or a report is credited in the [CHANGELOG](QuickMD/CHANGELOG.md).
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)

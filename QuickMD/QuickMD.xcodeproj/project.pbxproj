@@ -121,6 +121,31 @@
 		A1B2C3D401000110 /* DocumentReadingPosition.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000110 /* DocumentReadingPosition.swift */; };
 		A1B2C3D401000111 /* DocumentReadingPosition.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000110 /* DocumentReadingPosition.swift */; };
 		A1B2C3D401000112 /* ExternalEditorLineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000111 /* ExternalEditorLineTests.swift */; };
+		A1B2C3D401000120 /* DocumentFileFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000120 /* DocumentFileFormat.swift */; };
+		A1B2C3D401000121 /* DocumentFileFormat.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000120 /* DocumentFileFormat.swift */; };
+		A1B2C3D401000122 /* DocumentFileWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000121 /* DocumentFileWriter.swift */; };
+		A1B2C3D401000123 /* DocumentFileWriter.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000121 /* DocumentFileWriter.swift */; };
+		A1B2C3D401000124 /* DocumentFileFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000122 /* DocumentFileFormatTests.swift */; };
+		A1B2C3D401000125 /* DocumentFileWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000123 /* DocumentFileWriterTests.swift */; };
+		A1B2C3D401000130 /* SourceEditSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000130 /* SourceEditSupport.swift */; };
+		A1B2C3D401000131 /* SourceEditSupport.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000130 /* SourceEditSupport.swift */; };
+		A1B2C3D401000132 /* SourceEditSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000131 /* SourceEditSupportTests.swift */; };
+		A1B2C3D401000150 /* SourceEditorController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000150 /* SourceEditorController.swift */; };
+		A1B2C3D401000151 /* SourceEditorController.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000150 /* SourceEditorController.swift */; };
+		A1B2C3D401000170 /* SourceTint.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000170 /* SourceTint.swift */; };
+		A1B2C3D401000171 /* SourceTint.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000170 /* SourceTint.swift */; };
+		A1B2C3D401000172 /* SourceTintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000171 /* SourceTintTests.swift */; };
+		A1B2C3D401000152 /* SourceEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000151 /* SourceEditorView.swift */; };
+		A1B2C3D401000153 /* SourceEditorControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000152 /* SourceEditorControllerTests.swift */; };
+		A1B2C3D401000140 /* EditCloseGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000140 /* EditCloseGuard.swift */; };
+		A1B2C3D401000141 /* EditCloseGuard.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000140 /* EditCloseGuard.swift */; };
+		A1B2C3D401000142 /* EditCloseGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000141 /* EditCloseGuardTests.swift */; };
+		A1B2C3D401000160 /* SourceEditSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000160 /* SourceEditSession.swift */; };
+		A1B2C3D401000161 /* SourceEditSession.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000160 /* SourceEditSession.swift */; };
+		A1B2C3D401000162 /* SourceEditSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000161 /* SourceEditSessionTests.swift */; };
+		A1B2C3D401000180 /* SourceEditLanding.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000180 /* SourceEditLanding.swift */; };
+		A1B2C3D401000181 /* SourceEditLanding.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000180 /* SourceEditLanding.swift */; };
+		A1B2C3D401000182 /* SourceEditLandingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000181 /* SourceEditLandingTests.swift */; };
 		A1B2C3D4010000F0 /* HeadingLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000F0 /* HeadingLayoutTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -142,6 +167,23 @@
 		A1B2C3D4000000C1 /* DocumentSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentSelectionTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000110 /* DocumentReadingPosition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentReadingPosition.swift; sourceTree = "<group>"; };
 		A1B2C3D400000111 /* ExternalEditorLineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalEditorLineTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000120 /* DocumentFileFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentFileFormat.swift; sourceTree = "<group>"; };
+		A1B2C3D400000121 /* DocumentFileWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentFileWriter.swift; sourceTree = "<group>"; };
+		A1B2C3D400000122 /* DocumentFileFormatTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentFileFormatTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000123 /* DocumentFileWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentFileWriterTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000130 /* SourceEditSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditSupport.swift; sourceTree = "<group>"; };
+		A1B2C3D400000131 /* SourceEditSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditSupportTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000150 /* SourceEditorController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditorController.swift; sourceTree = "<group>"; };
+		A1B2C3D400000170 /* SourceTint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceTint.swift; sourceTree = "<group>"; };
+		A1B2C3D400000171 /* SourceTintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceTintTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000151 /* SourceEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditorView.swift; sourceTree = "<group>"; };
+		A1B2C3D400000152 /* SourceEditorControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditorControllerTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000140 /* EditCloseGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditCloseGuard.swift; sourceTree = "<group>"; };
+		A1B2C3D400000141 /* EditCloseGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditCloseGuardTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000160 /* SourceEditSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditSession.swift; sourceTree = "<group>"; };
+		A1B2C3D400000161 /* SourceEditSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditSessionTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000180 /* SourceEditLanding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditLanding.swift; sourceTree = "<group>"; };
+		A1B2C3D400000181 /* SourceEditLandingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditLandingTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4000000F0 /* HeadingLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadingLayoutTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000001 /* QuickMDApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickMDApp.swift; sourceTree = "<group>"; };
 		A1B2C3D400000002 /* MarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDocument.swift; sourceTree = "<group>"; };
@@ -270,6 +312,14 @@
 				A1B2C3D4000000F0 /* HeadingLayoutTests.swift */,
 				A1B2C3D4000000C1 /* DocumentSelectionTests.swift */,
 				A1B2C3D400000111 /* ExternalEditorLineTests.swift */,
+				A1B2C3D400000122 /* DocumentFileFormatTests.swift */,
+				A1B2C3D400000123 /* DocumentFileWriterTests.swift */,
+				A1B2C3D400000131 /* SourceEditSupportTests.swift */,
+				A1B2C3D400000152 /* SourceEditorControllerTests.swift */,
+				A1B2C3D400000171 /* SourceTintTests.swift */,
+				A1B2C3D400000141 /* EditCloseGuardTests.swift */,
+				A1B2C3D400000161 /* SourceEditSessionTests.swift */,
+				A1B2C3D400000181 /* SourceEditLandingTests.swift */,
 			);
 			path = QuickMDTests;
 			sourceTree = "<group>";
@@ -290,6 +340,14 @@
 				A1B2C3D400000081 /* ImageLoader.swift */,
 				A1B2C3D4000000C0 /* DocumentSelection.swift */,
 				A1B2C3D400000110 /* DocumentReadingPosition.swift */,
+				A1B2C3D400000120 /* DocumentFileFormat.swift */,
+				A1B2C3D400000121 /* DocumentFileWriter.swift */,
+				A1B2C3D400000130 /* SourceEditSupport.swift */,
+				A1B2C3D400000150 /* SourceEditorController.swift */,
+				A1B2C3D400000170 /* SourceTint.swift */,
+				A1B2C3D400000140 /* EditCloseGuard.swift */,
+				A1B2C3D400000160 /* SourceEditSession.swift */,
+				A1B2C3D400000180 /* SourceEditLanding.swift */,
 				A1B2C3D40000003D /* SectionExtractor.swift */,
 				A1B2C3D40000003E /* DocumentSearch.swift */,
 				A1B2C3D40000003F /* WindowTabbing.swift */,
@@ -339,6 +397,7 @@
 				A1B2C3D400000063 /* FontPickerView.swift */,
 				A1B2C3D40000006C /* VirtualBlockList.swift */,
 				A1B2C3D40000006D /* SVGBlockView.swift */,
+				A1B2C3D400000151 /* SourceEditorView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -573,6 +632,15 @@
 				A1B2C3D401000082 /* ImageLoader.swift in Sources */,
 				A1B2C3D4010000C0 /* DocumentSelection.swift in Sources */,
 				A1B2C3D401000110 /* DocumentReadingPosition.swift in Sources */,
+				A1B2C3D401000120 /* DocumentFileFormat.swift in Sources */,
+				A1B2C3D401000122 /* DocumentFileWriter.swift in Sources */,
+				A1B2C3D401000130 /* SourceEditSupport.swift in Sources */,
+				A1B2C3D401000150 /* SourceEditorController.swift in Sources */,
+				A1B2C3D401000170 /* SourceTint.swift in Sources */,
+				A1B2C3D401000152 /* SourceEditorView.swift in Sources */,
+				A1B2C3D401000140 /* EditCloseGuard.swift in Sources */,
+				A1B2C3D401000160 /* SourceEditSession.swift in Sources */,
+				A1B2C3D401000180 /* SourceEditLanding.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -614,6 +682,22 @@
 				A1B2C3D4010000C2 /* DocumentSelectionTests.swift in Sources */,
 				A1B2C3D401000111 /* DocumentReadingPosition.swift in Sources (Tests) */,
 				A1B2C3D401000112 /* ExternalEditorLineTests.swift in Sources */,
+				A1B2C3D401000121 /* DocumentFileFormat.swift in Sources (Tests) */,
+				A1B2C3D401000123 /* DocumentFileWriter.swift in Sources (Tests) */,
+				A1B2C3D401000124 /* DocumentFileFormatTests.swift in Sources */,
+				A1B2C3D401000125 /* DocumentFileWriterTests.swift in Sources */,
+				A1B2C3D401000131 /* SourceEditSupport.swift in Sources (Tests) */,
+				A1B2C3D401000132 /* SourceEditSupportTests.swift in Sources */,
+				A1B2C3D401000151 /* SourceEditorController.swift in Sources (Tests) */,
+				A1B2C3D401000171 /* SourceTint.swift in Sources (Tests) */,
+				A1B2C3D401000153 /* SourceEditorControllerTests.swift in Sources */,
+				A1B2C3D401000172 /* SourceTintTests.swift in Sources */,
+				A1B2C3D401000141 /* EditCloseGuard.swift in Sources (Tests) */,
+				A1B2C3D401000142 /* EditCloseGuardTests.swift in Sources */,
+				A1B2C3D401000161 /* SourceEditSession.swift in Sources (Tests) */,
+				A1B2C3D401000162 /* SourceEditSessionTests.swift in Sources */,
+				A1B2C3D401000181 /* SourceEditLanding.swift in Sources (Tests) */,
+				A1B2C3D401000182 /* SourceEditLandingTests.swift in Sources */,
 				A1B2C3D4010000F0 /* HeadingLayoutTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -753,7 +837,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 23;
+				CURRENT_PROJECT_VERSION = 24;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = VJ92852M32;
 				ENABLE_APP_SANDBOX = YES;
@@ -778,7 +862,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.11.0;
+				MARKETING_VERSION = 1.12.0;
 				PRODUCT_BUNDLE_IDENTIFIER = pl.falami.studio.QuickMD;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -797,7 +881,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 23;
+				CURRENT_PROJECT_VERSION = 24;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = VJ92852M32;
 				ENABLE_APP_SANDBOX = YES;
@@ -822,7 +906,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.11.0;
+				MARKETING_VERSION = 1.12.0;
 				PRODUCT_BUNDLE_IDENTIFIER = pl.falami.studio.QuickMD;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";

@@ -286,7 +286,22 @@ struct VirtualBlockList: NSViewRepresentable {
         coordinator.selection.selectableText = selectableText
         coordinator.selection.onCopy = onCopySelection
         coordinator.setDocumentCovered(isCovered)
+        // Covered (graphic preview, Source Edit): out of the accessibility
+        // tree too — SwiftUI's `.accessibilityHidden` does not reach this
+        // AppKit subtree.
+        // Written only on a change: a document that is never covered never
+        // has the property set at all.
+        if nsView.isAccessibilityHidden() != isCovered { nsView.setAccessibilityHidden(isCovered) }
         readingPosition?.provider = { [weak coordinator] in coordinator?.readingEditorLine() }
+        readingPosition?.selectionProvider = { [weak coordinator] in
+            guard let coordinator,
+                  let hint = coordinator.selection.sourceEditHint(
+                      maxRows: SourceEditSession.selectionHintMaxRows,
+                      maxLength: SourceEditSession.selectionHintMaxLength,
+                      contextLength: SourceEditSession.selectionHintContextLength) else { return nil }
+            return DocumentReadingPosition.selectionHint(text: hint.text, before: hint.before, after: hint.after,
+                                                         rows: hint.rows, blocks: coordinator.blocks)
+        }
         if focusRequest != coordinator.lastFocusRequest {
             coordinator.lastFocusRequest = focusRequest
             coordinator.restoreDocumentFocus()
@@ -1828,6 +1843,44 @@ final class SelectionController: NSObject {
 
     func stopSpeaking() {
         Self.speech?.stopSpeaking(at: .immediate)
+    }
+
+    /// Source Edit's carry-over (S-D14b): the selection's plain text (as ⌘C
+    /// copies it) plus up to `contextLength` rendered characters before it in
+    /// its first row and after it in its last. Nil — and NOTHING built — when
+    /// the selection spans more than `maxRows` rows, touches a row without
+    /// selectable text (a table or diagram cannot match the source literally)
+    /// or covers more than `maxLength` UTF-16 units: the checks only measure
+    /// the rows' selectable strings, the output is built after them.
+    func sourceEditHint(maxRows: Int, maxLength: Int, contextLength: Int)
+        -> (text: String, before: String, after: String, rows: ClosedRange<Int>)? {
+        guard let selection, let span = selection.rowSpan, span.count <= maxRows,
+              span.upperBound < blocks.count else { return nil }
+        var covered = 0
+        var before = ""
+        var after = ""
+        for row in span {
+            let block = blocks[row]
+            switch block.content {
+            case .codeBlock, .text, .blockquote, .alert, .heading: break
+            case .table, .image, .svgImage, .mathBlock, .mermaidDiagram: return nil
+            }
+            guard let string = selectableText(block, contentVersion) else { return nil }
+            guard let range = selection.range(inRow: row, rowLength: string.length) else { continue }
+            covered += range.length
+            guard covered <= maxLength else { return nil }
+            let ns = string.string as NSString
+            if row == span.lowerBound {
+                let start = max(0, range.location - contextLength)
+                before = ns.substring(with: NSRange(location: start, length: range.location - start))
+            }
+            if row == span.upperBound {
+                let end = min(ns.length, NSMaxRange(range) + contextLength)
+                after = ns.substring(with: NSRange(location: NSMaxRange(range), length: end - NSMaxRange(range)))
+            }
+        }
+        guard covered > 0, let text = selectionOutput()?.plain else { return nil }
+        return (text, before, after, span)
     }
 
     /// Plain text + RTF of the selection — the ONE builder behind ⌘C, the

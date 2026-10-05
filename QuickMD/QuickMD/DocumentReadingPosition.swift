@@ -24,11 +24,17 @@ final class DocumentReadingPosition {
 
     /// Answers `editorLine()`. Nil until the list has been wired up.
     var provider: (() -> Int?)?
+    /// Answers `selectionHint()`. Installed next to `provider`.
+    var selectionProvider: (() -> SourceEditSession.SelectionHint?)?
 
     /// The 1-based editor line the reader is at, or nil when there is no answer
     /// (empty document, list not laid out yet) — the caller then opens the file
     /// plainly.
     func editorLine() -> Int? { provider?() }
+
+    /// The rendered selection as Source Edit's entry hint (S-D14b), or nil
+    /// when nothing is selected.
+    func selectionHint() -> SourceEditSession.SelectionHint? { selectionProvider?() }
 
     // MARK: Pure rule
 
@@ -54,5 +60,22 @@ final class DocumentReadingPosition {
         guard let row = targetRow(selection: selection, topRow: topRow),
               blocks.indices.contains(row) else { return nil }
         return blocks[row].sourceLine + 1
+    }
+
+    /// The selection's plain text plus the source lines to look for it in:
+    /// from the first selected block's `sourceLine` up to (not including) the
+    /// `sourceLine` of the block after the last selected one — to the end of
+    /// the text when there is none. Nil for empty text or rows outside
+    /// `blocks` (a stale selection racing a re-install).
+    static func selectionHint(text: String, before: String = "", after: String = "",
+                              rows: ClosedRange<Int>,
+                              blocks: [MarkdownBlock]) -> SourceEditSession.SelectionHint? {
+        guard !text.isEmpty, blocks.indices.contains(rows.lowerBound),
+              blocks.indices.contains(rows.upperBound) else { return nil }
+        let start = blocks[rows.lowerBound].sourceLine
+        let next = rows.upperBound + 1
+        let end = next < blocks.count ? blocks[next].sourceLine : Int.max
+        guard end > start else { return nil }
+        return SourceEditSession.SelectionHint(text: text, before: before, after: after, lines: start..<end)
     }
 }

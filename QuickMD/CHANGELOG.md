@@ -5,6 +5,24 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-10-05
+
+Source Edit: QuickMD stays a viewer first, but you can now fix the Markdown you are reading without leaving the window. Asked for by [@KillSwitchSIG](https://github.com/KillSwitchSIG) (#31) and [@vinaymve](https://github.com/vinaymve) (#34).
+
+### Added
+- **Source Edit** (⌥⌘E, the pencil button, or File ▸ Edit Source): the window switches to the raw Markdown at the line you are reading; a word selected in the rendered view is already selected in the source. ⌘S saves, Esc (or Done) returns to the rendered view at the place you edited.
+- Saves are byte-faithful: the file keeps its encoding (UTF-8, UTF-8 with BOM, UTF-16, ISO Latin 1), its line endings, permissions, Finder tags, creation date and symlinks — only what you typed changes. A file with mixed line endings is unified to its dominant style, and QuickMD says so. A read-only file is not edited.
+- Unsaved text is never lost silently: closing the tab, the window or the app asks Save / Don't Save / Cancel, and the close button shows the edited dot.
+- If another application changes the file while you edit, QuickMD does not choose for you: with no unsaved changes the editor follows the disk; otherwise a banner offers Keep My Version or Load Disk Version (undoable), and Save asks before replacing the other change.
+- In the editor: undo and redo, the system find and replace bar (⌘F, ⌘G), indentation kept on Return, Tab / ⇧Tab to indent and outdent, a light syntax tint for headings, code blocks and quotes (documents up to about 100 KB), zoom and Reading Mode. Smart quotes, smart dashes and autocorrect are off.
+
+### Changed
+- The pencil button now starts Source Edit. Open in External Editor stays on ⌘E and in the File menu.
+- Documents larger than 2 MB are not edited in place (QuickMD says so; ⌘E still opens them in your editor).
+
+### Fixed
+- Auto-reload recovers when a file that disappeared comes back at the same path (git checkout, stash pop). Before, the tab stayed on "File no longer exists" until the document was reopened.
+
 ## [1.11.0] - 2026-10-01
 
 Selection, images and the editor handoff, shaped by your reports: text can now be selected and copied across the whole document ([@ssstraub](https://github.com/ssstraub), #33), embedded and HTML images render ([@filmo](https://github.com/filmo), #32), and ⌘E opens your editor right where you are reading (an answer to [@KillSwitchSIG](https://github.com/KillSwitchSIG)'s #31). Thank you!
