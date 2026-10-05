@@ -69,7 +69,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ### Custom Themes & Fonts
 - 7 built-in themes: Auto, Solarized Light/Dark, Dracula, GitHub, Gruvbox Dark, Nord
-- **User themes from disk** — drop a JSON file into `~/Library/Containers/pl.falami.studio.QuickMD/Data/Library/Application Support/QuickMD/Themes/` (or use the **Import Theme…** button in Settings). Live reload, no restart. See [docs/themes/](docs/themes/) for the schema and examples.
+- **User themes from disk** — drop a JSON file into `~/Library/Application Support/QuickMD/Themes/` (GitHub and Homebrew builds; the Mac App Store build keeps the same folder inside its container, `~/Library/Containers/pl.falami.studio.QuickMD/Data/`), or use the **Import Theme…** button in Settings. Live reload, no restart. See [docs/themes/](docs/themes/) for the schema and examples.
 - **Custom font families** — pick any installed font for body text and another for code in Settings → Fonts (JetBrains Mono for code, a serif for reading…). Applies to the document, print and PDF; size and zoom are unaffected. Themes can set their own with `bodyFontFamily` / `codeFontFamily`.
 - Settings panel (`⌘,`) with color and font previews
 - Dark mode follows the system, or pick a fixed theme; theme and fonts persist across restarts

@@ -3,8 +3,10 @@
 QuickMD supports user-defined themes via JSON files. Drop any `*.json` matching the schema below into:
 
 ```
-~/Library/Containers/pl.falami.studio.QuickMD/Data/Library/Application Support/QuickMD/Themes/
+~/Library/Application Support/QuickMD/Themes/
 ```
+
+(GitHub and Homebrew builds. The Mac App Store build is sandboxed and keeps the same folder inside its container: `~/Library/Containers/pl.falami.studio.QuickMD/Data/Library/Application Support/QuickMD/Themes/`.)
 
 Or open it instantly via **Settings (⌘,) → Open Themes Folder**.
 
