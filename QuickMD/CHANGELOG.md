@@ -15,10 +15,9 @@ Source Edit: QuickMD stays a viewer first, but you can now fix the Markdown you 
 - Unsaved text is never lost silently: closing the tab, the window or the app asks Save / Don't Save / Cancel, and the close button shows the edited dot.
 - If another application changes the file while you edit, QuickMD does not choose for you: with no unsaved changes the editor follows the disk; otherwise a banner offers Keep My Version or Load Disk Version (undoable), and Save asks before replacing the other change.
 - In the editor: undo and redo, the system find and replace bar (⌘F, ⌘G), indentation kept on Return, Tab / ⇧Tab to indent and outdent, a light syntax tint for headings, code blocks and quotes (documents up to about 100 KB), zoom and Reading Mode. Smart quotes, smart dashes and autocorrect are off.
-- "Open in editor" has its own button next to the pencil; ⌘E works as before.
 
 ### Changed
-- The pencil button now starts Source Edit; opening the external editor moved to the button next to it.
+- The pencil button now starts Source Edit. Open in External Editor stays on ⌘E and in the File menu.
 - Documents larger than 2 MB are not edited in place (QuickMD says so; ⌘E still opens them in your editor).
 
 ### Fixed

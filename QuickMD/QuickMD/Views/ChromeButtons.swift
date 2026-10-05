@@ -322,9 +322,11 @@ struct CopySourceButton: View {
 // MARK: - Edit Source Button
 
 /// Top-right pencil button — fixes the source in place (Source Edit, ⌥⌘E).
-/// Since v1.12 (U2) the pencil means "edit HERE"; the handoff to another
-/// application has its own pill (`OpenInEditorButton`). One of the three ways
-/// into Source Edit, with File ▸ Edit Source and the shortcut.
+/// Since v1.12 the pencil means "edit HERE". The handoff to another
+/// application has NO pill of its own (the user's call, 2026-10-05: two edit
+/// buttons side by side were one too many) — it stays on ⌘E and in the File
+/// menu. One of the three ways into Source Edit, with File ▸ Edit Source and
+/// the shortcut.
 struct EditSourceButton: View {
     let theme: MarkdownTheme
     let action: () -> Void
@@ -340,27 +342,6 @@ struct EditSourceButton: View {
                 .font(.system(size: 11))
         }
         .accessibilityIdentifier("source-edit")
-    }
-}
-
-// MARK: - Open In External Editor Button
-
-/// Top-right handoff to the user's configured editor (⌘E), at the line being
-/// read when that editor supports line links. Was the pencil until v1.12.
-struct OpenInEditorButton: View {
-    let theme: MarkdownTheme
-    let action: () -> Void
-
-    var body: some View {
-        ChromePill(
-            theme: theme,
-            title: "Open in editor",
-            help: "Open in external editor (⌘E)",
-            action: action
-        ) {
-            Image(systemName: "arrow.up.forward.square")
-                .font(.system(size: 11))
-        }
     }
 }
 

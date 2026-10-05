@@ -437,9 +437,6 @@ struct MarkdownView: View {
                     EditSourceButton(theme: theme) {
                         toggleSourceEdit()
                     }
-                    OpenInEditorButton(theme: theme) {
-                        openInExternalEditor()
-                    }
                 }
                 CopySourceButton(theme: theme) {
                     copyToClipboard(currentText)
