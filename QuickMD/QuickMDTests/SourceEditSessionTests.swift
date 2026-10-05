@@ -740,6 +740,20 @@ final class SourceEditSessionTests: XCTestCase {
         XCTAssertFalse(session.isActive)
     }
 
+    /// S-D10: with the find bar showing, Esc in the text view closes the bar
+    /// and stays in the mode; the next Esc leaves.
+    func testEscapeClosesTheFindBarFirst() throws {
+        let (session, window) = entered(try fixture("find me\n"))
+        window.makeFirstResponder(session.editor.textView)
+        session.editor.showFind()
+        XCTAssertTrue(session.editor.isFindBarVisible)
+        session.editor.textView.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertFalse(session.editor.isFindBarVisible)
+        XCTAssertTrue(session.isActive)
+        session.editor.textView.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
+        XCTAssertFalse(session.isActive)
+    }
+
     private func numbered(_ count: Int) -> String {
         (0..<count).map { "line \($0)" }.joined(separator: "\n") + "\n"
     }

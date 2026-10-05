@@ -126,6 +126,12 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     /// Escape reached the text view. Consumed here so it never opens
     /// NSTextView's completion list; the session decides what Esc means.
     var onEscape: (() -> Void)?
+    /// The find bar's height while it is showing, 0 once it is hidden —
+    /// reported when it changes. The bar sits at the top of the scroll view,
+    /// exactly where the window's chrome pills and banners float, so the host
+    /// moves those below it (otherwise the Save / Done pills cover the bar's
+    /// own buttons).
+    var onFindBarHeightChange: ((CGFloat) -> Void)?
 
     /// The editor's OWN undo stack, handed to the text view through
     /// `undoManager(for:)`. Never `window.undoManager`: that one belongs to
@@ -186,6 +192,8 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     private var focusRequested = false
     /// Re-entrancy guard for the attribute fix-up in `didProcessEditing`.
     private var isFixingAttributes = false
+    /// The last height handed to `onFindBarHeightChange`.
+    private var reportedFindBarHeight: CGFloat = 0
 
     override init() {
         // An explicit TextKit 1 stack: an NSTextView created with a container
@@ -283,7 +291,10 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
         scrollView.automaticallyAdjustsContentInsets = false
         scrollView.contentInsets = NSEdgeInsets()
         scrollView.documentView = textView
-        scrollView.onTile = { [weak self] in self?.updateGeometry() }
+        scrollView.onTile = { [weak self] in
+            self?.updateGeometry()
+            self?.reportFindBarHeight()
+        }
         scrollView.onEndLiveResize = { [weak self] in self?.finishRelayout() }
         scrollView.onUserScroll = { [weak self] in self?.dropPendingAnchor() }
         self.scrollView = scrollView
@@ -746,6 +757,16 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     func findNext() { performFinder(.nextMatch) }
     func findPrevious() { performFinder(.previousMatch) }
     func hideFind() { performFinder(.hideFindInterface) }
+
+    /// Showing or hiding the bar re-tiles the scroll view; that is where the
+    /// change is seen.
+    private func reportFindBarHeight() {
+        guard let scrollView else { return }
+        let height = scrollView.isFindBarVisible ? (scrollView.findBarView?.frame.height ?? 0) : 0
+        guard height != reportedFindBarHeight else { return }
+        reportedFindBarHeight = height
+        onFindBarHeightChange?(height)
+    }
 
     /// `performTextFinderAction(_:)` reads the action from the sender's `tag`.
     private func performFinder(_ action: NSTextFinder.Action) {

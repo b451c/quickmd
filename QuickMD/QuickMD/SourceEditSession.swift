@@ -199,7 +199,17 @@ final class SourceEditSession: ObservableObject {
 
     init() {
         editor.onChange = { [weak self] in self?.bufferDidChange() }
-        editor.onEscape = { [weak self] in self?.requestLeave() }
+        // Esc closes the find bar first, then leaves (S-D10). With the focus
+        // in the bar's own field the bar handles Esc itself; this is Esc in
+        // the text view while the bar is still showing.
+        editor.onEscape = { [weak self] in
+            guard let self else { return }
+            if self.editor.isFindBarVisible {
+                self.editor.hideFind()
+            } else {
+                self.requestLeave()
+            }
+        }
     }
 
     deinit {
