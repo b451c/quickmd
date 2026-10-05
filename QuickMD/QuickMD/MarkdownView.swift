@@ -252,11 +252,11 @@ struct MarkdownView: View {
                     focusRequest: documentFocusRequest,
                     // Stays mounted under the editor (its anchor and offset
                     // survive; a remount would park at the top) but never takes
-                    // the focus back while covered.
+                    // the focus back while covered, and leaves the
+                    // accessibility tree meanwhile (set on the AppKit view).
                     isCovered: graphicPreview != nil || editSession.isActive,
                     readingPosition: readingPosition
                 )
-                .accessibilityHidden(editSession.isActive)
                 .onChange(of: scrollTrigger) { _ in
                     scrollFocusedMatchIntoView()
                 }
@@ -338,8 +338,10 @@ struct MarkdownView: View {
                 .padding(.top, topChromeInset)
             }
             .overlay(alignment: .bottomTrailing) {
-                // Not over the editor either: it would sit on the text being
-                // edited, and there is nothing to read past it.
+                // The Support / Tip Jar button is hidden while editing as well
+                // as in Reading Mode: it would float over the text being
+                // edited (bottom-right is where a long line ends), and a
+                // misclick there opens a menu or a window mid-edit.
                 if !isReadingMode && !editSession.isActive {
                     Group {
                         #if APPSTORE
@@ -547,6 +549,11 @@ struct MarkdownView: View {
         .focusedSceneValue(\.toggleSourceEditAction, { toggleSourceEdit() })
         .focusedSceneValue(\.saveSourceAction, { editSession.save() })
         .focusedSceneValue(\.discardSourceChangesAction, { editSession.discardChanges() })
+        // The session's URL follows the view's: a document can be moved or
+        // renamed while open (set on appear too, `configureEditSession`).
+        .onChange(of: documentURL) { url in
+            editSession.environment.documentURL = url
+        }
         .onChange(of: editSession.lastLeave) { leave in
             if let leave { didLeaveSourceEdit(leave) }
         }
@@ -733,17 +740,30 @@ struct MarkdownView: View {
                 let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
 
                 if editSession.isActive {
-                    // ⌘G / ⇧⌘G go to the editor's text finder (S-D6). Nothing
-                    // else is touched: Escape must reach the text view (it
-                    // closes the find bar, then leaves the mode) or the find
-                    // bar's field — never Reading Mode or the search first.
-                    if flags.contains(.command), event.charactersIgnoringModifiers?.lowercased() == "g" {
-                        if flags.contains(.shift) {
+                    // ⌘G / ⇧⌘G — exactly those, not ⌥⌘G / ⌃⌘G — go to the
+                    // editor's text finder (S-D6).
+                    let finderFlags = flags.intersection([.command, .shift, .option, .control])
+                    if finderFlags == .command || finderFlags == [.command, .shift],
+                       event.charactersIgnoringModifiers?.lowercased() == "g" {
+                        if finderFlags.contains(.shift) {
                             editSession.editor.findPrevious()
                         } else {
                             editSession.editor.findNext()
                         }
                         return nil
+                    }
+                    // Escape: in a text view (the editor, or the find bar's
+                    // field editor) it is theirs — the editor reports it to the
+                    // session, the field closes the bar. With the focus
+                    // anywhere else (a banner or sidebar button, nothing) the
+                    // session gets it here, so Esc works wherever focus is —
+                    // and never reaches Reading Mode or the search first.
+                    if event.keyCode == 53 {
+                        let responder = event.window?.firstResponder ?? hostWindow?.firstResponder
+                        if !(responder is NSText) {
+                            editSession.escape()
+                            return nil
+                        }
                     }
                     return event
                 }
@@ -863,7 +883,10 @@ struct MarkdownView: View {
             return
         }
         guard graphicPreview == nil else { return }
-        if let refusal = editSession.enter(atLine: readingPosition.editorLine().map { $0 - 1 }) {
+        // A rendered selection whose text is literally in its source lines is
+        // selected in the editor (S-D14b); otherwise the caret goes to the line.
+        if let refusal = editSession.enter(atLine: readingPosition.editorLine().map { $0 - 1 },
+                                           selection: readingPosition.selectionHint()) {
             showToast(refusal.message)
             return
         }
@@ -1157,7 +1180,9 @@ struct MarkdownView: View {
         // could animate the AppKit column's re-wrap. The sidebars and pills
         // animate through their own `.animation(value: isReadingMode)`.
         isReadingMode = on
-        if on { showToast("Reading Mode (Esc to exit)") }
+        // While editing the first Esc leaves the editor, not Reading Mode —
+        // the hint would be wrong there.
+        if on { showToast(editSession.isActive ? "Reading Mode" : "Reading Mode (Esc to exit)") }
     }
 
     private func showToast(_ message: String) {

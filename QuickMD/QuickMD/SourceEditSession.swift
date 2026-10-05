@@ -199,17 +199,7 @@ final class SourceEditSession: ObservableObject {
 
     init() {
         editor.onChange = { [weak self] in self?.bufferDidChange() }
-        // Esc closes the find bar first, then leaves (S-D10). With the focus
-        // in the bar's own field the bar handles Esc itself; this is Esc in
-        // the text view while the bar is still showing.
-        editor.onEscape = { [weak self] in
-            guard let self else { return }
-            if self.editor.isFindBarVisible {
-                self.editor.hideFind()
-            } else {
-                self.requestLeave()
-            }
-        }
+        editor.onEscape = { [weak self] in self?.escape() }
     }
 
     deinit {
@@ -241,14 +231,25 @@ final class SourceEditSession: ObservableObject {
         environment.commitText(text)
     }
 
+    /// The rendered selection, for carrying it into the editor (S-D14b): its
+    /// plain text and the 0-based source lines of the blocks it touches
+    /// (`DocumentReadingPosition.selectionHint`).
+    struct SelectionHint: Equatable {
+        let text: String
+        let lines: Range<Int>
+    }
+
     /// Enters the editor with the caret at the start of 0-based `line` (nil:
     /// the top), scrolled to the top of the visible area — the view converts
-    /// the reading position's 1-based `editorLine()`. Returns nil when it
+    /// the reading position's 1-based `editorLine()`. With a `selection` whose
+    /// text occurs literally in its source lines, that text is selected
+    /// instead, its first line at the top (select a typo, ⌥⌘E, type the fix);
+    /// otherwise the caret goes to `line` as without one. Returns nil when it
     /// entered; otherwise nothing changed and the refusal says why. Checks in
     /// the spec's order: no file, missing, unreadable, read-only, too large,
     /// unsafe. The view requests focus after mounting the editor (`focusEditor`).
     @discardableResult
-    func enter(atLine line: Int?) -> EnterRefusal? {
+    func enter(atLine line: Int?, selection: SelectionHint? = nil) -> EnterRefusal? {
         guard !isActive, !isPrompting else { return .alreadyEditing }
         guard let url = environment.documentURL else { return .noFile }
         let name = url.lastPathComponent
@@ -281,13 +282,35 @@ final class SourceEditSession: ObservableObject {
         installGuardIfNeeded()
         closeGuard?.setEdited(false)
         isActive = true
-        editor.placeCaret(atLine: max(line ?? 0, 0))
+        if let selection, let range = SourceEditSupport.sourceRange(ofSelection: selection.text,
+                                                                    in: decoded.text, lines: selection.lines) {
+            // Select, then put the first line at the top WITHOUT moving the
+            // caret (`placeCaret` would collapse the selection).
+            editor.select(range)
+            editor.scroll(toLine: SourceEditSupport.line(containing: range.location, in: decoded.text))
+        } else {
+            editor.placeCaret(atLine: max(line ?? 0, 0))
+        }
         entryLine = editor.caretLine
         return nil
     }
 
     func focusEditor() {
         editor.focus()
+    }
+
+    /// Esc while editing (S-D10): closes the find bar first, then leaves. The
+    /// ONE place that decides it — reached from the text view (`onEscape`)
+    /// and from the window's key monitor when the focus is elsewhere (a
+    /// banner button, a sidebar control, nothing). Esc inside the find bar's
+    /// own field never gets here: the bar closes itself.
+    func escape() {
+        guard isActive else { return }
+        if editor.isFindBarVisible {
+            editor.hideFind()
+        } else {
+            requestLeave()
+        }
     }
 
     /// Format, base bytes and saved text always move TOGETHER — from one read
@@ -555,7 +578,7 @@ final class SourceEditSession: ObservableObject {
                         finish(saved)
                     }
                 case .discard:
-                    leave()
+                    leave(discarding: true)
                     finish(true)
                 case .cancel:
                     finish(false)
@@ -564,8 +587,15 @@ final class SourceEditSession: ObservableObject {
         }
     }
 
-    private func leave() {
-        let line = editor.caretLine
+    /// `discarding`: Don't Save — the buffer the caret is in is thrown away,
+    /// so its line means nothing for the rendered (saved) text: land only if
+    /// something was saved (the list shows that text, not where the reader
+    /// left it), and at most on the saved text's last line.
+    private func leave(discarding: Bool = false) {
+        var line = editor.caretLine
+        if discarding {
+            line = min(line, SourceEditSupport.lineCount(in: savedText) - 1)
+        }
         leaveSequence += 1
         emptyFileRecheck?.cancel()
         emptyFileRecheck = nil
@@ -579,8 +609,8 @@ final class SourceEditSession: ObservableObject {
         externalChange = false
         if isDirty { isDirty = false }
         closeGuard?.setEdited(false)
-        lastLeave = LeaveInfo(caretLine: line, shouldLand: hasSavedOnce || line != entryLine,
-                              sequence: leaveSequence)
+        let shouldLand = discarding ? hasSavedOnce : (hasSavedOnce || line != entryLine)
+        lastLeave = LeaveInfo(caretLine: max(line, 0), shouldLand: shouldLand, sequence: leaveSequence)
     }
 
     /// "Discard Changes": back to the saved text as ONE undoable edit (⌘Z
