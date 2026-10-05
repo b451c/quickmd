@@ -58,10 +58,67 @@ final class SourceEditorControllerTests: XCTestCase {
         return (controller, scrollView, window)
     }
 
-    /// Lets the deferred exact top-line restore (100 ms after the last
-    /// relayout) run.
-    private func settle() {
-        RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+    /// Runs the main run loop until `condition` holds (or a generous timeout).
+    @discardableResult
+    private func waitUntil(timeout: TimeInterval = 10, _ condition: () -> Bool,
+                           file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            guard Date() < deadline else {
+                XCTFail("condition not met within \(timeout) s", file: file, line: line)
+                return false
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        return true
+    }
+
+    /// Waits for the deferred exact top-line restore (100 ms after the last
+    /// relayout) to have run.
+    private func settle(_ controller: SourceEditorController, file: StaticString = #filePath, line: UInt = #line) {
+        waitUntil({ !controller.isRestorePending }, file: file, line: line)
+    }
+
+    /// Deterministic pseudo-random numbers (SplitMix64), so a failing
+    /// layout test fails the same way every run.
+    private struct SeededGenerator: RandomNumberGenerator {
+        var state: UInt64
+        mutating func next() -> UInt64 {
+            state &+= 0x9E37_79B9_7F4A_7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            return z ^ (z >> 31)
+        }
+    }
+
+    /// Lines of 0–40 words (they wrap differently at every width).
+    private func wrappingLines(_ count: Int, seed: UInt64 = 42) -> String {
+        var rng = SeededGenerator(state: seed)
+        return (0..<count).map { index in
+            String(repeating: "word ", count: Int.random(in: 0...40, using: &rng)) + "\(index)"
+        }.joined(separator: "\n")
+    }
+
+    /// The line fragment at the top EDGE of the visible area — its first
+    /// character and how far its top is from that edge — measured the way
+    /// the controller anchors a relayout (container coordinates on both sides).
+    private func topLine(_ controller: SourceEditorController,
+                         _ scrollView: NSScrollView) -> (character: Int, offset: CGFloat) {
+        let layoutManager = controller.textView.layoutManager!
+        let top = scrollView.contentView.bounds.minY - controller.textView.textContainerOrigin.y
+        let glyph = layoutManager.glyphIndex(for: NSPoint(x: 0, y: max(top, 0)),
+                                             in: controller.textView.textContainer!)
+        var line = NSRange()
+        let lineTop = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &line).minY
+        return (layoutManager.characterIndexForGlyph(at: line.location), lineTop - top)
+    }
+
+    /// `topLine`'s offset for `character`'s line, from a FULL layout.
+    private func exactOffset(_ controller: SourceEditorController, _ scrollView: NSScrollView,
+                             character: Int) -> CGFloat {
+        exactLineTop(controller, offset: character)
+            - (scrollView.contentView.bounds.minY - controller.textView.textContainerOrigin.y)
     }
 
     private func userAction(_ controller: SourceEditorController, _ body: () -> Void) {
@@ -481,6 +538,7 @@ final class SourceEditorControllerTests: XCTestCase {
         XCTAssertTrue(font?.fontDescriptor.symbolicTraits.contains(.monoSpace) ?? false)
         controller.placeCaret(atLine: 1_200)
         let caret = controller.textView.selectedRange()
+        let before = topLine(controller, scrollView)
 
         controller.apply(style: style(scale: 1.5))
         let zoomed = controller.textView.textStorage!.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
@@ -496,11 +554,10 @@ final class SourceEditorControllerTests: XCTestCase {
         // The top line stays the top line: at once within a line or two (the
         // layout manager's estimate), exactly once the relayout has settled.
         let storage = controller.textView.textStorage!.mutableString
-        let estimatedLine = SourceEditSupport.line(containing: topCharacter(controller, scrollView), in: storage)
-        XCTAssertLessThanOrEqual(abs(estimatedLine - 1_200), 3)
-        settle()
-        XCTAssertEqual(scrollView.contentView.bounds.minY, exactLineTop(controller, offset: caret.location),
-                       accuracy: 0.5)
+        let estimatedLine = SourceEditSupport.line(containing: topLine(controller, scrollView).character, in: storage)
+        XCTAssertLessThanOrEqual(abs(estimatedLine - SourceEditSupport.line(containing: before.character, in: storage)), 3)
+        settle(controller)
+        XCTAssertEqual(exactOffset(controller, scrollView, character: before.character), before.offset, accuracy: 0.5)
         XCTAssertFalse(controller.undoManager.canUndo)
         XCTAssertEqual(changes, 0)
     }
@@ -565,48 +622,92 @@ final class SourceEditorControllerTests: XCTestCase {
         check(reading: false)
     }
 
-    /// The character at the top of the visible area (container coordinates).
-    private func topCharacter(_ controller: SourceEditorController, _ scrollView: NSScrollView) -> Int {
-        let layoutManager = controller.textView.layoutManager!
-        let glyph = layoutManager.glyphIndex(for: NSPoint(x: 0, y: scrollView.contentView.bounds.minY),
-                                             in: controller.textView.textContainer!)
-        return layoutManager.characterIndexForGlyph(at: glyph)
-    }
-
-    func testResizingKeepsTheTopLineDeepInALongDocument() {
-        var rng = SystemRandomNumberGenerator()
-        let text = (0..<20_000).map { index in
-            String(repeating: "word ", count: Int.random(in: 0...40, using: &rng)) + "\(index)"
-        }.joined(separator: "\n")
-        let (controller, scrollView, window) = makeEditor(text, width: 900)
-        controller.scroll(toLine: 15_000)
+    func testRelayoutsKeepTheTopLineDeepInAWrappingDocument() {
+        // ~300 K UTF-16 units: the anchor stays below the exact-restore limit.
+        let (controller, scrollView, window) = makeEditor(wrappingLines(3_000), width: 900)
         let storage = controller.textView.textStorage!.mutableString
-        let target = SourceEditSupport.lineStart(15_000, in: storage)
-        XCTAssertEqual(topCharacter(controller, scrollView), target)
+        XCTAssertLessThan(storage.length, SourceEditorController.exactRestoreCharacterLimit)
+        controller.scroll(toLine: 2_000)
+        let anchor = topLine(controller, scrollView)
+        let anchorLine = SourceEditSupport.line(containing: anchor.character, in: storage)
         /// Immediately after a relayout: the estimate — the same text, give
-        /// or take a line or two (of 20 000, after the whole layout moved).
-        func checkTopLine(_ label: String, line: UInt = #line) {
-            let top = SourceEditSupport.line(containing: topCharacter(controller, scrollView), in: storage)
-            XCTAssertLessThanOrEqual(abs(top - 15_000), 3, label, line: line)
+        /// or take a line or two.
+        func checkEstimate(_ label: String, line: UInt = #line) {
+            let top = SourceEditSupport.line(containing: topLine(controller, scrollView).character, in: storage)
+            XCTAssertLessThanOrEqual(abs(top - anchorLine), 3, label, line: line)
         }
+        /// Once settled: the anchor's line exactly where it was on screen.
         func checkExact(_ label: String, line: UInt = #line) {
-            settle()
-            XCTAssertEqual(scrollView.contentView.bounds.minY, exactLineTop(controller, offset: target),
+            settle(controller, line: line)
+            XCTAssertEqual(exactOffset(controller, scrollView, character: anchor.character), anchor.offset,
                            accuracy: 0.5, label, line: line)
         }
         // Several widths in a row (a sidebar animating), then the exact landing.
         for width in [700, 1100, 640] as [CGFloat] {
             window.setContentSize(NSSize(width: width, height: 600))
             window.contentView!.layoutSubtreeIfNeeded()
-            checkTopLine("width \(width)")
+            checkEstimate("width \(width)")
         }
         checkExact("after resizing")
         controller.apply(style: style(reading: true))
-        checkTopLine("reading layout")
+        checkEstimate("reading layout")
         checkExact("reading layout")
         controller.apply(style: style(scale: 1.3, reading: true))
-        checkTopLine("zoom")
+        checkEstimate("zoom")
         checkExact("zoom")
+    }
+
+    /// Reading Mode changes the vertical inset (24 -> 48 pt). In a window
+    /// narrower than the 720 pt cap the column does not change, so the line
+    /// at the top must not move by a single point — at once and after settling.
+    func testReadingModeInsetChangeDoesNotShiftTheText() {
+        let (controller, scrollView, _) = makeEditor(wrappingLines(2_000), width: 700)
+        XCTAssertEqual(SourceEditorController.columnGeometry(clipWidth: scrollView.contentView.bounds.width,
+                                                             isReadingLayout: true).columnWidth,
+                       controller.textView.textContainer!.size.width, "same column in both layouts")
+        controller.scroll(toLine: 1_200)
+        let storage = controller.textView.textStorage!.mutableString
+        let target = SourceEditSupport.lineStart(1_200, in: storage)
+        func screenY() -> CGFloat {
+            exactLineTop(controller, offset: target) + controller.textView.textContainerOrigin.y
+                - scrollView.contentView.bounds.minY
+        }
+        let before = screenY()
+        controller.apply(style: style(reading: true))
+        XCTAssertEqual(controller.textView.textContainerInset.height, 48)
+        XCTAssertEqual(screenY(), before, accuracy: 0.5, "at once")
+        settle(controller)
+        XCTAssertEqual(screenY(), before, accuracy: 0.5, "after settling")
+        controller.apply(style: style(reading: false))
+        settle(controller)
+        XCTAssertEqual(screenY(), before, accuracy: 0.5, "and back")
+    }
+
+    /// Beyond `exactRestoreCharacterLimit` the estimate is kept: the exact
+    /// pass — a layout of everything above the anchor — does not run. Seen
+    /// directly: after settling, the text above the anchor is still unlaid
+    /// (background layout off here, so only the controller could lay it out).
+    func testExactRestoreIsSkippedBeyondTheCharacterLimit() {
+        let (controller, scrollView, window) = makeEditor(numberedLines(40_000), width: 900)
+        let layoutManager = controller.textView.layoutManager!
+        layoutManager.backgroundLayoutEnabled = false
+        controller.scroll(toLine: 30_000)
+        let anchor = topLine(controller, scrollView)
+        XCTAssertGreaterThan(anchor.character, SourceEditorController.exactRestoreCharacterLimit)
+        window.setContentSize(NSSize(width: 700, height: 600))
+        window.contentView!.layoutSubtreeIfNeeded()
+        XCTAssertTrue(controller.isRestorePending)
+        settle(controller)
+        XCTAssertLessThan(layoutManager.firstUnlaidCharacterIndex(), anchor.character)
+
+        // Control: below the limit the same sequence does lay out up to it.
+        controller.scroll(toLine: 5_000)
+        let near = topLine(controller, scrollView)
+        XCTAssertLessThan(near.character, SourceEditorController.exactRestoreCharacterLimit)
+        window.setContentSize(NSSize(width: 900, height: 600))
+        window.contentView!.layoutSubtreeIfNeeded()
+        settle(controller)
+        XCTAssertGreaterThanOrEqual(layoutManager.firstUnlaidCharacterIndex(), near.character)
     }
 
     func testAScrollAfterARelayoutIsNotUndoneByTheExactRestore() {
@@ -615,9 +716,25 @@ final class SourceEditorControllerTests: XCTestCase {
         window.setContentSize(NSSize(width: 400, height: 600))
         window.contentView!.layoutSubtreeIfNeeded()
         controller.scroll(toLine: 100)
-        settle()
+        settle(controller)
         let offset = SourceEditSupport.lineStart(100, in: controller.textView.textStorage!.mutableString)
         XCTAssertEqual(scrollView.contentView.bounds.minY, exactLineTop(controller, offset: offset), accuracy: 0.5)
+    }
+
+    func testLiveScrollAndKeyboardCommandsCancelTheExactRestore() {
+        let (controller, scrollView, window) = makeEditor(numberedLines(5_000), width: 900)
+        controller.scroll(toLine: 3_000)
+        window.setContentSize(NSSize(width: 600, height: 600))
+        window.contentView!.layoutSubtreeIfNeeded()
+        XCTAssertTrue(controller.isRestorePending)
+        NotificationCenter.default.post(name: NSScrollView.willStartLiveScrollNotification, object: scrollView)
+        XCTAssertFalse(controller.isRestorePending, "a scroller drag / trackpad scroll")
+
+        window.setContentSize(NSSize(width: 800, height: 600))
+        window.contentView!.layoutSubtreeIfNeeded()
+        XCTAssertTrue(controller.isRestorePending)
+        controller.textView.doCommand(by: #selector(NSResponder.pageDown(_:)))
+        XCTAssertFalse(controller.isRestorePending, "keyboard paging")
     }
 
     func testColoursAndAppearanceFollowADarkAndALightTheme() {
@@ -662,5 +779,98 @@ final class SourceEditorControllerTests: XCTestCase {
         let (controller, _, window) = makeEditor("x")
         controller.focus()
         XCTAssertTrue(window.firstResponder === controller.textView)
+    }
+
+    func testFocusBeforeTheViewHasAWindowIsHonouredWhenItGetsOne() {
+        let controller = SourceEditorController()
+        let scrollView = controller.makeScrollView(style: style())
+        controller.focus()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        windows.append(window)
+        window.contentView!.addSubview(scrollView)
+        XCTAssertTrue(window.firstResponder === controller.textView)
+    }
+
+    func testMakeScrollViewDetachesTheViewFromAnOldHost() {
+        let (controller, scrollView, window) = makeEditor("x")
+        XCTAssertTrue(scrollView.superview === window.contentView)
+        let again = controller.makeScrollView(style: style())
+        XCTAssertTrue(again === scrollView)
+        XCTAssertNil(again.superview, "never in two hosts at once")
+    }
+
+    // MARK: - Review fixes (undo, attributes, line breaks)
+
+    func testUndoManagerDoesNotDependOnTheDelegate() {
+        let (controller, _, window) = makeEditor("abc")
+        controller.textView.delegate = nil
+        XCTAssertTrue(controller.textView.undoManager === controller.undoManager)
+        XCTAssertFalse(controller.textView.undoManager === window.undoManager)
+        controller.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        type(controller, "d")
+        XCTAssertTrue(controller.undoManager.canUndo)
+        XCTAssertFalse(window.undoManager?.canUndo ?? false)
+    }
+
+    func testPastedCRLFTextIsItsOwnUndoStepBetweenTyping() {
+        let (controller, _, _) = makeEditor("")
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("QuickMDTests.SourceEditor.\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("x\r\ny", forType: .string)
+        type(controller, "abc")
+        userAction(controller) { _ = controller.textView.readSelection(from: pasteboard, type: .string) }
+        type(controller, "def")
+        XCTAssertEqual(controller.text, "abcx\nydef")
+        controller.undoManager.undo()
+        XCTAssertEqual(controller.text, "abcx\ny", "only the last typing goes")
+        controller.undoManager.undo()
+        XCTAssertEqual(controller.text, "abc", "then the paste")
+        controller.undoManager.undo()
+        XCTAssertEqual(controller.text, "")
+    }
+
+    func testUndoAfterARestyleRestoresTextInTheCurrentStyle() {
+        let (controller, _, _) = makeEditor("hello world")
+        controller.textView.setSelectedRange(NSRange(location: 6, length: 5))
+        userAction(controller) { controller.textView.delete(nil) }
+        XCTAssertEqual(controller.text, "hello ")
+        controller.apply(style: style(dark, scale: 2))
+        controller.undoManager.undo()
+        XCTAssertEqual(controller.text, "hello world")
+        let storage = controller.textView.textStorage!
+        var run = NSRange()
+        let font = storage.attribute(.font, at: 6, longestEffectiveRange: &run,
+                                     in: NSRange(location: 0, length: storage.length)) as? NSFont
+        XCTAssertEqual(font?.pointSize, BlockLayout.Code.codeFontSize * 2)
+        XCTAssertEqual(run, NSRange(location: 0, length: storage.length), "one run: a plain buffer")
+        assertSameColor(storage.attribute(.foregroundColor, at: 8, effectiveRange: nil) as? NSColor,
+                        dark.textColor, appearance: NSAppearance(named: .darkAqua))
+    }
+
+    func testShiftReturnAndOptionReturnInsertAPlainNewline() {
+        for selector in [#selector(NSResponder.insertLineBreak(_:)),
+                         #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:))] {
+            let (controller, _, _) = makeEditor("  item")
+            controller.textView.setSelectedRange(NSRange(location: 6, length: 0))
+            command(controller, selector)
+            XCTAssertEqual(controller.text, "  item\n  ", "\(selector)")
+            XCTAssertFalse(controller.text.unicodeScalars.contains("\u{2028}"))
+            controller.undoManager.undo()
+            XCTAssertEqual(controller.text, "  item")
+        }
+    }
+
+    func testLoadBreaksTypingCoalescing() {
+        let (controller, _, _) = makeEditor("")
+        type(controller, "old")
+        controller.load("new")
+        controller.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        type(controller, "er")
+        XCTAssertEqual(controller.text, "newer")
+        controller.undoManager.undo()
+        XCTAssertEqual(controller.text, "new")
     }
 }
