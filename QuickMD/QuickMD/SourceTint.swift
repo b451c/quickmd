@@ -13,6 +13,12 @@ import Foundation
 // No AppKit state, so the file is compiled into BOTH the app and the test
 // target. The editor applies the result as temporary layout-manager
 // attributes (`SourceEditorController`).
+//
+// Known cosmetic gap: a document with footnote definitions gets a synthetic
+// footnotes block from the parser, anchored to the document's LAST line. If
+// that line is the last line of a quote or a fence (no trailing newline), the
+// synthetic block takes it as its own start, so the quote / fence ends one
+// line early and that last line stays untinted.
 
 enum SourceTint {
 
