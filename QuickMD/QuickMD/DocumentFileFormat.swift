@@ -62,6 +62,13 @@ struct DocumentFileFormat: Equatable, Sendable {
         /// are mixed; the edit session refuses to edit in the first case
         /// rather than silently rewrite bytes the user never saw.
         let isByteExact: Bool
+        /// The decoded text, BEFORE line-ending normalization, re-encodes to
+        /// exactly the file's bytes (with the BOM): nothing was repaired or
+        /// dropped. Unlike `isByteExact` this ignores line endings, so it
+        /// tells "mixed line endings" (true — saving only unifies them) apart
+        /// from "mixed AND repaired by the decoder" (false). The edit session
+        /// refuses exactly when this is false.
+        let isLosslessDecode: Bool
     }
 
     var encoding: Encoding
@@ -100,10 +107,13 @@ struct DocumentFileFormat: Equatable, Sendable {
         let counts = LineEndingCounts(raw)
         let format = DocumentFileFormat(encoding: encoding, hasBOM: hasBOM, lineEnding: counts.dominant)
         let text = MarkdownDocument.normalizeLineEndings(raw)
-        // One extra encode per edit session (≤ 5 MB) — cheap insurance.
+        // Two extra encodes per edit session (≤ 2 MB) — cheap insurance.
+        // `.lf` passes the raw text through, line endings and all.
+        let asRead = DocumentFileFormat(encoding: encoding, hasBOM: hasBOM, lineEnding: .lf)
         return Decoded(format: format, text: text,
                        hasMixedLineEndings: counts.isMixed,
-                       isByteExact: format.encode(text) == data)
+                       isByteExact: format.encode(text) == data,
+                       isLosslessDecode: asRead.encode(raw) == data)
     }
 
     /// Mixed files get the dominant style; ties and break-free text get LF
