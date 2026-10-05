@@ -37,6 +37,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - **Byte-faithful saves** — the file keeps its encoding (UTF-8, UTF-8 with BOM, UTF-16, Latin-1), line endings, permissions, Finder tags and symlinks; only what you typed changes
 - **Nothing lost, nothing overwritten** — closing a tab, a window or the app with unsaved text always asks; if another app changes the file while you edit, QuickMD offers both versions instead of picking one
 - **A real text editor underneath** — undo, system find and replace, indentation that follows the line, a light syntax tint from the same parser that renders the document
+- Limits: files up to 2 MB are edited in place (larger ones open in your editor with `⌘E`), the syntax tint covers documents up to about 100 KB, read-only files are not edited, and a file with mixed line endings is saved with its dominant style
 - Still a viewer first: no WYSIWYG, no split panes
 
 ### Works with Your Editor
