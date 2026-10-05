@@ -1206,12 +1206,20 @@ final class SourceEditorControllerTests: XCTestCase {
     func testStaleParseResultIsDropped() {
         let (controller, _, _) = makeEditor("")
         waitUntil { controller.tintApplyCount == 1 }
-        // A big A, so its parse is likely still running when B arrives —
-        // either way only B's result may land.
-        let a = (0..<1_500).map { "# Heading \($0)\n\nParagraph \($0) with *some* text.\n" }.joined()
-        let b = "Plain\n\n> quote\n"
-        controller.load(a)
-        controller.load(b)
+        // A's parse is held at its start until B is loaded, so it provably
+        // finishes AFTER the buffer changed: only the generation check can
+        // keep its result out (B's parse waits behind it on the serial queue).
+        let started = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        controller.tintParseWillStart = {
+            started.signal()
+            release.wait()
+        }
+        controller.load("# A heading\n")
+        XCTAssertEqual(started.wait(timeout: .now() + 10), .success)
+        controller.tintParseWillStart = nil
+        controller.load("Plain\n\n> quote\n")
+        release.signal()
         waitUntil { controller.tintApplyCount == 2 }
         idle(0.5)
         XCTAssertEqual(controller.tintApplyCount, 2, "A's result was dropped")
@@ -1228,5 +1236,104 @@ final class SourceEditorControllerTests: XCTestCase {
         idle(0.5)
         XCTAssertEqual(controller.tintApplyCount, 1)
         XCTAssertNil(tint(controller, at: 0).color)
+    }
+
+    /// A buffer of exactly `length` UTF-16 units that starts with a heading.
+    private func headingText(length: Int) -> String {
+        let head = "# Heading\n"
+        let body = length - (head as NSString).length
+        let line = String(repeating: "x", count: 99) + "\n"
+        let text = head + String(repeating: line, count: body / 100) + String(repeating: "x", count: body % 100)
+        precondition((text as NSString).length == length)
+        return text
+    }
+
+    func testSizeLimitBoundary() {
+        let limit = SourceEditorController.tintCharacterLimit
+        let (controller, _, _) = makeEditor("")
+        waitUntil { controller.tintApplyCount == 1 }
+        controller.load(headingText(length: limit))
+        waitUntil { controller.tintApplyCount == 2 }
+        assertSameColor(tint(controller, at: 0).color, light.keywordColor, appearance: nil)
+        controller.load(headingText(length: limit + 1))
+        idle(0.5)
+        XCTAssertEqual(controller.tintApplyCount, 2, "one unit over the limit is not parsed")
+        XCTAssertNil(tint(controller, at: 0).color)
+    }
+
+    func testGrowingPastTheLimitClearsTheTintAndShrinkingRestoresIt() {
+        let limit = SourceEditorController.tintCharacterLimit
+        let (controller, _, _) = makeEditor(headingText(length: limit))
+        waitUntil { controller.tintApplyCount == 1 }
+        XCTAssertNotNil(tint(controller, at: 0).color)
+        controller.textView.setSelectedRange(NSRange(location: limit, length: 0))
+        type(controller, "y")
+        waitUntil { tint(controller, at: 0).color == nil }
+        command(controller, #selector(NSResponder.deleteBackward(_:)))
+        XCTAssertEqual(controller.textView.textStorage!.length, limit)
+        waitUntil { tint(controller, at: 0).color != nil }
+        assertSameColor(tint(controller, at: 0).color, light.keywordColor, appearance: nil)
+    }
+
+    func testTextTypedOnANewLineAfterATintedLineIsNotTinted() {
+        let (controller, _, _) = makeEditor("# Title\n\n```\ncode\n```")
+        waitUntil { controller.tintApplyCount == 1 }
+        // Return at the end of the heading, then a paragraph without a pause.
+        controller.textView.setSelectedRange(NSRange(location: 7, length: 0))
+        command(controller, #selector(NSResponder.insertNewline(_:)))
+        type(controller, "Para")
+        XCTAssertEqual(controller.text, "# Title\nPara\n\n```\ncode\n```")
+        XCTAssertEqual(controller.tintApplyCount, 1, "no re-tint yet")
+        XCTAssertNil(tint(controller, at: 8).color)
+        XCTAssertNil(tint(controller, at: 11).color)
+        assertSameColor(tint(controller, at: 0).color, light.keywordColor, appearance: nil)
+        // Typing inside a tinted line keeps the colour of the rest of it (the
+        // typed character itself waits for the re-tint).
+        controller.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        type(controller, "x")
+        assertSameColor(tint(controller, at: 2).color, light.keywordColor, appearance: nil)
+        assertSameColor(tint(controller, at: 4).color, light.keywordColor, appearance: nil)
+        assertSameColor(tint(controller, at: 7).color, light.keywordColor, appearance: nil)
+        // The same after a closing fence.
+        let end = controller.textView.textStorage!.length
+        controller.textView.setSelectedRange(NSRange(location: end, length: 0))
+        command(controller, #selector(NSResponder.insertNewline(_:)))
+        type(controller, "after")
+        XCTAssertEqual(controller.tintApplyCount, 1, "no re-tint yet")
+        XCTAssertNil(tint(controller, at: end + 1).color)
+        XCTAssertNil(tint(controller, at: end + 5).color)
+    }
+
+    func testContinuousTypingIsReTintedAfterTheMaximumWait() {
+        let (controller, _, _) = makeEditor("Body\n")
+        waitUntil { controller.tintApplyCount == 1 }
+        controller.textView.setSelectedRange(NSRange(location: 5, length: 0))
+        // Keystrokes closer together than the debounce, for longer than the
+        // maximum wait: the debounce alone would never fire.
+        let start = Date()
+        var tintedWhileTyping = false
+        while Date().timeIntervalSince(start) < SourceEditorController.tintMaximumWait + 0.8 {
+            type(controller, "x")
+            idle(SourceEditorController.tintDebounce / 4)
+            if controller.tintApplyCount > 1 { tintedWhileTyping = true }
+        }
+        XCTAssertTrue(tintedWhileTyping)
+    }
+
+    func testUndoAndRedoReTint() {
+        let (controller, _, _) = makeEditor("Body\n")
+        waitUntil { controller.tintApplyCount == 1 }
+        controller.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        type(controller, "# ")
+        waitUntil { controller.tintApplyCount == 2 }
+        assertSameColor(tint(controller, at: 0).color, light.keywordColor, appearance: nil)
+        controller.undoManager.undo()
+        XCTAssertEqual(controller.text, "Body\n")
+        waitUntil { controller.tintApplyCount == 3 }
+        XCTAssertNil(tint(controller, at: 0).color)
+        controller.undoManager.redo()
+        XCTAssertEqual(controller.text, "# Body\n")
+        waitUntil { controller.tintApplyCount == 4 }
+        assertSameColor(tint(controller, at: 0).color, light.keywordColor, appearance: nil)
     }
 }

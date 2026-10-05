@@ -120,7 +120,7 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
                 && lhs.hasSameTintColors(as: rhs)
         }
 
-        /// The colours of the block tint (`tintColor(for:)`).
+        /// The colours of the block tint (`paintTint`).
         func hasSameTintColors(as other: Style) -> Bool {
             theme.keywordColor == other.theme.keywordColor
                 && theme.secondaryTextColor == other.theme.secondaryTextColor
@@ -218,8 +218,12 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
         }
     }
     /// Quiet time after the last edit before the buffer is re-parsed for the
-    /// tint. Typing never parses; only a pause does.
+    /// tint. A keystroke never parses by itself; a pause does.
     static let tintDebounce: TimeInterval = 0.2
+    /// The longest an edit waits for its re-tint while keystrokes keep
+    /// arriving: continuous typing never pauses for `tintDebounce`, and the
+    /// tint of the text around the caret must not stay wrong all that time.
+    static let tintMaximumWait: TimeInterval = 1
     /// Above this many UTF-16 units the editor shows untinted text. The parse
     /// renders every block, so a re-tint costs what opening the document
     /// costs. Measured 2026-10-05 (M1 Pro, Release, off-main): ~1.3 ms per KB
@@ -235,6 +239,9 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     private var textGeneration = 0
     /// The debounce after an edit; it takes the snapshot when it fires.
     private var tintDebounceWork: DispatchWorkItem?
+    /// When the oldest edit no parse has seen yet was made — the
+    /// `tintMaximumWait` clock. Reset when a parse takes its snapshot.
+    private var firstUntintedEdit: DispatchTime?
     /// The off-main parse. Cancelling it only stops one that has not started;
     /// one already running finishes and is dropped by the generation check.
     private var tintParseWork: DispatchWorkItem?
@@ -246,6 +253,9 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     private var appliedTint: (generation: Int, spans: [SourceTint.Span])?
     /// How many parse results were applied (tests: a stale one never is).
     private(set) var tintApplyCount = 0
+    /// Test seam: runs on the tint queue right before a parse starts, so a
+    /// test can hold a parse until the buffer has changed under it.
+    var tintParseWillStart: (@Sendable () -> Void)?
 
     override init() {
         // An explicit TextKit 1 stack: an NSTextView created with a container
@@ -875,16 +885,29 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     // `onChange`, the storage delegate's base-attribute stamping or anything
     // that compares the buffer. The parse is the real `MarkdownBlockParser`,
     // off the main thread on a snapshot; `SourceTint` maps its blocks to ranges.
+    //
+    // Between an edit and its re-tint the layout manager keeps the existing
+    // runs in place (shifted with the text) and gives INSERTED characters no
+    // temporary colour at all — measured 2026-10-05 at a run's end, inside a
+    // run and after Return — so new text never inherits a heading's colour.
+    // Do not strip the colour from `didProcessEditing`: it runs before the
+    // layout manager has processed the edit, and removing there (tried)
+    // uncoloured the rest of the line the user was typing in.
 
-    /// After an edit: re-tint once typing pauses. Per keystroke this only
-    /// re-arms a timer — the snapshot is taken when it fires.
+    /// After an edit: re-tint once typing pauses, or `tintMaximumWait` after
+    /// the first edit not parsed yet, whichever comes first. Per keystroke
+    /// this only re-arms a timer — the snapshot is taken when it fires.
     private func scheduleTint() {
         tintDebounceWork?.cancel()
         tintDebounceWork = nil
         guard isTintEnabled else { return }
+        let now = DispatchTime.now()
+        let first = firstUntintedEdit ?? now
+        firstUntintedEdit = first
         let work = DispatchWorkItem { [weak self] in self?.startTint() }
         tintDebounceWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.tintDebounce, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: min(now + Self.tintDebounce, first + Self.tintMaximumWait),
+                                      execute: work)
     }
 
     /// Snapshots the buffer and parses it off the main thread. Supersedes
@@ -897,12 +920,15 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
             return
         }
         let generation = textGeneration
+        firstUntintedEdit = nil
         // The one O(n) step on the main thread: a copy of the buffer, so the
         // parse never reads a storage that keeps changing under it.
         let snapshot = textStorage.string
         // Any theme parses to the same block kinds and lines.
         let parser = MarkdownBlockParser(theme: style?.theme ?? MarkdownTheme.cached(for: .light))
+        let willStart = tintParseWillStart
         let work = DispatchWorkItem { [weak self] in
+            willStart?()
             let ns = snapshot as NSString
             let spans = SourceTint.spans(for: parser.parse(snapshot),
                                          lineStarts: SourceEditSupport.lineStarts(in: ns), in: ns)
@@ -915,6 +941,7 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     private func cancelTint() {
         tintDebounceWork?.cancel()
         tintDebounceWork = nil
+        firstUntintedEdit = nil
         tintParseWork?.cancel()
         tintParseWork = nil
     }
@@ -1071,9 +1098,14 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     /// input method or a dead key composing there.
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
-        // Every character change, whichever path made it: a tint parsed from
-        // an older text must not be applied.
-        if editedMask.contains(.editedCharacters) { textGeneration &+= 1 }
+        // Every character change, whichever path made it (typing, undo, the
+        // find bar, `load`): a tint parsed from an older text must not be
+        // applied, and a new one is due. `load` / `reload` / `replaceAll`
+        // start theirs right after, which supersedes this debounce.
+        if editedMask.contains(.editedCharacters) {
+            textGeneration &+= 1
+            scheduleTint()
+        }
         guard editedMask.contains(.editedCharacters), !isFixingAttributes,
               editedRange.length > 0, NSMaxRange(editedRange) <= textStorage.length else { return }
         let attributes = baseAttributes
@@ -1087,7 +1119,6 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
         cachedIndentUnit = nil
         // A kept top line is a character offset; an edit may have moved it.
         dropPendingAnchor()
-        scheduleTint()
         onChange?()
     }
 }
