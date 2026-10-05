@@ -1102,4 +1102,131 @@ final class SourceEditorControllerTests: XCTestCase {
         window.contentView!.addSubview(scrollView)
         XCTAssertFalse(window.firstResponder === controller.textView)
     }
+
+    // MARK: - Tint (S-D14a)
+
+    /// The temporary foreground colour at `index` and the whole run it covers.
+    private func tint(_ controller: SourceEditorController, at index: Int) -> (color: NSColor?, range: NSRange) {
+        var range = NSRange()
+        let whole = NSRange(location: 0, length: controller.textView.textStorage!.length)
+        let color = controller.textView.layoutManager!.temporaryAttribute(
+            .foregroundColor, atCharacterIndex: index, longestEffectiveRange: &range, in: whole) as? NSColor
+        return (color, range)
+    }
+
+    /// Runs the run loop for `seconds` — long enough for a debounce or a
+    /// stale parse to have landed if it were going to.
+    private func idle(_ seconds: TimeInterval) {
+        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    func testTintArrivesAfterLoadAsTemporaryAttributes() {
+        let (controller, _, _) = makeEditor("# Heading\n\nBody text\n\n> quote\n")
+        waitUntil { controller.tintApplyCount == 1 }
+        let heading = tint(controller, at: 0)
+        assertSameColor(heading.color, light.keywordColor, appearance: nil)
+        XCTAssertEqual(heading.range, NSRange(location: 0, length: 9))
+        XCTAssertNil(tint(controller, at: 12).color, "a paragraph is not tinted")
+        assertSameColor(tint(controller, at: 22).color, light.blockquoteColor, appearance: nil)
+        // The storage still holds one plain run in the text colour.
+        let storage = controller.textView.textStorage!
+        var run = NSRange()
+        let stored = storage.attribute(.foregroundColor, at: 0, effectiveRange: &run) as? NSColor
+        assertSameColor(stored, light.textColor, appearance: nil)
+        XCTAssertEqual(run, NSRange(location: 0, length: storage.length))
+    }
+
+    func testEditReTintsAfterTheDebounce() {
+        let (controller, _, _) = makeEditor("# Top\n\nBody\n")
+        waitUntil { controller.tintApplyCount == 1 }
+        controller.textView.setSelectedRange(NSRange(location: 7, length: 0))
+        type(controller, "## ")
+        // Nothing is parsed on the keystroke; the old tint stays put meanwhile
+        // (the storage delegate's attribute stamping does not touch it).
+        XCTAssertEqual(controller.tintApplyCount, 1)
+        assertSameColor(tint(controller, at: 0).color, light.keywordColor, appearance: nil)
+        idle(SourceEditorController.tintDebounce / 2)
+        XCTAssertEqual(controller.tintApplyCount, 1, "still inside the debounce")
+        waitUntil { controller.tintApplyCount == 2 }
+        let heading = tint(controller, at: 7)
+        assertSameColor(heading.color, light.keywordColor, appearance: nil)
+        XCTAssertEqual(heading.range, NSRange(location: 7, length: 7))
+    }
+
+    func testTintAddsNoUndoEntryAndNoChange() {
+        var changes = 0
+        let (controller, _, _) = makeEditor("Body\n")
+        controller.onChange = { changes += 1 }
+        waitUntil { controller.tintApplyCount == 1 }
+        XCTAssertFalse(controller.undoManager.canUndo)
+        XCTAssertEqual(changes, 0)
+        controller.textView.setSelectedRange(NSRange(location: 0, length: 0))
+        type(controller, "# ")
+        XCTAssertEqual(changes, 1)
+        waitUntil { controller.tintApplyCount == 2 }
+        XCTAssertEqual(changes, 1, "the tint fires no onChange")
+        controller.undoManager.undo()
+        XCTAssertEqual(controller.text, "Body\n")
+        XCTAssertFalse(controller.undoManager.canUndo, "the typing was the only undo step")
+    }
+
+    func testStyleChangeRecoloursWithoutParsing() {
+        let (controller, _, _) = makeEditor("# Heading\n\n```\ncode\n```\n")
+        waitUntil { controller.tintApplyCount == 1 }
+        XCTAssertNotEqual(NSColor(light.keywordColor), NSColor(dark.keywordColor))
+        controller.apply(style: style(dark))
+        assertSameColor(tint(controller, at: 0).color, dark.keywordColor, appearance: nil)
+        assertSameColor(tint(controller, at: 12).color, dark.secondaryTextColor, appearance: nil)
+        // A zoom restyles the storage; the tint survives it.
+        controller.apply(style: style(dark, scale: 1.5))
+        assertSameColor(tint(controller, at: 0).color, dark.keywordColor, appearance: nil)
+        idle(0.3)
+        XCTAssertEqual(controller.tintApplyCount, 1, "re-coloured, not re-parsed")
+    }
+
+    func testTintOffSwitchLeavesNoTemporaryColour() {
+        let (controller, _, _) = makeEditor("# Heading\n\n> quote\n")
+        waitUntil { controller.tintApplyCount == 1 }
+        controller.isTintEnabled = false
+        let length = controller.textView.textStorage!.length
+        let whole = tint(controller, at: 0)
+        XCTAssertNil(whole.color)
+        XCTAssertEqual(whole.range, NSRange(location: 0, length: length))
+        controller.load("## Other\n")
+        controller.textView.setSelectedRange(NSRange(location: 9, length: 0))
+        type(controller, "x")
+        idle(SourceEditorController.tintDebounce + 0.3)
+        XCTAssertEqual(controller.tintApplyCount, 1, "nothing parsed while off")
+        XCTAssertNil(tint(controller, at: 4).color)
+        controller.isTintEnabled = true
+        waitUntil { controller.tintApplyCount == 2 }
+        XCTAssertNotNil(tint(controller, at: 4).color)
+    }
+
+    func testStaleParseResultIsDropped() {
+        let (controller, _, _) = makeEditor("")
+        waitUntil { controller.tintApplyCount == 1 }
+        // A big A, so its parse is likely still running when B arrives —
+        // either way only B's result may land.
+        let a = (0..<1_500).map { "# Heading \($0)\n\nParagraph \($0) with *some* text.\n" }.joined()
+        let b = "Plain\n\n> quote\n"
+        controller.load(a)
+        controller.load(b)
+        waitUntil { controller.tintApplyCount == 2 }
+        idle(0.5)
+        XCTAssertEqual(controller.tintApplyCount, 2, "A's result was dropped")
+        XCTAssertNil(tint(controller, at: 0).color)
+        assertSameColor(tint(controller, at: 7).color, light.blockquoteColor, appearance: nil)
+    }
+
+    func testTintIsSkippedAboveTheSizeLimit() {
+        let line = String(repeating: "x", count: 99) + "\n"
+        let big = "# Heading\n" + String(repeating: line, count: SourceEditorController.tintCharacterLimit / 100 + 1)
+        let (controller, _, _) = makeEditor("# Small\n")
+        waitUntil { controller.tintApplyCount == 1 }
+        controller.load(big)
+        idle(0.5)
+        XCTAssertEqual(controller.tintApplyCount, 1)
+        XCTAssertNil(tint(controller, at: 0).color)
+    }
 }
