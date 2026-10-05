@@ -35,6 +35,8 @@ struct QuickMDApp: App {
                 }
                 .keyboardShortcut("w", modifiers: .command)
                 Divider()
+                SourceEditCommands()
+                Divider()
                 OpenInExternalEditorCommand()
                 Divider()
                 ExportPDFCommand()
@@ -162,30 +164,67 @@ struct ToggleDocumentListCommand: View {
     }
 }
 
+/// File ▸ Edit Source / Done Editing (⌥⌘E), Save (⌘S), Discard Changes —
+/// Source Edit for the frontmost document only, via @FocusedValue like every
+/// other per-document command (an NSEvent monitor would act on every tab).
+/// ⌘S belongs to Save only while there is something to save: the viewer has
+/// no other Save, so a disabled item costs nothing.
+struct SourceEditCommands: View {
+    @FocusedValue(\.toggleSourceEditAction) var toggleSourceEditAction
+    @FocusedValue(\.saveSourceAction) var saveSourceAction
+    @FocusedValue(\.discardSourceChangesAction) var discardSourceChangesAction
+    @FocusedValue(\.sourceEditState) var sourceEditState
+
+    var body: some View {
+        Button(sourceEditState?.isEditing == true ? "Done Editing" : "Edit Source") {
+            toggleSourceEditAction?()
+        }
+        .keyboardShortcut("e", modifiers: [.command, .option])
+        .disabled(toggleSourceEditAction == nil)
+
+        Button("Save") {
+            saveSourceAction?()
+        }
+        .keyboardShortcut("s", modifiers: .command)
+        .disabled(saveSourceAction == nil || sourceEditState?.canSave != true)
+
+        Button("Discard Changes") {
+            discardSourceChangesAction?()
+        }
+        .disabled(discardSourceChangesAction == nil || sourceEditState?.canSave != true)
+    }
+}
+
 struct CopyMarkdownCommand: View {
     @FocusedValue(\.copyDocumentAction) var copyDocumentAction
+    @FocusedValue(\.sourceEditState) var sourceEditState
 
     var body: some View {
         Button("Copy Markdown") {
             copyDocumentAction?()
         }
         .keyboardShortcut("c", modifiers: [.command, .shift])
-        .disabled(copyDocumentAction == nil)
+        // While editing it would copy the saved text, not the one on screen.
+        .disabled(copyDocumentAction == nil || sourceEditState?.isEditing == true)
     }
 }
 
 struct OpenInExternalEditorCommand: View {
     @FocusedValue(\.openInExternalEditorAction) var openInExternalEditorAction
+    @FocusedValue(\.sourceEditState) var sourceEditState
 
     var body: some View {
         Button("Open in External Editor") {
             openInExternalEditorAction?()
         }
         .keyboardShortcut("e", modifiers: .command)
-        .disabled(openInExternalEditorAction == nil)
+        // Two editors on one file while editing here: off until Done.
+        .disabled(openInExternalEditorAction == nil || sourceEditState?.isEditing == true)
     }
 }
 
+/// ⌘F: the document search — or, while Source Edit is showing, the editor's
+/// own find bar (the focused view decides; `MarkdownView.findCommand`).
 struct FindMenuCommand: View {
     @FocusedValue(\.searchAction) var searchAction
 

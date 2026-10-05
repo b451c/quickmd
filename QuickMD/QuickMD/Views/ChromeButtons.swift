@@ -319,10 +319,13 @@ struct CopySourceButton: View {
     }
 }
 
-// MARK: - Edit In External Editor Button
+// MARK: - Edit Source Button
 
-/// Top-right pencil button — one-click handoff to the user's editor (⌘E).
-struct EditInEditorButton: View {
+/// Top-right pencil button — fixes the source in place (Source Edit, ⌥⌘E).
+/// Since v1.12 (U2) the pencil means "edit HERE"; the handoff to another
+/// application has its own pill (`OpenInEditorButton`). One of the three ways
+/// into Source Edit, with File ▸ Edit Source and the shortcut.
+struct EditSourceButton: View {
     let theme: MarkdownTheme
     let action: () -> Void
 
@@ -330,12 +333,69 @@ struct EditInEditorButton: View {
         ChromePill(
             theme: theme,
             title: "Edit",
-            help: "Open in external editor (⌘E)",
+            help: "Edit source (⌥⌘E)",
             action: action
         ) {
             Image(systemName: "pencil")
                 .font(.system(size: 11))
         }
+        .accessibilityIdentifier("source-edit")
+    }
+}
+
+// MARK: - Open In External Editor Button
+
+/// Top-right handoff to the user's configured editor (⌘E), at the line being
+/// read when that editor supports line links. Was the pencil until v1.12.
+struct OpenInEditorButton: View {
+    let theme: MarkdownTheme
+    let action: () -> Void
+
+    var body: some View {
+        ChromePill(
+            theme: theme,
+            title: "Open in editor",
+            help: "Open in external editor (⌘E)",
+            action: action
+        ) {
+            Image(systemName: "arrow.up.forward.square")
+                .font(.system(size: 11))
+        }
+    }
+}
+
+// MARK: - Source Edit Pills (Save / Done)
+
+/// The whole cluster while Source Edit shows (S-D12) — also in Reading Mode,
+/// where the cluster is otherwise hidden: a mode you could only leave by
+/// shortcut is not acceptable. Save is dimmed and inert while there is
+/// nothing to save, but stays in place so Done never shifts under the pointer.
+struct SourceSaveButton: View {
+    let theme: MarkdownTheme
+    let isEnabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        ChromePill(theme: theme, title: "Save", help: "Save (⌘S)", action: action) {
+            Image(systemName: "square.and.arrow.down")
+                .font(.system(size: 11))
+        }
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.5)
+        .accessibilityIdentifier("source-save")
+    }
+}
+
+struct SourceDoneButton: View {
+    let theme: MarkdownTheme
+    let action: () -> Void
+
+    var body: some View {
+        ChromePill(theme: theme, title: "Done", help: "Done editing (Esc)", action: action) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 11))
+        }
+        .accessibilityIdentifier("source-done")
     }
 }
 

@@ -66,7 +66,55 @@ struct FocusedExportDocumentLocationKey: FocusedValueKey {
     typealias Value = ExportDocumentLocation
 }
 
+/// Source Edit (v1.12 S-D12) as the File menu sees the focused document: the
+/// title of "Edit Source" / "Done Editing", whether Save and Discard Changes
+/// are enabled, and the commands that must be off while the editor shows
+/// (Export, Print, Copy Markdown, Open in External Editor act on the SAVED
+/// text, not the one the user is looking at). Non-optional for the same
+/// reason as `FocusedExportNameKey`.
+struct SourceEditMenuState: Equatable {
+    let isEditing: Bool
+    let isDirty: Bool
+
+    var canSave: Bool { isEditing && isDirty }
+}
+
+struct FocusedSourceEditStateKey: FocusedValueKey {
+    typealias Value = SourceEditMenuState
+}
+
+/// ⌥⌘E — enter or leave Source Edit in the FOCUSED document only.
+struct FocusedToggleSourceEditKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+/// ⌘S while editing.
+struct FocusedSaveSourceKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+/// File ▸ Discard Changes while editing.
+struct FocusedDiscardSourceChangesKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
+    var sourceEditState: SourceEditMenuState? {
+        get { self[FocusedSourceEditStateKey.self] }
+        set { self[FocusedSourceEditStateKey.self] = newValue }
+    }
+    var toggleSourceEditAction: (() -> Void)? {
+        get { self[FocusedToggleSourceEditKey.self] }
+        set { self[FocusedToggleSourceEditKey.self] = newValue }
+    }
+    var saveSourceAction: (() -> Void)? {
+        get { self[FocusedSaveSourceKey.self] }
+        set { self[FocusedSaveSourceKey.self] = newValue }
+    }
+    var discardSourceChangesAction: (() -> Void)? {
+        get { self[FocusedDiscardSourceChangesKey.self] }
+        set { self[FocusedDiscardSourceChangesKey.self] = newValue }
+    }
     var documentText: String? {
         get { self[FocusedDocumentTextKey.self] }
         set { self[FocusedDocumentTextKey.self] = newValue }
@@ -913,6 +961,7 @@ struct ExportPDFCommand: View {
     @FocusedValue(\.documentText) private var documentText
     @FocusedValue(\.exportName) private var exportName
     @FocusedValue(\.exportDocumentLocation) private var documentLocation
+    @FocusedValue(\.sourceEditState) private var sourceEditState
 
     var body: some View {
         Button("Export as PDF\u{2026}") {
@@ -921,7 +970,8 @@ struct ExportPDFCommand: View {
                                              documentURL: documentLocation?.url)
             }
         }
-        .disabled(documentText?.isEmpty ?? true)
+        // While editing the export would be of the saved text, not the screen.
+        .disabled((documentText?.isEmpty ?? true) || sourceEditState?.isEditing == true)
         .keyboardShortcut("e", modifiers: [.command, .shift])
     }
 }
@@ -929,6 +979,7 @@ struct ExportPDFCommand: View {
 struct PrintCommand: View {
     @FocusedValue(\.documentText) private var documentText
     @FocusedValue(\.exportDocumentLocation) private var documentLocation
+    @FocusedValue(\.sourceEditState) private var sourceEditState
 
     var body: some View {
         Button("Print\u{2026}") {
@@ -936,7 +987,7 @@ struct PrintCommand: View {
                 PrintManager.printDocument(documentText: text, documentURL: documentLocation?.url)
             }
         }
-        .disabled(documentText?.isEmpty ?? true)
+        .disabled((documentText?.isEmpty ?? true) || sourceEditState?.isEditing == true)
         .keyboardShortcut("p", modifiers: .command)
     }
 }
