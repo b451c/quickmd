@@ -130,6 +130,10 @@
 		A1B2C3D401000130 /* SourceEditSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000130 /* SourceEditSupport.swift */; };
 		A1B2C3D401000131 /* SourceEditSupport.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000130 /* SourceEditSupport.swift */; };
 		A1B2C3D401000132 /* SourceEditSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000131 /* SourceEditSupportTests.swift */; };
+		A1B2C3D401000150 /* SourceEditorController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000150 /* SourceEditorController.swift */; };
+		A1B2C3D401000151 /* SourceEditorController.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000150 /* SourceEditorController.swift */; };
+		A1B2C3D401000152 /* SourceEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000151 /* SourceEditorView.swift */; };
+		A1B2C3D401000153 /* SourceEditorControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000152 /* SourceEditorControllerTests.swift */; };
 		A1B2C3D4010000F0 /* HeadingLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000F0 /* HeadingLayoutTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -157,6 +161,9 @@
 		A1B2C3D400000123 /* DocumentFileWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentFileWriterTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000130 /* SourceEditSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditSupport.swift; sourceTree = "<group>"; };
 		A1B2C3D400000131 /* SourceEditSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditSupportTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000150 /* SourceEditorController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditorController.swift; sourceTree = "<group>"; };
+		A1B2C3D400000151 /* SourceEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditorView.swift; sourceTree = "<group>"; };
+		A1B2C3D400000152 /* SourceEditorControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditorControllerTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4000000F0 /* HeadingLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadingLayoutTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000001 /* QuickMDApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickMDApp.swift; sourceTree = "<group>"; };
 		A1B2C3D400000002 /* MarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDocument.swift; sourceTree = "<group>"; };
@@ -288,6 +295,7 @@
 				A1B2C3D400000122 /* DocumentFileFormatTests.swift */,
 				A1B2C3D400000123 /* DocumentFileWriterTests.swift */,
 				A1B2C3D400000131 /* SourceEditSupportTests.swift */,
+				A1B2C3D400000152 /* SourceEditorControllerTests.swift */,
 			);
 			path = QuickMDTests;
 			sourceTree = "<group>";
@@ -311,6 +319,7 @@
 				A1B2C3D400000120 /* DocumentFileFormat.swift */,
 				A1B2C3D400000121 /* DocumentFileWriter.swift */,
 				A1B2C3D400000130 /* SourceEditSupport.swift */,
+				A1B2C3D400000150 /* SourceEditorController.swift */,
 				A1B2C3D40000003D /* SectionExtractor.swift */,
 				A1B2C3D40000003E /* DocumentSearch.swift */,
 				A1B2C3D40000003F /* WindowTabbing.swift */,
@@ -360,6 +369,7 @@
 				A1B2C3D400000063 /* FontPickerView.swift */,
 				A1B2C3D40000006C /* VirtualBlockList.swift */,
 				A1B2C3D40000006D /* SVGBlockView.swift */,
+				A1B2C3D400000151 /* SourceEditorView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -597,6 +607,8 @@
 				A1B2C3D401000120 /* DocumentFileFormat.swift in Sources */,
 				A1B2C3D401000122 /* DocumentFileWriter.swift in Sources */,
 				A1B2C3D401000130 /* SourceEditSupport.swift in Sources */,
+				A1B2C3D401000150 /* SourceEditorController.swift in Sources */,
+				A1B2C3D401000152 /* SourceEditorView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -644,6 +656,8 @@
 				A1B2C3D401000125 /* DocumentFileWriterTests.swift in Sources */,
 				A1B2C3D401000131 /* SourceEditSupport.swift in Sources (Tests) */,
 				A1B2C3D401000132 /* SourceEditSupportTests.swift in Sources */,
+				A1B2C3D401000151 /* SourceEditorController.swift in Sources (Tests) */,
+				A1B2C3D401000153 /* SourceEditorControllerTests.swift in Sources */,
 				A1B2C3D4010000F0 /* HeadingLayoutTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
