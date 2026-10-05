@@ -1,6 +1,6 @@
 # Privacy Policy for QuickMD
 
-**Last updated: October 1, 2026**
+**Last updated: October 5, 2026**
 
 ## Overview
 
@@ -30,12 +30,13 @@ Specifically, QuickMD does NOT collect:
 
 ### File Access
 
-QuickMD only accesses files that **you explicitly open**.
+QuickMD works with the files **you open**, and with what those files point to.
 
-- Files are read locally from your device
-- File contents are never transmitted over the internet
-- Files are never uploaded to any server
-- No files are cached or stored by QuickMD outside of macOS's standard document handling
+- It reads the Markdown file you open, the local images that file references, and another Markdown file when you click a link to it
+- It writes to a file only when you ask it to: saving your changes in Source Edit writes to the document you are editing; "Save a Copy" and "Export as PDF" write where you choose
+- Your settings, the list of recent documents and any custom themes you add are stored on your Mac
+- Remote images you view may be kept in the standard macOS network cache on your Mac
+- File contents are never transmitted over the internet and never uploaded to any server
 
 ### Network Access
 
@@ -65,20 +66,27 @@ The only external interactions are:
 - **Tip Jar** (Mac App Store version only, optional) - tips are processed by Apple's in-app purchase system.
 - **Donation goal on qmd.app** - the website (not the app) shows a donation total. When Buy Me a Coffee or Ko-fi notify qmd.app about a donation, only the amount, currency, date and the platform's transaction ID are stored - never names, email addresses or messages.
 
-### App Sandbox
+### What QuickMD Can Access
 
-QuickMD runs in **macOS App Sandbox** with the following permissions:
+QuickMD is distributed in two builds, and macOS limits them differently.
+
+**Mac App Store build** - runs in the macOS App Sandbox with these permissions:
 
 | Permission | Purpose |
 |------------|---------|
-| **User Selected File (Read Only)** | To read Markdown files you explicitly open |
-| **Outgoing Network Connections** | To fetch remote images from URLs in your Markdown files, and (GitHub version) Check for Updates |
+| **User Selected File (Read/Write)** | To read the Markdown files you open and to save your Source Edit changes to them |
+| **App-Scoped Bookmarks** | To remember a folder you allowed, so images next to your documents keep loading |
+| **Outgoing Network Connections** | To fetch remote images from URLs in your Markdown files |
+| **Printing** | To print and export to PDF |
 
-QuickMD has **NO** access to:
+It cannot read anything else unless you grant access to a folder when macOS asks.
+
+**GitHub / Homebrew build** - signed with a Developer ID and notarized by Apple, but **not sandboxed**. It can read the files your user account can read, which lets images next to a document and linked Markdown files open without extra prompts. macOS still asks for your permission before any app reads protected folders such as Desktop, Documents or Downloads. This build also contacts GitHub when you choose "Check for Updates".
+
+Neither build accesses:
 - Your contacts, calendar, or location
 - Your camera, microphone, or photos
-- Your Downloads, Desktop, or Documents folders (unless you explicitly open a file from there)
-- Any system files or settings
+- Files other than the documents you open, what they reference, and QuickMD's own settings and themes
 
 ### Open Source
 

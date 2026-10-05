@@ -175,7 +175,7 @@ Now all your Markdown files will open instantly with QuickMD!
 - One image loader and cache for local, remote and embedded images, on screen and in PDF
 - Per-block **vector PDF export** — selectable text, embedded fonts, Mermaid diagrams as images, multi-page pagination
 - Source Edit writes the file in place (inode, permissions and extended attributes survive) and re-encodes exactly what it decoded; the unsaved-changes guard sits in front of the window's own delegate, so the system's document machinery is untouched
-- App Sandbox with security-scoped bookmarks for local images
+- The Mac App Store build runs in the App Sandbox (security-scoped bookmarks for local images); the GitHub and Homebrew build is Developer ID signed and notarized, not sandboxed
 - 688 unit tests; GitHub Actions builds every flavor on each push
 
 ### Where Things Live
