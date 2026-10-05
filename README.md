@@ -32,16 +32,16 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Native SwiftUI + AppKit app—lightweight, zero dependencies
 - Huge documents (10,000+ lines) open and scroll smoothly, Table of Contents and search jumps land exactly, and QuickMD keeps your place through zoom, theme changes, resizes and auto-reload
 
-### Companion to Your Editor
-- **Auto-reload** — the document refreshes the moment your editor saves it. Enable auto-save in VS Code/Cursor/Zed and QuickMD becomes a live preview
-- **Open in External Editor (`⌘E`)** — one-click handoff to VS Code, Cursor, Sublime, Zed, Typora, Obsidian and more (auto-detected; configurable in Settings). In VS Code, BBEdit, TextMate and Nova it opens at the line you are reading
-
 ### Fix It in Place
 - **Source Edit (`⌥⌘E`)** — switch the window to the raw Markdown at the line you are reading, fix it, `⌘S`, `Esc`, and you are back in the rendered view at the same place. Select a word first and it is already selected in the source
 - **Byte-faithful saves** — the file keeps its encoding (UTF-8, UTF-8 with BOM, UTF-16, Latin-1), line endings, permissions, Finder tags and symlinks; only what you typed changes
 - **Nothing lost, nothing overwritten** — closing a tab, a window or the app with unsaved text always asks; if another app changes the file while you edit, QuickMD offers both versions instead of picking one
 - **A real text editor underneath** — undo, system find and replace, indentation that follows the line, a light syntax tint from the same parser that renders the document
-- Still a viewer first: no WYSIWYG, no split panes. For longer writing sessions `⌘E` hands the file to your editor
+- Still a viewer first: no WYSIWYG, no split panes
+
+### Works with Your Editor
+- **Auto-reload** — the document refreshes the moment another app saves it. Turn on auto-save in VS Code, Cursor or Zed, or let an AI agent write the file, and QuickMD is a live preview
+- **Open in External Editor (`⌘E`)** — for longer writing sessions: hands the file to your editor (auto-detected, configurable in Settings). VS Code, BBEdit, TextMate and Nova open at the line you are reading
 
 ### Complete Markdown Support
 - Headings (ATX `#` and setext), bold, italic, strikethrough, horizontal rules
