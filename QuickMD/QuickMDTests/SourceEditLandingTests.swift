@@ -1,5 +1,4 @@
 import XCTest
-@testable import QuickMD
 
 /// The landing scroll after leaving Source Edit (S-D10): resolved against the
 /// blocks of the CURRENT text, never against a previous parse.
