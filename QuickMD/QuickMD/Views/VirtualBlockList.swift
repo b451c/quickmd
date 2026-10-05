@@ -286,7 +286,16 @@ struct VirtualBlockList: NSViewRepresentable {
         coordinator.selection.selectableText = selectableText
         coordinator.selection.onCopy = onCopySelection
         coordinator.setDocumentCovered(isCovered)
+        // Covered (graphic preview, Source Edit): out of the accessibility
+        // tree too — SwiftUI's `.accessibilityHidden` does not reach this
+        // AppKit subtree.
+        nsView.setAccessibilityHidden(isCovered)
         readingPosition?.provider = { [weak coordinator] in coordinator?.readingEditorLine() }
+        readingPosition?.selectionProvider = { [weak coordinator] in
+            guard let coordinator, let rows = coordinator.selection.selection?.rowSpan,
+                  let text = coordinator.selection.selectionOutput()?.plain else { return nil }
+            return DocumentReadingPosition.selectionHint(text: text, rows: rows, blocks: coordinator.blocks)
+        }
         if focusRequest != coordinator.lastFocusRequest {
             coordinator.lastFocusRequest = focusRequest
             coordinator.restoreDocumentFocus()

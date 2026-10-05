@@ -787,6 +787,106 @@ final class SourceEditSessionTests: XCTestCase {
         XCTAssertNotEqual(session.lastLeave, first, "each leave publishes a distinct value")
     }
 
+    /// Don't Save throws the buffer away: its caret line means nothing for the
+    /// rendered text, which never changed (enter at line 10, paste lines above,
+    /// Esc, Don't Save — the list must not jump).
+    func testDontSaveWithoutASaveDoesNotLand() throws {
+        let (session, _) = entered(try fixture(numbered(20)), line: 10)
+        type(session, String(repeating: "pasted\n", count: 8), at: 0)
+        // The caret's line in the buffer, now 8 lines further down: the old
+        // rule ("the caret left the entry line") would have landed there.
+        session.editor.placeCaret(atLine: 18)
+        prompts.unsavedAnswers = [.discard]
+        session.requestLeave()
+        XCTAssertFalse(session.isActive)
+        XCTAssertEqual(session.lastLeave?.shouldLand, false)
+    }
+
+    /// Saved once, then more edits discarded: the rendered text is the SAVED
+    /// one, so it lands — on a line that exists in it.
+    func testDontSaveAfterASaveLandsOnASavedLine() throws {
+        let (session, _) = entered(try fixture("a\nb\nc\n"), line: 1)
+        type(session, "x")
+        XCTAssertEqual(save(session), true)
+        let savedLines = SourceEditSupport.lineCount(in: "a\nxb\nc\n")
+        type(session, String(repeating: "more\n", count: 30), at: (session.editor.text as NSString).length)
+        XCTAssertGreaterThan(session.editor.caretLine, savedLines)
+        prompts.unsavedAnswers = [.discard]
+        session.requestLeave()
+        XCTAssertEqual(session.lastLeave?.shouldLand, true)
+        XCTAssertEqual(session.lastLeave?.caretLine, savedLines - 1, "clamped to the saved text's last line")
+    }
+
+    /// Escape from outside a text view (the window's key monitor) goes
+    /// through the same method: find bar first, then leave.
+    func testEscapeMethodClosesTheFindBarThenLeaves() throws {
+        let (session, window) = entered(try fixture("find me\n"))
+        window.makeFirstResponder(session.editor.textView)
+        session.editor.showFind()
+        window.makeFirstResponder(nil)
+        session.escape()
+        XCTAssertFalse(session.editor.isFindBarVisible)
+        XCTAssertTrue(session.isActive)
+        session.escape()
+        XCTAssertFalse(session.isActive)
+    }
+
+    // MARK: - Selection carry-over (S-D14b)
+
+    private func hint(_ text: String, _ lines: Range<Int>) -> SourceEditSession.SelectionHint {
+        SourceEditSession.SelectionHint(text: text, lines: lines)
+    }
+
+    func testSelectionHintFoundIsSelectedAndScrolledTo() throws {
+        let text = numbered(200) + "a **bold** typo here\n" + numbered(5)
+        let (session, window) = makeSession(try fixture(text))
+        XCTAssertNil(session.enter(atLine: 3, selection: hint("bold", 200..<201)))
+        let ns = session.editor.text as NSString
+        let expected = ns.range(of: "bold", options: .literal,
+                                range: NSRange(location: SourceEditSupport.lineStart(200, in: ns), length: 20))
+        XCTAssertEqual(session.editor.textView.selectedRange(), expected)
+        XCTAssertEqual(session.editor.caretLine, 200)
+        window.contentView!.layoutSubtreeIfNeeded()
+        let visible = session.editor.textView.visibleRect
+        let layoutManager = session.editor.textView.layoutManager!
+        let glyphs = layoutManager.glyphRange(forCharacterRange: expected, actualCharacterRange: nil)
+        var rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: session.editor.textView.textContainer!)
+        rect.origin.y += session.editor.textView.textContainerOrigin.y
+        XCTAssertTrue(visible.intersects(rect), "the selection is on screen")
+        // Typing replaces the selection: the entry line is the selection's.
+        session.requestLeave()
+        XCTAssertEqual(session.lastLeave?.caretLine, 200)
+        XCTAssertEqual(session.lastLeave?.shouldLand, false, "nothing moved from the entry line")
+    }
+
+    func testSelectionHintNotFoundFallsBackToTheLine() throws {
+        let (session, _) = makeSession(try fixture(numbered(20)))
+        // "line 15" exists, but outside the selected blocks' lines.
+        XCTAssertNil(session.enter(atLine: 4, selection: hint("line 15", 2..<6)))
+        XCTAssertEqual(session.editor.textView.selectedRange().length, 0)
+        XCTAssertEqual(session.editor.caretLine, 4)
+    }
+
+    func testEmptySelectionHintFallsBackToTheLine() throws {
+        let (session, _) = makeSession(try fixture(numbered(20)))
+        XCTAssertNil(session.enter(atLine: 6, selection: hint("  \n ", 0..<20)))
+        XCTAssertEqual(session.editor.textView.selectedRange().length, 0)
+        XCTAssertEqual(session.editor.caretLine, 6)
+    }
+
+    func testReadingPositionSelectionHintLineRange() {
+        let blocks = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light), fontScale: 1)
+            .parse("# Title\n\none\n\n# Two\n\nthree\n")
+        let lines = blocks.map(\.sourceLine)
+        XCTAssertEqual(lines, [0, 2, 4, 6])
+        XCTAssertEqual(DocumentReadingPosition.selectionHint(text: "one", rows: 1...2, blocks: blocks)?.lines, 2..<6)
+        XCTAssertEqual(DocumentReadingPosition.selectionHint(text: "x", rows: 3...3, blocks: blocks)?.lines.lowerBound, 6)
+        XCTAssertEqual(DocumentReadingPosition.selectionHint(text: "x", rows: 3...3, blocks: blocks)?.lines.upperBound,
+                       Int.max, "the last block runs to the end of the text")
+        XCTAssertNil(DocumentReadingPosition.selectionHint(text: "", rows: 0...0, blocks: blocks))
+        XCTAssertNil(DocumentReadingPosition.selectionHint(text: "x", rows: 2...9, blocks: blocks), "stale rows")
+    }
+
     func testDiscardChangesIsUndoableAndStaysInTheMode() throws {
         let url = try fixture("abc\n")
         let (session, window) = entered(url)
