@@ -1309,15 +1309,21 @@ final class SourceEditorControllerTests: XCTestCase {
         waitUntil { controller.tintApplyCount == 1 }
         controller.textView.setSelectedRange(NSRange(location: 5, length: 0))
         // Keystrokes closer together than the debounce, for longer than the
-        // maximum wait: the debounce alone would never fire.
+        // maximum wait: the debounce alone would never fire. The assertion is
+        // that a parse STARTS while the typing continues. Whether its result
+        // is still current when it lands depends on the machine (a keystroke
+        // during the parse makes it stale, and there is one attempt per
+        // maximum wait) — asserting "a tint was applied" failed on a loaded
+        // CI runner.
+        let parses = ParseCounter()
+        controller.tintParseWillStart = { parses.increment() }
         let start = Date()
-        var tintedWhileTyping = false
-        while Date().timeIntervalSince(start) < SourceEditorController.tintMaximumWait + 0.8 {
+        while parses.value == 0, Date().timeIntervalSince(start) < SourceEditorController.tintMaximumWait + 8 {
             type(controller, "x")
             idle(SourceEditorController.tintDebounce / 4)
-            if controller.tintApplyCount > 1 { tintedWhileTyping = true }
         }
-        XCTAssertTrue(tintedWhileTyping)
+        controller.tintParseWillStart = nil
+        XCTAssertGreaterThan(parses.value, 0, "no parse started while typing continuously")
     }
 
     func testUndoAndRedoReTint() {
@@ -1336,4 +1342,13 @@ final class SourceEditorControllerTests: XCTestCase {
         waitUntil { controller.tintApplyCount == 4 }
         assertSameColor(tint(controller, at: 0).color, light.keywordColor, appearance: nil)
     }
+}
+
+
+/// Counts tint parses from the tint queue (`tintParseWillStart` is `@Sendable`).
+private final class ParseCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() { lock.lock(); count += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
 }
