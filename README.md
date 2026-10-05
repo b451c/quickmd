@@ -37,6 +37,13 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - **Open in External Editor (`⌘E`)** — one-click handoff to VS Code, Cursor, Sublime, Zed, Typora, Obsidian and more (auto-detected; configurable in Settings). In VS Code, BBEdit, TextMate and Nova it opens at the line you are reading
 - **Copy button on code blocks** — hover and click, like on GitHub
 
+### Fix It in Place
+- **Source Edit (`⌥⌘E`)** — switch the window to the raw Markdown at the line you are reading, fix it, `⌘S`, `Esc`, and you are back in the rendered view at the same place. Select a word first and it is already selected in the source
+- **Byte-faithful saves** — the file keeps its encoding (UTF-8, UTF-8 with BOM, UTF-16, Latin-1), line endings, permissions, Finder tags and symlinks; only what you typed changes
+- **Nothing lost, nothing overwritten** — closing a tab, a window or the app with unsaved text always asks; if another app changes the file while you edit, QuickMD offers both versions instead of picking one
+- **A real text editor underneath** — undo, system find and replace, indentation that follows the line, a light syntax tint from the same parser that renders the document
+- Still a viewer first: no WYSIWYG, no split panes. For longer writing sessions `⌘E` hands the file to your editor
+
 ### Complete Markdown Support
 - Headers, bold, italic, strikethrough (ATX `#` and setext underline styles)
 - **GitHub-flavored alerts** — `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]` render as native callouts in GitHub's palette
@@ -170,6 +177,8 @@ Now all your Markdown files will open instantly with QuickMD!
 |----------|--------|
 | `⌘O` | Open file |
 | `⌘W` | Close tab (or window if last tab) |
+| `⌥⌘E` | Edit the Markdown source in place / done editing |
+| `⌘S` | Save (while editing the source) |
 | `⌘E` | Open in External Editor (at the line you are reading, where supported) |
 | `⌘F` | Find in document |
 | `⌘G` / `⇧⌘G` | Next / previous match |
@@ -204,7 +213,8 @@ Now all your Markdown files will open instantly with QuickMD!
 - Security-Scoped Bookmarks for local image access in sandbox
 - Per-block **vector PDF export** — selectable text, embedded fonts, Mermaid diagrams as images, multi-page pagination
 - Zero external package dependencies — everything is vendored or bundled
-- Unit test suite (186 tests) + GitHub Actions CI building every flavor on each push
+- Source Edit writes the file in place (inode, permissions and extended attributes survive) and re-encodes exactly what it decoded; the unsaved-changes guard sits in front of the window's own delegate, so SwiftUI's document machinery is untouched
+- Unit test suite (688 tests) + GitHub Actions CI building every flavor on each push
 
 ## Project Structure
 
@@ -233,6 +243,14 @@ QuickMD/
 │   ├── FileWatchManager.swift      # Auto-reload file watcher (DispatchSource)
 │   ├── ExternalEditorManager.swift # ⌘E editor detection + launch (opens at the reading line where supported)
 │   ├── DocumentReadingPosition.swift # ⌘E reading position (selection start or top visible block)
+│   ├── SourceEditSession.swift     # Source Edit: enter / save / conflict / leave flows for one window
+│   ├── SourceEditorController.swift # Source Edit: NSTextView editor (own undo, find bar, tint)
+│   ├── SourceEditSupport.swift     # Source Edit: line/offset mapping, indentation edits, selection lookup
+│   ├── SourceEditLanding.swift     # Source Edit: where the rendered view lands after leaving
+│   ├── SourceTint.swift            # Source Edit: block-level colour ranges from the parser's blocks
+│   ├── DocumentFileFormat.swift    # Encoding / BOM / line-ending detection and byte-exact re-encoding
+│   ├── DocumentFileWriter.swift    # In-place file write with verification and restore
+│   ├── EditCloseGuard.swift        # Unsaved-changes guard for close, tab close and quit
 │   ├── WindowTabbing.swift         # Native macOS tab merging + window size memory
 │   ├── MermaidPDFRenderer.swift    # Mermaid → image rendering for PDF export
 │   ├── CustomThemeStore.swift      # User themes from disk (live reload + validation)
@@ -255,7 +273,8 @@ QuickMD/
 │   │   ├── ImageBlockView.swift    # Local, remote and embedded image rendering + click-to-enlarge preview
 │   │   ├── BlockquoteView.swift    # Nested blockquotes
 │   │   ├── AlertBlockView.swift    # GitHub-flavored alerts ([!NOTE], [!TIP], ...)
-│   │   ├── ChromeButtons.swift     # Heading copy, source copy, edit, zoom, support pills
+│   │   ├── ChromeButtons.swift     # Heading copy, source copy, edit, save/done, zoom, support pills
+│   │   ├── SourceEditorView.swift  # SwiftUI host for the source editor
 │   │   ├── ChromeHoverState.swift  # Hover-cluster state for the top-right pills
 │   │   ├── SearchBar.swift         # Find in document (⌘F)
 │   │   ├── TableOfContentsView.swift # ToC sidebar (⌘⇧T)
@@ -373,6 +392,7 @@ QuickMD is **free and open source**. If you find it useful, consider supporting 
 - [x] Select and copy across the whole document, with a copied-characters toast ([#33](https://github.com/b451c/quickmd/issues/33))
 - [x] Embedded `data:` images and HTML `<img>` tags ([#32](https://github.com/b451c/quickmd/issues/32))
 - [x] `⌘E` opens your editor at the line you are reading
+- [x] Source Edit — fix the Markdown in place (`⌥⌘E`), byte-faithful saves ([#31](https://github.com/b451c/quickmd/issues/31), [#34](https://github.com/b451c/quickmd/issues/34))
 
 Have a feature request? [Open an issue!](https://github.com/b451c/quickmd/issues)
 
