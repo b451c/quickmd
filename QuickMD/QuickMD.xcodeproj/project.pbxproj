@@ -121,6 +121,9 @@
 		A1B2C3D401000110 /* DocumentReadingPosition.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000110 /* DocumentReadingPosition.swift */; };
 		A1B2C3D401000111 /* DocumentReadingPosition.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000110 /* DocumentReadingPosition.swift */; };
 		A1B2C3D401000112 /* ExternalEditorLineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000111 /* ExternalEditorLineTests.swift */; };
+		A1B2C3D401000130 /* SourceEditSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000130 /* SourceEditSupport.swift */; };
+		A1B2C3D401000131 /* SourceEditSupport.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000130 /* SourceEditSupport.swift */; };
+		A1B2C3D401000132 /* SourceEditSupportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000131 /* SourceEditSupportTests.swift */; };
 		A1B2C3D4010000F0 /* HeadingLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000F0 /* HeadingLayoutTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -142,6 +145,8 @@
 		A1B2C3D4000000C1 /* DocumentSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentSelectionTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000110 /* DocumentReadingPosition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentReadingPosition.swift; sourceTree = "<group>"; };
 		A1B2C3D400000111 /* ExternalEditorLineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalEditorLineTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000130 /* SourceEditSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditSupport.swift; sourceTree = "<group>"; };
+		A1B2C3D400000131 /* SourceEditSupportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditSupportTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4000000F0 /* HeadingLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadingLayoutTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000001 /* QuickMDApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickMDApp.swift; sourceTree = "<group>"; };
 		A1B2C3D400000002 /* MarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownDocument.swift; sourceTree = "<group>"; };
@@ -270,6 +275,7 @@
 				A1B2C3D4000000F0 /* HeadingLayoutTests.swift */,
 				A1B2C3D4000000C1 /* DocumentSelectionTests.swift */,
 				A1B2C3D400000111 /* ExternalEditorLineTests.swift */,
+				A1B2C3D400000131 /* SourceEditSupportTests.swift */,
 			);
 			path = QuickMDTests;
 			sourceTree = "<group>";
@@ -290,6 +296,7 @@
 				A1B2C3D400000081 /* ImageLoader.swift */,
 				A1B2C3D4000000C0 /* DocumentSelection.swift */,
 				A1B2C3D400000110 /* DocumentReadingPosition.swift */,
+				A1B2C3D400000130 /* SourceEditSupport.swift */,
 				A1B2C3D40000003D /* SectionExtractor.swift */,
 				A1B2C3D40000003E /* DocumentSearch.swift */,
 				A1B2C3D40000003F /* WindowTabbing.swift */,
@@ -573,6 +580,7 @@
 				A1B2C3D401000082 /* ImageLoader.swift in Sources */,
 				A1B2C3D4010000C0 /* DocumentSelection.swift in Sources */,
 				A1B2C3D401000110 /* DocumentReadingPosition.swift in Sources */,
+				A1B2C3D401000130 /* SourceEditSupport.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -614,6 +622,8 @@
 				A1B2C3D4010000C2 /* DocumentSelectionTests.swift in Sources */,
 				A1B2C3D401000111 /* DocumentReadingPosition.swift in Sources (Tests) */,
 				A1B2C3D401000112 /* ExternalEditorLineTests.swift in Sources */,
+				A1B2C3D401000131 /* SourceEditSupport.swift in Sources (Tests) */,
+				A1B2C3D401000132 /* SourceEditSupportTests.swift in Sources */,
 				A1B2C3D4010000F0 /* HeadingLayoutTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
