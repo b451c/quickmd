@@ -307,7 +307,7 @@ struct MarkdownView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Button("Close Tab") {
-                            NSApp.keyWindow?.close()
+                            EditCloseGuard.requestClose(NSApp.keyWindow)
                         }
                         .controlSize(.small)
                     }

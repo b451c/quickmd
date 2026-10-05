@@ -13,6 +13,8 @@ enum AppURLs {
 
 @main
 struct QuickMDApp: App {
+    @NSApplicationDelegateAdaptor(QuickMDAppDelegate.self) private var appDelegate
+
     init() {
         // Premium UX: every QuickMD document opens as a tab in an existing window
         // (instead of stacking standalone windows). Overrides the system-wide
@@ -29,7 +31,7 @@ struct QuickMDApp: App {
         .commands {
             CommandGroup(replacing: .saveItem) {
                 Button("Close") {
-                    NSApp.keyWindow?.close()
+                    EditCloseGuard.requestClose(NSApp.keyWindow)
                 }
                 .keyboardShortcut("w", modifiers: .command)
                 Divider()
