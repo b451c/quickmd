@@ -153,11 +153,18 @@ final class SourceEditSession: ObservableObject {
     /// How the file is stored; a save writes the buffer back in it.
     private(set) var format = DocumentFileFormat(encoding: .utf8, hasBOM: false, lineEnding: .lf)
     /// The file bytes the buffer is based on: as read on entry, as written by
-    /// our last save, or as acknowledged by the user (Keep My Version / Save
-    /// Anyway). A disk that differs from these was changed by someone else.
+    /// our last save, or as acknowledged by the user (Keep My Version). A disk
+    /// that differs from these was changed by someone else. Moves only
+    /// together with `savedText` and `format` — never ahead of a write.
     private(set) var baseBytes = Data()
     /// The LF text matching `baseBytes` — the clean state of the buffer.
     private(set) var savedText = ""
+    /// A chain of prompts (unsaved changes → conflict → encoding → save
+    /// failed → save panel) is on screen. While it is, nothing else may start
+    /// a sheet or change the buffer: `save` / `requestLeave` / the guard's
+    /// `confirm` report false at once, the banner and menu actions do nothing,
+    /// and a disk change only keeps the rendered text in step with the disk.
+    private(set) var isPrompting = false
     /// The caret's line right after entering (0-based).
     private var entryLine = 0
     private var hasSavedOnce = false
@@ -168,10 +175,26 @@ final class SourceEditSession: ObservableObject {
     /// the editor's `onChange` does not flip the dirty flag on and off.
     private var isApplyingOwnEdit = false
     private weak var closeGuard: EditCloseGuard?
+    /// The second look at a file that became empty (see `handleDiskChange`).
+    private var emptyFileRecheck: DispatchWorkItem?
+
+    /// A file that suddenly reads EMPTY may be another program half-way
+    /// through a non-atomic save (truncate, then write): adopting it at once
+    /// would show a clean, empty buffer for a moment and lose the caret.
+    /// Looked at again after this long.
+    static let emptyFileRecheckDelay: TimeInterval = 0.3
+
+    /// The beep for a close request that arrives while a prompt is up.
+    /// Replaced in tests (no sound from a test run).
+    static var beep: () -> Void = { NSSound.beep() }
 
     init() {
         editor.onChange = { [weak self] in self?.bufferDidChange() }
         editor.onEscape = { [weak self] in self?.requestLeave() }
+    }
+
+    deinit {
+        emptyFileRecheck?.cancel()
     }
 
     private var fileName: String {
@@ -182,35 +205,48 @@ final class SourceEditSession: ObservableObject {
         environment.window() ?? editor.textView.window
     }
 
+    /// "The buffer equals the saved text", LITERALLY: UTF-16 code units, not
+    /// Swift's `==` (canonical equivalence — "é" precomposed and decomposed
+    /// compare equal, and a buffer differing only in normalization would
+    /// count as clean and never be saved).
+    static func isSameText(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.utf16.count == rhs.utf16.count && lhs.utf16.elementsEqual(rhs.utf16)
+    }
+
+    private var bufferMatchesSaved: Bool { Self.isSameText(editor.text, savedText) }
+
     /// Enters the editor with the caret at the start of 0-based `line` (nil:
     /// the top), scrolled to the top of the visible area — the view converts
     /// the reading position's 1-based `editorLine()`. Returns nil when it
-    /// entered; otherwise nothing changed and the refusal says why.
-    /// The view requests focus after mounting the editor (`focusEditor`).
+    /// entered; otherwise nothing changed and the refusal says why. Checks in
+    /// the spec's order: no file, missing, unreadable, read-only, too large,
+    /// unsafe. The view requests focus after mounting the editor (`focusEditor`).
     @discardableResult
     func enter(atLine line: Int?) -> EnterRefusal? {
-        guard !isActive else { return .alreadyEditing }
+        guard !isActive, !isPrompting else { return .alreadyEditing }
         guard let url = environment.documentURL else { return .noFile }
         let name = url.lastPathComponent
         let path = url.path
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: path) else { return .missing(fileName: name) }
+        guard fileManager.isReadableFile(atPath: path) else { return .unreadable(fileName: name) }
+        guard fileManager.isWritableFile(atPath: path) else { return .readOnly(fileName: name) }
+        // Size from the attributes first: a huge file is refused unread.
         if let size = (try? fileManager.attributesOfItem(atPath: path))?[.size] as? NSNumber,
            size.intValue > Self.maximumEditableBytes {
             return .tooLarge(fileName: name)
         }
-        guard fileManager.isWritableFile(atPath: path) else { return .readOnly(fileName: name) }
         // Fresh from disk, not the rendered text: the watcher's debounce may lag.
         guard let data = try? Data(contentsOf: url) else { return .unreadable(fileName: name) }
         guard data.count <= Self.maximumEditableBytes else { return .tooLarge(fileName: name) }
         guard let decoded = DocumentFileFormat.decode(data) else { return .unreadable(fileName: name) }
-        guard decoded.isByteExact || decoded.hasMixedLineEndings else { return .unsafe(fileName: name) }
+        guard decoded.isLosslessDecode else { return .unsafe(fileName: name) }
 
         adopt(decoded, bytes: data)
         hasSavedOnce = false
         externalChange = false
         isDirty = false
-        if environment.renderedText() != decoded.text {
+        if !(environment.renderedText().map { Self.isSameText($0, decoded.text) } ?? false) {
             environment.commitText(decoded.text)
         }
         editor.load(decoded.text)
@@ -226,6 +262,8 @@ final class SourceEditSession: ObservableObject {
         editor.focus()
     }
 
+    /// Format, base bytes and saved text always move TOGETHER — from one read
+    /// of the disk, or from one successful write.
     private func adopt(_ decoded: DocumentFileFormat.Decoded, bytes: Data) {
         format = decoded.format
         baseBytes = bytes
@@ -251,10 +289,8 @@ final class SourceEditSession: ObservableObject {
     // MARK: - Dirty state
 
     private func bufferDidChange() {
-        guard !isApplyingOwnEdit, isActive, !isDirty else { return }
-        isDirty = true
-        installGuardIfNeeded()
-        closeGuard?.setEdited(true)
+        guard !isApplyingOwnEdit, isActive else { return }
+        markDirty()
     }
 
     /// The exact check: the flag only says "something was typed". Clears the
@@ -263,39 +299,84 @@ final class SourceEditSession: ObservableObject {
     @discardableResult
     func checkDirty() -> Bool {
         guard isActive, isDirty else { return false }
-        if editor.text == savedText { setClean() }
+        if bufferMatchesSaved { markClean() }
         return isDirty
     }
 
-    private func setClean() {
+    private func markDirty() {
+        guard !isDirty else { return }
+        isDirty = true
+        installGuardIfNeeded()
+        closeGuard?.setEdited(true)
+    }
+
+    private func markClean() {
         if isDirty { isDirty = false }
         closeGuard?.setEdited(false)
     }
 
+    /// After the session changed the buffer or the saved text: the flag
+    /// follows what the buffer really holds. Never "clean" on faith — a
+    /// refused `replaceAll` leaves the user's text in place, still unsaved.
+    private func syncDirtyWithBuffer() {
+        if bufferMatchesSaved { markClean() } else { markDirty() }
+    }
+
     /// Runs `body` (which replaces the buffer through the editor) without the
-    /// edit counting as the user's, then ends clean.
+    /// edit counting as the user's.
     private func replaceBufferAsOwnEdit(_ body: () -> Void) {
         isApplyingOwnEdit = true
         body()
         isApplyingOwnEdit = false
     }
 
+    // MARK: - Prompt chains
+
+    /// Runs one prompt chain unless one is already running (then `completion`
+    /// gets false at once). `body` receives the chain's ONLY exit: it ends the
+    /// chain and reports the result, once — every path of `body` must call it.
+    private func runChain(_ completion: ((Bool) -> Void)?, _ body: (@escaping (Bool) -> Void) -> Void) {
+        guard !isPrompting else {
+            completion?(false)
+            return
+        }
+        isPrompting = true
+        var finished = false
+        body { [weak self] result in
+            guard !finished else { return }
+            finished = true
+            self?.isPrompting = false
+            completion?(result)
+        }
+    }
+
     // MARK: - Saving (S-D7)
 
     /// ⌘S. Synchronous except for prompts; `then` gets true once the buffer
-    /// is on disk (or nothing needed saving) and false on cancel or failure —
-    /// called after the last prompt is answered.
+    /// is on disk (or nothing needed saving) and false on cancel, failure, or
+    /// when another prompt is already up — called after the last prompt is
+    /// answered.
     func save(then completion: ((Bool) -> Void)? = nil) {
-        let finish: (Bool) -> Void = { completion?($0) }
+        guard isActive else { completion?(false); return }
+        runChain(completion) { finish in
+            performSave(window: window, finish: finish)
+        }
+    }
+
+    /// The save steps, inside a chain. `window` is where every follow-up sheet
+    /// goes — the one the chain started on (the guard's `confirm` hands its
+    /// own: a sheet elsewhere, or none, would look like a lost confirmation).
+    private func performSave(window: NSWindow?, finish: @escaping (Bool) -> Void) {
         guard isActive, environment.documentURL != nil else { return finish(false) }
         let text = editor.text
-        guard text != savedText else {
-            // Nothing to write: no mtime change, no watcher echo.
-            setClean()
+        // Nothing to write — unless the banner is up: then the disk is not
+        // what the buffer holds, and the conflict flow decides.
+        if !externalChange && Self.isSameText(text, savedText) {
+            markClean()
             return finish(true)
         }
         if let data = format.encode(text) {
-            saveCheckingDisk(text: text, data: data, format: format, finish: finish)
+            saveCheckingDisk(text: text, data: data, format: format, window: window, finish: finish)
             return
         }
         prompts.encodingFallback(window, fileName, Self.displayName(of: format.encoding)) { [self] useUTF8 in
@@ -303,27 +384,36 @@ final class SourceEditSession: ObservableObject {
             let fallback = format.utf8Fallback
             // UTF-8 represents every String.
             guard let data = fallback.encode(text) else { return finish(false) }
-            saveCheckingDisk(text: text, data: data, format: fallback, finish: finish)
+            saveCheckingDisk(text: text, data: data, format: fallback, window: window, finish: finish)
         }
     }
 
-    /// Step 2: the disk must still hold `baseBytes`, or the user decides.
+    /// Step 2: the disk must still hold `baseBytes`, or the user decides —
+    /// about the version they were shown. Save Anyway re-reads the disk: if
+    /// it moved while the prompt was up, the user is asked again about the
+    /// NEW version; nothing is ever overwritten (or "restored" over) unseen.
     private func saveCheckingDisk(text: String, data: Data, format target: DocumentFileFormat,
-                                  finish: @escaping (Bool) -> Void) {
+                                  window: NSWindow?, finish: @escaping (Bool) -> Void) {
         guard let url = environment.documentURL else { return finish(false) }
         // Unreadable / missing: nothing to conflict with — the write reports it.
         guard let disk = try? Data(contentsOf: url), disk != baseBytes else {
-            return write(text: text, data: data, format: target, restoring: baseBytes, finish: finish)
+            return write(text: text, data: data, format: target, restoring: baseBytes,
+                         window: window, finish: finish)
         }
+        // The disk moved on: the rendered view shows it, the banner says so.
+        noteExternalChange(disk)
         prompts.saveConflict(window, fileName) { [self] choice in
             switch choice {
             case .saveAnyway:
-                // The user saw the conflict and chose their text: what is on
-                // disk now is what a failed write puts back.
-                baseBytes = disk
-                write(text: text, data: data, format: target, restoring: disk, finish: finish)
+                if let now = try? Data(contentsOf: url), now != disk {
+                    saveCheckingDisk(text: text, data: data, format: target, window: window, finish: finish)
+                    return
+                }
+                // `baseBytes` stays until the write succeeded; a failed write
+                // puts back exactly the version the user agreed to replace.
+                write(text: text, data: data, format: target, restoring: disk, window: window, finish: finish)
             case .loadDiskVersion:
-                loadDiskVersion()
+                applyDiskVersion()
                 finish(false)
             case .cancel:
                 finish(false)
@@ -333,7 +423,7 @@ final class SourceEditSession: ObservableObject {
 
     /// Steps 3 and 4.
     private func write(text: String, data: Data, format target: DocumentFileFormat, restoring: Data,
-                       finish: @escaping (Bool) -> Void) {
+                       window: NSWindow?, finish: @escaping (Bool) -> Void) {
         guard let url = environment.documentURL else { return finish(false) }
         do {
             try DocumentFileWriter.write(data, to: url, restoring: restoring)
@@ -361,9 +451,17 @@ final class SourceEditSession: ObservableObject {
         let unified = hasMixedLineEndings
         hasMixedLineEndings = false
         environment.commitText(text)
-        if editor.text == text { setClean() }
+        syncDirtyWithBuffer()
         environment.toast(unified ? "Saved · line endings unified to \(Self.displayName(of: target.lineEnding))"
                                   : "Saved")
+    }
+
+    /// The disk differs from `baseBytes` (seen by the save check): keep the
+    /// rendered text equal to it and show the banner. Base and saved text stay.
+    private func noteExternalChange(_ data: Data) {
+        guard let decoded = DocumentFileFormat.decode(data) else { return }
+        environment.commitText(decoded.text)
+        externalChange = true
     }
 
     /// A copy is a new file the save panel granted: a plain (non-atomic)
@@ -406,26 +504,29 @@ final class SourceEditSession: ObservableObject {
 
     /// Esc, Done, the toggle command. Clean → leaves at once. Dirty → the
     /// unsaved-changes sheet: Save leaves only if the save succeeded, Don't
-    /// Save leaves and drops the buffer, Cancel stays. `then(true)` = left.
+    /// Save leaves and drops the buffer, Cancel stays. `then(true)` = left;
+    /// false also when another prompt is already up.
     func requestLeave(then completion: ((Bool) -> Void)? = nil) {
         guard isActive else { completion?(false); return }
-        guard checkDirty() else {
-            leave()
-            completion?(true)
-            return
-        }
-        prompts.unsavedChanges(window, fileName) { [self] choice in
-            switch choice {
-            case .save:
-                save { [self] saved in
-                    if saved { leave() }
-                    completion?(saved)
-                }
-            case .discard:
+        runChain(completion) { finish in
+            guard checkDirty() else {
                 leave()
-                completion?(true)
-            case .cancel:
-                completion?(false)
+                return finish(true)
+            }
+            let window = self.window
+            prompts.unsavedChanges(window, fileName) { [self] choice in
+                switch choice {
+                case .save:
+                    performSave(window: window) { [self] saved in
+                        if saved { leave() }
+                        finish(saved)
+                    }
+                case .discard:
+                    leave()
+                    finish(true)
+                case .cancel:
+                    finish(false)
+                }
             }
         }
     }
@@ -433,6 +534,14 @@ final class SourceEditSession: ObservableObject {
     private func leave() {
         let line = editor.caretLine
         leaveSequence += 1
+        emptyFileRecheck?.cancel()
+        emptyFileRecheck = nil
+        // A finished session keeps nothing alive: a focus request that never
+        // reached a window must not fire on a later mount, and the undo stack
+        // (operations holding removed text) goes — the next `enter` loads
+        // fresh from disk anyway.
+        editor.cancelPendingFocus()
+        editor.undoManager.removeAllActions()
         isActive = false
         externalChange = false
         if isDirty { isDirty = false }
@@ -442,19 +551,28 @@ final class SourceEditSession: ObservableObject {
     }
 
     /// "Discard Changes": back to the saved text as ONE undoable edit (⌘Z
-    /// brings the changes back, and with them the dirty state); stays in the mode.
+    /// brings the changes back, and with them the dirty state); stays in the
+    /// mode. With the banner up the saved text is no longer what is on disk —
+    /// "drop my edits" then means the disk version (`loadDiskVersion`).
     func discardChanges() {
-        guard isActive else { return }
-        if editor.text != savedText {
+        guard isActive, !isPrompting else { return }
+        if externalChange { return applyDiskVersion() }
+        if !bufferMatchesSaved {
             replaceBufferAsOwnEdit { editor.replaceAll(with: savedText) }
         }
-        setClean()
+        syncDirtyWithBuffer()
     }
 
     // MARK: - External changes (S-D9)
 
     /// The view's file watcher fired while the session is active.
     func diskDidChange() {
+        emptyFileRecheck?.cancel()
+        emptyFileRecheck = nil
+        handleDiskChange(adoptingEmpty: false)
+    }
+
+    private func handleDiskChange(adoptingEmpty: Bool) {
         guard isActive, let url = environment.documentURL,
               let data = try? Data(contentsOf: url) else { return }
         guard data != baseBytes else {
@@ -469,7 +587,9 @@ final class SourceEditSession: ObservableObject {
         guard let decoded = DocumentFileFormat.decode(data) else { return }
         // Rendered == disk, whatever the buffer holds.
         environment.commitText(decoded.text)
-        guard !checkDirty() else {
+        // A prompt is up (its chain is deciding about the buffer), or the
+        // buffer holds unsaved text: the banner, never a replaced buffer.
+        if isPrompting || checkDirty() {
             externalChange = true
             return
         }
@@ -480,58 +600,80 @@ final class SourceEditSession: ObservableObject {
             environment.toast(refusal.message)
             return
         }
+        if data.isEmpty && !baseBytes.isEmpty && !adoptingEmpty {
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.emptyFileRecheck = nil
+                self.handleDiskChange(adoptingEmpty: true)
+            }
+            emptyFileRecheck = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.emptyFileRecheckDelay, execute: work)
+            return
+        }
         adopt(decoded, bytes: data)
+        externalChange = false
         editor.reload(decoded.text)
     }
 
     /// The entry checks that still matter for a file already open.
     private func refusal(forDisk decoded: DocumentFileFormat.Decoded, bytes: Data) -> EnterRefusal? {
         if bytes.count > Self.maximumEditableBytes { return .tooLarge(fileName: fileName) }
-        if !decoded.isByteExact && !decoded.hasMixedLineEndings { return .unsafe(fileName: fileName) }
+        if !decoded.isLosslessDecode { return .unsafe(fileName: fileName) }
         return nil
     }
 
-    /// Banner: "Keep My Version". The disk's current bytes become the base —
-    /// acknowledged, so a later save does not ask again — and the buffer is
-    /// dirty against THAT text (it is what is on disk now).
-    func keepMyVersion() {
-        guard isActive else { return }
-        externalChange = false
-        guard let url = environment.documentURL, let data = try? Data(contentsOf: url) else { return }
-        baseBytes = data
-        if let decoded = DocumentFileFormat.decode(data) {
-            savedText = decoded.text
-            hasMixedLineEndings = decoded.hasMixedLineEndings
+    /// Reads the disk for a banner action. Nil (after a toast saying why) when
+    /// it cannot be read or this session could not have entered it.
+    private func readDiskForAdoption() -> (decoded: DocumentFileFormat.Decoded, bytes: Data)? {
+        guard let url = environment.documentURL else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            environment.toast(EnterRefusal.missing(fileName: fileName).message)
+            return nil
         }
-        if editor.text == savedText {
-            setClean()
-        } else if !isDirty {
-            isDirty = true
-            closeGuard?.setEdited(true)
-        }
-    }
-
-    /// Banner (and conflict prompt): "Load Disk Version". Replaces the buffer
-    /// as ONE undoable edit — ⌘Z brings the user's text back, dirty again —
-    /// and adopts the disk as the clean state.
-    func loadDiskVersion() {
-        guard isActive, let url = environment.documentURL else { return }
         guard let data = try? Data(contentsOf: url), let decoded = DocumentFileFormat.decode(data) else {
             environment.toast(EnterRefusal.unreadable(fileName: fileName).message)
-            return
+            return nil
         }
         if let refusal = refusal(forDisk: decoded, bytes: data) {
-            // Keep the user's text; Keep My Version / Save still work.
             environment.toast(refusal.message)
-            return
+            return nil
         }
-        adopt(decoded, bytes: data)
+        return (decoded, data)
+    }
+
+    /// Banner: "Keep My Version". The disk's current content — bytes, text
+    /// AND format — becomes the base: acknowledged, so a later save does not
+    /// ask again, and written back in the file's NEW format (a CRLF file git
+    /// rewrote as LF stays LF). The buffer is dirty against that text. A disk
+    /// that cannot be read or entered keeps the banner (base and saved text
+    /// never get out of step).
+    func keepMyVersion() {
+        guard isActive, !isPrompting else { return }
+        guard let disk = readDiskForAdoption() else { return }
+        adopt(disk.decoded, bytes: disk.bytes)
         externalChange = false
-        environment.commitText(decoded.text)
-        if editor.text != decoded.text {
-            replaceBufferAsOwnEdit { editor.replaceAll(with: decoded.text) }
+        syncDirtyWithBuffer()
+    }
+
+    /// Banner: "Load Disk Version". Replaces the buffer as ONE undoable edit
+    /// — ⌘Z brings the user's text back, dirty again — and adopts the disk as
+    /// the clean state.
+    func loadDiskVersion() {
+        guard isActive, !isPrompting else { return }
+        applyDiskVersion()
+    }
+
+    /// `loadDiskVersion` without the prompt check — also the conflict
+    /// prompt's answer, from inside its chain.
+    private func applyDiskVersion() {
+        guard isActive, let disk = readDiskForAdoption() else { return }
+        adopt(disk.decoded, bytes: disk.bytes)
+        externalChange = false
+        environment.commitText(disk.decoded.text)
+        if !bufferMatchesSaved {
+            replaceBufferAsOwnEdit { editor.replaceAll(with: disk.decoded.text) }
         }
-        setClean()
+        syncDirtyWithBuffer()
     }
 
     // MARK: - Close guard (S-D11)
@@ -539,18 +681,25 @@ final class SourceEditSession: ObservableObject {
     /// The guard's `confirm`: the unsaved-changes sheet on that window.
     /// `completion(true)` only once clean — saved, or Don't Save reverted the
     /// buffer (also when another tab then cancels the quit and this window
-    /// stays open).
+    /// stays open). A close or quit that arrives while one of our prompts is
+    /// up (Esc's sheet, a save's) is cancelled with a beep, not queued.
     private func confirmClose(on window: NSWindow, completion: @escaping (Bool) -> Void) {
+        guard !isPrompting else {
+            Self.beep()
+            return completion(false)
+        }
         guard checkDirty() else { return completion(true) }
-        prompts.unsavedChanges(window, fileName) { [self] choice in
-            switch choice {
-            case .save:
-                save { completion($0) }
-            case .discard:
-                revertToSaved()
-                completion(true)
-            case .cancel:
-                completion(false)
+        runChain(completion) { finish in
+            prompts.unsavedChanges(window, fileName) { [self] choice in
+                switch choice {
+                case .save:
+                    performSave(window: window, finish: finish)
+                case .discard:
+                    revertToSaved()
+                    finish(true)
+                case .cancel:
+                    finish(false)
+                }
             }
         }
     }
@@ -559,7 +708,7 @@ final class SourceEditSession: ObservableObject {
     /// (not undoable — the window is closing), the caret stays put.
     private func revertToSaved() {
         editor.reload(savedText)
-        setClean()
+        syncDirtyWithBuffer()
     }
 
     /// The window is already closing and cannot be kept: app-modal Save /
@@ -599,25 +748,21 @@ extension SourceEditSession.Prompts {
     static let saveFailedOKIdentifier = "source-savefail-ok"
     static let copyPanelIdentifier = "source-copy-panel"
 
-    /// Real sheets on the window, app-modal without one.
+    /// Real sheets on the window, app-modal without one — with the same
+    /// buttons either way (the unsaved-changes prompt keeps its Cancel).
     static let standard = SourceEditSession.Prompts(
         unsavedChanges: { window, fileName, completion in
-            guard let window else { return completion(UnsavedChangesAlert.runModal(fileName: fileName)) }
+            guard let window else {
+                let alert = UnsavedChangesAlert.makeAlert(fileName: fileName, allowsCancel: true)
+                return completion(UnsavedChangesAlert.choice(for: alert.runModal()))
+            }
             UnsavedChangesAlert.beginSheet(on: window, fileName: fileName, completion: completion)
         },
         unsavedChangesModal: { fileName in
             UnsavedChangesAlert.runModal(fileName: fileName)
         },
         saveConflict: { window, fileName, completion in
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "“\(fileName)” has been changed by another application."
-            alert.informativeText = "Save Anyway replaces the other version with yours. Load Disk Version "
-                + "shows the file as it is on disk; Undo brings your text back."
-            addButton(to: alert, "Save Anyway", identifier: conflictSaveAnywayIdentifier)
-            addButton(to: alert, "Load Disk Version", identifier: conflictLoadDiskIdentifier)
-            addButton(to: alert, "Cancel", identifier: conflictCancelIdentifier, key: "\u{1b}")
-            run(alert, on: window) { response in
+            run(makeConflictAlert(fileName: fileName), on: window) { response in
                 switch response {
                 case .alertFirstButtonReturn: completion(.saveAnyway)
                 case .alertSecondButtonReturn: completion(.loadDiskVersion)
@@ -626,13 +771,9 @@ extension SourceEditSession.Prompts {
             }
         },
         encodingFallback: { window, fileName, encodingName, completion in
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "“\(fileName)” uses \(encodingName), which cannot store some of the characters you typed."
-            alert.informativeText = "Saving as UTF-8 keeps every character. The line endings stay as they are."
-            addButton(to: alert, "Save as UTF-8", identifier: encodingUTF8Identifier)
-            addButton(to: alert, "Cancel", identifier: encodingCancelIdentifier, key: "\u{1b}")
-            run(alert, on: window) { completion($0 == .alertFirstButtonReturn) }
+            run(makeEncodingAlert(fileName: fileName, encodingName: encodingName), on: window) {
+                completion($0 == .alertFirstButtonReturn)
+            }
         },
         saveFailed: { window, error, completion in
             let alert = NSAlert()
@@ -659,6 +800,34 @@ extension SourceEditSession.Prompts {
             return panel.runModal() == .OK ? panel.url : nil
         }
     )
+
+    /// Built separately so the tests can check the buttons without a sheet.
+    static func makeConflictAlert(fileName: String) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "“\(fileName)” has been changed by another application."
+        alert.informativeText = "Save Anyway replaces the other version with yours. Load Disk Version "
+            + "shows the file as it is on disk; Undo brings your text back."
+        // No default button: Return must not overwrite another application's
+        // changes on reflex. Escape cancels.
+        addButton(to: alert, "Save Anyway", identifier: conflictSaveAnywayIdentifier, key: "")
+        addButton(to: alert, "Load Disk Version", identifier: conflictLoadDiskIdentifier)
+        addButton(to: alert, "Cancel", identifier: conflictCancelIdentifier, key: "\u{1b}")
+        return alert
+    }
+
+    /// Says nothing about line endings: a mixed file has them unified by the
+    /// same save, a uniform one keeps them — one sentence true for both is
+    /// the one about the characters.
+    static func makeEncodingAlert(fileName: String, encodingName: String) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "“\(fileName)” uses \(encodingName), which cannot store some of the characters you typed."
+        alert.informativeText = "Saving as UTF-8 keeps every character you typed."
+        addButton(to: alert, "Save as UTF-8", identifier: encodingUTF8Identifier)
+        addButton(to: alert, "Cancel", identifier: encodingCancelIdentifier, key: "\u{1b}")
+        return alert
+    }
 
     private static func addButton(to alert: NSAlert, _ title: String, identifier: String, key: String? = nil) {
         let button = alert.addButton(withTitle: title)

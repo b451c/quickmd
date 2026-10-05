@@ -638,6 +638,8 @@ final class SourceEditorControllerTests: XCTestCase {
         }
         /// Once settled: the anchor's line exactly where it was on screen.
         func checkExact(_ label: String, line: UInt = #line) {
+            // A relayout that did nothing would pass the check below vacuously.
+            XCTAssertTrue(controller.isRestorePending, "\(label): a restore is due", line: line)
             settle(controller, line: line)
             XCTAssertEqual(exactOffset(controller, scrollView, character: anchor.character), anchor.offset,
                            accuracy: 0.5, label, line: line)
@@ -794,6 +796,12 @@ final class SourceEditorControllerTests: XCTestCase {
         XCTAssertEqual(controller.text, "ONE\nTWO\n")
         XCTAssertFalse(controller.undoManager.canUndo, "reload clears the stack")
         XCTAssertEqual(changes, 1, "reload never fires onChange")
+        // Typing after a reload never merges with typing before it.
+        controller.textView.setSelectedRange(NSRange(location: 3, length: 0))
+        type(controller, "?")
+        controller.undoManager.undo()
+        XCTAssertEqual(controller.text, "ONE\nTWO\n")
+        XCTAssertFalse(controller.undoManager.canUndo)
     }
 
     func testReloadKeepsTheCaretsLineAndColumn() {
@@ -823,12 +831,56 @@ final class SourceEditorControllerTests: XCTestCase {
         controller.scroll(toLine: 1_200)
         let before = scrollView.contentView.bounds.minY
         XCTAssertGreaterThan(before, 0)
+        let storageBefore = controller.textView.textStorage!.mutableString
+        let lineBefore = SourceEditSupport.line(containing: topLine(controller, scrollView).character,
+                                                in: storageBefore)
         // Same line count, one line above the top rewritten.
         let edited = numberedLines(2_000).replacingOccurrences(of: "line 5 ", with: "LINE 5 ")
         controller.reload(edited)
         let storage = controller.textView.textStorage!.mutableString
-        XCTAssertEqual(SourceEditSupport.line(containing: topCharacter(controller, scrollView), in: storage), 1_200)
+        XCTAssertEqual(SourceEditSupport.line(containing: topLine(controller, scrollView).character, in: storage),
+                       lineBefore)
         XCTAssertEqual(scrollView.contentView.bounds.minY, before, accuracy: 0.5)
+        XCTAssertFalse(controller.isRestorePending)
+    }
+
+    /// A reload while a relayout's exact restore is due keeps THAT top line
+    /// (exactly) and leaves nothing pending that points into the old text.
+    func testReloadDuringAPendingRestoreKeepsItsLineAndCancelsIt() {
+        let (controller, scrollView, window) = makeEditor(wrappingLines(2_000), width: 900)
+        let storage = controller.textView.textStorage!.mutableString
+        controller.scroll(toLine: 1_200)
+        let anchor = topLine(controller, scrollView)
+        let anchorLine = SourceEditSupport.line(containing: anchor.character, in: storage)
+        window.setContentSize(NSSize(width: 700, height: 600))
+        window.contentView!.layoutSubtreeIfNeeded()
+        XCTAssertTrue(controller.isRestorePending)
+        // A line far above the top changes; the line count does not.
+        controller.reload("changed\n" + wrappingLines(2_000).split(separator: "\n", omittingEmptySubsequences: false)
+            .dropFirst().joined(separator: "\n"))
+        XCTAssertFalse(controller.isRestorePending, "nothing stale left to run")
+        let line = SourceEditSupport.line(containing: topLine(controller, scrollView).character, in: storage)
+        XCTAssertEqual(line, anchorLine)
+        let character = SourceEditSupport.lineStart(anchorLine, in: storage) + anchor.character
+            - SourceEditSupport.lineStart(anchorLine, in: wrappingLines(2_000) as NSString)
+        XCTAssertEqual(exactOffset(controller, scrollView, character: character), anchor.offset, accuracy: 0.5)
+    }
+
+    /// Beyond the exact-restore limit a reload keeps the top line by the
+    /// estimate and does not lay out everything above it.
+    func testReloadBeyondTheExactLimitUsesTheEstimate() {
+        let (controller, scrollView, _) = makeEditor(numberedLines(40_000), width: 900)
+        let layoutManager = controller.textView.layoutManager!
+        layoutManager.backgroundLayoutEnabled = false
+        let storage = controller.textView.textStorage!.mutableString
+        controller.scroll(toLine: 30_000)
+        let anchor = topLine(controller, scrollView)
+        XCTAssertGreaterThan(anchor.character, SourceEditorController.exactRestoreCharacterLimit)
+        controller.reload(numberedLines(40_000).replacingOccurrences(of: "line 39999 ", with: "LINE 39999 "))
+        XCTAssertLessThan(layoutManager.firstUnlaidCharacterIndex(), anchor.character)
+        let top = SourceEditSupport.line(containing: topLine(controller, scrollView).character, in: storage)
+        XCTAssertLessThanOrEqual(abs(top - 30_000), 3)
+        XCTAssertFalse(controller.isRestorePending)
     }
 
     func testReloadWithShorterTextScrollsAsFarAsItCan() {
@@ -954,5 +1006,100 @@ final class SourceEditorControllerTests: XCTestCase {
         XCTAssertEqual(controller.text, "newer")
         controller.undoManager.undo()
         XCTAssertEqual(controller.text, "new")
+    }
+
+    // MARK: - Second review round
+
+    /// The base font and colour are ADDED to an edited range: another
+    /// attribute placed in the same edit (as NSTextView does for marked text
+    /// while an input method composes) survives.
+    func testEditStampsBaseAttributesWithoutStrippingOthers() {
+        let (controller, _, _) = makeEditor("ab", style: style(dark, scale: 2))
+        let storage = controller.textView.textStorage!
+        let foreign = NSAttributedString.Key("QuickMDTests.foreign")
+        storage.replaceCharacters(in: NSRange(location: 1, length: 0), with: NSAttributedString(
+            string: "XY",
+            attributes: [.font: NSFont.systemFont(ofSize: 40), .foregroundColor: NSColor.red,
+                         .underlineStyle: NSUnderlineStyle.single.rawValue, foreign: true]))
+        XCTAssertEqual(controller.text, "aXYb")
+        for index in [1, 2] {
+            XCTAssertEqual(storage.attribute(foreign, at: index, effectiveRange: nil) as? Bool, true)
+            XCTAssertEqual(storage.attribute(.underlineStyle, at: index, effectiveRange: nil) as? Int,
+                           NSUnderlineStyle.single.rawValue)
+            let font = storage.attribute(.font, at: index, effectiveRange: nil) as? NSFont
+            XCTAssertEqual(font?.pointSize, BlockLayout.Code.codeFontSize * 2)
+            assertSameColor(storage.attribute(.foregroundColor, at: index, effectiveRange: nil) as? NSColor,
+                            dark.textColor, appearance: NSAppearance(named: .darkAqua))
+        }
+    }
+
+    func testPastedCRTextUndoIsNamedPaste() {
+        let (controller, _, _) = makeEditor("start ")
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("QuickMDTests.SourceEditor.\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("x\r\ny", forType: .string)
+        controller.textView.setSelectedRange(NSRange(location: 6, length: 0))
+        userAction(controller) { _ = controller.textView.readSelection(from: pasteboard, type: .string) }
+        XCTAssertEqual(controller.text, "start x\ny")
+        XCTAssertEqual(controller.undoManager.undoActionName, "Paste")
+    }
+
+    /// Replace All with a replacement containing CR (multi-range change):
+    /// every replacement is normalised, and the whole change undoes as one.
+    func testMultiRangeReplacementWithCRIsNormalizedAsOneUndo() {
+        let (controller, _, _) = makeEditor("a-b-c")
+        let ranges = [NSRange(location: 1, length: 1), NSRange(location: 3, length: 1)].map { NSValue(range: $0) }
+        var allowed = true
+        userAction(controller) {
+            allowed = controller.textView.shouldChangeText(inRanges: ranges, replacementStrings: ["\r\n", "\r"])
+        }
+        XCTAssertFalse(allowed, "the CR version is refused and replaced")
+        XCTAssertEqual(controller.text, "a\nb\nc")
+        XCTAssertFalse(controller.text.unicodeScalars.contains("\r"))
+        controller.undoManager.undo()
+        XCTAssertEqual(controller.text, "a-b-c")
+        controller.undoManager.redo()
+        XCTAssertEqual(controller.text, "a\nb\nc")
+    }
+
+    func testMultiRangeReplacementWithoutCRIsLeftToAppKit() {
+        let (controller, _, _) = makeEditor("a-b-c")
+        let ranges = [NSRange(location: 1, length: 1), NSRange(location: 3, length: 1)].map { NSValue(range: $0) }
+        XCTAssertTrue(controller.textView.delegate!.textView!(controller.textView, shouldChangeTextInRanges: ranges,
+                                                              replacementStrings: ["+", "+"]))
+        XCTAssertEqual(controller.text, "a-b-c", "nothing done by the delegate itself")
+    }
+
+    /// Short lines: under the character limit but beyond the line limit, the
+    /// exact pass does not run (layout above the anchor stays undone).
+    func testExactRestoreIsSkippedBeyondTheLineLimit() {
+        let (controller, scrollView, window) = makeEditor(numberedLines(20_000, width: 12), width: 900)
+        let layoutManager = controller.textView.layoutManager!
+        layoutManager.backgroundLayoutEnabled = false
+        let storage = controller.textView.textStorage!.mutableString
+        controller.scroll(toLine: 18_000)
+        let anchor = topLine(controller, scrollView)
+        XCTAssertLessThan(anchor.character, SourceEditorController.exactRestoreCharacterLimit)
+        XCTAssertGreaterThan(SourceEditSupport.line(containing: anchor.character, in: storage),
+                             SourceEditorController.exactRestoreLineLimit)
+        window.setContentSize(NSSize(width: 700, height: 600))
+        window.contentView!.layoutSubtreeIfNeeded()
+        XCTAssertTrue(controller.isRestorePending)
+        settle(controller)
+        XCTAssertLessThan(layoutManager.firstUnlaidCharacterIndex(), anchor.character)
+    }
+
+    func testCancelPendingFocus() {
+        let controller = SourceEditorController()
+        let scrollView = controller.makeScrollView(style: style())
+        controller.focus()
+        controller.cancelPendingFocus()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        windows.append(window)
+        window.contentView!.addSubview(scrollView)
+        XCTAssertFalse(window.firstResponder === controller.textView)
     }
 }

@@ -30,6 +30,15 @@ final class SourceTextView: NSTextView {
     var editorUndoManager: UndoManager?
     /// Called once the view is in a window (a deferred `focus()`).
     var onMoveToWindow: (() -> Void)?
+    /// True while text from a pasteboard is being inserted (paste, Services,
+    /// a drop) — the CR-normalising re-insert names its undo step after it.
+    private(set) var isReadingPasteboard = false
+
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        isReadingPasteboard = true
+        defer { isReadingPasteboard = false }
+        return super.readSelection(from: pboard, type: type)
+    }
 
     override var undoManager: UndoManager? {
         editorUndoManager ?? super.undoManager
@@ -167,6 +176,11 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     /// screen within a line or two, only the scroller is approximate). The
     /// explicit jumps (`placeCaret`, `scroll(toLine:)`) are exact at any offset.
     static let exactRestoreCharacterLimit = 400_000
+    /// The same budget in lines: layout cost follows line fragments, not
+    /// UTF-16 units, so a file of very short lines would get several times
+    /// the work under the character limit alone. 400 000 units at the
+    /// measured worst case of 25 characters per line = 16 000 lines.
+    static let exactRestoreLineLimit = 16_000
     /// `focus()` asked for before the view had a window (the session mounts
     /// and focuses in one pass); honoured when it gets one.
     private var focusRequested = false
@@ -247,7 +261,11 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     /// ONE live `SourceEditorView` per controller: there is one view, and an
     /// NSView has one superview. If SwiftUI briefly keeps two representables
     /// (a removal transition, an identity change), the view is detached from
-    /// the old host before the new one gets it, never shared between them.
+    /// the old host before the new one gets it, never shared between them —
+    /// and the old host is left EMPTY. So the integrator must not put a
+    /// `.transition` on the editor overlay, and must keep its identity stable
+    /// across Reading Mode / zoom / theme changes (style flows through
+    /// `apply(style:)`, never through a new view identity).
     func makeScrollView(style: Style) -> NSScrollView {
         if let scrollView {
             scrollView.removeFromSuperview()
@@ -435,7 +453,7 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
         exactRestoreWork = nil
         guard let anchor = pendingAnchor else { return }
         pendingAnchor = nil
-        guard anchor.character < Self.exactRestoreCharacterLimit else { return }
+        guard isExactRestoreAffordable(at: anchor.character) else { return }
         // AppKit itself nudges the clip by a line or two while background
         // layout refines the estimate; more than half a screen is a scroll
         // that slipped past the explicit cancels (wheel, live scroll,
@@ -444,6 +462,15 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
         let clip = scrollView.contentView.bounds
         guard abs(clip.minY - pendingAnchorClipY) <= clip.height / 2 else { return }
         restore(anchor)
+    }
+
+    /// Whether an exact top-line restore at `character` stays within both
+    /// budgets. The line count scans up to the anchor — only once the
+    /// character limit already holds, so the scan is bounded too.
+    private func isExactRestoreAffordable(at character: Int) -> Bool {
+        guard character < Self.exactRestoreCharacterLimit else { return false }
+        return SourceEditSupport.line(containing: character, in: textStorage.mutableString)
+            < Self.exactRestoreLineLimit
     }
 
     /// A relayout's exact top-line restore is still to come (tests wait on it).
@@ -486,7 +513,12 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     /// area stays there, each clamped to the new text: an external rewrite of
     /// a paragraph elsewhere must not throw the user back to line 0.
     /// Positions are carried as (line, column), not as offsets — an edit
-    /// above the caret shifts every offset below it.
+    /// above the caret shifts every offset below it. Nothing pending survives
+    /// pointing into the old text: a relayout's kept top line becomes the
+    /// line kept here (it is the truer top while its exact pass is due), and
+    /// an entry scroll still waiting for a width is re-targeted. The top line
+    /// lands exactly within the exact-restore budgets (characters and lines),
+    /// by the estimate beyond them — the same trade-off as a relayout.
     func reload(_ text: String) {
         let normalized = MarkdownDocument.normalizeLineEndings(text)
         let old = textStorage.mutableString
@@ -495,7 +527,9 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
             return (line, offset - SourceEditSupport.lineStart(line, in: old))
         }
         let caret = lineAndColumn(textView.selectedRange().location)
-        let top = topVisibleAnchor().map { (position: lineAndColumn($0.character), offset: $0.offset) }
+        let top = (pendingAnchor ?? topVisibleAnchor()).map {
+            (position: lineAndColumn($0.character), offset: $0.offset)
+        }
         let pendingTopLine = pendingTopOffset.map { SourceEditSupport.line(containing: $0, in: old) }
 
         textStorage.beginEditing()
@@ -504,7 +538,9 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
         textStorage.endEditing()
         cachedIndentUnit = nil
         undoManager.removeAllActions()
+        textView.breakUndoCoalescing()
         dropPendingAnchor()
+        pendingTopOffset = nil
 
         let new = textStorage.mutableString
         func offset(line: Int, column: Int) -> Int {
@@ -518,8 +554,15 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
             // the new text.
             pendingTopOffset = SourceEditSupport.lineStart(pendingTopLine, in: new)
         } else if let top {
-            restore(TopAnchor(character: offset(line: top.position.line, column: top.position.column),
-                              offset: top.offset))
+            let anchor = TopAnchor(character: offset(line: top.position.line, column: top.position.column),
+                                   offset: top.offset)
+            if isExactRestoreAffordable(at: anchor.character) {
+                restore(anchor)
+            } else if textContainer.size.width > 0, textStorage.length > 0 {
+                let glyph = layoutManager.glyphIndexForCharacter(at: min(anchor.character, textStorage.length - 1))
+                let estimatedTop = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY
+                scrollLaidOut(toY: clipY(forLineTop: estimatedTop, anchor))
+            }
         } else {
             scrollClip(toY: 0)
         }
@@ -580,6 +623,12 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
         }
         focusRequested = false
         window.makeFirstResponder(textView)
+    }
+
+    /// Drops a deferred `focus()`: the session left the mode before the view
+    /// ever reached a window, and a later mount must not take the focus.
+    func cancelPendingFocus() {
+        focusRequested = false
     }
 
     private func focusIfRequested() {
@@ -756,6 +805,40 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
         let end = affectedCharRange.location + (normalized as NSString).length
         perform(range: affectedCharRange, replacement: normalized,
                 selection: NSRange(location: end, length: 0))
+        // The refused change was a paste, so the step replacing it is one.
+        // AppKit exposes no localized name for it; the app's menus are English.
+        if self.textView.isReadingPasteboard { undoManager.setActionName("Paste") }
+        return false
+    }
+
+    /// The multi-range variant (the find bar's Replace All, multi-selection
+    /// edits). NSTextView asks this one instead of the single-range method
+    /// when the delegate implements it, so it must close the same CR route.
+    /// One range → the single-range path above; several → every replacement
+    /// LF-normalised and applied back to front (earlier ranges stay valid)
+    /// as ONE undo step.
+    func textView(_ textView: NSTextView, shouldChangeTextInRanges affectedRanges: [NSValue],
+                  replacementStrings: [String]?) -> Bool {
+        guard let replacementStrings, replacementStrings.count == affectedRanges.count,
+              replacementStrings.contains(where: { $0.unicodeScalars.contains("\r") }) else { return true }
+        if affectedRanges.count == 1 {
+            return self.textView(textView, shouldChangeTextIn: affectedRanges[0].rangeValue,
+                                 replacementString: replacementStrings[0])
+        }
+        let normalized = replacementStrings.map(MarkdownDocument.normalizeLineEndings)
+        undoManager.beginUndoGrouping()
+        defer { undoManager.endUndoGrouping() }
+        textView.breakUndoCoalescing()
+        guard textView.shouldChangeText(inRanges: affectedRanges, replacementStrings: normalized) else {
+            return false
+        }
+        let edits = zip(affectedRanges.map(\.rangeValue), normalized).sorted { $0.0.location > $1.0.location }
+        for (range, replacement) in edits {
+            textStorage.replaceCharacters(in: range,
+                                          with: NSAttributedString(string: replacement, attributes: baseAttributes))
+        }
+        textView.didChangeText()
+        textView.breakUndoCoalescing()
         return false
     }
 
@@ -803,9 +886,12 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     /// storage's attributes, but undo operations keep the text they removed
     /// with the attributes it had — undoing a deletion after a zoom would
     /// bring back a run in the old font. Every character edit is therefore
-    /// stamped with the current base attributes; attribute changes are left
-    /// alone (they are ours). Changing attributes, not characters, is what
-    /// `didProcessEditing` allows. Per keystroke this touches the typed range.
+    /// stamped with the current base font and colour; attribute changes are
+    /// left alone (they are ours). Changing attributes, not characters, is
+    /// what `didProcessEditing` allows. Per keystroke this touches the typed
+    /// range. ADDED, not replaced: `setAttributes` would also strip what
+    /// NSTextView itself keeps on the range — the marked-text underline of an
+    /// input method or a dead key composing there.
     func textStorage(_ textStorage: NSTextStorage, didProcessEditing editedMask: NSTextStorageEditActions,
                      range editedRange: NSRange, changeInLength delta: Int) {
         guard editedMask.contains(.editedCharacters), !isFixingAttributes,
@@ -814,7 +900,7 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
         guard !attributes.isEmpty else { return }
         isFixingAttributes = true
         defer { isFixingAttributes = false }
-        textStorage.setAttributes(attributes, range: editedRange)
+        textStorage.addAttributes(attributes, range: editedRange)
     }
 
     func textDidChange(_ notification: Notification) {

@@ -30,6 +30,7 @@ final class DocumentFileFormatTests: XCTestCase {
         XCTAssertEqual(decoded.format.encode(decoded.text), bytes, "round trip changed the bytes",
                        file: file, line: line)
         XCTAssertTrue(decoded.isByteExact, file: file, line: line)
+        XCTAssertTrue(decoded.isLosslessDecode, file: file, line: line)
         XCTAssertFalse(decoded.hasMixedLineEndings, file: file, line: line)
     }
 
@@ -175,6 +176,60 @@ final class DocumentFileFormatTests: XCTestCase {
             XCTAssertEqual(decoded.isByteExact, roundTrip == bytes, name)
             XCTAssertTrue(roundTrip == bytes || !decoded.isByteExact, name)
             print("MalformedUTF16 \(name): encoding=\(decoded.format.encoding) isByteExact=\(decoded.isByteExact)")
+        }
+    }
+
+    // MARK: - Lossless decode (the edit session's entry check)
+
+    func testMixedLineEndingFilesDecodeLosslessly() throws {
+        for (name, bytes) in [("CRLF+LF", utf8("a\r\nb\r\nc\n")),
+                              ("CR+CRLF", utf8("a\r\r\nb")),
+                              ("LF+CR UTF-16 LE", Data([0xFF, 0xFE]) + "a\nb\rc".data(using: .utf16LittleEndian)!),
+                              ("CRLF+LF Latin-1", "caf\u{E9}\r\nb\n".data(using: .isoLatin1)!),
+                              ("CRLF+LF UTF-8 BOM", Data([0xEF, 0xBB, 0xBF]) + utf8("a\r\nb\n"))] {
+            let decoded = try XCTUnwrap(DocumentFileFormat.decode(bytes), name)
+            XCTAssertTrue(decoded.hasMixedLineEndings, name)
+            XCTAssertFalse(decoded.isByteExact, name)
+            XCTAssertTrue(decoded.isLosslessDecode, name)
+        }
+    }
+
+    /// An odd number of UTF-16 bytes cannot be reproduced by any UTF-16
+    /// encode: if the decoder took it as UTF-16 it repaired something, and the
+    /// flag must say so — with or without mixed line endings. (Should
+    /// Foundation refuse it and fall back to Latin-1, that decode IS
+    /// lossless: every byte is one character.)
+    func testOddLengthUTF16IsNotLossless() throws {
+        let cases: [(String, Data)] = [
+            ("odd LE", Data([0xFF, 0xFE, 0x61, 0x00, 0x62])),
+            ("odd BE", Data([0xFE, 0xFF, 0x00, 0x61, 0x00])),
+            ("odd LE mixed", Data([0xFF, 0xFE]) + "a\r\nb\nc".data(using: .utf16LittleEndian)! + Data([0x64])),
+            ("odd BE mixed", Data([0xFE, 0xFF]) + "a\r\nb\nc".data(using: .utf16BigEndian)! + Data([0x00])),
+        ]
+        for (name, bytes) in cases {
+            let decoded = try XCTUnwrap(DocumentFileFormat.decode(bytes), name)
+            switch decoded.format.encoding {
+            case .utf16LittleEndian, .utf16BigEndian:
+                XCTAssertFalse(decoded.isLosslessDecode, name)
+            case .isoLatin1:
+                XCTAssertTrue(decoded.isLosslessDecode, name)
+            case .utf8:
+                XCTFail("\(name) cannot be UTF-8")
+            }
+            XCTAssertFalse(decoded.isByteExact && !decoded.isLosslessDecode, name)
+        }
+    }
+
+    func testLosslessDecodeMatchesARawReencode() throws {
+        let cases = [Data([0xFF, 0xFE, 0x00, 0xD8, 0x61, 0x00]), Data([0xFE, 0xFF, 0xDC, 0x00, 0x00, 0x61]),
+                     utf8(""), utf8("x"), Data([0xEF, 0xBB, 0xBF])]
+        for bytes in cases {
+            let decoded = try XCTUnwrap(DocumentFileFormat.decode(bytes))
+            let raw = try XCTUnwrap(MarkdownDocument.decodeDetectingEncoding(bytes)).text
+            let asRead = DocumentFileFormat(encoding: decoded.format.encoding, hasBOM: decoded.format.hasBOM,
+                                            lineEnding: .lf)
+            XCTAssertEqual(decoded.isLosslessDecode, asRead.encode(raw) == bytes)
+            if decoded.isByteExact { XCTAssertTrue(decoded.isLosslessDecode) }
         }
     }
 

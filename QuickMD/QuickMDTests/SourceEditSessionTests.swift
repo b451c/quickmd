@@ -34,32 +34,53 @@ final class SourceEditSessionTests: XCTestCase {
         var copyCalls = 0
         var copyModalURLs: [URL?] = []
         var copyModalCalls = 0
+        /// The unsaved-changes prompt stays "on screen": its completion is
+        /// kept in `heldUnsaved` instead of being called.
+        var holdUnsaved = false
+        var heldUnsaved: ((UnsavedChangesAlert.Choice) -> Void)?
+        /// Runs before each conflict answer, with the call's 1-based number
+        /// (e.g. another app writes the file while the prompt is up).
+        var beforeConflictAnswer: ((Int) -> Void)?
+        /// Per-call conflict answers; `conflictAnswer` once they run out.
+        var conflictAnswers: [SourceEditSession.ConflictChoice] = []
+        /// The window every sheet-capable prompt was given, in call order.
+        var windows: [NSWindow?] = []
 
         var prompts: SourceEditSession.Prompts {
             SourceEditSession.Prompts(
-                unsavedChanges: { _, _, completion in
+                unsavedChanges: { window, _, completion in
                     self.unsavedCalls += 1
+                    self.windows.append(window)
                     self.onUnsaved?()
+                    if self.holdUnsaved {
+                        self.heldUnsaved = completion
+                        return
+                    }
                     completion(self.unsavedAnswers.isEmpty ? .cancel : self.unsavedAnswers.removeFirst())
                 },
                 unsavedChangesModal: { _ in
                     self.modalCalls += 1
                     return self.modalAnswer
                 },
-                saveConflict: { _, _, completion in
+                saveConflict: { window, _, completion in
                     self.conflictCalls += 1
-                    completion(self.conflictAnswer)
+                    self.windows.append(window)
+                    self.beforeConflictAnswer?(self.conflictCalls)
+                    completion(self.conflictAnswers.isEmpty ? self.conflictAnswer : self.conflictAnswers.removeFirst())
                 },
-                encodingFallback: { _, _, name, completion in
+                encodingFallback: { window, _, name, completion in
                     self.encodingNames.append(name)
+                    self.windows.append(window)
                     completion(self.encodingAnswer)
                 },
-                saveFailed: { _, error, completion in
+                saveFailed: { window, error, completion in
                     self.saveFailedErrors.append(error)
+                    self.windows.append(window)
                     completion(self.saveFailedAnswer)
                 },
-                copyDestination: { _, _, _, completion in
+                copyDestination: { window, _, _, completion in
                     self.copyCalls += 1
+                    self.windows.append(window)
                     completion(self.copyURL)
                 },
                 copyDestinationModal: { _, _ in
@@ -84,6 +105,8 @@ final class SourceEditSessionTests: XCTestCase {
     private var savedHasAttachedSheet: ((NSWindow) -> Bool)!
     private var savedDisable: ((String) -> Void)!
     private var savedEnable: ((String) -> Void)!
+    private var savedBeep: (() -> Void)!
+    private var beeps = 0
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -99,6 +122,9 @@ final class SourceEditSessionTests: XCTestCase {
         EditCloseGuard.hasAttachedSheet = { _ in false }
         EditCloseGuard.disableAutomaticTermination = { _ in }
         EditCloseGuard.enableAutomaticTermination = { _ in }
+        savedBeep = SourceEditSession.beep
+        beeps = 0
+        SourceEditSession.beep = { [weak self] in self?.beeps += 1 }
     }
 
     override func tearDownWithError() throws {
@@ -107,6 +133,7 @@ final class SourceEditSessionTests: XCTestCase {
         EditCloseGuard.hasAttachedSheet = savedHasAttachedSheet
         EditCloseGuard.disableAutomaticTermination = savedDisable
         EditCloseGuard.enableAutomaticTermination = savedEnable
+        SourceEditSession.beep = savedBeep
         if let enumerator = FileManager.default.enumerator(atPath: directory.path) {
             for case let path as String in enumerator {
                 chmod(directory.appendingPathComponent(path).path, 0o644)
@@ -262,7 +289,7 @@ final class SourceEditSessionTests: XCTestCase {
                           Data([0xFF, 0xFE, 0x00, 0xD8, 0x61, 0x00])]
         guard let unsafe = candidates.first(where: { data in
             guard let decoded = DocumentFileFormat.decode(data) else { return false }
-            return !decoded.isByteExact && !decoded.hasMixedLineEndings
+            return !decoded.isLosslessDecode
         }) else {
             throw XCTSkip("this system's decoder round-trips every malformed fixture")
         }
@@ -691,6 +718,22 @@ final class SourceEditSessionTests: XCTestCase {
         XCTAssertTrue(session.isDirty)
     }
 
+    func testLeavingDropsTheUndoStackAndAPendingFocus() throws {
+        let (session, window) = entered(try fixture("abc\n"))
+        type(session, "x", at: 0)
+        XCTAssertEqual(save(session), true)
+        XCTAssertTrue(session.editor.undoManager.canUndo)
+        // The editor is not mounted yet when focus is asked for.
+        let scrollView = try XCTUnwrap(session.editor.textView.enclosingScrollView)
+        scrollView.removeFromSuperview()
+        session.focusEditor()
+        session.requestLeave()
+        XCTAssertFalse(session.isActive)
+        XCTAssertFalse(session.editor.undoManager.canUndo)
+        window.contentView!.addSubview(scrollView)
+        XCTAssertFalse(window.firstResponder === session.editor.textView, "no focus after the mode ended")
+    }
+
     func testEscapeRequestsLeave() throws {
         let (session, _) = entered(try fixture("abc\n"))
         session.editor.textView.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
@@ -837,6 +880,363 @@ final class SourceEditSessionTests: XCTestCase {
         session.requestLeave()
         XCTAssertFalse(try guardHandlers(window).isDirty())
         XCTAssertTrue(window.delegate === EditCloseGuard.guardFor(window), "installed once, stays")
+    }
+
+    // MARK: - Review round (2026-10-05)
+
+    private func spin(_ seconds: TimeInterval) {
+        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    // 1. Save Anyway never advances the base ahead of the write.
+    func testSaveAnywayThenAFailedWriteKeepsEverythingConsistent() throws {
+        let url = try fixture("base\n")
+        let (session, _) = entered(url)
+        type(session, "mine ", at: 0)
+        try Data("other app\n".utf8).write(to: url)
+        prompts.conflictAnswer = .saveAnyway
+        prompts.beforeConflictAnswer = { _ in chmod(url.path, 0o444) }
+        prompts.saveFailedAnswer = .ok
+        XCTAssertEqual(save(session), false)
+        XCTAssertEqual(prompts.saveFailedErrors.count, 1)
+        XCTAssertEqual(bytes(url), Data("other app\n".utf8), "the other version is still on disk")
+        XCTAssertEqual(session.baseBytes, Data("base\n".utf8), "base untouched by a failed write")
+        XCTAssertEqual(session.savedText, "base\n")
+        XCTAssertEqual(view.rendered, "other app\n", "rendered == disk")
+        XCTAssertTrue(session.externalChange, "the banner says the disk moved")
+        XCTAssertTrue(session.isDirty)
+        // The watcher's echo of nothing changes nothing; the next save asks again.
+        session.diskDidChange()
+        XCTAssertEqual(view.rendered, "other app\n")
+        chmod(url.path, 0o644)
+        prompts.beforeConflictAnswer = nil
+        XCTAssertEqual(save(session), true)
+        XCTAssertEqual(prompts.conflictCalls, 2)
+        XCTAssertEqual(bytes(url), Data("mine base\n".utf8))
+        XCTAssertFalse(session.externalChange)
+    }
+
+    // 2. The disk moved while the conflict prompt was up: ask about the new version.
+    func testDiskChangeWhileTheConflictPromptIsUpAsksAgain() throws {
+        let url = try fixture("base\n")
+        let (session, _) = entered(url)
+        type(session, "mine ", at: 0)
+        try Data("other 1\n".utf8).write(to: url)
+        prompts.conflictAnswer = .saveAnyway
+        prompts.beforeConflictAnswer = { call in
+            if call == 1 { try? Data("other 2\n".utf8).write(to: url) }
+        }
+        XCTAssertEqual(save(session), true)
+        XCTAssertEqual(prompts.conflictCalls, 2, "the second version was shown before overwriting it")
+        XCTAssertEqual(bytes(url), Data("mine base\n".utf8))
+    }
+
+    func testDiskChangeWhileTheConflictPromptIsUpThenCancelOverwritesNothing() throws {
+        let url = try fixture("base\n")
+        let (session, _) = entered(url)
+        type(session, "mine ", at: 0)
+        try Data("other 1\n".utf8).write(to: url)
+        prompts.conflictAnswers = [.saveAnyway, .cancel]
+        prompts.beforeConflictAnswer = { call in
+            if call == 1 { try? Data("other 2\n".utf8).write(to: url) }
+        }
+        XCTAssertEqual(save(session), false)
+        XCTAssertEqual(bytes(url), Data("other 2\n".utf8))
+        XCTAssertEqual(view.rendered, "other 2\n")
+    }
+
+    // 3. Keep My Version adopts the disk's NEW format.
+    func testKeepMyVersionAfterAFormatChangeSavesInTheNewFormat() throws {
+        let url = try fixture("a\r\nb\r\n")
+        let (session, _) = entered(url)
+        type(session, "X", at: 0)
+        try Data("a\nb\n".utf8).write(to: url)   // git rewrote it as LF
+        session.diskDidChange()
+        session.keepMyVersion()
+        XCTAssertEqual(session.format.lineEnding, .lf)
+        XCTAssertEqual(session.savedText, "a\nb\n")
+        XCTAssertEqual(save(session), true)
+        XCTAssertEqual(prompts.conflictCalls, 0)
+        XCTAssertEqual(bytes(url), Data("Xa\nb\n".utf8), "LF, only the user's edit")
+    }
+
+    func testKeepMyVersionOfAFileThatCannotBeEditedKeepsTheBanner() throws {
+        let unsafe = [Data([0xFF, 0xFE, 0x61, 0x00, 0x62]), Data([0xFE, 0xFF, 0x00, 0x61, 0x00]),
+                      Data([0xFF, 0xFE, 0x00, 0xD8, 0x61, 0x00])]
+            .first { DocumentFileFormat.decode($0).map { !$0.isLosslessDecode } ?? false }
+        let url = try fixture("base\n")
+        let (session, _) = entered(url)
+        type(session, "mine ", at: 0)
+        try XCTUnwrap(unsafe).write(to: url)
+        session.diskDidChange()
+        XCTAssertTrue(session.externalChange)
+        session.keepMyVersion()
+        XCTAssertTrue(session.externalChange, "banner stays")
+        XCTAssertEqual(session.baseBytes, Data("base\n".utf8))
+        XCTAssertEqual(session.savedText, "base\n")
+        XCTAssertEqual(view.toasts.last?.contains("can’t be edited safely"), true)
+        try FileManager.default.removeItem(at: url)
+        session.keepMyVersion()
+        XCTAssertTrue(session.externalChange)
+        XCTAssertEqual(view.toasts.last, "“doc.md” no longer exists.")
+    }
+
+    // 4. Re-entrancy while a prompt is up.
+    func testNothingStartsWhileAPromptIsUp() throws {
+        let url = try fixture("abc\n")
+        let (session, window) = entered(url)
+        type(session, "x", at: 0)
+        prompts.holdUnsaved = true
+        var left: Bool?
+        session.requestLeave { left = $0 }
+        XCTAssertNil(left)
+        XCTAssertTrue(session.isPrompting)
+
+        var saved: Bool?
+        session.save { saved = $0 }
+        XCTAssertEqual(saved, false)
+        var leftAgain: Bool?
+        session.requestLeave { leftAgain = $0 }
+        XCTAssertEqual(leftAgain, false)
+        var confirmed: Bool?
+        try guardHandlers(window).confirm(window) { confirmed = $0 }
+        XCTAssertEqual(confirmed, false, "a ⌘W / ⌘Q during the sheet is cancelled, not queued")
+        XCTAssertEqual(beeps, 1)
+        session.discardChanges()
+        session.keepMyVersion()
+        session.loadDiskVersion()
+        XCTAssertEqual(session.editor.text, "xabc\n", "no banner / menu action ran")
+        XCTAssertEqual(prompts.unsavedCalls, 1, "never a second sheet")
+        XCTAssertEqual(bytes(url), Data("abc\n".utf8))
+
+        // A disk change keeps rendered == disk and raises the banner, buffer untouched.
+        try Data("other\n".utf8).write(to: url)
+        session.diskDidChange()
+        XCTAssertEqual(view.rendered, "other\n")
+        XCTAssertTrue(session.externalChange)
+        XCTAssertEqual(session.editor.text, "xabc\n")
+
+        let held = try XCTUnwrap(prompts.heldUnsaved)
+        held(.cancel)
+        XCTAssertEqual(left, false)
+        XCTAssertFalse(session.isPrompting)
+        XCTAssertEqual(save(session), false, "a new chain starts (and meets the conflict, cancelled)")
+        XCTAssertEqual(prompts.conflictCalls, 1)
+    }
+
+    func testAChainEndsOnEveryExit() throws {
+        let url = try fixture("abc\n")
+        let (session, window) = entered(url)
+        type(session, "x", at: 0)
+        prompts.unsavedAnswers = [.cancel]
+        session.requestLeave()
+        XCTAssertFalse(session.isPrompting)
+        chmod(url.path, 0o444)
+        prompts.saveFailedAnswer = .saveCopy
+        prompts.copyURL = nil
+        save(session)
+        XCTAssertFalse(session.isPrompting, "save failed, copy panel cancelled")
+        chmod(url.path, 0o644)
+        prompts.unsavedAnswers = [.cancel]
+        try guardHandlers(window).confirm(window) { _ in }
+        XCTAssertFalse(session.isPrompting)
+        XCTAssertEqual(save(session), true)
+        XCTAssertFalse(session.isPrompting)
+    }
+
+    // 5. Never clean on faith.
+    func testRefusedDiscardKeepsTheBufferDirty() throws {
+        let (session, window) = entered(try fixture("abc\n"))
+        type(session, "x", at: 0)
+        session.editor.textView.isEditable = false
+        session.discardChanges()
+        XCTAssertEqual(session.editor.text, "xabc\n")
+        XCTAssertTrue(session.isDirty)
+        XCTAssertTrue(window.isDocumentEdited)
+        XCTAssertTrue(try guardHandlers(window).isDirty())
+    }
+
+    func testRefusedLoadDiskVersionKeepsTheBufferDirty() throws {
+        let url = try fixture("abc\n")
+        let (session, window) = entered(url)
+        type(session, "x", at: 0)
+        try Data("other\n".utf8).write(to: url)
+        session.diskDidChange()
+        session.editor.textView.isEditable = false
+        session.loadDiskVersion()
+        XCTAssertEqual(session.editor.text, "xabc\n")
+        XCTAssertTrue(session.isDirty, "dirty against the adopted disk text")
+        XCTAssertTrue(window.isDocumentEdited)
+    }
+
+    // 6. Mixed AND repaired is refused; mixed alone is allowed (above).
+    func testEntryRefusesExactlyWhenTheDecodeIsLossy() throws {
+        let mixedRepaired = Data([0xFF, 0xFE]) + "a\r\nb\nc".data(using: .utf16LittleEndian)! + Data([0x64])
+        let decoded = try XCTUnwrap(DocumentFileFormat.decode(mixedRepaired))
+        let url = try fixture(mixedRepaired, name: "odd.md")
+        let (session, _) = makeSession(url)
+        let refusal = session.enter(atLine: 0)
+        XCTAssertEqual(refusal == .unsafe(fileName: "odd.md"), !decoded.isLosslessDecode)
+    }
+
+    // 7. Follow-up prompts use the window confirm was given.
+    func testConfirmFollowUpsUseTheConfirmWindow() throws {
+        let url = try fixture("abc\n")
+        let (session, window) = entered(url)
+        type(session, "x", at: 0)
+        // No window from the environment, and the editor unmounted, so the
+        // session's own fallback finds none either.
+        session.environment.window = { nil }
+        session.editor.textView.enclosingScrollView?.removeFromSuperview()
+        try Data("other\n".utf8).write(to: url)
+        prompts.unsavedAnswers = [.save]
+        prompts.conflictAnswer = .saveAnyway
+        chmod(url.path, 0o444)
+        prompts.saveFailedAnswer = .saveCopy
+        prompts.copyURL = nil
+        var result: Bool?
+        try guardHandlers(window).confirm(window) { result = $0 }
+        XCTAssertEqual(result, false)
+        XCTAssertEqual(prompts.windows.count, 4, "unsaved, conflict, save failed, copy panel")
+        XCTAssertTrue(prompts.windows.allSatisfy { $0 === window })
+    }
+
+    // 8. Literal comparison: NFC vs NFD is a change.
+    func testNormalizationOnlyChangeIsDirtyAndSaved() throws {
+        let url = try fixture("caf\u{E9}\n")
+        let (session, window) = entered(url)
+        let length = (session.editor.text as NSString).length
+        userAction(session) {
+            session.editor.textView.insertText("cafe\u{301}\n", replacementRange: NSRange(location: 0, length: length))
+        }
+        XCTAssertEqual(session.editor.text, session.savedText, "Swift == says equal…")
+        XCTAssertTrue(session.checkDirty(), "…the session does not")
+        XCTAssertTrue(window.isDocumentEdited)
+        XCTAssertEqual(save(session), true)
+        XCTAssertEqual(bytes(url), Data("cafe\u{301}\n".utf8))
+        XCTAssertFalse(SourceEditSession.isSameText("\u{E9}", "e\u{301}"))
+        XCTAssertTrue(SourceEditSession.isSameText("e\u{301}", "e\u{301}"))
+    }
+
+    // 9. With the banner up, ⌘S on an unchanged buffer is not a silent no-op…
+    func testSaveWithTheBannerUpAndAnUnchangedBufferGoesThroughTheConflict() throws {
+        let url = try fixture("base\n")
+        let (session, _) = entered(url)
+        type(session, "x", at: 0)
+        try Data("other\n".utf8).write(to: url)
+        session.diskDidChange()
+        session.editor.undoManager.undo()
+        XCTAssertEqual(session.editor.text, "base\n")
+        prompts.conflictAnswer = .saveAnyway
+        XCTAssertEqual(save(session), true)
+        XCTAssertEqual(prompts.conflictCalls, 1)
+        XCTAssertEqual(bytes(url), Data("base\n".utf8))
+        XCTAssertFalse(session.externalChange)
+    }
+
+    // …and Discard Changes means the disk version.
+    func testDiscardWithTheBannerUpLoadsTheDiskVersion() throws {
+        let url = try fixture("base\n")
+        let (session, _) = entered(url)
+        type(session, "mine ", at: 0)
+        try Data("other\n".utf8).write(to: url)
+        session.diskDidChange()
+        session.discardChanges()
+        XCTAssertEqual(session.editor.text, "other\n")
+        XCTAssertFalse(session.isDirty)
+        XCTAssertFalse(session.externalChange)
+        session.editor.undoManager.undo()
+        XCTAssertEqual(session.editor.text, "mine base\n")
+    }
+
+    // 10. A clean adopt clears the banner.
+    func testCleanAdoptClearsTheBanner() throws {
+        let url = try fixture("base\n")
+        let (session, _) = entered(url)
+        type(session, "x", at: 0)
+        try Data("other 1\n".utf8).write(to: url)
+        session.diskDidChange()
+        XCTAssertTrue(session.externalChange)
+        session.editor.undoManager.undo()
+        try Data("other 2\n".utf8).write(to: url)
+        session.diskDidChange()
+        XCTAssertEqual(session.editor.text, "other 2\n")
+        XCTAssertFalse(session.externalChange)
+    }
+
+    // 11. An empty file is adopted only if it is still empty a moment later.
+    func testEmptyFileIsAdoptedAfterTheRecheck() throws {
+        let url = try fixture("abc\n")
+        let (session, _) = entered(url)
+        try Data().write(to: url)
+        session.diskDidChange()
+        XCTAssertEqual(view.rendered, "", "rendered == disk at once")
+        XCTAssertEqual(session.editor.text, "abc\n", "not adopted yet")
+        spin(SourceEditSession.emptyFileRecheckDelay + 0.3)
+        XCTAssertEqual(session.editor.text, "")
+        XCTAssertEqual(session.savedText, "")
+    }
+
+    func testEmptyFileFollowedByContentAdoptsTheContent() throws {
+        let url = try fixture("abc\n")
+        let (session, _) = entered(url)
+        try Data().write(to: url)
+        session.diskDidChange()
+        try Data("rewritten\n".utf8).write(to: url)
+        session.diskDidChange()
+        XCTAssertEqual(session.editor.text, "rewritten\n")
+        spin(SourceEditSession.emptyFileRecheckDelay + 0.3)
+        XCTAssertEqual(session.editor.text, "rewritten\n")
+        XCTAssertEqual(session.savedText, "rewritten\n")
+    }
+
+    func testLeavingCancelsTheEmptyFileRecheck() throws {
+        let url = try fixture("abc\n")
+        let (session, _) = entered(url)
+        try Data().write(to: url)
+        session.diskDidChange()
+        session.requestLeave()
+        let commits = view.commits.count
+        spin(SourceEditSession.emptyFileRecheckDelay + 0.3)
+        XCTAssertEqual(view.commits.count, commits)
+        XCTAssertEqual(session.savedText, "abc\n")
+    }
+
+    // 12. The standard alerts, built but never shown.
+    func testConflictAlertHasNoDefaultButton() {
+        let alert = SourceEditSession.Prompts.makeConflictAlert(fileName: "x.md")
+        XCTAssertEqual(alert.messageText, "“x.md” has been changed by another application.")
+        XCTAssertEqual(alert.buttons.map(\.title), ["Save Anyway", "Load Disk Version", "Cancel"])
+        XCTAssertFalse(alert.buttons.contains { $0.keyEquivalent == "\r" }, "Return triggers nothing")
+        XCTAssertEqual(alert.buttons[2].keyEquivalent, "\u{1b}")
+        XCTAssertEqual(alert.buttons.map { $0.accessibilityIdentifier() },
+                       ["source-conflict-save-anyway", "source-conflict-load-disk", "source-conflict-cancel"])
+    }
+
+    func testEncodingAlertMakesNoClaimAboutLineEndings() {
+        let alert = SourceEditSession.Prompts.makeEncodingAlert(fileName: "x.md", encodingName: "ISO Latin 1")
+        XCTAssertEqual(alert.messageText,
+                       "“x.md” uses ISO Latin 1, which cannot store some of the characters you typed.")
+        XCTAssertFalse(alert.informativeText.lowercased().contains("line ending"))
+        XCTAssertEqual(alert.buttons.map { $0.accessibilityIdentifier() },
+                       ["source-encoding-utf8", "source-encoding-cancel"])
+    }
+
+    // 13. Entry-check order.
+    func testEntryCheckOrder() throws {
+        let big = String(repeating: "a", count: SourceEditSession.maximumEditableBytes + 1)
+        let readOnlyAndBig = try fixture(big, name: "ro-big.md")
+        chmod(readOnlyAndBig.path, 0o444)
+        XCTAssertEqual(makeSession(readOnlyAndBig).0.enter(atLine: 0), .readOnly(fileName: "ro-big.md"))
+
+        let writeOnly = try fixture("abc\n", name: "wo.md")
+        chmod(writeOnly.path, 0o222)
+        XCTAssertEqual(makeSession(writeOnly).0.enter(atLine: 0), .unreadable(fileName: "wo.md"),
+                       "unreadable before read-only")
+
+        let noAccess = try fixture(big, name: "none-big.md")
+        chmod(noAccess.path, 0o000)
+        XCTAssertEqual(makeSession(noAccess).0.enter(atLine: 0), .unreadable(fileName: "none-big.md"))
     }
 
     // MARK: - Lifetime
