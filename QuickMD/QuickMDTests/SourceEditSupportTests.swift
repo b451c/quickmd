@@ -269,6 +269,54 @@ final class SourceEditSupportTests: XCTestCase {
                        (text as NSString).range(of: "bold"))
     }
 
+    // MARK: - Selection carry-over with context
+
+    private func match(_ selected: String, before: String = "", after: String = "",
+                       in text: String, lines: Range<Int> = 0..<1) -> Int? {
+        S.sourceRange(ofSelection: selected, before: before, after: after, in: text, lines: lines)?.location
+    }
+
+    func testContextPicksTheFirstOrTheSecondOccurrence() {
+        let text = "teh cat and teh dog"
+        XCTAssertEqual(match("teh", after: " cat and teh dog", in: text), 0)
+        XCTAssertEqual(match("teh", before: "teh cat and ", after: " dog", in: text), 12)
+    }
+
+    /// `[docs](https://x.io/docs) see docs` renders as "docs see docs": the
+    /// URL holds a third occurrence the reader cannot see, so position
+    /// counting would pick the wrong one.
+    func testContextSeesPastALinkURL() {
+        let text = "[docs](https://x.io/docs) see docs"
+        XCTAssertEqual(match("docs", after: " see docs", in: text), 1, "the link text")
+        XCTAssertEqual(match("docs", before: "docs see ", in: text), 30, "the last word")
+    }
+
+    func testContextWithASingleMatch() {
+        XCTAssertEqual(match("cat", before: "something else ", after: " entirely", in: "a cat here"), 2)
+    }
+
+    func testNoContextFallsBackToTheFirstMatch() {
+        XCTAssertEqual(match("ab", in: "ab ab ab"), 0)
+        XCTAssertEqual(match("ab", before: "  ", after: "\n", in: "ab ab ab"), 0, "whitespace-only context")
+        XCTAssertNil(match("zz", before: "a", in: "ab ab ab"))
+    }
+
+    func testContextMatchesAtTheEdgesOfTheRange() {
+        let text = "intro\nword middle word\noutro"
+        // Line 1 only: its first and last characters are matches too.
+        XCTAssertEqual(match("word", after: " middle word", in: text, lines: 1..<2), 6)
+        XCTAssertEqual(match("word", before: "word middle ", in: text, lines: 1..<2), 18)
+        // Context from outside the range does not pull a match in from there.
+        XCTAssertNil(match("intro", after: "\nword", in: text, lines: 1..<2))
+    }
+
+    func testContextIgnoresWhitespaceAtTheEdges() {
+        // Rendered soft-break joins / trimmed spaces vs. the source's newline.
+        let text = "one teh\nteh two"
+        XCTAssertEqual(match("teh", before: "one teh ", after: " two", in: text, lines: 0..<2), 8)
+        XCTAssertEqual(match("teh", before: "one  ", after: "  teh two", in: text, lines: 0..<2), 4)
+    }
+
     func testSelectionIsTrimmed() {
         let text = "alpha beta\ngamma"
         XCTAssertEqual(S.sourceRange(ofSelection: "  beta\n", in: text, lines: 0..<1),

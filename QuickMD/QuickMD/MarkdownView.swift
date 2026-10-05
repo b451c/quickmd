@@ -549,10 +549,15 @@ struct MarkdownView: View {
         .focusedSceneValue(\.toggleSourceEditAction, { toggleSourceEdit() })
         .focusedSceneValue(\.saveSourceAction, { editSession.save() })
         .focusedSceneValue(\.discardSourceChangesAction, { editSession.discardChanges() })
-        // The session's URL follows the view's: a document can be moved or
-        // renamed while open (set on appear too, `configureEditSession`).
+        // A document can be moved or renamed while open: the session's URL
+        // and the watcher follow the view's (both set on appear too). A
+        // "file missing" from the old path no longer applies.
         .onChange(of: documentURL) { url in
             editSession.environment.documentURL = url
+            startWatching(url)
+            if fileMissing {
+                withAnimation(.easeInOut(duration: 0.2)) { fileMissing = false }
+            }
         }
         .onChange(of: editSession.lastLeave) { leave in
             if let leave { didLeaveSourceEdit(leave) }
@@ -696,16 +701,8 @@ struct MarkdownView: View {
             configureEditSession()
             if let url = documentURL {
                 RecentDocumentsStore.shared.register(url)
-                // Auto-reload: watch this document's file and refresh on save.
-                // Silent by default — pro users expect the viewer to be current.
-                let watcher = FileWatcher()
-                watcher.onChange = { reloadFromDisk() }
-                watcher.onFileMissing = {
-                    withAnimation(.easeInOut(duration: 0.2)) { fileMissing = true }
-                }
-                watcher.start(watching: url)
-                fileWatcher = watcher
             }
+            startWatching(documentURL)
             // NSEvent.addLocalMonitorForEvents is GLOBAL for the app process —
             // every visible MarkdownView (one per open tab) registers its own
             // monitor, and ALL of them fire on every keypress. So we can't
@@ -808,6 +805,22 @@ struct MarkdownView: View {
 
     // MARK: - Auto-Reload & External Editor
 
+    /// Auto-reload: watch this document's file and refresh on save. Silent by
+    /// default — pro users expect the viewer to be current. Replaces any
+    /// watcher bound to a previous path (the document was moved or renamed).
+    private func startWatching(_ url: URL?) {
+        fileWatcher?.stop()
+        fileWatcher = nil
+        guard let url else { return }
+        let watcher = FileWatcher()
+        watcher.onChange = { reloadFromDisk() }
+        watcher.onFileMissing = {
+            withAnimation(.easeInOut(duration: 0.2)) { fileMissing = true }
+        }
+        watcher.start(watching: url)
+        fileWatcher = watcher
+    }
+
     /// Re-reads the watched file and swaps the displayed text if it changed.
     /// Same decode + line-ending normalization as the initial document load.
     private func reloadFromDisk() {
@@ -886,7 +899,7 @@ struct MarkdownView: View {
         // A rendered selection whose text is literally in its source lines is
         // selected in the editor (S-D14b); otherwise the caret goes to the line.
         if let refusal = editSession.enter(atLine: readingPosition.editorLine().map { $0 - 1 },
-                                           selection: readingPosition.selectionHint()) {
+                                           selection: { readingPosition.selectionHint() }) {
             showToast(refusal.message)
             return
         }

@@ -840,7 +840,7 @@ final class SourceEditSessionTests: XCTestCase {
     func testSelectionHintFoundIsSelectedAndScrolledTo() throws {
         let text = numbered(200) + "a **bold** typo here\n" + numbered(5)
         let (session, window) = makeSession(try fixture(text))
-        XCTAssertNil(session.enter(atLine: 3, selection: hint("bold", 200..<201)))
+        XCTAssertNil(session.enter(atLine: 3, selection: { self.hint("bold", 200..<201) }))
         let ns = session.editor.text as NSString
         let expected = ns.range(of: "bold", options: .literal,
                                 range: NSRange(location: SourceEditSupport.lineStart(200, in: ns), length: 20))
@@ -862,16 +862,49 @@ final class SourceEditSessionTests: XCTestCase {
     func testSelectionHintNotFoundFallsBackToTheLine() throws {
         let (session, _) = makeSession(try fixture(numbered(20)))
         // "line 15" exists, but outside the selected blocks' lines.
-        XCTAssertNil(session.enter(atLine: 4, selection: hint("line 15", 2..<6)))
+        XCTAssertNil(session.enter(atLine: 4, selection: { self.hint("line 15", 2..<6) }))
         XCTAssertEqual(session.editor.textView.selectedRange().length, 0)
         XCTAssertEqual(session.editor.caretLine, 4)
     }
 
     func testEmptySelectionHintFallsBackToTheLine() throws {
         let (session, _) = makeSession(try fixture(numbered(20)))
-        XCTAssertNil(session.enter(atLine: 6, selection: hint("  \n ", 0..<20)))
+        XCTAssertNil(session.enter(atLine: 6, selection: { self.hint("  \n ", 0..<20) }))
         XCTAssertEqual(session.editor.textView.selectedRange().length, 0)
         XCTAssertEqual(session.editor.caretLine, 6)
+    }
+
+    /// The hint is built only once the entry checks passed: a refusal never
+    /// pays for it.
+    func testSelectionHintIsNotAskedForWhenEntryIsRefused() throws {
+        let url = try fixture("abc\n", name: "ro.md")
+        chmod(url.path, 0o444)
+        let (session, _) = makeSession(url)
+        var asked = 0
+        XCTAssertEqual(session.enter(atLine: 0, selection: { asked += 1; return self.hint("abc", 0..<1) }),
+                       .readOnly(fileName: "ro.md"))
+        XCTAssertEqual(asked, 0)
+        chmod(url.path, 0o644)
+        XCTAssertNil(session.enter(atLine: 0, selection: { asked += 1; return self.hint("abc", 0..<1) }))
+        XCTAssertEqual(asked, 1)
+        XCTAssertEqual(session.editor.textView.selectedRange(), NSRange(location: 0, length: 3))
+    }
+
+    func testOverlongSelectionHintIsIgnored() throws {
+        let long = String(repeating: "x", count: SourceEditSession.selectionHintMaxLength + 1)
+        let (session, _) = makeSession(try fixture(numbered(10) + long + "\n"))
+        XCTAssertNil(session.enter(atLine: 2, selection: { self.hint(long, 10..<11) }))
+        XCTAssertEqual(session.editor.textView.selectedRange().length, 0)
+        XCTAssertEqual(session.editor.caretLine, 2)
+    }
+
+    /// The occurrence the reader selected, not the first one.
+    func testSelectionHintPicksTheSelectedOccurrence() throws {
+        let (session, _) = makeSession(try fixture("teh cat and teh dog\n"))
+        XCTAssertNil(session.enter(atLine: 0, selection: {
+            SourceEditSession.SelectionHint(text: "teh", before: "teh cat and ", after: " dog", lines: 0..<1)
+        }))
+        XCTAssertEqual(session.editor.textView.selectedRange(), NSRange(location: 12, length: 3))
     }
 
     func testReadingPositionSelectionHintLineRange() {

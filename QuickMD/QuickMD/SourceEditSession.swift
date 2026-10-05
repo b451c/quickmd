@@ -232,24 +232,40 @@ final class SourceEditSession: ObservableObject {
     }
 
     /// The rendered selection, for carrying it into the editor (S-D14b): its
-    /// plain text and the 0-based source lines of the blocks it touches
+    /// plain text, the rendered text right before and after it inside its
+    /// first / last row (to tell apart several occurrences —
+    /// `SourceEditSupport.sourceRange(ofSelection:before:after:in:lines:)`),
+    /// and the 0-based source lines of the blocks it touches
     /// (`DocumentReadingPosition.selectionHint`).
     struct SelectionHint: Equatable {
         let text: String
+        var before = ""
+        var after = ""
         let lines: Range<Int>
     }
 
+    /// A carry-over is for "select a typo, fix it": a selection over more
+    /// rows than this is not looked for (and its text is never built — ⌘A on
+    /// a large document must not produce megabytes that cannot match).
+    static let selectionHintMaxRows = 3
+    /// Longer hint texts are ignored, for the same reason.
+    static let selectionHintMaxLength = 1000
+    /// Rendered characters of context on each side of the selection.
+    static let selectionHintContextLength = 40
+
     /// Enters the editor with the caret at the start of 0-based `line` (nil:
     /// the top), scrolled to the top of the visible area — the view converts
-    /// the reading position's 1-based `editorLine()`. With a `selection` whose
-    /// text occurs literally in its source lines, that text is selected
+    /// the reading position's 1-based `editorLine()`. `selection` supplies
+    /// the rendered selection as a hint; it is asked only once every entry
+    /// check has passed (building it costs, a refusal must not). If its text
+    /// occurs literally in its source lines, that occurrence is selected
     /// instead, its first line at the top (select a typo, ⌥⌘E, type the fix);
     /// otherwise the caret goes to `line` as without one. Returns nil when it
     /// entered; otherwise nothing changed and the refusal says why. Checks in
     /// the spec's order: no file, missing, unreadable, read-only, too large,
     /// unsafe. The view requests focus after mounting the editor (`focusEditor`).
     @discardableResult
-    func enter(atLine line: Int?, selection: SelectionHint? = nil) -> EnterRefusal? {
+    func enter(atLine line: Int?, selection: (() -> SelectionHint?)? = nil) -> EnterRefusal? {
         guard !isActive, !isPrompting else { return .alreadyEditing }
         guard let url = environment.documentURL else { return .noFile }
         let name = url.lastPathComponent
@@ -282,8 +298,9 @@ final class SourceEditSession: ObservableObject {
         installGuardIfNeeded()
         closeGuard?.setEdited(false)
         isActive = true
-        if let selection, let range = SourceEditSupport.sourceRange(ofSelection: selection.text,
-                                                                    in: decoded.text, lines: selection.lines) {
+        if let hint = selection?(), hint.text.utf16.count <= Self.selectionHintMaxLength,
+           let range = SourceEditSupport.sourceRange(ofSelection: hint.text, before: hint.before,
+                                                     after: hint.after, in: decoded.text, lines: hint.lines) {
             // Select, then put the first line at the top WITHOUT moving the
             // caret (`placeCaret` would collapse the selection).
             editor.select(range)
@@ -590,7 +607,10 @@ final class SourceEditSession: ObservableObject {
     /// `discarding`: Don't Save — the buffer the caret is in is thrown away,
     /// so its line means nothing for the rendered (saved) text: land only if
     /// something was saved (the list shows that text, not where the reader
-    /// left it), and at most on the saved text's last line.
+    /// left it), and at most on the saved text's last line. Best effort: after
+    /// "saved once, then more edits discarded" the line is the DISCARDED
+    /// buffer's caret line clamped to the saved text, so it can be off by the
+    /// number of lines inserted above the caret after that save.
     private func leave(discarding: Bool = false) {
         var line = editor.caretLine
         if discarding {

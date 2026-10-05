@@ -144,7 +144,66 @@ enum SourceEditSupport {
     static func sourceRange(ofSelection selectedText: String, in text: NSString,
                             lines: Range<Int>) -> NSRange? {
         let needle = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return nil }
+        guard !needle.isEmpty, let scope = searchRange(lines: lines, in: text) else { return nil }
+        let found = text.range(of: needle, options: .literal, range: scope)
+        return found.location == NSNotFound ? nil : found
+    }
+
+    static func sourceRange(ofSelection selectedText: String, in text: String,
+                            lines: Range<Int>) -> NSRange? {
+        sourceRange(ofSelection: selectedText, in: text as NSString, lines: lines)
+    }
+
+    /// `sourceRange(ofSelection:in:lines:)` for the occurrence the reader
+    /// actually selected: `before` / `after` are the RENDERED text right
+    /// before and after the selection (a few dozen characters, cut at its
+    /// row). Every literal match in the lines is scored by how far the source
+    /// around it agrees with that context — the common suffix of the source
+    /// before the match with `before`, plus the common prefix of the source
+    /// after it with `after`, each compared with the whitespace at the edge
+    /// ignored — and the best one wins; ties, and no context at all, go to
+    /// the earliest match.
+    ///
+    /// Context, not counting: "the second `teh`" in the rendered paragraph is
+    /// not the second in the source when a link URL also contains the word
+    /// (`[docs](…/docs) see docs` renders as "docs see docs"). Markup inside
+    /// the context (`**`, `](`) just ends the agreement early.
+    static func sourceRange(ofSelection selectedText: String, before: String, after: String,
+                            in text: NSString, lines: Range<Int>) -> NSRange? {
+        let needle = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty, let scope = searchRange(lines: lines, in: text) else { return nil }
+        let wantBefore = Array(before.utf16.reversed().drop(while: isWhitespaceUnit))
+        let wantAfter = Array(after.utf16.drop(while: isWhitespaceUnit))
+        var best: NSRange?
+        var bestScore = -1
+        var searchFrom = scope.location
+        let scopeEnd = NSMaxRange(scope)
+        while searchFrom < scopeEnd {
+            let found = text.range(of: needle, options: .literal,
+                                   range: NSRange(location: searchFrom, length: scopeEnd - searchFrom))
+            guard found.location != NSNotFound else { break }
+            let score = agreement(text, from: found.location, backwards: true, with: wantBefore)
+                + agreement(text, from: NSMaxRange(found), backwards: false, with: wantAfter)
+            if score > bestScore {
+                best = found
+                bestScore = score
+            }
+            // Without context every later match scores 0 too: the first wins.
+            if wantBefore.isEmpty && wantAfter.isEmpty { break }
+            searchFrom = found.location + 1
+        }
+        return best
+    }
+
+    static func sourceRange(ofSelection selectedText: String, before: String, after: String,
+                            in text: String, lines: Range<Int>) -> NSRange? {
+        sourceRange(ofSelection: selectedText, before: before, after: after, in: text as NSString, lines: lines)
+    }
+
+    /// From the start of 0-based line `lines.lowerBound` to the end of line
+    /// `lines.upperBound - 1`, its newline excluded; nil when the text has
+    /// fewer lines than the range starts at, or the range is empty.
+    private static func searchRange(lines: Range<Int>, in text: NSString) -> NSRange? {
         let lower = max(lines.lowerBound, 0)
         guard lines.upperBound > lower else { return nil }
         // Start of `lower`, or nil when the text has fewer lines.
@@ -166,14 +225,33 @@ enum SourceEditSupport {
             if remaining == 0 { end = offset }
             return remaining > 0
         }
-        let found = text.range(of: needle, options: .literal,
-                               range: NSRange(location: start, length: end - start))
-        return found.location == NSNotFound ? nil : found
+        return NSRange(location: start, length: end - start)
     }
 
-    static func sourceRange(ofSelection selectedText: String, in text: String,
-                            lines: Range<Int>) -> NSRange? {
-        sourceRange(ofSelection: selectedText, in: text as NSString, lines: lines)
+    /// How many UTF-16 units of `wanted` (already in walking order, edge
+    /// whitespace dropped) the source repeats when read from `offset` —
+    /// backwards (the text before a match) or forwards (the text after it),
+    /// skipping the source's own whitespace at that edge first. Looks at no
+    /// more than `wanted` needs plus that whitespace.
+    private static func agreement(_ text: NSString, from offset: Int, backwards: Bool,
+                                  with wanted: [unichar]) -> Int {
+        guard !wanted.isEmpty else { return 0 }
+        var position = backwards ? offset - 1 : offset
+        let length = text.length
+        func valid(_ index: Int) -> Bool { index >= 0 && index < length }
+        while valid(position), isWhitespaceUnit(text.character(at: position)) {
+            position += backwards ? -1 : 1
+        }
+        var count = 0
+        while count < wanted.count, valid(position), text.character(at: position) == wanted[count] {
+            count += 1
+            position += backwards ? -1 : 1
+        }
+        return count
+    }
+
+    private static func isWhitespaceUnit(_ unit: unichar) -> Bool {
+        unit == space || unit == tab || unit == newline || unit == 0x0D || unit == 0xA0
     }
 
     // MARK: - Indentation (S-D5)
