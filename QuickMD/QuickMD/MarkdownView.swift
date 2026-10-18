@@ -503,12 +503,8 @@ struct MarkdownView: View {
         }
         .background(theme.backgroundColor)
         .background(WindowConfigurator { window in
-            // Make every QuickMD document window prefer to join existing windows
-            // as tabs (rather than as standalone windows), regardless of the
-            // system-wide "Prefer tabs" preference. All windows share one
-            // tabbingIdentifier so AppKit groups them in a single tabbed window.
-            window.tabbingMode = .preferred
-            window.tabbingIdentifier = "pl.falami.studio.QuickMD.Document"
+            // Tabbing is set up app-wide (WindowTabbing.preferTabsAlways); the
+            // window keeps SwiftUI's shared tabbingIdentifier.
             // Remembered so the process-global key monitor below can ignore
             // key events addressed to OTHER windows (tabs are separate windows).
             hostWindow = window

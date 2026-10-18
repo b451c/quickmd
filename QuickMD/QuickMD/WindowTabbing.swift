@@ -4,13 +4,13 @@ import AppKit
 // MARK: - Window Configurator
 
 /// Bridges into AppKit to configure the host NSWindow once it's available.
-/// Used to opt every document window into native macOS tabbing — we set the
-/// shared `tabbingIdentifier` and, if another QuickMD doc window is already
-/// visible, programmatically merge the new window as a tab.
 ///
-/// We can't rely on AppKit's auto-tabbing (controlled by the system-wide
-/// "Prefer tabs" pref) because we want consistent tab UX regardless of user
-/// settings. `addTabbedWindow` is the explicit override.
+/// Tabbing itself is AppKit's: `WindowTabbing.preferTabsAlways()` makes every
+/// new document window join the frontmost one as a tab while AppKit orders it
+/// in, in full screen and Split View too. SwiftUI already gives all
+/// DocumentGroup windows one shared `tabbingIdentifier`, so it must be left as
+/// is. This callback can't do the tabbing: on macOS 26 it fires only after the
+/// window is on screen (and, in full screen, already in a Space of its own).
 struct WindowConfigurator: NSViewRepresentable {
     let configure: (NSWindow) -> Void
 
@@ -18,7 +18,7 @@ struct WindowConfigurator: NSViewRepresentable {
         let view = TabAwareView()
         view.onWindowAttached = { window in
             configure(window)
-            let merged = mergeIntoExistingTabIfPossible(window: window)
+            let merged = WindowTabbing.joinExistingTabs(window, among: NSApp.windows)
             if !merged {
                 // Standalone window (first of the session, or all others closed):
                 // give it the last size the user chose instead of the hardcoded
@@ -39,21 +39,43 @@ struct WindowConfigurator: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
 
+// MARK: - Window Tabbing
+
+enum WindowTabbing {
+    /// The defaults key behind `NSWindow.userTabbingPreference` (System
+    /// Settings ▸ Desktop & Dock ▸ "Prefer tabs when opening documents").
+    static let preferenceKey = "AppleWindowTabbingMode"
+
+    /// Every QuickMD document opens as a tab, whatever the system-wide setting
+    /// (default "In Full Screen" only). Set in the argument domain: it outranks
+    /// the global domain, is never written to disk, and leaves the user's
+    /// setting for other apps alone. Call before the first window exists.
+    static func preferTabsAlways(in defaults: UserDefaults = .standard) {
+        var arguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[preferenceKey] = "always"
+        defaults.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+    }
+
+    /// Called once the new window is on screen. Returns true when it ended up
+    /// as a tab (so it must keep the group's frame).
+    ///
+    /// Normally AppKit has already tabbed it. Merging by hand is a fallback for
+    /// ordinary windows only: in full screen the window already has its own
+    /// Space, and moving it into another window's tab group then leaves a
+    /// half-empty black full-screen Space without a menu bar.
     @discardableResult
-    private func mergeIntoExistingTabIfPossible(window newWindow: NSWindow) -> Bool {
-        // Find another visible QuickMD document window already on screen and
-        // merge the new window into its tab group.
-        guard let identifier = newWindow.tabbingIdentifier as String?,
-              !identifier.isEmpty else { return false }
-
-        let candidates = NSApp.windows.filter { other in
+    static func joinExistingTabs(_ newWindow: NSWindow, among windows: [NSWindow]) -> Bool {
+        if (newWindow.tabbedWindows?.count ?? 0) > 1 { return true }
+        guard let host = windows.first(where: { other in
             other !== newWindow
                 && other.isVisible
                 && other.tabbingIdentifier == newWindow.tabbingIdentifier
-                && other.tabGroup !== newWindow.tabGroup  // not already grouped
+        }) else { return false }
+        if host.styleMask.contains(.fullScreen) || newWindow.styleMask.contains(.fullScreen) {
+            return false
         }
-        guard let host = candidates.first else { return false }
         host.addTabbedWindow(newWindow, ordered: .above)
         newWindow.makeKeyAndOrderFront(nil)
         return true
@@ -90,7 +112,11 @@ enum WindowSizeMemory {
         return NSSize(width: w, height: h)
     }
 
-    private static func persist(_ size: NSSize) {
+    private static func persist(_ window: NSWindow) {
+        // A full-screen (or Split View) frame is the screen's size, not one the
+        // user chose; saving it would open later standalone windows screen-sized.
+        guard !window.styleMask.contains(.fullScreen) else { return }
+        let size = window.frame.size
         guard size.width >= minSize.width, size.height >= minSize.height else { return }
         let defaults = UserDefaults.standard
         defaults.set(Double(size.width), forKey: widthKey)
@@ -101,7 +127,7 @@ enum WindowSizeMemory {
     /// frame, keeping the top-left corner anchored (so the title bar doesn't
     /// jump). No-op when nothing is saved or the size already matches.
     static func apply(to window: NSWindow) {
-        guard var target = savedSize() else { return }
+        guard !window.styleMask.contains(.fullScreen), var target = savedSize() else { return }
         if let screen = window.screen ?? NSScreen.main {
             target.width = min(target.width, screen.visibleFrame.width)
             target.height = min(target.height, screen.visibleFrame.height)
@@ -123,7 +149,7 @@ enum WindowSizeMemory {
             forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
         ) { note in
             guard let w = note.object as? NSWindow else { return }
-            persist(w.frame.size)
+            persist(w)
         }
         final class TokenBox { var token: NSObjectProtocol? }
         let closeBox = TokenBox()
@@ -131,7 +157,7 @@ enum WindowSizeMemory {
             forName: NSWindow.willCloseNotification, object: window, queue: .main
         ) { note in
             if let w = note.object as? NSWindow {
-                persist(w.frame.size)
+                persist(w)
             }
             center.removeObserver(resizeToken)
             if let token = closeBox.token { center.removeObserver(token) }
