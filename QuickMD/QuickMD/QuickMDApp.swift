@@ -48,6 +48,8 @@ struct QuickMDApp: App {
                 CopyMarkdownCommand()
             }
             CommandGroup(after: .toolbar) {
+                ReloadDocumentCommand()
+                Divider()
                 ZoomCommands()
                 ToggleToCCommand()
                 ToggleDocumentListCommand()
@@ -206,6 +208,22 @@ struct CopyMarkdownCommand: View {
         .keyboardShortcut("c", modifiers: [.command, .shift])
         // While editing it would copy the saved text, not the one on screen.
         .disabled(copyDocumentAction == nil || sourceEditState?.isEditing == true)
+    }
+}
+
+/// View ▸ Reload (⌘R) — re-reads the frontmost document from disk, for the
+/// times auto-reload did not notice a change (network volumes, some editors'
+/// save strategies). Off while Source Edit shows: the session owns the disk.
+struct ReloadDocumentCommand: View {
+    @FocusedValue(\.reloadDocumentAction) var reloadDocumentAction
+    @FocusedValue(\.sourceEditState) var sourceEditState
+
+    var body: some View {
+        Button("Reload") {
+            reloadDocumentAction?()
+        }
+        .keyboardShortcut("r", modifiers: .command)
+        .disabled(reloadDocumentAction == nil || sourceEditState?.isEditing == true)
     }
 }
 

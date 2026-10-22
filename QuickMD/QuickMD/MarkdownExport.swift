@@ -28,6 +28,11 @@ struct FocusedOpenInExternalEditorKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+/// View ▸ Reload (⌘R) and the reload pill.
+struct FocusedReloadDocumentKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 struct FocusedZoomActionKey: FocusedValueKey {
     typealias Value = (MarkdownZoom) -> Void
 }
@@ -146,6 +151,10 @@ extension FocusedValues {
     var openInExternalEditorAction: (() -> Void)? {
         get { self[FocusedOpenInExternalEditorKey.self] }
         set { self[FocusedOpenInExternalEditorKey.self] = newValue }
+    }
+    var reloadDocumentAction: (() -> Void)? {
+        get { self[FocusedReloadDocumentKey.self] }
+        set { self[FocusedReloadDocumentKey.self] = newValue }
     }
     var zoomAction: ((MarkdownZoom) -> Void)? {
         get { self[FocusedZoomActionKey.self] }

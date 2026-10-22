@@ -434,6 +434,9 @@ struct MarkdownView: View {
                     .transition(.opacity)
                 }
                 if documentURL != nil {
+                    ReloadDocumentButton(theme: theme) {
+                        reloadManually()
+                    }
                     EditSourceButton(theme: theme) {
                         toggleSourceEdit()
                     }
@@ -526,6 +529,7 @@ struct MarkdownView: View {
         })
         .focusedSceneValue(\.copyDocumentAction, { copyToClipboard(currentText) })
         .focusedSceneValue(\.openInExternalEditorAction, { openInExternalEditor() })
+        .focusedSceneValue(\.reloadDocumentAction, { reloadManually() })
         .focusedSceneValue(\.toggleDocumentListAction, {
             guard !isReadingMode else { return }
             withAnimation(.easeInOut(duration: 0.2)) { isDocumentListVisible.toggle() }
@@ -842,6 +846,22 @@ struct MarkdownView: View {
         if fileMissing {
             withAnimation(.easeInOut(duration: 0.2)) { fileMissing = false }
         }
+    }
+
+    /// ⌘R / the reload pill: re-read the file now, and restart the watcher in
+    /// case it lost track of the file (some volumes and save strategies never
+    /// deliver an event). Not while Source Edit shows — the session owns the
+    /// disk then.
+    private func reloadManually() {
+        guard !editSession.isActive, let url = documentURL else { return }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            withAnimation(.easeInOut(duration: 0.2)) { fileMissing = true }
+            return
+        }
+        let before = currentText
+        reloadFromDisk()
+        startWatching(url)
+        showToast(currentText == before ? "Reloaded \u{00B7} no changes" : "Reloaded")
     }
 
     /// ⌘E — hand the document off to the user's configured editor, at the line
