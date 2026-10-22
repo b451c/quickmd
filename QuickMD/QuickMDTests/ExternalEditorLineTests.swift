@@ -224,7 +224,12 @@ final class ExternalEditorLineTests: XCTestCase {
     func testAppDisplayNameHasNoAppExtension() {
         let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
         let name = ExternalEditorManager.appDisplayName(at: textEdit)
-        XCTAssertEqual(name, "TextEdit")
+        // Localized like the toast it feeds ("文本编辑" on a Mac set to
+        // Chinese, #37), so the English name is pinned only under English.
+        if Locale.preferredLanguages.first?.hasPrefix("en") == true {
+            XCTAssertEqual(name, "TextEdit")
+        }
+        XCTAssertFalse(name.isEmpty)
         XCTAssertFalse(name.hasSuffix(".app"))
         let missing = URL(fileURLWithPath: "/nonexistent/Some Editor.app")
         XCTAssertEqual(ExternalEditorManager.appDisplayName(at: missing), "Some Editor")
