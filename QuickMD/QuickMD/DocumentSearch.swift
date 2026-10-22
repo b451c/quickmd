@@ -23,17 +23,29 @@ struct ParsedDocument: Sendable {
 /// comparison, non-overlapping. The ONE matcher behind the NSTextView-hosted
 /// highlights (`applyNSSearchHighlight`) — and behind `DocumentSearch`'s count
 /// for tables, which is how a table's count equals what its view highlights.
+///
+/// The ranges must index the ORIGINAL string (the highlight applies them to
+/// the view's storage). Lowercasing can change the UTF-16 length ("İ" U+0130
+/// becomes "i̇", two units), and a range found in the lowercased copy then
+/// points one unit further per such character — every later highlight of the
+/// row (a whole table) drifts and the last one can be clipped. Only then is
+/// the original searched with `.caseInsensitive`; ordinary text keeps the
+/// lowercased search exactly as before.
 func searchMatchRanges(in string: String, term: String) -> [NSRange] {
     guard !term.isEmpty else { return [] }
-    let needle = term.lowercased() as NSString
+    let original = string as NSString
     let lowerHaystack = string.lowercased() as NSString
-    guard needle.length > 0, lowerHaystack.length >= needle.length else { return [] }
+    let lengthPreserved = lowerHaystack.length == original.length
+    let haystack = lengthPreserved ? lowerHaystack : original
+    let needle = (lengthPreserved ? term.lowercased() : term) as NSString
+    let options: NSString.CompareOptions = lengthPreserved ? [] : .caseInsensitive
+    guard needle.length > 0, haystack.length >= needle.length else { return [] }
 
     var ranges: [NSRange] = []
     var location = 0
-    while location < lowerHaystack.length {
-        let searchRange = NSRange(location: location, length: lowerHaystack.length - location)
-        let found = lowerHaystack.range(of: needle as String, options: [], range: searchRange)
+    while location < haystack.length {
+        let searchRange = NSRange(location: location, length: haystack.length - location)
+        let found = haystack.range(of: needle as String, options: options, range: searchRange)
         if found.location == NSNotFound { break }
         ranges.append(found)
         location = found.location + max(found.length, 1)

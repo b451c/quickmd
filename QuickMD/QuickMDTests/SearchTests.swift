@@ -241,6 +241,49 @@ final class SearchTests: XCTestCase {
         }
     }
 
+    /// "İ" (U+0130) lowercases to two UTF-16 units. The ranges must still be
+    /// the ORIGINAL string's — in a table one such character used to shift
+    /// every later highlight by one.
+    func testLengthChangingLowercaseDoesNotShiftRanges() {
+        let text = "İstanbul and x, then X"
+        let expected = [(text as NSString).range(of: "x"), (text as NSString).range(of: "X")]
+        XCTAssertEqual(searchMatchRanges(in: text, term: "x"), expected)
+        XCTAssertEqual(searchMatchRanges(in: text, term: "STANBUL"), [NSRange(location: 1, length: 7)],
+                       "case-insensitive on the original string")
+        XCTAssertEqual(searchMatchRanges(in: text, term: "İ"), [NSRange(location: 0, length: 1)])
+
+        // A text row through the shared highlight.
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 10))
+        textView.textStorage?.setAttributedString(NSAttributedString(string: text))
+        applyNSSearchHighlight(in: textView, term: "x", focusedOccurrence: 1)
+        XCTAssertEqual(highlights(in: textView).map(\.range), expected)
+        XCTAssertEqual(highlights(in: textView).map(\.focused), [false, true])
+
+        // A table: "İstanbul" in the first cell, the term in later cells.
+        let markdown = "| İstanbul | x |\n|---|---|\n| **x** İ | [x](https://x.example) |"
+        let table = onlyTable(markdown)
+        let built = build(table)
+        let string = built.string.string as NSString
+        var original: [NSRange] = []
+        var location = 0
+        while true {
+            let found = string.range(of: "x", options: [],
+                                     range: NSRange(location: location, length: string.length - location))
+            if found.location == NSNotFound { break }
+            original.append(found)
+            location = NSMaxRange(found)
+        }
+        XCTAssertEqual(original.count, 3)
+        XCTAssertEqual(DocumentSearch.computeMatches(in: [table.block], term: "x").matchBlockIds.count, 3)
+        let tableView = tableTextView(built)
+        for focused in 0..<original.count {
+            applyNSSearchHighlight(in: tableView, term: "x", focusedOccurrence: focused)
+            let drawn = highlights(in: tableView)
+            XCTAssertEqual(drawn.map(\.range), original, "count == highlights, original coordinates")
+            XCTAssertEqual(drawn.firstIndex(where: \.focused), focused)
+        }
+    }
+
     /// Paragraphs and tables interleave in document order; each table counts
     /// its rendered matches only.
     func testMixedDocumentCountsParagraphsAndTablesInOrder() {
