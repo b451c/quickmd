@@ -404,9 +404,9 @@ struct MarkdownView: View {
 
     /// The top-right pill cluster.
     ///
-    /// Reading: zoom reset (while zoomed), Edit (Source Edit, ⌥⌘E), Open in
-    /// editor (⌘E), Copy source — gone in Reading Mode, whose shortcuts (⌘0,
-    /// ⌥⌘E, ⌘E, ⌘⇧C) all still work, so nothing is lost except the thing
+    /// Reading: zoom reset (while zoomed), Reload (⌘R), Edit (Source Edit,
+    /// ⌥⌘E), Copy source — gone in Reading Mode, whose shortcuts (⌘0, ⌘R,
+    /// ⌥⌘E, ⌘⇧C) all still work, so nothing is lost except the thing
     /// hovering over the text.
     ///
     /// Editing: ONLY Save and Done, also in Reading Mode — a mode you can only
@@ -822,10 +822,14 @@ struct MarkdownView: View {
         fileWatcher = watcher
     }
 
+    /// What `reloadFromDisk` found — the ⌘R toast reports it.
+    private enum DiskReload { case changed, unchanged, unreadable, ownedBySession }
+
     /// Re-reads the watched file and swaps the displayed text if it changed.
     /// Same decode + line-ending normalization as the initial document load.
-    private func reloadFromDisk() {
-        guard let url = documentURL else { return }
+    @discardableResult
+    private func reloadFromDisk() -> DiskReload {
+        guard let url = documentURL else { return .unreadable }
         if editSession.isActive {
             // The session reads the disk itself and keeps the rendered text
             // equal to it through `commitText` (S-D9) — or shows the banner
@@ -835,17 +839,20 @@ struct MarkdownView: View {
             if fileMissing && FileManager.default.fileExists(atPath: url.path) {
                 withAnimation(.easeInOut(duration: 0.2)) { fileMissing = false }
             }
-            return
+            return .ownedBySession
         }
+        // Only the read can fail: decoding falls back to Latin-1.
         guard let data = try? Data(contentsOf: url),
-              let decoded = MarkdownDocument.decode(data) else { return }
+              let decoded = MarkdownDocument.decode(data) else { return .unreadable }
         let text = MarkdownDocument.normalizeLineEndings(decoded)
-        if text != currentText {
+        let changed = text != currentText
+        if changed {
             currentText = text
         }
         if fileMissing {
             withAnimation(.easeInOut(duration: 0.2)) { fileMissing = false }
         }
+        return changed ? .changed : .unchanged
     }
 
     /// ⌘R / the reload pill: re-read the file now, and restart the watcher in
@@ -854,14 +861,17 @@ struct MarkdownView: View {
     /// disk then.
     private func reloadManually() {
         guard !editSession.isActive, let url = documentURL else { return }
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            withAnimation(.easeInOut(duration: 0.2)) { fileMissing = true }
-            return
-        }
-        let before = currentText
-        reloadFromDisk()
+        // Watch first, then read: a write landing in between is caught by the
+        // new watcher (at worst one more reload that finds nothing new). For a
+        // missing file the watcher shows the banner and polls for its return.
         startWatching(url)
-        showToast(currentText == before ? "Reloaded \u{00B7} no changes" : "Reloaded")
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        switch reloadFromDisk() {
+        case .changed: showToast("Reloaded")
+        case .unchanged: showToast("Reloaded \u{00B7} no changes")
+        case .unreadable: showToast("Couldn't read the file")
+        case .ownedBySession: break
+        }
     }
 
     /// ⌘E — hand the document off to the user's configured editor, at the line
