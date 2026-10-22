@@ -285,6 +285,76 @@ final class TableTextTests: XCTestCase {
                              TableTextBuilder.height(of: built.string, width: 1000))
     }
 
+    /// Review fix (2026-10-22, seen on screen with 8 columns at 1920 pt): plain
+    /// `NSTextTable` floors every column, so the cells stopped up to
+    /// `columns - 1` pt short of the outline. `FullWidthTextTable` tiles the
+    /// width exactly — first column at 0, last column at the right edge, no
+    /// gaps — and the measurer still equals the laid-out view.
+    func testColumnsSpanTheFullWidthAndParityHolds() {
+        let wrapping = "a longer cell text that wraps several times in the narrower columns"
+        for columns in 1...9 {
+            let headers = (0..<columns).map { "h\($0)" }
+            let rows = (0..<3).map { r in (0..<columns).map { c in c == columns / 2 && r == 1 ? wrapping : "c\(r),\(c)" } }
+            let alignments = Array(repeating: TextAlignment.leading, count: columns)
+            let block = MarkdownBlock(id: "table-0", content: .table(headers: headers, rows: rows, alignments: alignments),
+                                      sourceLine: 0)
+            let built = TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
+                                               theme: theme, fontScale: 1)
+            for width in [CGFloat(397), 401, 653, 999, 1913] {
+                let tag = "\(columns) columns @\(Int(width))"
+                let textView = liveTextView(built, width: width)
+                let layout = built.layout
+                for band in 0..<layout.bandCount {
+                    var rects: [NSRect] = []
+                    for column in 0..<columns {
+                        guard let rect = textView.tableCellBounds(band: band, column: column, layout: layout) else {
+                            XCTFail("\(tag) no bounds (\(band),\(column))"); continue
+                        }
+                        rects.append(rect)
+                    }
+                    guard rects.count == columns else { continue }
+                    XCTAssertEqual(rects[0].minX, 0, accuracy: 0.5, "\(tag) band \(band) starts at 0")
+                    XCTAssertEqual(rects[columns - 1].maxX, width, accuracy: 0.5, "\(tag) band \(band) reaches the edge")
+                    for column in 1..<columns {
+                        XCTAssertEqual(rects[column].minX, rects[column - 1].maxX, accuracy: 0.01,
+                                       "\(tag) band \(band) gap before column \(column)")
+                        XCTAssertEqual(rects[column].minY, rects[0].minY, accuracy: 0.01, tag)
+                        XCTAssertEqual(rects[column].height, rects[0].height, accuracy: 0.01, tag)
+                    }
+                    // Whole-point columns; only the last one may be wider by 1.
+                    let widths = rects.map(\.width)
+                    XCTAssertLessThanOrEqual((widths.max() ?? 0) - (widths.min() ?? 0), 1.0, tag)
+                }
+                let measured = BlockHeightMeasurer.measure(blocks: [block], theme: theme, fontScale: 1,
+                                                           contentWidth: width, math: nil).table.heights[0]
+                    - 2 * BlockLayout.Document.tableOuterVerticalPadding
+                let live = TableTextBuilder.tableHeight(layoutManager: textView.layoutManager!,
+                                                        container: textView.textContainer!)
+                XCTAssertEqual(measured, live, tag)
+            }
+        }
+    }
+
+    /// Review fix: an instance built for another theme, light/dark variant or
+    /// font family must not be adopted by the view.
+    func testSourceRejectsAnotherThemeOrFont() {
+        let t = table(Self.fixtures[0].markdown)
+        let light = MarkdownTheme.cached(for: .light)
+        let dark = MarkdownTheme.cached(for: .dark)
+        let built = TableTextBuilder.build(headers: t.headers, rows: t.rows, alignments: t.alignments,
+                                           theme: light, fontScale: 1)
+        XCTAssertTrue(built.matches(headers: t.headers, rows: t.rows, alignments: t.alignments,
+                                    theme: light, fontScale: 1))
+        XCTAssertFalse(built.matches(headers: t.headers, rows: t.rows, alignments: t.alignments,
+                                     theme: dark, fontScale: 1), "Auto light vs Auto dark")
+        var serif = light
+        serif.fonts = DocumentFonts(body: "Georgia")
+        XCTAssertFalse(built.matches(headers: t.headers, rows: t.rows, alignments: t.alignments,
+                                     theme: serif, fontScale: 1), "another body font")
+        XCTAssertFalse(built.matches(headers: t.headers, rows: t.rows + [["x"]], alignments: t.alignments,
+                                     theme: light, fontScale: 1), "another row")
+    }
+
     // MARK: - Hit-testing helper (TS-D6 groundwork)
 
     /// Centre and padding corners of every cell resolve to THAT cell — the
