@@ -319,6 +319,22 @@ struct CopySourceButton: View {
     }
 }
 
+// MARK: - Reload Button
+
+/// Top-right button: re-read the document from disk (⌘R).
+struct ReloadDocumentButton: View {
+    let theme: MarkdownTheme
+    let action: () -> Void
+
+    var body: some View {
+        ChromePill(theme: theme, title: "Reload", help: "Reload from disk (⌘R)", action: action) {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 11))
+        }
+        .accessibilityIdentifier("reload-document")
+    }
+}
+
 // MARK: - Edit Source Button
 
 /// Top-right pencil button — fixes the source in place (Source Edit, ⌥⌘E).

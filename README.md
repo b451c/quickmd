@@ -42,6 +42,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ### Works with Your Editor
 - **Auto-reload** — the document refreshes the moment another app saves it. Turn on auto-save in VS Code, Cursor or Zed, or let an AI agent write the file, and QuickMD is a live preview
+- **Reload (`⌘R`)** — re-read the file on demand, for the rare change auto-reload misses (network volumes, unusual save strategies)
 - **Open in External Editor (`⌘E`)** — for longer writing sessions: hands the file to your editor (auto-detected, configurable in Settings). VS Code, BBEdit, TextMate and Nova open at the line you are reading
 
 ### Complete Markdown Support

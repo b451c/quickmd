@@ -5,6 +5,11 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Reload** (⌘R, View ▸ Reload, or the ↻ button in the top-right cluster): re-reads the document from disk now and restarts the file watcher, for the times auto-reload does not notice a change (some network volumes and editors' save strategies). A toast says whether anything changed; a file that is gone shows the "File no longer exists" banner. Off while Source Edit shows, where the editor already follows the disk.
+
 ## [1.12.0] - 2026-10-05
 
 Source Edit: QuickMD stays a viewer first, but you can now fix the Markdown you are reading without leaving the window. Asked for by [@KillSwitchSIG](https://github.com/KillSwitchSIG) (#31) and [@vinaymve](https://github.com/vinaymve) (#34).
