@@ -78,16 +78,34 @@ struct TableTextLayout: Equatable {
 
 /// A table block's string plus its layout, built once by `TableTextBuilder`.
 ///
-/// `source` is what it was built from. `BlockHeightMeasurer` hands these to the
-/// view through `MeasuredBlocks.tables` (keyed by the POSITIONAL block id), so
-/// the view checks `matches(...)` before trusting one — a cell that still shows
-/// the previous parse's `table-2` must not draw the new parse's `table-2`.
+/// `source` is everything it was built from. `BlockHeightMeasurer` hands these
+/// to the view through `MeasuredBlocks.tables` (keyed by the POSITIONAL block
+/// id), so the view compares `source` before trusting one — a cell that still
+/// shows the previous parse's `table-2` must not draw the new parse's `table-2`.
 struct TableText {
+    /// The block's cells plus what `MarkdownView.DocumentIdentity` re-parses
+    /// for: theme (name + light/dark variant — "Auto" is one name for two
+    /// palettes), document fonts, zoom. An instance built for another theme or
+    /// font therefore never matches, whatever the parse ordering.
     struct Source: Equatable {
         let headers: [String]
         let rows: [[String]]
         let alignments: [TextAlignment]
         let fontScale: CGFloat
+        let themeName: String
+        let isDark: Bool
+        let fonts: DocumentFonts
+
+        init(headers: [String], rows: [[String]], alignments: [TextAlignment],
+             theme: MarkdownTheme, fontScale: CGFloat) {
+            self.headers = headers
+            self.rows = rows
+            self.alignments = alignments
+            self.fontScale = fontScale
+            themeName = theme.name
+            isDark = theme.isDark
+            fonts = theme.fonts
+        }
     }
 
     let string: NSAttributedString
@@ -95,8 +113,52 @@ struct TableText {
     let source: Source
 
     func matches(headers: [String], rows: [[String]], alignments: [TextAlignment],
+                 theme: MarkdownTheme, fontScale: CGFloat) -> Bool {
+        source == Source(headers: headers, rows: rows, alignments: alignments, theme: theme, fontScale: fontScale)
+    }
+
+    /// Content and zoom only. For `MarkdownView.selectableText`, whose cached
+    /// instance is already pinned to the installed parse (`installedVersion ==
+    /// contentVersion`, and every theme/font change is a new parse); prefer
+    /// `matches(…theme:…)` everywhere else.
+    func matches(headers: [String], rows: [[String]], alignments: [TextAlignment],
                  fontScale: CGFloat) -> Bool {
-        source == Source(headers: headers, rows: rows, alignments: alignments, fontScale: fontScale)
+        source.headers == headers && source.rows == rows && source.alignments == alignments
+            && source.fontScale == fontScale
+    }
+}
+
+/// An `NSTextTable` whose columns fill the available width exactly.
+///
+/// With `fixedLayoutAlgorithm` TextKit floors every column to whole points, so
+/// the cells stop up to `columnCount - 1` pt short of the container (measured:
+/// 6–7 pt for 8 columns) and the header band, the rules and the outline no
+/// longer meet — 1.12's grid filled the width. This override hands out the
+/// columns itself: whole points, `floor(width / n)` each, the remainder 1 pt at
+/// a time to the first columns (and a fractional width's last fraction to the
+/// last one), so they tile `rect` with no gap. Only x and width of the content
+/// rect change; TextKit still decides the row heights and the vertical layout,
+/// and the measurer lays out the same subclass, so parity is unaffected.
+final class FullWidthTextTable: NSTextTable {
+    override func rect(for block: NSTextTableBlock, layoutAt startingPoint: NSPoint, in rect: NSRect,
+                       textContainer: NSTextContainer, characterRange charRange: NSRange) -> NSRect {
+        var layoutRect = super.rect(for: block, layoutAt: startingPoint, in: rect,
+                                    textContainer: textContainer, characterRange: charRange)
+        let columns = max(1, numberOfColumns)
+        let column = min(max(0, block.startingColumn), columns - 1)
+        let whole = floor(rect.width)
+        let base = floor(whole / CGFloat(columns))
+        let remainder = Int(whole - base * CGFloat(columns))
+        let x = rect.minX + base * CGFloat(column) + CGFloat(min(column, remainder))
+        var width = base + (column < remainder ? 1 : 0)
+        if column == columns - 1 { width += rect.width - whole }
+        let leading = block.width(for: .margin, edge: .minX) + block.width(for: .border, edge: .minX)
+            + block.width(for: .padding, edge: .minX)
+        let trailing = block.width(for: .margin, edge: .maxX) + block.width(for: .border, edge: .maxX)
+            + block.width(for: .padding, edge: .maxX)
+        layoutRect.origin.x = x + leading
+        layoutRect.size.width = BlockLayout.clampedWidth(width - leading - trailing)
+        return layoutRect
     }
 }
 
@@ -108,11 +170,10 @@ struct TableText {
 ///
 /// The look is the one 1.12's SwiftUI table DREW, measured, not what its
 /// modifiers asked for (TS-D2). Metrics come from `BlockLayout.Table`:
-/// - columns are equal (`fixedLayoutAlgorithm`, no explicit widths). TextKit
-///   floors each column to whole points, so the table can be up to
-///   `columnCount - 1` pt narrower than the container and a cell can wrap a
-///   word earlier than 1.12 did. Accepted: the measurer lays out the same
-///   string, so it is self-consistent, and the dividers land on whole points;
+/// - columns are equal, whole points, and fill the width exactly
+///   (`FullWidthTextTable`); a cell can wrap a word earlier than 1.12's
+///   fractional columns did. The measurer lays out the same string, so it is
+///   self-consistent, and the dividers land on whole points;
 /// - a cell's padding is 1.12's `.padding`; its 1 pt rule is a BORDER on its
 ///   trailing edge (not the last column) and its bottom edge (not the last
 ///   data row — the header always has one, as 1.12's header separator), so
@@ -138,7 +199,7 @@ enum TableTextBuilder {
         let renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
         let (columnCount, showsHeader, bands) = grid(headers: headers, rows: rows, alignments: alignments)
 
-        let table = NSTextTable()
+        let table = FullWidthTextTable()
         table.numberOfColumns = columnCount
         table.layoutAlgorithm = .fixedLayoutAlgorithm
         table.collapsesBorders = false
@@ -198,7 +259,8 @@ enum TableTextBuilder {
         return TableText(
             string: result,
             layout: TableTextLayout(columnCount: columnCount, showsHeader: showsHeader, cellRanges: cellRanges),
-            source: TableText.Source(headers: headers, rows: rows, alignments: alignments, fontScale: fontScale))
+            source: TableText.Source(headers: headers, rows: rows, alignments: alignments,
+                                     theme: theme, fontScale: fontScale))
     }
 
     /// The characters of `build(...).string` — the cells' rendered text, each

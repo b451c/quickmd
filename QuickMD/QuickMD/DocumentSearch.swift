@@ -79,7 +79,8 @@ enum DocumentSearch {
 
     /// `tables`, `theme` and `fontScale` locate the string each `.table`
     /// block's view shows: the measurer's `TableText` when it was built from
-    /// this block (the rule `TableTextBlockView` applies), otherwise
+    /// this block for this look (the rule `TableTextRepresentable` applies —
+    /// pass the theme the view renders with), otherwise
     /// `TableTextBuilder.plainString` — the same characters, rendered without
     /// building the table. Rendered characters do not depend on the theme or
     /// the scale, so the defaults are exact for callers without a view (tests);
@@ -107,7 +108,8 @@ enum DocumentSearch {
                 // reading order (TS-D9). 1.12 counted the cells' markdown.
                 let string: String
                 if let measured = tables[block.id],
-                   measured.matches(headers: headers, rows: rows, alignments: alignments, fontScale: fontScale) {
+                   measured.matches(headers: headers, rows: rows, alignments: alignments,
+                                    theme: theme, fontScale: fontScale) {
                     string = measured.string.string
                 } else {
                     string = TableTextBuilder.plainString(headers: headers, rows: rows, alignments: alignments,

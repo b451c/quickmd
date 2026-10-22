@@ -31,13 +31,16 @@ struct TableTextBlockView: View {
     typealias Metrics = BlockLayout.Table
 
     var body: some View {
-        let table = preconverted.flatMap {
-            $0.matches(headers: headers, rows: rows, alignments: alignments, fontScale: fontScale) ? $0 : nil
-        } ?? TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
-                                    theme: theme, fontScale: fontScale)
-
+        // Nothing is built here: `body` runs on every search keystroke, focus
+        // move and cell reuse. The representable builds (or adopts
+        // `preconverted`) only when the text view's installed source differs.
         TableTextRepresentable(
-            table: table,
+            headers: headers,
+            rows: rows,
+            alignments: alignments,
+            theme: theme,
+            fontScale: fontScale,
+            preconverted: preconverted,
             background: theme.backgroundColor,
             searchTerm: searchText,
             focusedOccurrence: focusedOccurrence,
@@ -52,7 +55,13 @@ struct TableTextBlockView: View {
 // MARK: - NSTextView Wrapper
 
 private struct TableTextRepresentable: NSViewRepresentable {
-    let table: TableText
+    /// The cells' markdown — what the table is built from.
+    let headers: [String]
+    let rows: [[String]]
+    let alignments: [TextAlignment]
+    let theme: MarkdownTheme
+    let fontScale: CGFloat
+    let preconverted: TableText?
     let background: Color
     let searchTerm: String
     let focusedOccurrence: Int?
@@ -77,17 +86,26 @@ private struct TableTextRepresentable: NSViewRepresentable {
     func updateNSView(_ textView: TableTextView, context: Context) {
         context.coordinator.onLink = onLink
 
-        let fill = NSColor(background)
-        if textView.tableBackground != fill {
-            textView.tableBackground = fill
+        // By value: `NSColor(Color)` is a fresh object per call.
+        if textView.tableBackgroundSource != background {
+            textView.tableBackgroundSource = background
+            textView.tableBackground = NSColor(background)
             textView.needsDisplay = true
         }
 
-        let textChanged = (textView.cachedAttributed !== table.string)
+        // At most one build per source per view: the measurer's instance when
+        // it was built from exactly this source, otherwise our own.
+        let source = TableText.Source(headers: headers, rows: rows, alignments: alignments,
+                                      theme: theme, fontScale: fontScale)
+        let textChanged = textView.tableSource != source
         if textChanged {
+            let table = preconverted.flatMap { $0.source == source ? $0 : nil }
+                ?? TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
+                                          theme: theme, fontScale: fontScale)
             textView.textStorage?.setAttributedString(table.string)
             textView.cachedAttributed = table.string
             textView.tableLayout = table.layout
+            textView.tableSource = table.source
             textView.invalidateMeasurement()
         }
 
@@ -122,9 +140,12 @@ private struct TableTextRepresentable: NSViewRepresentable {
 final class TableTextView: SelfSizingTextView {
     /// The cell layout of the installed string; set with it.
     var tableLayout: TableTextLayout?
+    /// What the installed string was built from — the representable's rebuild key.
+    var tableSource: TableText.Source?
     /// The table's own background (1.12 `.background(theme.backgroundColor)`),
-    /// painted inside the rounded clip.
+    /// painted inside the rounded clip, and the theme colour it came from.
     var tableBackground: NSColor = .clear
+    var tableBackgroundSource: Color?
 
     /// Everything — background, header band, rules, selection, search
     /// highlights, text — is clipped to the rounded rect (1.12 `.clipShape`).
