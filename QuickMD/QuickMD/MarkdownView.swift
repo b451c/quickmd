@@ -248,6 +248,9 @@ struct MarkdownView: View {
                     selectableText: { block, version in
                         selectableText(for: block, installedVersion: version)
                     },
+                    selectableTable: { block, version in
+                        selectableTable(for: block, installedVersion: version)
+                    },
                     onCopySelection: { output in copySelectionToClipboard(output) },
                     focusRequest: documentFocusRequest,
                     // Stays mounted under the editor (its anchor and offset
@@ -976,11 +979,12 @@ struct MarkdownView: View {
     ///
     /// `NSViewRepresentable` is an environment boundary: nothing applied to the
     /// SwiftUI tree AROUND `VirtualBlockList` reaches the views inside its cells.
-    /// The link action matters — table cells render their links as SwiftUI
-    /// `Text` with a Foundation `.link` attribute, which SwiftUI opens
-    /// through `openURL`; without this they would bypass
-    /// `handleLinkActivation` (relative paths unresolved, `.md` files opened by
-    /// whatever app claims them, no confirmation for exotic schemes).
+    /// The link action matters — any SwiftUI `Text` with a Foundation `.link`
+    /// attribute inside a cell is opened by SwiftUI through `openURL`; without
+    /// this it would bypass `handleLinkActivation` (relative paths unresolved,
+    /// `.md` files opened by whatever app claims them, no confirmation for
+    /// exotic schemes). The NSTextView-backed rows (text, headings, tables
+    /// since v1.13) open links through their delegate's `onLink` instead.
     private func hostedBlockView(for block: MarkdownBlock) -> some View {
         blockView(for: block)
             .environment(\.openURL, OpenURLAction { url in
@@ -1028,8 +1032,12 @@ struct MarkdownView: View {
                 )
 
             case .table(let headers, let rows, let alignments):
-                TableBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme,
-                               fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc)
+                // One NSTextView over the measurer's own `TableText` (v1.13
+                // TS-D1/TS-D3) — an `.exact` row like the text kinds.
+                TableTextBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme,
+                                   fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc,
+                                   preconverted: measured.tables[block.id],
+                                   onLink: { handleLinkActivation($0) })
                     .padding(.vertical, Metrics.tableOuterVerticalPadding)
 
             case .codeBlock(let code, let language):
@@ -1133,8 +1141,10 @@ struct MarkdownView: View {
     // MARK: - Selectable strings (v1.11 S-D2)
 
     /// The string `block`'s text view displays — the string the document
-    /// selection's offsets index into — or nil for atomic rows (tables,
-    /// images, math, diagrams), which are selected whole.
+    /// selection's offsets index into — or nil for rows without one (images,
+    /// math, diagrams), which are selected whole. A table's is its
+    /// `TableTextBuilder` string (v1.13 TS-D4): cells in reading order, one
+    /// paragraph each.
     ///
     /// Built WITHOUT the view, so ⌘A + ⌘C works for rows that were never
     /// materialized. Each case is the same construction the block's view uses
@@ -1179,9 +1189,27 @@ struct MarkdownView: View {
             return TextBlockView.makeNSAttributedString(
                 from: MarkdownRenderer(theme: theme, fontScale: scale).renderHeader(title, level: level),
                 hasInlineMath: false, theme: theme, fontScale: scale)
-        case .table, .image, .svgImage, .mathBlock, .mermaidDiagram:
+        case .table:
+            return selectableTable(for: block, installedVersion: installedVersion)?.string
+        case .image, .svgImage, .mathBlock, .mermaidDiagram:
             return nil
         }
+    }
+
+    /// A `.table` block's selectable string with its cell layout (TS-D4 /
+    /// TS-D8): the measurer's instance when it belongs to this parse and was
+    /// built with the theme the view renders with (the strict `matches`, as
+    /// `TableTextBlockView` checks it); otherwise the same builder the view
+    /// falls back to. Nil for any other block.
+    private func selectableTable(for block: MarkdownBlock, installedVersion: Int) -> TableText? {
+        guard case .table(let headers, let rows, let alignments) = block.content else { return nil }
+        let scale = CGFloat(renderedFontScale)
+        if installedVersion == contentVersion, let table = measured.tables[block.id],
+           table.matches(headers: headers, rows: rows, alignments: alignments, theme: theme, fontScale: scale) {
+            return table
+        }
+        return TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
+                                      theme: theme, fontScale: scale)
     }
 
     /// ⌘+ / ⌘− / ⌘0 (menu, shortcuts, the zoom pill). Announces the resulting
@@ -1274,6 +1302,7 @@ struct MarkdownView: View {
             table: BlockHeightTable(heights: heights, kinds: table.kinds,
                                     contentWidth: table.contentWidth),
             converted: measured.converted,
+            tables: measured.tables,
             mathPendingRows: measured.mathPendingRows)
     }
 
@@ -1324,8 +1353,15 @@ struct MarkdownView: View {
         // NSTextView wrappers via temporary attributes.)
         let generation = searchGeneration
         let blocks = cachedBlocks
+        // Tables are counted on the strings their views show; the measurer's
+        // are reused (no table rebuilt per keystroke) when they belong to
+        // these blocks — `computeMatches` checks that per table.
+        let measuredBlocks = measured
+        let currentTheme = theme
+        let scale = CGFloat(renderedFontScale)
         Task.detached(priority: .userInitiated) {
-            let results = DocumentSearch.computeMatches(in: blocks, term: term)
+            let results = DocumentSearch.computeMatches(in: blocks, term: term, tables: measuredBlocks.tables,
+                                                        theme: currentTheme, fontScale: scale)
             await MainActor.run {
                 guard generation == searchGeneration else { return }
                 matchBlockIds = results.matchBlockIds

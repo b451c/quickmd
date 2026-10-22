@@ -243,6 +243,34 @@ struct MarkdownPrintableView: View {
     }
 }
 
+// MARK: - Table Alignment Protocol
+
+/// Column alignment for the SwiftUI table (`PrintableTableView`). The on-screen
+/// table (v1.13, `TableTextBuilder`) maps the same `TextAlignment`s to paragraph
+/// alignments itself.
+protocol TableAlignmentProvider {
+    var alignments: [TextAlignment] { get }
+}
+
+extension TableAlignmentProvider {
+    /// Convert TextAlignment to SwiftUI Alignment for frame
+    func alignmentFor(_ index: Int) -> Alignment {
+        guard index < alignments.count else { return .leading }
+        switch alignments[index] {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        @unknown default: return .leading
+        }
+    }
+
+    /// Get TextAlignment for multilineTextAlignment modifier
+    func textAlignmentFor(_ index: Int) -> TextAlignment {
+        guard index < alignments.count else { return .leading }
+        return alignments[index]
+    }
+}
+
 // MARK: - Printable Table View
 
 /// Table view optimized for PDF export and printing

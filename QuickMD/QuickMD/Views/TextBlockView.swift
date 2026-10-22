@@ -29,42 +29,8 @@ final class BlockHeightCache {
 
 // MARK: - Shared NSTextView Search Highlight
 
-/// Search highlighting for NSTextView-hosted blocks (code + text + headings +
-/// blockquotes). Applied via the layout manager's temporary attributes — no
-/// rebuild of the text storage. Main-thread by convention (called from
-/// updateNSView); not @MainActor for older-SDK compatibility (see
-/// BlockHeightCache note).
-func applyNSSearchHighlight(in textView: NSTextView, term: String, focusedOccurrence: Int?) {
-    guard let layoutManager = textView.layoutManager,
-          let storage = textView.textStorage else { return }
-    let fullRange = NSRange(location: 0, length: storage.length)
-    layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
-
-    guard !term.isEmpty else { return }
-
-    let plain = storage.string as NSString
-    let needle = term.lowercased() as NSString
-    let lowerHaystack = (storage.string.lowercased()) as NSString
-    guard needle.length > 0, lowerHaystack.length >= needle.length else { return }
-
-    let yellow = NSColor.systemYellow.withAlphaComponent(0.55)
-    let orange = NSColor.systemOrange
-
-    var location = 0
-    var occurrenceIndex = 0
-    while location < lowerHaystack.length {
-        let searchRange = NSRange(location: location, length: lowerHaystack.length - location)
-        let found = lowerHaystack.range(of: needle as String, options: [], range: searchRange)
-        if found.location == NSNotFound { break }
-        let safeRange = NSIntersectionRange(found, NSRange(location: 0, length: plain.length))
-        if safeRange.length > 0 {
-            let color = (focusedOccurrence == occurrenceIndex) ? orange : yellow
-            layoutManager.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: safeRange)
-        }
-        location = found.location + max(found.length, 1)
-        occurrenceIndex += 1
-    }
-}
+// `applyNSSearchHighlight` (used by every NSTextView-hosted block) lives in
+// DocumentSearch.swift, next to the matcher `DocumentSearch` counts with.
 
 // MARK: - Text Block View
 
@@ -194,7 +160,7 @@ private struct BlockTextView: NSViewRepresentable {
     let focusedOccurrence: Int?
     let onLink: (URL) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onLink: onLink) }
+    func makeCoordinator() -> TextViewLinkDelegate { TextViewLinkDelegate(onLink: onLink) }
 
     func makeNSView(context: Context) -> SelfSizingTextView {
         let textView = SelfSizingTextView()
@@ -236,25 +202,31 @@ private struct BlockTextView: NSViewRepresentable {
         textView.attachSelection(context.environment.blockSelection)
     }
 
-    static func dismantleNSView(_ textView: SelfSizingTextView, coordinator: Coordinator) {
+    static func dismantleNSView(_ textView: SelfSizingTextView, coordinator: TextViewLinkDelegate) {
         textView.detachSelection()
     }
+}
 
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var onLink: (URL) -> Void
+// MARK: - Link delegate
 
-        init(onLink: @escaping (URL) -> Void) { self.onLink = onLink }
+/// The delegate of every NSTextView-backed row (text, headings, quote and alert
+/// bodies, tables): a link click — the document selection's click-through
+/// (`SelectionController` → `clicked(onLink:at:)`) — goes to `onLink`, i.e.
+/// `MarkdownView.handleLinkActivation`.
+final class TextViewLinkDelegate: NSObject, NSTextViewDelegate {
+    var onLink: (URL) -> Void
 
-        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-            if let url = link as? URL {
-                onLink(url)
-                return true
-            }
-            if let string = link as? String, let url = URL(string: string) {
-                onLink(url)
-                return true
-            }
-            return false
+    init(onLink: @escaping (URL) -> Void) { self.onLink = onLink }
+
+    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        if let url = link as? URL {
+            onLink(url)
+            return true
         }
+        if let string = link as? String, let url = URL(string: string) {
+            onLink(url)
+            return true
+        }
+        return false
     }
 }

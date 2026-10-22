@@ -34,9 +34,9 @@ import os
 // Feedback discipline (the reason this is not the LazyVStack estimator again):
 // rows whose height the measurer can compute exactly (`RowKind.exact`) never
 // report anything. Rows whose real size only exists once a view is placed
-// (`.reported`: headings, tables, images, display math, Mermaid) report their
-// natural height ONCE per model generation; the coordinator applies the
-// correction and compensates the scroll offset. No unplaced row is ever
+// (`.reported`: headings, images, display math, Mermaid — tables are `.exact`
+// since v1.13) report their natural height ONCE per model generation; the
+// coordinator applies the correction and compensates the scroll offset. No unplaced row is ever
 // re-estimated, and no row's height is a function of the height we gave it (the
 // hosted content is `fixedSize`d vertically, so the row height cannot feed back
 // into the measured height).
@@ -172,6 +172,10 @@ struct VirtualBlockList: NSViewRepresentable {
     /// the block comes from, so the parent can tell whether its per-id caches
     /// belong to them (block ids are positional and are reused by every parse).
     let selectableText: (_ block: MarkdownBlock, _ contentVersion: Int) -> NSAttributedString?
+    /// A `.table` row's selectable string WITH its cell layout (v1.13 TS-D8):
+    /// copy and the Source Edit hint map a covered range to cells through
+    /// `TableTextLayout`. Same caching rule as `selectableText`.
+    let selectableTable: (_ block: MarkdownBlock, _ contentVersion: Int) -> TableText?
     /// ⌘C / context-menu Copy / auto-copy (S-D10) produced this output. The parent writes it to the
     /// pasteboard and shows the toast (`MarkdownView.copySelectionToClipboard`).
     let onCopySelection: (DocumentCopyOutput) -> Void
@@ -284,6 +288,7 @@ struct VirtualBlockList: NSViewRepresentable {
         coordinator.onHeightReport = onHeightReport
         coordinator.setContentWidth = { width in contentWidth = width }
         coordinator.selection.selectableText = selectableText
+        coordinator.selection.selectableTable = selectableTable
         coordinator.selection.onCopy = onCopySelection
         coordinator.setDocumentCovered(isCovered)
         // Covered (graphic preview, Source Edit): out of the accessibility
@@ -300,7 +305,8 @@ struct VirtualBlockList: NSViewRepresentable {
                       maxLength: SourceEditSession.selectionHintMaxLength,
                       contextLength: SourceEditSession.selectionHintContextLength) else { return nil }
             return DocumentReadingPosition.selectionHint(text: hint.text, before: hint.before, after: hint.after,
-                                                         rows: hint.rows, blocks: coordinator.blocks)
+                                                         rows: hint.rows, lines: hint.lines,
+                                                         blocks: coordinator.blocks)
         }
         if focusRequest != coordinator.lastFocusRequest {
             coordinator.lastFocusRequest = focusRequest
@@ -1527,7 +1533,7 @@ final class BlockHostingCell: NSTableCellView {
 }
 
 /// The highlight over a selected atomic row (S-D3): the selection colour at a
-/// third of its strength, so the table / image / diagram stays readable under it.
+/// third of its strength, so the image / diagram stays readable under it.
 ///
 /// Drawn in AppKit, above the hosted SwiftUI content — and invisible to the
 /// mouse: `hitTest` answers nil, so the Mermaid diagram's transparent preview
@@ -1598,6 +1604,8 @@ final class SelectionController: NSObject {
 
     /// See `VirtualBlockList.selectableText`.
     var selectableText: (MarkdownBlock, Int) -> NSAttributedString? = { _, _ in nil }
+    /// See `VirtualBlockList.selectableTable`.
+    var selectableTable: (MarkdownBlock, Int) -> TableText? = { _, _ in nil }
     /// See `VirtualBlockList.onCopySelection`.
     var onCopy: (DocumentCopyOutput) -> Void = { _ in }
 
@@ -1704,12 +1712,12 @@ final class SelectionController: NSObject {
     /// the row has no text view to draw the selection in — atomic rows
     /// (S-D3), and a text-kind row whose text view has not registered (yet).
     /// Since S-D7 every text kind, headings included, draws through an
-    /// NSTextView, so a materialized text row drops the tint as soon as its
-    /// view registers (`register`).
+    /// NSTextView — and since v1.13 tables too (TS-D10) — so a materialized
+    /// text row drops the tint as soon as its view registers (`register`).
     func wantsTint(row: Int) -> Bool {
         guard let selection, !selection.isEmpty, row >= 0, row < blocks.count else { return false }
         let block = blocks[row]
-        if Self.isAtomic(block) { return selection.range(inRow: row, rowLength: 1) != nil }
+        if SelectionRows.isAtomic(block) { return selection.range(inRow: row, rowLength: 1) != nil }
         if let view = registry[block.id]?.view, view.selectionController === self { return false }
         return selection.range(inRow: row, rowLength: rowLength(row)) != nil
     }
@@ -1768,19 +1776,12 @@ final class SelectionController: NSObject {
 
     // MARK: - Rows
 
-    /// Rows selected whole, with no text of their own to select (S-D3).
-    static func isAtomic(_ block: MarkdownBlock) -> Bool {
-        switch block.content {
-        case .table, .image, .svgImage, .mathBlock, .mermaidDiagram: return true
-        case .text, .codeBlock, .blockquote, .alert, .heading: return false
-        }
-    }
-
-    /// UTF-16 length of `row`'s selectable string (1 for an atomic row).
+    /// UTF-16 length of `row`'s selectable string (1 for an atomic row —
+    /// `SelectionRows.isAtomic`).
     private func rowLength(_ row: Int) -> Int {
         guard row >= 0, row < blocks.count else { return 0 }
         let block = blocks[row]
-        if Self.isAtomic(block) { return 1 }
+        if SelectionRows.isAtomic(block) { return 1 }
         if let cached = lengthCache[row] { return cached }
         let length = selectableText(block, contentVersion)?.length ?? 0
         lengthCache[row] = length
@@ -1845,92 +1846,27 @@ final class SelectionController: NSObject {
         Self.speech?.stopSpeaking(at: .immediate)
     }
 
-    /// Source Edit's carry-over (S-D14b): the selection's plain text (as ⌘C
-    /// copies it) plus up to `contextLength` rendered characters before it in
-    /// its first row and after it in its last. Nil — and NOTHING built — when
-    /// the selection spans more than `maxRows` rows, touches a row without
-    /// selectable text (a table or diagram cannot match the source literally)
-    /// or covers more than `maxLength` UTF-16 units: the checks only measure
-    /// the rows' selectable strings, the output is built after them.
+    /// Source Edit's carry-over (S-D14b): see `SelectionRows.sourceEditHint`
+    /// (a range inside a table now gives a hint too — TS-D10).
     func sourceEditHint(maxRows: Int, maxLength: Int, contextLength: Int)
-        -> (text: String, before: String, after: String, rows: ClosedRange<Int>)? {
-        guard let selection, let span = selection.rowSpan, span.count <= maxRows,
-              span.upperBound < blocks.count else { return nil }
-        var covered = 0
-        var before = ""
-        var after = ""
-        for row in span {
-            let block = blocks[row]
-            switch block.content {
-            case .codeBlock, .text, .blockquote, .alert, .heading: break
-            case .table, .image, .svgImage, .mathBlock, .mermaidDiagram: return nil
-            }
-            guard let string = selectableText(block, contentVersion) else { return nil }
-            guard let range = selection.range(inRow: row, rowLength: string.length) else { continue }
-            covered += range.length
-            guard covered <= maxLength else { return nil }
-            let ns = string.string as NSString
-            if row == span.lowerBound {
-                let start = max(0, range.location - contextLength)
-                before = ns.substring(with: NSRange(location: start, length: range.location - start))
-            }
-            if row == span.upperBound {
-                let end = min(ns.length, NSMaxRange(range) + contextLength)
-                after = ns.substring(with: NSRange(location: NSMaxRange(range), length: end - NSMaxRange(range)))
-            }
-        }
-        guard covered > 0, let text = selectionOutput()?.plain else { return nil }
-        return (text, before, after, span)
+        -> (text: String, before: String, after: String, rows: ClosedRange<Int>, lines: Range<Int>?)? {
+        let version = contentVersion
+        return SelectionRows.sourceEditHint(
+            for: selection, blocks: blocks, maxRows: maxRows, maxLength: maxLength, contextLength: contextLength,
+            text: { selectableText($0, version) },
+            table: { selectableTable($0, version) },
+            output: { selectionOutput()?.plain })
     }
 
     /// Plain text + RTF of the selection — the ONE builder behind ⌘C, the
     /// context menu, Services and Speech. Nil when nothing is selected.
     func selectionOutput() -> DocumentCopyOutput? {
-        guard let selection, let span = selection.rowSpan else { return nil }
-        var pieces: [SelectionPiece] = []
-        pieces.reserveCapacity(span.count)
-        // Table cells: their rendered characters (no `**`). The characters do
-        // not depend on the theme, so any theme will do.
-        var cellRenderer: MarkdownRenderer?
-        func renderedCell(_ markdown: String) -> String {
-            let renderer = cellRenderer ?? MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
-            cellRenderer = renderer
-            return String(renderer.renderInline(markdown).characters)
-        }
-
-        for row in span where row < blocks.count {
-            let block = blocks[row]
-            switch block.content {
-            case .table(let headers, let rows, _):
-                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                // Same rule as `TableBlockView.showsHeader`: an all-blank header
-                // row is not shown, so it is not copied either.
-                let showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-                pieces.append(.table(headers: showsHeader ? headers.map(renderedCell) : nil,
-                                     rows: rows.map { $0.map(renderedCell) }))
-            case .image(_, let alt, _):
-                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                pieces.append(.image(alt: alt))
-            case .svgImage:
-                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                pieces.append(.image(alt: ""))
-            case .mathBlock(let latex):
-                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                pieces.append(.displayMath(latex: latex))
-            case .mermaidDiagram(let source):
-                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                pieces.append(.mermaid(source: source))
-            case .codeBlock, .text, .blockquote, .alert, .heading:
-                guard let text = selectableText(block, contentVersion),
-                      let covered = selection.range(inRow: row, rowLength: text.length) else { continue }
-                let part = text.attributedSubstring(from: covered)
-                if case .codeBlock = block.content {
-                    pieces.append(.code(part))
-                } else {
-                    pieces.append(.text(part))
-                }
-            }
-        }
+        guard let selection else { return nil }
+        let version = contentVersion
+        let pieces = SelectionRows.pieces(of: selection, blocks: blocks,
+                                          text: { selectableText($0, version) },
+                                          table: { selectableTable($0, version) })
+        guard !pieces.isEmpty else { return nil }
         let output = DocumentCopyBuilder.build(pieces)
         return output.plain.isEmpty ? nil : output
     }
@@ -1971,7 +1907,7 @@ final class SelectionController: NSObject {
     private func lookUpItem(for event: NSEvent) -> NSMenuItem? {
         guard let hit = hit(atWindowPoint: event.locationInWindow),
               let textView = hit.textView, let local = hit.pointInTextView,
-              let index = Self.characterIndex(in: textView, at: local, requireInside: true),
+              let index = textView.selectionGlyphCharacterIndex(at: local, requireInside: true),
               let storage = textView.textStorage else { return nil }
         let word = textView.selectionRange(forProposedRange: NSRange(location: index, length: 0),
                                            granularity: .selectByWord)
@@ -2014,7 +1950,10 @@ final class SelectionController: NSObject {
     }
 
     /// Maps a window point to a document position THROUGH THE TABLE: row under
-    /// the point → that row's registered text view → insertion index. Never
+    /// the point → that row's registered text view → its hit-test hook
+    /// (`selectionCharacterIndex(at:)`, TS-D6: TextKit's insertion index, or
+    /// for a table the cell-confined one — a point in a cell's padding or
+    /// beside the table snaps into the nearest cell). Never
     /// through the view that received the mouse-down, which a drag can scroll
     /// out of the prepared area and the table can recycle for another row.
     ///
@@ -2040,7 +1979,7 @@ final class SelectionController: NSObject {
 
         let block = blocks[row]
         let rowRect = tableView.rect(ofRow: row)
-        if Self.isAtomic(block) {
+        if SelectionRows.isAtomic(block) {
             // Upper half = before the row, lower half = after it: dragging
             // DOWN selects the row once the pointer is past its middle, and so
             // does dragging UP — symmetrical, like a very tall character.
@@ -2050,16 +1989,10 @@ final class SelectionController: NSObject {
 
         if let textView = registeredTextView(for: block.id, in: tableView) {
             let local = textView.convert(windowPoint, from: nil)  // flipped
-            let length = textView.selectionTextLength
-            let offset: Int
-            if local.y < 0 {
-                offset = 0
-            } else if local.y > textView.bounds.height {
-                offset = length
-            } else {
-                let clamped = NSPoint(x: min(max(local.x, 0), textView.bounds.width), y: local.y)
-                offset = min(max(0, textView.characterIndexForInsertion(at: clamped)), length)
-            }
+            let offset = SelectionRows.hitOffset(at: local, viewSize: textView.bounds.size,
+                                                 length: textView.selectionTextLength,
+                                                 isTable: textView is TableTextView,
+                                                 characterIndex: textView.selectionCharacterIndex(at:))
             return Hit(point: SelectionPoint(row: row, offset: offset), isAtomic: false,
                        textView: textView, pointInTextView: local)
         }
@@ -2077,28 +2010,6 @@ final class SelectionController: NSObject {
               view.window === tableView.window, !view.isHiddenOrHasHiddenAncestor,
               view.isDescendant(of: tableView) else { return nil }
         return view
-    }
-
-    /// The character whose glyph is under `local` (text-view coordinates), or
-    /// nil past the end. With `requireInside`, only when the point is ON the
-    /// glyph — a click in the empty space after a link must not open it.
-    private static func characterIndex(in textView: SelfSizingTextView, at local: NSPoint,
-                                       requireInside: Bool) -> Int? {
-        guard let layoutManager = textView.layoutManager, let container = textView.textContainer,
-              textView.selectionTextLength > 0 else { return nil }
-        let origin = textView.textContainerOrigin
-        let point = NSPoint(x: local.x - origin.x, y: local.y - origin.y)
-        var fraction: CGFloat = 0
-        let glyph = layoutManager.glyphIndex(for: point, in: container,
-                                             fractionOfDistanceThroughGlyph: &fraction)
-        guard glyph < layoutManager.numberOfGlyphs else { return nil }
-        if requireInside {
-            let box = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1),
-                                                 in: container)
-            guard box.contains(point) else { return nil }
-        }
-        let index = layoutManager.characterIndexForGlyph(at: glyph)
-        return index < textView.selectionTextLength ? index : nil
     }
 
     // MARK: - Mouse (S-D6)
@@ -2140,8 +2051,12 @@ final class SelectionController: NSObject {
             anchorIsAtomic = false
             setSelection(DocumentSelection(anchor: anchor, focus: start.point))
         } else if clickCount >= 2, let textView = start.textView, let local = start.pointInTextView,
-                  let index = Self.characterIndex(in: textView, at: local, requireInside: false) {
-            // Double-click = word, triple-click = paragraph, in that row.
+                  let index = textView.multiClickCharacterIndex(at: local, insertion: start.point.offset,
+                                                                inTableCell: textView is TableTextView) {
+            // Double-click = word, triple-click = paragraph, in that row — in
+            // a table the cell (one paragraph per cell, TS-D7). The character
+            // is checked against the hook's answer (`start`), so a click in a
+            // cell's padding is about that cell, not TextKit's nearest glyph.
             let granularity: NSSelectionGranularity = clickCount == 2 ? .selectByWord : .selectByParagraph
             let range = textView.selectionRange(forProposedRange: NSRange(location: index, length: 0),
                                                 granularity: granularity)
@@ -2286,7 +2201,7 @@ final class SelectionController: NSObject {
         if !dragged, clickCount == 1, !isExtending,
            let release = hit(atWindowPoint: event.locationInWindow),
            let textView = release.textView, let local = release.pointInTextView,
-           let index = Self.characterIndex(in: textView, at: local, requireInside: true),
+           let index = textView.selectionGlyphCharacterIndex(at: local, requireInside: true),
            let link = textView.textStorage?.attribute(.link, at: index, effectiveRange: nil) {
             textView.clicked(onLink: link, at: index)
         }

@@ -67,11 +67,17 @@ final class DocumentReadingPosition {
     /// `sourceLine` of the block after the last selected one — to the end of
     /// the text when there is none. Nil for empty text or rows outside
     /// `blocks` (a stale selection racing a re-install).
+    ///
+    /// `lines`, when given, replaces that range (a selection inside one band
+    /// of a table names the band's own line — `SelectionRows.sourceEditHint`).
     static func selectionHint(text: String, before: String = "", after: String = "",
-                              rows: ClosedRange<Int>,
+                              rows: ClosedRange<Int>, lines: Range<Int>? = nil,
                               blocks: [MarkdownBlock]) -> SourceEditSession.SelectionHint? {
         guard !text.isEmpty, blocks.indices.contains(rows.lowerBound),
               blocks.indices.contains(rows.upperBound) else { return nil }
+        if let lines, !lines.isEmpty {
+            return SourceEditSession.SelectionHint(text: text, before: before, after: after, lines: lines)
+        }
         let start = blocks[rows.lowerBound].sourceLine
         let next = rows.upperBound + 1
         let end = next < blocks.count ? blocks[next].sourceLine : Int.max
