@@ -454,6 +454,10 @@ struct SupportButton: View {
             .environment(\.chromeExpansionSource, .fixed)
         }
         .menuStyle(.button)
+        // Like ChromePill: with keyboard navigation on (System Settings ▸
+        // Keyboard), a clicked pop-up button keeps focus and AppKit draws a
+        // blue ring around the pill over the document.
+        .focusable(false)
         .opacity(hover.isExpanded ? 1.0 : 0.5)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: hover.isExpanded)
         .modifier(ChromeHoverTracking(hover: $hover))
