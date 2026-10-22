@@ -140,6 +140,8 @@
 		A1B2C3D401000140 /* EditCloseGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000140 /* EditCloseGuard.swift */; };
 		A1B2C3D401000141 /* EditCloseGuard.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000140 /* EditCloseGuard.swift */; };
 		A1B2C3D401000142 /* EditCloseGuardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000141 /* EditCloseGuardTests.swift */; };
+		A1B2C3D401000190 /* WindowTabbing.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000003F /* WindowTabbing.swift */; };
+		A1B2C3D401000191 /* WindowTabbingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000190 /* WindowTabbingTests.swift */; };
 		A1B2C3D401000160 /* SourceEditSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000160 /* SourceEditSession.swift */; };
 		A1B2C3D401000161 /* SourceEditSession.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000160 /* SourceEditSession.swift */; };
 		A1B2C3D401000162 /* SourceEditSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000161 /* SourceEditSessionTests.swift */; };
@@ -180,6 +182,7 @@
 		A1B2C3D400000152 /* SourceEditorControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditorControllerTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000140 /* EditCloseGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditCloseGuard.swift; sourceTree = "<group>"; };
 		A1B2C3D400000141 /* EditCloseGuardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditCloseGuardTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000190 /* WindowTabbingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowTabbingTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000160 /* SourceEditSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditSession.swift; sourceTree = "<group>"; };
 		A1B2C3D400000161 /* SourceEditSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditSessionTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000180 /* SourceEditLanding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceEditLanding.swift; sourceTree = "<group>"; };
@@ -318,6 +321,7 @@
 				A1B2C3D400000152 /* SourceEditorControllerTests.swift */,
 				A1B2C3D400000171 /* SourceTintTests.swift */,
 				A1B2C3D400000141 /* EditCloseGuardTests.swift */,
+				A1B2C3D400000190 /* WindowTabbingTests.swift */,
 				A1B2C3D400000161 /* SourceEditSessionTests.swift */,
 				A1B2C3D400000181 /* SourceEditLandingTests.swift */,
 			);
@@ -694,6 +698,8 @@
 				A1B2C3D401000172 /* SourceTintTests.swift in Sources */,
 				A1B2C3D401000141 /* EditCloseGuard.swift in Sources (Tests) */,
 				A1B2C3D401000142 /* EditCloseGuardTests.swift in Sources */,
+				A1B2C3D401000190 /* WindowTabbing.swift in Sources (Tests) */,
+				A1B2C3D401000191 /* WindowTabbingTests.swift in Sources */,
 				A1B2C3D401000161 /* SourceEditSession.swift in Sources (Tests) */,
 				A1B2C3D401000162 /* SourceEditSessionTests.swift in Sources */,
 				A1B2C3D401000181 /* SourceEditLanding.swift in Sources (Tests) */,

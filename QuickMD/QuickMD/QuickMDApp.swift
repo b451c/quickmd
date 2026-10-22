@@ -17,11 +17,12 @@ struct QuickMDApp: App {
 
     init() {
         // Premium UX: every QuickMD document opens as a tab in an existing window
-        // (instead of stacking standalone windows). Overrides the system-wide
-        // "Prefer tabs when opening documents" preference for our app specifically.
-        // The actual tabbingMode + tabbingIdentifier is set per-window via
-        // WindowAccessor in MarkdownView.
+        // (instead of stacking standalone windows), also in full screen and
+        // Split View. Overrides the system-wide "Prefer tabs when opening
+        // documents" preference for our app only; AppKit does the tabbing as
+        // each window is ordered in. Must run before the first window exists.
         NSWindow.allowsAutomaticWindowTabbing = true
+        WindowTabbing.preferTabsAlways()
     }
 
     var body: some Scene {
