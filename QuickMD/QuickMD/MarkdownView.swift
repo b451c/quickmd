@@ -1197,14 +1197,15 @@ struct MarkdownView: View {
     }
 
     /// A `.table` block's selectable string with its cell layout (TS-D4 /
-    /// TS-D8): the measurer's instance when it belongs to this parse;
-    /// otherwise the same builder `TableTextBlockView` falls back to. Nil for
-    /// any other block.
+    /// TS-D8): the measurer's instance when it belongs to this parse and was
+    /// built with the theme the view renders with (the strict `matches`, as
+    /// `TableTextBlockView` checks it); otherwise the same builder the view
+    /// falls back to. Nil for any other block.
     private func selectableTable(for block: MarkdownBlock, installedVersion: Int) -> TableText? {
         guard case .table(let headers, let rows, let alignments) = block.content else { return nil }
         let scale = CGFloat(renderedFontScale)
         if installedVersion == contentVersion, let table = measured.tables[block.id],
-           table.matches(headers: headers, rows: rows, alignments: alignments, fontScale: scale) {
+           table.matches(headers: headers, rows: rows, alignments: alignments, theme: theme, fontScale: scale) {
             return table
         }
         return TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
