@@ -88,8 +88,9 @@ enum SelectionRows {
     /// - every cell's text covered (a drag through the table, ⌘A) → `whole()`,
     ///   which is 1.12's TSV;
     /// - inside ONE cell → that text, as a text row copies (fonts, links), but
-    ///   without the cell's `NSTextTableBlock` — pasted RTF must not turn a
-    ///   word into a one-cell table;
+    ///   without the cell's `NSTextTableBlock` and the column's alignment —
+    ///   pasted RTF must not turn a word into a one-cell table, nor into a
+    ///   right-aligned or centred paragraph;
     /// - across cells → `.tableCells`: the covered cells in reading order, a
     ///   partial first / last cell with only its covered part.
     ///
@@ -124,7 +125,7 @@ enum SelectionRows {
         if first.band == last.band && first.column == last.column {
             let range = coveredText(first.band, first.column)
             guard range.length > 0 else { return nil }
-            return .text(withoutTextBlocks(table.string.attributedSubstring(from: range)))
+            return .text(withoutCellLayout(table.string.attributedSubstring(from: range)))
         }
         let string = table.string.string as NSString
         var bands: [[String]] = []
@@ -136,14 +137,17 @@ enum SelectionRows {
         return .tableCells(bands: bands)
     }
 
-    /// `text` with every paragraph style's text blocks removed (alignment,
-    /// spacing and the rest kept).
-    private static func withoutTextBlocks(_ text: NSAttributedString) -> NSAttributedString {
+    /// `text` with what belongs to the TABLE removed from its paragraph
+    /// styles: the text blocks (the cell) and the alignment (the column's,
+    /// from the separator row — back to natural). The rest is kept.
+    private static func withoutCellLayout(_ text: NSAttributedString) -> NSAttributedString {
         let result = NSMutableAttributedString(attributedString: text)
         result.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: result.length)) { value, range, _ in
-            guard let style = value as? NSParagraphStyle, !style.textBlocks.isEmpty,
+            guard let style = value as? NSParagraphStyle,
+                  !style.textBlocks.isEmpty || style.alignment != .natural,
                   let plain = style.mutableCopy() as? NSMutableParagraphStyle else { return }
             plain.textBlocks = []
+            plain.alignment = .natural
             result.addAttribute(.paragraphStyle, value: plain, range: range)
         }
         return result
@@ -165,17 +169,25 @@ enum SelectionRows {
     /// never matches literally) still opens the editor at the table. Its
     /// context stops at the CELL's edges — the "\n" between two rendered
     /// cells is a `|` in the source and would end the agreement anyway.
+    ///
+    /// `lines`: nil = the rows' own lines (`DocumentReadingPosition
+    /// .selectionHint` derives them from `rows`). A selection inside ONE band
+    /// of a table names that band's source line instead: a whole-cell
+    /// selection has no context, and the first literal match in the table's
+    /// lines can be another row's cell — `| 10 | a |` above `| 1 | b |`, the
+    /// "1" of "10" (`sourceLine(ofBand:in:tableLine:)`).
     static func sourceEditHint(for selection: DocumentSelection?, blocks: [MarkdownBlock],
                                maxRows: Int, maxLength: Int, contextLength: Int,
                                text: (MarkdownBlock) -> NSAttributedString?,
                                table: (MarkdownBlock) -> TableText?,
                                output: () -> String?)
-        -> (text: String, before: String, after: String, rows: ClosedRange<Int>)? {
+        -> (text: String, before: String, after: String, rows: ClosedRange<Int>, lines: Range<Int>?)? {
         guard let selection, let span = selection.rowSpan, span.count <= maxRows,
               span.upperBound < blocks.count else { return nil }
         var covered = 0
         var before = ""
         var after = ""
+        var lines: Range<Int>?
         for row in span {
             let block = blocks[row]
             let string: NSAttributedString
@@ -206,9 +218,25 @@ enum SelectionRows {
                 let stop = min(ceiling, end + contextLength)
                 after = ns.substring(with: NSRange(location: end, length: max(0, stop - end)))
             }
+            if span.count == 1, let layout,
+               let first = layout.cell(containing: range.location)?.band,
+               let last = layout.cell(containing: NSMaxRange(range) - 1)?.band, first == last {
+                let line = sourceLine(ofBand: first, in: layout, tableLine: block.sourceLine)
+                lines = line..<(line + 1)
+            }
         }
         guard covered > 0, let plain = output() else { return nil }
-        return (plain, before, after, span)
+        return (plain, before, after, span, lines)
+    }
+
+    /// The 0-based source line of `band`, from the table's `sourceLine` (its
+    /// header line). `MarkdownBlockParser` reads a table as the header line,
+    /// the separator line, then one line per row — and keeps the header line
+    /// even when it is blank (`| | |`, a headerless table: no header band, so
+    /// band 0 is the first row, two lines down).
+    static func sourceLine(ofBand band: Int, in layout: TableTextLayout, tableLine: Int) -> Int {
+        guard layout.showsHeader else { return tableLine + 2 + band }
+        return band == 0 ? tableLine : tableLine + 1 + band
     }
 
     /// The text range (without its "\n") of the cell holding `index`.
@@ -245,32 +273,37 @@ extension NSTextView {
     /// what `selectionRange(forProposedRange:granularity:)` expands to a word
     /// or a paragraph (in a table: the cell).
     ///
-    /// `insertion` is the row's own hit-test answer for the same press (the
-    /// TS-D6 hook, `SelfSizingTextView.selectionCharacterIndex`). The glyph
-    /// under the point is used when it agrees with it (it is one side of that
-    /// insertion point) — always the case on a text line. When they disagree,
-    /// TextKit's "nearest glyph" went somewhere the hook would not: in a
-    /// table cell's padding, or below a short cell in a tall band, that is a
-    /// NEIGHBOURING cell, so the hook wins.
+    /// A text row (`inTableCell == false`) gets exactly what it got before
+    /// v1.13: the glyph TextKit finds nearest to the point — on a multi-unit
+    /// glyph (emoji, ZWJ sequence, ligature) on either half, and above/below
+    /// the text the word under the pointer's x.
     ///
-    /// `inTableCell`: a press in the empty part of a cell (right of a short
-    /// text — most of a wide cell) lands on the cell's terminating "\n",
-    /// which a word selection would select alone. It is moved back onto the
-    /// cell's last character, so the double-click is about the cell's last
-    /// word. (Text rows keep TextKit's answer, as before v1.13.) An empty
-    /// cell has nothing else: its "\n" stays (the triple-click still selects
-    /// the cell).
+    /// In a table cell, TextKit's "nearest glyph" can be in a NEIGHBOURING
+    /// cell (a press in a cell's padding, or under a short cell in a tall
+    /// band). `insertion` is the row's own hit-test answer for the same press
+    /// (the TS-D6 hook, `SelfSizingTextView.selectionCharacterIndex`, confined
+    /// to the cell under the point): the glyph is used when the insertion
+    /// point is on one of its edges — compared against the glyph's whole
+    /// composed character sequence, so the right half of an emoji still
+    /// agrees — and otherwise the hook wins. A press in the empty part of a
+    /// cell (right of a short text — most of a wide cell) lands on the cell's
+    /// terminating "\n", which a word selection would select alone, so it is
+    /// moved back onto the cell's last character: the double-click is about
+    /// the cell's last word. An empty cell has nothing else: its "\n" stays
+    /// (the triple-click still selects the cell).
     func multiClickCharacterIndex(at local: NSPoint, insertion: Int, inTableCell: Bool) -> Int? {
+        let glyph = selectionGlyphCharacterIndex(at: local, requireInside: false)
+        guard inTableCell else { return glyph }
         guard let storage = textStorage, storage.length > 0 else { return nil }
         let string = storage.string as NSString
         var index: Int
-        if let glyph = selectionGlyphCharacterIndex(at: local, requireInside: false),
-           glyph == insertion || glyph == insertion - 1 {
+        if let glyph, glyph < string.length,
+           case let composed = string.rangeOfComposedCharacterSequence(at: glyph),
+           insertion >= composed.location, insertion <= NSMaxRange(composed) {
             index = glyph
         } else {
             index = min(max(insertion, 0), string.length - 1)
         }
-        guard inTableCell else { return index }
         func isLineBreak(_ index: Int) -> Bool {
             let unit = string.character(at: index)
             return unit == 0x0A || unit == 0x0D || unit == 0x2028 || unit == 0x2029

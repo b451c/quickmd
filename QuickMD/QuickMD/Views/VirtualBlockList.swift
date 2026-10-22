@@ -305,7 +305,8 @@ struct VirtualBlockList: NSViewRepresentable {
                       maxLength: SourceEditSession.selectionHintMaxLength,
                       contextLength: SourceEditSession.selectionHintContextLength) else { return nil }
             return DocumentReadingPosition.selectionHint(text: hint.text, before: hint.before, after: hint.after,
-                                                         rows: hint.rows, blocks: coordinator.blocks)
+                                                         rows: hint.rows, lines: hint.lines,
+                                                         blocks: coordinator.blocks)
         }
         if focusRequest != coordinator.lastFocusRequest {
             coordinator.lastFocusRequest = focusRequest
@@ -1848,7 +1849,7 @@ final class SelectionController: NSObject {
     /// Source Edit's carry-over (S-D14b): see `SelectionRows.sourceEditHint`
     /// (a range inside a table now gives a hint too — TS-D10).
     func sourceEditHint(maxRows: Int, maxLength: Int, contextLength: Int)
-        -> (text: String, before: String, after: String, rows: ClosedRange<Int>)? {
+        -> (text: String, before: String, after: String, rows: ClosedRange<Int>, lines: Range<Int>?)? {
         let version = contentVersion
         return SelectionRows.sourceEditHint(
             for: selection, blocks: blocks, maxRows: maxRows, maxLength: maxLength, contextLength: contextLength,

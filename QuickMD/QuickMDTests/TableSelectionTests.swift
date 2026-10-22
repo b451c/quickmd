@@ -276,7 +276,7 @@ final class TableSelectionTests: XCTestCase {
     // MARK: - TS-D10 Source Edit hint
 
     private func hint(_ selection: DocumentSelection, _ blocks: [MarkdownBlock])
-        -> (text: String, before: String, after: String, rows: ClosedRange<Int>)? {
+        -> (text: String, before: String, after: String, rows: ClosedRange<Int>, lines: Range<Int>?)? {
         SelectionRows.sourceEditHint(
             for: selection, blocks: blocks,
             maxRows: SourceEditSession.selectionHintMaxRows,
@@ -300,8 +300,10 @@ final class TableSelectionTests: XCTestCase {
         XCTAssertEqual(h.rows, row...row)
 
         let lines = try XCTUnwrap(DocumentReadingPosition.selectionHint(
-            text: h.text, before: h.before, after: h.after, rows: h.rows, blocks: blocks))
-        XCTAssertEqual(lines.lines.lowerBound, blocks[row].sourceLine, "the editor opens at the table")
+            text: h.text, before: h.before, after: h.after, rows: h.rows, lines: h.lines, blocks: blocks))
+        // Band 2 = the second data row: header, separator, first row, then it.
+        XCTAssertEqual(lines.lines, (blocks[row].sourceLine + 3)..<(blocks[row].sourceLine + 4),
+                       "the band's own source line")
         let source = Self.documentMarkdown as NSString
         let found = try XCTUnwrap(SourceEditSupport.sourceRange(ofSelection: lines.text, before: lines.before,
                                                                 after: lines.after, in: source, lines: lines.lines))
@@ -316,7 +318,9 @@ final class TableSelectionTests: XCTestCase {
                                           focus: SelectionPoint(row: row, offset: layout.cellRanges[2][0].location + 2))
         let h = try XCTUnwrap(hint(selection, blocks))
         XCTAssertEqual(h.text, "alpha one\t1\nbe")
-        let lines = try XCTUnwrap(DocumentReadingPosition.selectionHint(text: h.text, rows: h.rows, blocks: blocks))
+        XCTAssertNil(h.lines, "two bands: the table's lines")
+        let lines = try XCTUnwrap(DocumentReadingPosition.selectionHint(text: h.text, rows: h.rows, lines: h.lines,
+                                                                        blocks: blocks))
         XCTAssertEqual(lines.lines.lowerBound, blocks[row].sourceLine)
         // A TSV never matches the source literally: the editor falls back to the line.
         XCTAssertNil(SourceEditSupport.sourceRange(ofSelection: lines.text, in: Self.documentMarkdown,
@@ -331,6 +335,99 @@ final class TableSelectionTests: XCTestCase {
         let h = try XCTUnwrap(hint(selection, blocks))
         XCTAssertEqual(h.rows, 0...row)
         XCTAssertEqual(h.after, "me", "after-context inside the last cell")
+        XCTAssertNil(h.lines, "two rows: their lines")
+    }
+
+    /// Where Source Edit selects a WHOLE cell (no context to tell matches
+    /// apart) of `markdown`: the source text of the match and its line.
+    private func sourceSelection(ofCell band: Int, _ column: Int, in markdown: String)
+        throws -> (text: String, line: String) {
+        let blocks = parse(markdown)
+        let row = try XCTUnwrap(blocks.firstIndex { if case .table = $0.content { return true } else { return false } })
+        let cell = table(blocks[row])!.layout.cellRanges[band][column]
+        // As a triple-click selects it: the cell and its "\n".
+        let selection = DocumentSelection(anchor: SelectionPoint(row: row, offset: cell.location),
+                                          focus: SelectionPoint(row: row, offset: NSMaxRange(cell) + 1))
+        let h = try XCTUnwrap(hint(selection, blocks))
+        let resolved = try XCTUnwrap(DocumentReadingPosition.selectionHint(
+            text: h.text, before: h.before, after: h.after, rows: h.rows, lines: h.lines, blocks: blocks))
+        let source = markdown as NSString
+        let found = try XCTUnwrap(SourceEditSupport.sourceRange(ofSelection: resolved.text, before: resolved.before,
+                                                                after: resolved.after, in: source,
+                                                                lines: resolved.lines))
+        return (source.substring(with: found), source.substring(with: source.lineRange(for: found)))
+    }
+
+    /// Repeated values in a column: the selected cell's OWN row, never the
+    /// first literal match in the table (the "1" of "10").
+    func testWholeCellHintFindsItsOwnRowAmongRepeatedValues() throws {
+        let markdown = """
+        Intro.
+
+        | Count | Done |
+        |------:|:----:|
+        | 10 | yes |
+        | 1 | yes |
+        | 1 | no |
+        | 100 | yes |
+
+        After.
+        """
+        var found = try sourceSelection(ofCell: 2, 0, in: markdown)
+        XCTAssertEqual(found.text, "1")
+        XCTAssertEqual(found.line, "| 1 | yes |\n")
+        found = try sourceSelection(ofCell: 3, 0, in: markdown)
+        XCTAssertEqual(found.line, "| 1 | no |\n")
+        found = try sourceSelection(ofCell: 4, 1, in: markdown)   // last band
+        XCTAssertEqual(found.text, "yes")
+        XCTAssertEqual(found.line, "| 100 | yes |\n")
+        found = try sourceSelection(ofCell: 0, 1, in: markdown)   // header band
+        XCTAssertEqual(found.line, "| Count | Done |\n")
+    }
+
+    func testWholeCellHintInAHeaderlessTable() throws {
+        let markdown = """
+        | | |
+        |---|---|
+        | 10 | yes |
+        | 1 | yes |
+        """
+        var found = try sourceSelection(ofCell: 0, 1, in: markdown)  // first band = first row
+        XCTAssertEqual(found.line, "| 10 | yes |\n")
+        found = try sourceSelection(ofCell: 1, 0, in: markdown)      // last band
+        XCTAssertEqual(found.text, "1")
+        XCTAssertEqual(found.line, "| 1 | yes |")
+    }
+
+    func testBandSourceLines() {
+        let header = TableTextBuilder.build(headers: ["A"], rows: [["1"], ["2"]], alignments: [],
+                                            theme: theme, fontScale: 1).layout
+        XCTAssertEqual((0..<3).map { SelectionRows.sourceLine(ofBand: $0, in: header, tableLine: 7) }, [7, 9, 10])
+        let headerless = TableTextBuilder.build(headers: [""], rows: [["1"], ["2"]], alignments: [],
+                                                theme: theme, fontScale: 1).layout
+        XCTAssertEqual((0..<2).map { SelectionRows.sourceLine(ofBand: $0, in: headerless, tableLine: 7) }, [9, 10])
+    }
+
+    /// A word copied from a right-aligned or centred column pastes as an
+    /// ordinary (natural) paragraph.
+    func testOneCellCopyDropsTheColumnAlignment() throws {
+        let fixture = tableBlock("""
+        | Left | Centre | Right |
+        |:-----|:------:|------:|
+        | a | b | c |
+        """)
+        let layout = fixture.text.layout
+        for column in 0..<3 {
+            let source = fixture.text.string.attribute(.paragraphStyle, at: layout.cellRanges[1][column].location,
+                                                       effectiveRange: nil) as? NSParagraphStyle
+            XCTAssertEqual(source?.alignment, [NSTextAlignment.left, .center, .right][column], "fixture")
+            let output = try XCTUnwrap(copy(layout.cellRanges[1][column], of: fixture))
+            output.rtf.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: output.rtf.length)) { value, _, _ in
+                guard let style = value as? NSParagraphStyle else { return }
+                XCTAssertEqual(style.alignment, .natural, "column \(column)")
+                XCTAssertTrue(style.textBlocks.isEmpty, "column \(column)")
+            }
+        }
     }
 
     // MARK: - TS-D6 / TS-D7 on a real text view
@@ -427,6 +524,96 @@ final class TableSelectionTests: XCTestCase {
                 XCTAssertEqual(textView.multiClickCharacterIndex(at: point, insertion: insertion, inTableCell: false), index,
                                "index \(index) x \(x)")
             }
+        }
+    }
+
+    /// The point at the left or right edge (`fraction` 0.1 / 0.9) of the glyph
+    /// that shows character `index`, in view coordinates.
+    private func point(onGlyphOf index: Int, fraction: CGFloat, in textView: NSTextView,
+                       dy: CGFloat = 0) -> NSPoint {
+        let layoutManager = textView.layoutManager!
+        let glyph = layoutManager.glyphIndexForCharacter(at: index)
+        let box = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1),
+                                             in: textView.textContainer!)
+        let origin = textView.textContainerOrigin
+        return NSPoint(x: origin.x + box.minX + box.width * fraction, y: origin.y + box.midY + dy)
+    }
+
+    private func word(at index: Int, in textView: NSTextView) -> String {
+        let range = textView.selectionRange(forProposedRange: NSRange(location: index, length: 0),
+                                            granularity: .selectByWord)
+        return (textView.string as NSString).substring(with: range)
+    }
+
+    /// A double-click on a glyph made of several UTF-16 units (emoji, a ZWJ
+    /// sequence) or of several characters (a ligature) is about THAT glyph on
+    /// either half — the insertion point after it is several units away from
+    /// the glyph's first character. (7fc791f compared them unit by unit and
+    /// selected the space after the emoji.)
+    func testMultiClickOnAMultiUnitGlyphOfATextRowIsThatGlyph() {
+        let font = NSFont.systemFont(ofSize: 18)
+        let cases: [(text: String, target: String)] = [
+            ("hi \u{1F600} there", "\u{1F600}"),
+            ("a \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} family", "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"),
+            ("an office", "office"),
+        ]
+        for (text, target) in cases {
+            let textView = liveTextView(NSAttributedString(string: text, attributes: [.font: font]), width: 600)
+            let location = (text as NSString).range(of: target).location
+            for fraction in [CGFloat(0.1), 0.9] {
+                let point = point(onGlyphOf: location, fraction: fraction, in: textView)
+                let insertion = textView.characterIndexForInsertion(at: point)
+                let index = textView.multiClickCharacterIndex(at: point, insertion: insertion, inTableCell: false)
+                XCTAssertEqual(index, textView.selectionGlyphCharacterIndex(at: point, requireInside: false),
+                               "\(text) @\(fraction): the glyph under the pointer")
+                XCTAssertEqual(index.map { word(at: $0, in: textView) }, target, "\(text) @\(fraction)")
+            }
+        }
+    }
+
+    /// Above or below a text row's text (in its view's inset) a double-click
+    /// is about what it was about before v1.13: TextKit's nearest glyph —
+    /// measured, the text's first / last character, so the first / last word,
+    /// not the word under the pointer's x.
+    func testMultiClickInATextRowsPaddingKeepsThePreTablesAnswer() {
+        let text = "first second third\nfourth fifth sixth"
+        let textView = liveTextView(NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: 14)]),
+                                    width: 600)
+        textView.textContainerInset = NSSize(width: 0, height: 12)
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+        let used = textView.layoutManager!.usedRect(for: textView.textContainer!)
+        let ns = text as NSString
+        let x = point(onGlyphOf: ns.range(of: "second").location + 2, fraction: 0.5, in: textView).x
+        let probes: [(NSPoint, String)] = [
+            (NSPoint(x: x, y: 4), "first"),                                           // in the top inset
+            (NSPoint(x: x, y: textView.textContainerOrigin.y + used.maxY + 4), "sixth"),  // below the text
+        ]
+        for (point, expected) in probes {
+            let insertion = textView.characterIndexForInsertion(at: point)
+            let glyph = textView.selectionGlyphCharacterIndex(at: point, requireInside: false)
+            let index = textView.multiClickCharacterIndex(at: point, insertion: insertion, inTableCell: false)
+            XCTAssertEqual(index, glyph, "y \(point.y): the pre-v1.13 rule")
+            XCTAssertEqual(index.map { word(at: $0, in: textView) }, expected, "y \(point.y)")
+        }
+    }
+
+    /// The same multi-unit glyph inside a table CELL: the cell rule still
+    /// accepts the glyph (its composed range contains the insertion point).
+    func testMultiClickOnAnEmojiInATableCell() throws {
+        let fixture = tableBlock("""
+        | A | B |
+        |---|---|
+        | hi \u{1F600} there | x |
+        """)
+        let layout = fixture.text.layout
+        let textView = liveTextView(fixture.text.string, width: 700)
+        let location = (fixture.text.string.string as NSString).range(of: "\u{1F600}").location
+        for fraction in [CGFloat(0.1), 0.9] {
+            let point = point(onGlyphOf: location, fraction: fraction, in: textView)
+            let insertion = textView.characterIndex(confinedToCellAt: point, layout: layout)
+            let index = try XCTUnwrap(textView.multiClickCharacterIndex(at: point, insertion: insertion,
+                                                                        inTableCell: true))
+            XCTAssertEqual(word(at: index, in: textView), "\u{1F600}", "@\(fraction)")
         }
     }
 }
