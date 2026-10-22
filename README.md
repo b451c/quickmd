@@ -13,7 +13,7 @@
 
 [![App Store goal](https://qmd.app/api/donation-goal.svg)](https://qmd.app/#support-goal)
 
-**QuickMD is back on the Mac App Store: the Apple Developer membership ($99 a year) was renewed on 22 October 2026. Donations help cover it - [chip in on Buy Me a Coffee or Ko-fi](#support-development).**
+**QuickMD is free. Donations help cover the yearly Apple Developer membership - [Buy Me a Coffee or Ko-fi](#support-development).**
 
 </div>
 
@@ -243,7 +243,7 @@ CI runs the test suite plus Release builds of both flavors on every push and pul
 
 QuickMD is **free and open source**. If you find it useful, consider supporting development.
 
-**Help keep QuickMD on the Mac App Store:** the Apple Developer Program membership ($99 a year) was renewed on 22 October 2026 - donations help cover it. [See the goal on qmd.app](https://qmd.app/#support-goal).
+Donations help cover the yearly Apple Developer membership ($99) - [see the goal on qmd.app](https://qmd.app/#support-goal).
 
 [![App Store goal](https://qmd.app/api/donation-goal.svg)](https://qmd.app/#support-goal)
 
