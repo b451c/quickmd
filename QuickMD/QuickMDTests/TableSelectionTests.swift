@@ -616,4 +616,34 @@ final class TableSelectionTests: XCTestCase {
             XCTAssertEqual(word(at: index, in: textView), "\u{1F600}", "@\(fraction)")
         }
     }
+
+    // MARK: - Selection drawing (table backgrounds are filled per cell)
+
+    /// `fillBackgroundRectArray` runs once per cell background and border of
+    /// a table, so it asks only for the selection rects of THAT fill's
+    /// characters (`limitedTo:`); the whole selection per call made ⌘A on a
+    /// 200-row table cost seconds and gigabytes. The limited calls must add up
+    /// to exactly the whole selection's rects, each inside its own share.
+    func testLimitedSelectionRectsAddUpToTheWholeSelection() {
+        let fixture = tableBlock(Self.multiClickFixtures[1])
+        let layout = fixture.text.layout
+        let textView = liveTextView(fixture.text.string, width: 640)
+        let manager = textView.layoutManager as! DocumentSelectionLayoutManager
+        // From inside the first header cell to inside the last cell.
+        manager.selectionCoveredRange = NSRange(location: 3, length: layout.length - 6)
+        let whole = Set(manager.selectionRects(in: textView).map(NSStringFromRect))
+        XCTAssertGreaterThan(whole.count, 3)
+        var parts = Set<String>()
+        for band in layout.cellRanges {
+            for cell in band {
+                let fill = NSRange(location: cell.location, length: cell.length + 1)  // cell + its "\n"
+                let rects = Set(manager.selectionRects(in: textView, limitedTo: fill).map(NSStringFromRect))
+                XCTAssertTrue(rects.isSubset(of: whole), "cell \(cell)")
+                parts.formUnion(rects)
+            }
+        }
+        XCTAssertEqual(parts, whole)
+        XCTAssertTrue(manager.selectionRects(in: textView,
+                                             limitedTo: NSRange(location: 0, length: 2)).isEmpty)
+    }
 }

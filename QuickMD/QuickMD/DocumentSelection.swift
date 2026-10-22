@@ -192,17 +192,23 @@ final class DocumentSelectionLayoutManager: NSLayoutManager {
     }
 
     /// The selection's rects in `textView` coordinates (empty when nothing of
-    /// this text is covered). `withinSelectedGlyphRange` = the same range, so
-    /// wrapped lines extend to the container edge as a native selection does.
-    func selectionRects(in textView: NSTextView) -> [NSRect] {
+    /// this text is covered), for the part of the selection inside `limit`
+    /// (all of it by default). `withinSelectedGlyphRange` is always the WHOLE
+    /// covered range, so wrapped lines extend to the container edge as a
+    /// native selection does, and a limited call returns exactly its share of
+    /// the unlimited rects.
+    func selectionRects(in textView: NSTextView, limitedTo limit: NSRange? = nil) -> [NSRect] {
         guard let covered = selectionCoveredRange, covered.length > 0,
               let storage = textStorage, NSMaxRange(covered) <= storage.length,
               let container = textView.textContainer else { return [] }
-        let glyphs = glyphRange(forCharacterRange: covered, actualCharacterRange: nil)
+        let part = limit.map { NSIntersectionRange(covered, $0) } ?? covered
+        guard part.length > 0 else { return [] }
+        let selected = glyphRange(forCharacterRange: covered, actualCharacterRange: nil)
+        let glyphs = glyphRange(forCharacterRange: part, actualCharacterRange: nil)
         guard glyphs.length > 0 else { return [] }
         let origin = textView.textContainerOrigin
         var rects: [NSRect] = []
-        enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: glyphs,
+        enumerateEnclosingRects(forGlyphRange: glyphs, withinSelectedGlyphRange: selected,
                                 in: container) { rect, _ in
             rects.append(rect.offsetBy(dx: origin.x, dy: origin.y))
         }
@@ -229,7 +235,10 @@ final class DocumentSelectionLayoutManager: NSLayoutManager {
             super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
             return
         }
-        let selected = selectionRects(in: textView)
+        // Only the selection inside this fill's characters can overlap it.
+        // A table fills a background (and borders) per CELL: the whole
+        // selection per call made ⌘A on a 200-row table take seconds and GBs.
+        let selected = selectionRects(in: textView, limitedTo: charRange)
         guard !selected.isEmpty else {
             super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
             return
