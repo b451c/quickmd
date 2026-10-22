@@ -5,7 +5,9 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.13.0] - 2026-10-22
+
+Tables you can select, reload on demand, and tabs that behave in full screen. Thanks to [@sporto](https://github.com/sporto) (#33), [@rinh](https://github.com/rinh) (#37) and [@onemannoplan](https://github.com/onemannoplan) (#36)!
 
 ### Added
 - **Reload** (⌘R, View ▸ Reload, or the ↻ button in the top-right cluster): re-reads the document from disk now and restarts the file watcher, for the times auto-reload does not notice a change (some network volumes and editors' save strategies). A toast says whether anything changed, or that the file could not be read; a file that is gone shows the "File no longer exists" banner, which clears by itself when the file comes back. Off while Source Edit shows, where the editor already follows the disk. Contributed by [@rinh](https://github.com/rinh) (#37).
