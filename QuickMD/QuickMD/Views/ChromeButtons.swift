@@ -11,12 +11,16 @@ import AppKit
 /// delegate → `onLink`. Never `Text(...).textSelection(.enabled)`: its
 /// SelectionOverlay is constraints.md bug B.
 ///
-/// The copy button is an OVERLAY in the trailing strip the title gives up
+/// The copy button is an OVERLAY, not an HStack sibling: an HStack
+/// re-negotiates an NSViewRepresentable child's width every pass (scroll-freeze
+/// rule 4). The title still gives up a trailing strip
 /// (`Metrics.copyButtonReservedWidth`, the same width `BlockHeightMeasurer`
-/// wraps the title at), not an HStack sibling: an HStack re-negotiates an
-/// NSViewRepresentable child's width every pass (scroll-freeze rule 4). An
-/// overlay takes no space, so the old HStack's first-baseline union is
-/// reproduced with explicit insets — see `BlockLayout.Heading.titleGeometry`.
+/// wraps the title at), so the button never covers text. An overlay takes no
+/// space, so the old HStack's first-baseline union is reproduced with explicit
+/// insets — see `BlockLayout.Heading.titleGeometry` — and its horizontal
+/// position (right after the title's widest line, as in v1.10) is computed
+/// synchronously from the row width and the title string, never fed back from
+/// the text view's layout (no async layout state — scroll-freeze rule 2).
 struct HeadingBlockView: View {
     let id: String
     let level: Int
@@ -62,22 +66,28 @@ struct HeadingBlockView: View {
         .padding(.trailing, Metrics.copyButtonReservedWidth)
         .padding(.top, geometry.titleTopInset)
         .frame(minHeight: geometry.minimumHeight, alignment: .top)
-        .overlay(alignment: .topTrailing) {
-            // `buttonTopInset` puts the icon's baseline on the title's first
-            // baseline, as the old `.firstTextBaseline` HStack did.
-            Button {
-                onCopySection()
-            } label: {
-                Image(systemName: "doc.on.doc")
-                    .font(.system(size: Metrics.copyButtonIconFontSize))
-                    .foregroundColor(.secondary.opacity(0.7))
-                    .padding(Metrics.copyButtonIconPadding)
-                    .contentShape(Rectangle())
+        .overlay {
+            // The reader only reads the row width the cell already gave this
+            // view; nothing here sizes the row. Its empty area is not hittable,
+            // so drags on the title still reach the text view.
+            GeometryReader { proxy in
+                // `buttonTopInset` puts the icon's baseline on the title's first
+                // baseline, as the old `.firstTextBaseline` HStack did.
+                Button {
+                    onCopySection()
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: Metrics.copyButtonIconFontSize))
+                        .foregroundColor(.secondary.opacity(0.7))
+                        .padding(Metrics.copyButtonIconPadding)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Copy section")
+                .opacity(isHovered ? 1 : 0)
+                .padding(.top, geometry.buttonTopInset)
+                .padding(.leading, copyButtonLeading(rowWidth: proxy.size.width, headingAttr: headingAttr))
             }
-            .buttonStyle(.plain)
-            .help("Copy section")
-            .opacity(isHovered ? 1 : 0)
-            .padding(.top, geometry.buttonTopInset)
         }
         .contentShape(Rectangle())
         .onHover { hovering in
@@ -90,6 +100,22 @@ struct HeadingBlockView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
             }
         }
+    }
+
+    /// The button's leading inset in a row `rowWidth` wide: right after the
+    /// title's widest line at the width the title wraps at. The string is the
+    /// one the title shows (the same conversion `MarkdownView.selectableText`
+    /// applies to headings); it is only built on a cache miss — the key pins
+    /// what decides its layout, so a hover toggle is a lookup.
+    private func copyButtonLeading(rowWidth: CGFloat, headingAttr: AttributedString) -> CGFloat {
+        let key = "\(contentVersion)|\(level)|\(fontScale)|\(theme.fonts)|\(title)"
+        let usedWidth = Metrics.titleUsedWidth(
+            cachedAs: key, wrapWidth: Metrics.titleWrapWidth(rowWidth: rowWidth)
+        ) {
+            TextBlockView.makeNSAttributedString(from: headingAttr, hasInlineMath: false,
+                                                 theme: theme, fontScale: fontScale)
+        }
+        return Metrics.copyButtonLeading(titleUsedWidth: usedWidth, rowWidth: rowWidth)
     }
 }
 
