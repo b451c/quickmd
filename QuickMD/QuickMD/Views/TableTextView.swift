@@ -31,15 +31,16 @@ struct TableTextBlockView: View {
     typealias Metrics = BlockLayout.Table
 
     var body: some View {
-        let table = preconverted.flatMap {
-            $0.matches(headers: headers, rows: rows, alignments: alignments, fontScale: fontScale) ? $0 : nil
-        } ?? TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
-                                    theme: theme, fontScale: fontScale)
-
+        // Nothing is built here: `body` runs on every search keystroke, focus
+        // move and cell reuse. The representable builds (or adopts
+        // `preconverted`) only when the text view's installed source differs.
         TableTextRepresentable(
-            table: table,
             headers: headers,
             rows: rows,
+            alignments: alignments,
+            theme: theme,
+            fontScale: fontScale,
+            preconverted: preconverted,
             background: theme.backgroundColor,
             searchTerm: searchText,
             focusedOccurrence: focusedOccurrence,
@@ -54,10 +55,13 @@ struct TableTextBlockView: View {
 // MARK: - NSTextView Wrapper
 
 private struct TableTextRepresentable: NSViewRepresentable {
-    let table: TableText
-    /// The cells' markdown, for the 1.12 search mapping (`applyTableSearchHighlight`).
+    /// The cells' markdown — what the table is built from.
     let headers: [String]
     let rows: [[String]]
+    let alignments: [TextAlignment]
+    let theme: MarkdownTheme
+    let fontScale: CGFloat
+    let preconverted: TableText?
     let background: Color
     let searchTerm: String
     let focusedOccurrence: Int?
@@ -82,25 +86,37 @@ private struct TableTextRepresentable: NSViewRepresentable {
     func updateNSView(_ textView: TableTextView, context: Context) {
         context.coordinator.onLink = onLink
 
-        let fill = NSColor(background)
-        if textView.tableBackground != fill {
-            textView.tableBackground = fill
+        // By value: `NSColor(Color)` is a fresh object per call.
+        if textView.tableBackgroundSource != background {
+            textView.tableBackgroundSource = background
+            textView.tableBackground = NSColor(background)
             textView.needsDisplay = true
         }
 
-        let textChanged = (textView.cachedAttributed !== table.string)
+        // At most one build per source per view: the measurer's instance when
+        // it was built from exactly this source, otherwise our own.
+        let source = TableText.Source(headers: headers, rows: rows, alignments: alignments,
+                                      theme: theme, fontScale: fontScale)
+        let textChanged = textView.tableSource != source
         if textChanged {
+            let table = preconverted.flatMap { $0.source == source ? $0 : nil }
+                ?? TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
+                                          theme: theme, fontScale: fontScale)
             textView.textStorage?.setAttributedString(table.string)
             textView.cachedAttributed = table.string
             textView.tableLayout = table.layout
+            textView.tableSource = table.source
             textView.invalidateMeasurement()
         }
 
         let searchChanged = (textView.lastSearchTerm != searchTerm) ||
                             (textView.lastFocusedOccurrence != focusedOccurrence)
         if textChanged || searchChanged {
-            applyTableSearchHighlight(in: textView, layout: table.layout, headers: headers, rows: rows,
-                                      term: searchTerm, focusedOccurrence: focusedOccurrence)
+            // The text rows' highlight on the whole table string: `DocumentSearch`
+            // counted this block on the same characters with the same matcher
+            // (TS-D9), so the focused occurrence is the n-th highlight in
+            // reading order.
+            applyNSSearchHighlight(in: textView, term: searchTerm, focusedOccurrence: focusedOccurrence)
             textView.lastSearchTerm = searchTerm
             textView.lastFocusedOccurrence = focusedOccurrence
         }
@@ -124,9 +140,12 @@ private struct TableTextRepresentable: NSViewRepresentable {
 final class TableTextView: SelfSizingTextView {
     /// The cell layout of the installed string; set with it.
     var tableLayout: TableTextLayout?
+    /// What the installed string was built from — the representable's rebuild key.
+    var tableSource: TableText.Source?
     /// The table's own background (1.12 `.background(theme.backgroundColor)`),
-    /// painted inside the rounded clip.
+    /// painted inside the rounded clip, and the theme colour it came from.
     var tableBackground: NSColor = .clear
+    var tableBackgroundSource: Color?
 
     /// Everything — background, header band, rules, selection, search
     /// highlights, text — is clipped to the rounded rect (1.12 `.clipShape`).
@@ -149,71 +168,5 @@ final class TableTextView: SelfSizingTextView {
             return super.selectionCharacterIndex(at: point)
         }
         return characterIndex(confinedToCellAt: point, layout: tableLayout)
-    }
-}
-
-// MARK: - Search highlight (1.12 semantics)
-
-/// Search highlighting for a table, with exactly 1.12's mapping (TS-T3 replaces
-/// it with `applyNSSearchHighlight` on the rendered string, TS-D9).
-///
-/// `DocumentSearch` counts a table's matches in the cells' MARKDOWN (headers
-/// first, then rows, left to right), so the block's focused occurrence is an
-/// index into those raw counts. Each cell therefore maps it to a cell-local
-/// index (`focused − occurrences in earlier cells`, if below this cell's raw
-/// count) and highlights the matches in its RENDERED text, the focused one
-/// orange — what 1.12's per-cell `searchHighlight` did. Main-thread by
-/// convention, like `applyNSSearchHighlight`.
-func applyTableSearchHighlight(in textView: NSTextView, layout: TableTextLayout,
-                               headers: [String], rows: [[String]],
-                               term: String, focusedOccurrence: Int?) {
-    guard let layoutManager = textView.layoutManager,
-          let storage = textView.textStorage else { return }
-    layoutManager.removeTemporaryAttribute(.backgroundColor,
-                                           forCharacterRange: NSRange(location: 0, length: storage.length))
-    guard !term.isEmpty, storage.length == layout.length else { return }
-
-    let needle = term.lowercased()
-    let string = storage.string as NSString
-    let yellow = NSColor.systemYellow.withAlphaComponent(0.55)
-    let orange = NSColor.systemOrange
-    var earlier = 0
-
-    func highlight(band: Int?, column: Int, markdown: String) {
-        let rawCount = countOccurrences(in: markdown, of: term)
-        defer { earlier += rawCount }
-        guard let band, band < layout.bandCount else { return }
-        let local = focusedOccurrence.map { $0 - earlier }.flatMap { (0..<rawCount).contains($0) ? $0 : nil }
-        let cell = layout.cellRanges[band][column]
-        guard cell.length > 0 else { return }
-        let haystack = string.substring(with: cell).lowercased() as NSString
-        var location = 0
-        var index = 0
-        while location < haystack.length {
-            let found = haystack.range(of: needle, options: [],
-                                       range: NSRange(location: location, length: haystack.length - location))
-            if found.location == NSNotFound { break }
-            let target = NSIntersectionRange(NSRange(location: cell.location + found.location, length: found.length),
-                                             cell)
-            if target.length > 0 {
-                layoutManager.addTemporaryAttribute(.backgroundColor, value: index == local ? orange : yellow,
-                                                    forCharacterRange: target)
-            }
-            location = found.location + max(found.length, 1)
-            index += 1
-        }
-    }
-
-    // 1.12 counted the header cells even when the band is hidden (all blank).
-    for column in 0..<layout.columnCount {
-        highlight(band: layout.showsHeader ? 0 : nil, column: column,
-                  markdown: column < headers.count ? headers[column] : "")
-    }
-    let firstRowBand = layout.showsHeader ? 1 : 0
-    for (index, row) in rows.enumerated() {
-        for column in 0..<layout.columnCount {
-            highlight(band: firstRowBand + index, column: column,
-                      markdown: column < row.count ? row[column] : "")
-        }
     }
 }
