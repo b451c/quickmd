@@ -18,7 +18,8 @@ struct WindowConfigurator: NSViewRepresentable {
         let view = TabAwareView()
         view.onWindowAttached = { window in
             configure(window)
-            let merged = WindowTabbing.joinExistingTabs(window, among: NSApp.windows)
+            WindowTabbing.registerDocumentWindow(window)
+            let merged = WindowTabbing.joinExistingTabs(window, among: WindowTabbing.documentWindows)
             if !merged {
                 // Standalone window (first of the session, or all others closed):
                 // give it the last size the user chose instead of the hardcoded
@@ -58,6 +59,18 @@ enum WindowTabbing {
         defaults.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
     }
 
+    /// Every document window, registered as it attaches (WindowConfigurator
+    /// lives in MarkdownView only). The manual merge picks its host from these,
+    /// not by `tabbingIdentifier`: SwiftUI chooses that value, and the Settings
+    /// or Tip Jar window must never become a document's host.
+    private static let registeredDocumentWindows = NSHashTable<NSWindow>.weakObjects()
+
+    static var documentWindows: [NSWindow] { registeredDocumentWindows.allObjects }
+
+    static func registerDocumentWindow(_ window: NSWindow) {
+        registeredDocumentWindows.add(window)
+    }
+
     /// Called once the new window is on screen. Returns true when it ended up
     /// as a tab (so it must keep the group's frame).
     ///
@@ -66,12 +79,10 @@ enum WindowTabbing {
     /// Space, and moving it into another window's tab group then leaves a
     /// half-empty black full-screen Space without a menu bar.
     @discardableResult
-    static func joinExistingTabs(_ newWindow: NSWindow, among windows: [NSWindow]) -> Bool {
+    static func joinExistingTabs(_ newWindow: NSWindow, among documentWindows: [NSWindow]) -> Bool {
         if (newWindow.tabbedWindows?.count ?? 0) > 1 { return true }
-        guard let host = windows.first(where: { other in
-            other !== newWindow
-                && other.isVisible
-                && other.tabbingIdentifier == newWindow.tabbingIdentifier
+        guard let host = documentWindows.first(where: { other in
+            other !== newWindow && other.isVisible
         }) else { return false }
         if host.styleMask.contains(.fullScreen) || newWindow.styleMask.contains(.fullScreen) {
             return false

@@ -10,11 +10,12 @@ import AppKit
 final class WindowTabbingTests: XCTestCase {
 
     /// NSWindow whose full-screen state, visibility and tab group are set by
-    /// the test.
+    /// the test; tab merges and ordering are recorded, never performed.
     private final class FakeWindow: NSWindow {
         var fakeFullScreen = false
         var fakeVisible = false
         var fakeTabs: [NSWindow]?
+        private(set) var addedTabs: [NSWindow] = []
 
         convenience init(width: CGFloat = 600, height: CGFloat = 400) {
             self.init(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
@@ -28,6 +29,10 @@ final class WindowTabbingTests: XCTestCase {
         }
         override var isVisible: Bool { fakeVisible }
         override var tabbedWindows: [NSWindow]? { fakeTabs }
+        override func addTabbedWindow(_ window: NSWindow, ordered: NSWindow.OrderingMode) {
+            addedTabs.append(window)
+        }
+        override func makeKeyAndOrderFront(_ sender: Any?) {}
     }
 
     private var savedArguments: [String: Any] = [:]
@@ -96,16 +101,30 @@ final class WindowTabbingTests: XCTestCase {
         let hidden = FakeWindow()
         let new = FakeWindow()
         XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [hidden, new]))
-        XCTAssertNil(hidden.tabbedWindows)
+        XCTAssertTrue(hidden.addedTabs.isEmpty)
     }
 
-    func testOtherKindsOfWindowAreNotHosts() {
+    /// Hosts come from the registered document windows: the Settings or Tip
+    /// Jar window is never registered, whatever identifier SwiftUI gives it.
+    func testOnlyRegisteredWindowsAreDocumentWindows() {
+        let document = FakeWindow()
         let settings = FakeWindow()
-        settings.fakeVisible = true
-        settings.tabbingIdentifier = "Settings"
+        WindowTabbing.registerDocumentWindow(document)
+        XCTAssertTrue(WindowTabbing.documentWindows.contains { $0 === document })
+        XCTAssertFalse(WindowTabbing.documentWindows.contains { $0 === settings })
+    }
+
+    /// The fallback does not depend on SwiftUI sharing one identifier across
+    /// document windows (only seen on macOS 26): outside full screen a visible
+    /// document window takes the new one as a tab, as before #36.
+    func testVisibleDocumentHostMergesWhateverItsIdentifier() {
+        let host = FakeWindow()
+        host.fakeVisible = true
+        host.tabbingIdentifier = "SwiftUI-1"
         let new = FakeWindow()
-        new.tabbingIdentifier = "Document"
-        XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [settings, new]))
+        new.tabbingIdentifier = "SwiftUI-2"
+        XCTAssertTrue(WindowTabbing.joinExistingTabs(new, among: [host, new]))
+        XCTAssertTrue(host.addedTabs.count == 1 && host.addedTabs.first === new)
     }
 
     /// The black-half bug: never move a window into a full-screen (or Split
@@ -116,6 +135,7 @@ final class WindowTabbingTests: XCTestCase {
         host.fakeFullScreen = true
         let new = FakeWindow()
         XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [host, new]))
+        XCTAssertTrue(host.addedTabs.isEmpty)
     }
 
     func testNoLateMergeOfWindowThatWentFullScreenOnItsOwn() {
@@ -124,6 +144,7 @@ final class WindowTabbingTests: XCTestCase {
         let new = FakeWindow()
         new.fakeFullScreen = true
         XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [host, new]))
+        XCTAssertTrue(host.addedTabs.isEmpty)
     }
 
     // MARK: - WindowSizeMemory in full screen

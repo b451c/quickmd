@@ -8,7 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Reload** (⌘R, View ▸ Reload, or the ↻ button in the top-right cluster): re-reads the document from disk now and restarts the file watcher, for the times auto-reload does not notice a change (some network volumes and editors' save strategies). A toast says whether anything changed, or that the file could not be read; a file that is gone shows the "File no longer exists" banner, which clears by itself when the file comes back. Off while Source Edit shows, where the editor already follows the disk.
+- **Reload** (⌘R, View ▸ Reload, or the ↻ button in the top-right cluster): re-reads the document from disk now and restarts the file watcher, for the times auto-reload does not notice a change (some network volumes and editors' save strategies). A toast says whether anything changed, or that the file could not be read; a file that is gone shows the "File no longer exists" banner, which clears by itself when the file comes back. Off while Source Edit shows, where the editor already follows the disk. Contributed by [@rinh](https://github.com/rinh) (#37).
+
+### Fixed
+- Full screen and Split View: opening another file adds a tab in place. Before, the tab group moved to a full-screen Space of its own, leaving the Split View broken, half the screen black and no menu bar. A full-screen window size is also no longer remembered as the size for new windows. Contributed by [@onemannoplan](https://github.com/onemannoplan) (#36).
 
 ## [1.12.0] - 2026-10-05
 
