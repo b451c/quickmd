@@ -31,7 +31,7 @@ import SwiftUI
 ///   carries the cell's paragraph style (its `NSTextTableBlock`), and the last
 ///   cell's "\n" is the last character of the string.
 /// - A band ("row" on screen) is the contiguous range from its first cell's
-///   location to its last cell's "\n" inclusive (`bandRange(_:)`).
+///   location to its last cell's "\n" inclusive.
 /// - Every band has `columnCount` cells: ragged rows are padded with empty
 ///   cells, so the column of a character is always well defined.
 /// - Offsets are UTF-16 (NSString), the unit `DocumentSelection` uses.
@@ -48,12 +48,6 @@ struct TableTextLayout: Equatable {
     var length: Int {
         guard let last = cellRanges.last?.last else { return 0 }
         return NSMaxRange(last) + 1
-    }
-
-    /// The whole band including the "\n" of its last cell.
-    func bandRange(_ band: Int) -> NSRange {
-        let first = cellRanges[band][0].location
-        return NSRange(location: first, length: NSMaxRange(cellRanges[band][columnCount - 1]) + 1 - first)
     }
 
     /// The cell a character index falls in; a cell's own "\n" counts as that
@@ -115,16 +109,6 @@ struct TableText {
     func matches(headers: [String], rows: [[String]], alignments: [TextAlignment],
                  theme: MarkdownTheme, fontScale: CGFloat) -> Bool {
         source == Source(headers: headers, rows: rows, alignments: alignments, theme: theme, fontScale: fontScale)
-    }
-
-    /// Content and zoom only. For `MarkdownView.selectableText`, whose cached
-    /// instance is already pinned to the installed parse (`installedVersion ==
-    /// contentVersion`, and every theme/font change is a new parse); prefer
-    /// `matches(…theme:…)` everywhere else.
-    func matches(headers: [String], rows: [[String]], alignments: [TextAlignment],
-                 fontScale: CGFloat) -> Bool {
-        source.headers == headers && source.rows == rows && source.alignments == alignments
-            && source.fontScale == fontScale
     }
 }
 

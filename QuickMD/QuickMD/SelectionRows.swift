@@ -35,28 +35,14 @@ enum SelectionRows {
         guard let span = selection.rowSpan else { return [] }
         var pieces: [SelectionPiece] = []
         pieces.reserveCapacity(span.count)
-        // A whole table copies as 1.12 did: the cells' rendered characters
-        // (no `**`). The characters do not depend on the theme, so any will do.
-        var cellRenderer: MarkdownRenderer?
-        func renderedCell(_ markdown: String) -> String {
-            let renderer = cellRenderer ?? MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
-            cellRenderer = renderer
-            return String(renderer.renderInline(markdown).characters)
-        }
 
         for row in span where row < blocks.count {
             let block = blocks[row]
             switch block.content {
-            case .table(let headers, let rows, _):
+            case .table:
                 guard let built = table(block),
                       let covered = selection.range(inRow: row, rowLength: built.string.length),
-                      let piece = tablePiece(built, covered: covered, whole: {
-                          // Same rule as `TableTextLayout.showsHeader`: an all-blank
-                          // header row is not shown, so it is not copied either.
-                          let showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-                          return .table(headers: showsHeader ? headers.map(renderedCell) : nil,
-                                        rows: rows.map { $0.map(renderedCell) })
-                      }) else { continue }
+                      let piece = tablePiece(built, covered: covered) else { continue }
                 pieces.append(piece)
             case .image(_, let alt, _):
                 guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
@@ -85,8 +71,8 @@ enum SelectionRows {
     }
 
     /// The piece for the `covered` part of a table's string (TS-D8):
-    /// - every cell's text covered (a drag through the table, ⌘A) → `whole()`,
-    ///   which is 1.12's TSV;
+    /// - every cell's text covered (a drag through the table, ⌘A) → `.table`,
+    ///   1.12's TSV, read from the string's own cells (`wholeTable`);
     /// - inside ONE cell → that text, as a text row copies (fonts, links), but
     ///   without the cell's `NSTextTableBlock` and the column's alignment —
     ///   pasted RTF must not turn a word into a one-cell table, nor into a
@@ -100,13 +86,12 @@ enum SelectionRows {
     /// That keeps start and end symmetric — the empty cell a drag starts or
     /// ends in is not copied, empty cells it crosses are (as empty fields).
     /// Cells come from `TableTextLayout`, never from re-reading the string.
-    static func tablePiece(_ table: TableText, covered: NSRange,
-                           whole: () -> SelectionPiece) -> SelectionPiece? {
+    static func tablePiece(_ table: TableText, covered: NSRange) -> SelectionPiece? {
         let layout = table.layout
         let end = NSMaxRange(covered)
         guard covered.length > 0, covered.location >= 0, layout.length == table.string.length,
               end <= layout.length, let lastCell = layout.cellRanges.last?.last else { return nil }
-        if covered.location == 0 && end >= NSMaxRange(lastCell) { return whole() }
+        if covered.location == 0 && end >= NSMaxRange(lastCell) { return wholeTable(table) }
 
         var start = covered.location
         if let cell = layout.cell(containing: start),
@@ -135,6 +120,21 @@ enum SelectionRows {
             bands.append((lower...upper).map { string.substring(with: coveredText(band, $0)) })
         }
         return .tableCells(bands: bands)
+    }
+
+    /// The whole table as 1.12 copied it: header (only when the table shows
+    /// one) and rows, each cell's RENDERED text. Read from the table's own
+    /// string and layout — the cells `TableTextBuilder` rendered once for the
+    /// view, the measurer and search — rather than rendering every cell
+    /// again (1.12 did, on the main thread: a second `renderInline` per cell
+    /// for ⌘A ⌘C). Bands are already padded to `columnCount`, which is what
+    /// 1.12's `tsv` padded to (the parser normalizes every row to it).
+    private static func wholeTable(_ table: TableText) -> SelectionPiece {
+        let layout = table.layout
+        let string = table.string.string as NSString
+        let bands = layout.cellRanges.map { $0.map(string.substring(with:)) }
+        guard layout.showsHeader, let header = bands.first else { return .table(headers: nil, rows: bands) }
+        return .table(headers: header, rows: Array(bands.dropFirst()))
     }
 
     /// `text` with what belongs to the TABLE removed from its paragraph
@@ -246,6 +246,31 @@ enum SelectionRows {
 }
 
 // MARK: - Points in a text view (S-D6 / TS-D6 / TS-D7)
+
+extension SelectionRows {
+    /// The selection offset for `local` (the row's text-view coordinates,
+    /// flipped) — `SelectionController.hit` for a row with a registered view.
+    /// `characterIndex` is the view's hit-test hook
+    /// (`SelfSizingTextView.selectionCharacterIndex`).
+    ///
+    /// A text row: above its view = the row's start, below = its end (the
+    /// gap and the chrome around the text belong to the row's edges), beside
+    /// it = the line's start or end. A TABLE (`isTable`) clamps the point into
+    /// the view and asks the hook in every direction, which snaps it to the
+    /// nearest band and cell (TS-D6): a drag along the header that slips a
+    /// few points above the table must stay in the header cells, not jump to
+    /// the start of the table; below the last band likewise.
+    static func hitOffset(at local: NSPoint, viewSize: NSSize, length: Int, isTable: Bool,
+                          characterIndex: (NSPoint) -> Int) -> Int {
+        if !isTable {
+            if local.y < 0 { return 0 }
+            if local.y > viewSize.height { return length }
+        }
+        let clamped = NSPoint(x: min(max(local.x, 0), viewSize.width),
+                              y: min(max(local.y, 0), viewSize.height))
+        return min(max(0, characterIndex(clamped)), length)
+    }
+}
 
 extension NSTextView {
     /// The character whose glyph is under `local` (view coordinates), or nil

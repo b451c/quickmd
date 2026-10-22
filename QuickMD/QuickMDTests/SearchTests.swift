@@ -284,6 +284,36 @@ final class SearchTests: XCTestCase {
         }
     }
 
+    /// A text row containing "İ": its count is exactly what its view
+    /// highlights, for every term (the count used the lowercased Swift
+    /// `String.range` loop while the highlight used `searchMatchRanges`, which
+    /// searches the original `.caseInsensitive` when lowercasing changes the
+    /// length — the two disagreed, e.g. on a dotted capital next to a
+    /// combining dot).
+    func testTextRowWithDottedCapitalCountEqualsHighlights() throws {
+        let theme = MarkdownTheme.cached(for: .light)
+        let markdown = "İİi\u{307} İstanbul, istanbul and ISTANBUL; x İ x."
+        let blocks = parse(markdown)
+        let block = try XCTUnwrap(blocks.first)
+        guard case .text(let attributed) = block.content else { return XCTFail("not a text row") }
+        let shown = BlockTextConverter.makeNSAttributedString(from: attributed, hasInlineMath: false,
+                                                              theme: theme, fontScale: 1, math: .none)
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 10))
+        textView.textStorage?.setAttributedString(shown)
+        for term in ["i", "I", "İ", "stanbul", "ISTANBUL", "x", "İ\u{307}", "\u{307}", "i\u{307}"] {
+            let tag = "term \(term.unicodeScalars.map { String($0.value, radix: 16) })"
+            // What `applyNSSearchHighlight` draws, one range per occurrence
+            // (adjacent runs of the drawn attribute would merge, so the
+            // drawing is checked by total length).
+            let occurrences = searchMatchRanges(in: textView.string, term: term)
+            applyNSSearchHighlight(in: textView, term: term, focusedOccurrence: nil)
+            XCTAssertEqual(highlights(in: textView).map(\.range.length).reduce(0, +),
+                           occurrences.map(\.length).reduce(0, +), tag)
+            let counted = DocumentSearch.computeMatches(in: blocks, term: term).matchBlockIds.count
+            XCTAssertEqual(counted, occurrences.count, tag)
+        }
+    }
+
     /// Paragraphs and tables interleave in document order; each table counts
     /// its rendered matches only.
     func testMixedDocumentCountsParagraphsAndTablesInOrder() {

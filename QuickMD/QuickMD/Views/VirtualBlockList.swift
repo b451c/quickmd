@@ -34,9 +34,9 @@ import os
 // Feedback discipline (the reason this is not the LazyVStack estimator again):
 // rows whose height the measurer can compute exactly (`RowKind.exact`) never
 // report anything. Rows whose real size only exists once a view is placed
-// (`.reported`: headings, tables, images, display math, Mermaid) report their
-// natural height ONCE per model generation; the coordinator applies the
-// correction and compensates the scroll offset. No unplaced row is ever
+// (`.reported`: headings, images, display math, Mermaid — tables are `.exact`
+// since v1.13) report their natural height ONCE per model generation; the
+// coordinator applies the correction and compensates the scroll offset. No unplaced row is ever
 // re-estimated, and no row's height is a function of the height we gave it (the
 // hosted content is `fixedSize`d vertically, so the row height cannot feed back
 // into the measured height).
@@ -1533,7 +1533,7 @@ final class BlockHostingCell: NSTableCellView {
 }
 
 /// The highlight over a selected atomic row (S-D3): the selection colour at a
-/// third of its strength, so the table / image / diagram stays readable under it.
+/// third of its strength, so the image / diagram stays readable under it.
 ///
 /// Drawn in AppKit, above the hosted SwiftUI content — and invisible to the
 /// mouse: `hitTest` answers nil, so the Mermaid diagram's transparent preview
@@ -1989,16 +1989,10 @@ final class SelectionController: NSObject {
 
         if let textView = registeredTextView(for: block.id, in: tableView) {
             let local = textView.convert(windowPoint, from: nil)  // flipped
-            let length = textView.selectionTextLength
-            let offset: Int
-            if local.y < 0 {
-                offset = 0
-            } else if local.y > textView.bounds.height {
-                offset = length
-            } else {
-                let clamped = NSPoint(x: min(max(local.x, 0), textView.bounds.width), y: local.y)
-                offset = min(max(0, textView.selectionCharacterIndex(at: clamped)), length)
-            }
+            let offset = SelectionRows.hitOffset(at: local, viewSize: textView.bounds.size,
+                                                 length: textView.selectionTextLength,
+                                                 isTable: textView is TableTextView,
+                                                 characterIndex: textView.selectionCharacterIndex(at:))
             return Hit(point: SelectionPoint(row: row, offset: offset), isAtomic: false,
                        textView: textView, pointInTextView: local)
         }

@@ -103,7 +103,6 @@ enum DocumentSearch {
                                fontScale: CGFloat = 1) -> Results {
         guard !term.isEmpty else { return Results(matchBlockIds: []) }
 
-        let searchLower = term.lowercased()
         var matches: [String] = []
 
         for block in blocks {
@@ -150,14 +149,13 @@ enum DocumentSearch {
                 segments = []
             }
 
-            // Count individual occurrences across all segments
+            // Count individual occurrences across all segments — with the
+            // matcher `applyNSSearchHighlight` draws with, so a text row's
+            // count is its number of highlights (a length-changing lowercase,
+            // "İ", switches both to `.caseInsensitive` on the original).
             for segment in segments {
-                let textLower = segment.lowercased()
-                var searchStart = textLower.startIndex
-                while let range = textLower.range(of: searchLower, range: searchStart..<textLower.endIndex) {
-                    matches.append(block.id)
-                    searchStart = range.upperBound
-                }
+                let count = searchMatchRanges(in: segment, term: term).count
+                matches.append(contentsOf: repeatElement(block.id, count: count))
             }
         }
 

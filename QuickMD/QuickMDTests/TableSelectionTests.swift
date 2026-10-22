@@ -56,20 +56,21 @@ final class TableSelectionTests: XCTestCase {
         return (block, table(block)!)
     }
 
-    /// 1.12's whole-table copy for `block` (what `SelectionRows.pieces` hands
-    /// `tablePiece` as `whole`).
+    /// 1.12's whole-table copy for `block`, built as 1.12 built it (each
+    /// cell's markdown rendered again, the header only when shown) — the
+    /// parity oracle for `SelectionRows`, which reads the built cells.
     private func wholeTablePiece(_ block: MarkdownBlock) -> SelectionPiece {
         guard case .table(let headers, let rows, _) = block.content else { fatalError("not a table") }
-        let renderer = MarkdownRenderer(theme: theme)
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
         func rendered(_ cell: String) -> String { String(renderer.renderInline(cell).characters) }
-        return .table(headers: headers.map(rendered), rows: rows.map { $0.map(rendered) })
+        let showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        return .table(headers: showsHeader ? headers.map(rendered) : nil, rows: rows.map { $0.map(rendered) })
     }
 
     /// The copy of `covered` in the fixture table.
     private func copy(_ covered: NSRange, of fixture: (block: MarkdownBlock, text: TableText)? = nil) -> DocumentCopyOutput? {
         let fixture = fixture ?? tableBlock()
-        guard let piece = SelectionRows.tablePiece(fixture.text, covered: covered,
-                                                   whole: { wholeTablePiece(fixture.block) }) else { return nil }
+        guard let piece = SelectionRows.tablePiece(fixture.text, covered: covered) else { return nil }
         return DocumentCopyBuilder.build([piece])
     }
 
@@ -200,6 +201,49 @@ final class TableSelectionTests: XCTestCase {
         XCTAssertEqual(copy(NSRange(location: 0, length: length))?.plain, expected)
         // Ending right after the last cell's text (before its "\n") is still every cell.
         XCTAssertEqual(copy(NSRange(location: 0, length: length - 1))?.plain, expected)
+    }
+
+    /// The whole-table copy is read from the BUILT cells; on every kind of
+    /// cell content it is character for character what 1.12 produced by
+    /// rendering each cell's markdown again.
+    func testWholeTableCopyHas112ParityOnRichFixtures() {
+        let fixtures = [
+            """
+            | Feature | Description | Status |
+            |:--------|:-----------:|-------:|
+            | **Search** | See [the docs](https://example.com/docs) and *more* | `done` |
+            | Code | `let x = a \\| b` inline ~~old~~ | ok |
+            | Escaped | a \\| b | c |
+            """,
+            """
+            | A | B | C |
+            |---|---|---|
+            | 1 |
+            | 1 | 2 | 3 | 4 |
+            |  | x |
+            """,
+            """
+            | | | |
+            |---|---|---|
+            | a | **b** |
+            | [l](https://x.y) | `c` | $x$ |
+            """,
+            """
+            | Only | Header |
+            |---|---|
+            """,
+        ]
+        for markdown in fixtures {
+            let fixture = tableBlock(markdown)
+            let length = fixture.text.string.length
+            let oracle = DocumentCopyBuilder.build([wholeTablePiece(fixture.block)]).plain
+            let copied = DocumentCopyBuilder.build(SelectionRows.pieces(
+                of: DocumentSelection(anchor: SelectionPoint(row: 0, offset: 0),
+                                      focus: SelectionPoint(row: 0, offset: length)),
+                blocks: [fixture.block], text: text, table: table)).plain
+            XCTAssertEqual(copied, oracle, markdown)
+            XCTAssertFalse(copied.isEmpty, markdown)
+        }
     }
 
     func testHeaderlessTableCopiesWithoutAHeaderLine() {
@@ -442,6 +486,47 @@ final class TableSelectionTests: XCTestCase {
         textView.textStorage?.setAttributedString(string)
         textView.layoutManager?.ensureLayout(for: textView.textContainer!)
         return textView
+    }
+
+    /// TS-D6: a drag that leaves a TABLE's view (above the header, below the
+    /// last band, beside it) snaps to the nearest cell — the hook is asked
+    /// with the point clamped into the view — while a text row keeps its
+    /// edges (above = start, below = end).
+    func testHitOffsetOutsideATableSnapsToTheNearestCell() throws {
+        let built = tableBlock().text
+        let layout = built.layout
+        let textView = liveTextView(built.string, width: 600)
+        let height = TableTextBuilder.tableHeight(layoutManager: textView.layoutManager!,
+                                                  container: textView.textContainer!)
+        textView.setFrameSize(NSSize(width: 600, height: height))
+        let size = textView.bounds.size
+        let length = built.string.length
+        let hook = { (point: NSPoint) in textView.characterIndex(confinedToCellAt: point, layout: layout) }
+        func cell(_ point: NSPoint, isTable: Bool = true) -> (band: Int, column: Int)? {
+            layout.cell(containing: SelectionRows.hitOffset(at: point, viewSize: size, length: length,
+                                                            isTable: isTable, characterIndex: hook))
+        }
+        let header = try XCTUnwrap(textView.tableCellBounds(band: 0, column: 1, layout: layout))
+        let last = try XCTUnwrap(textView.tableCellBounds(band: layout.bandCount - 1, column: 1, layout: layout))
+        let band1 = try XCTUnwrap(textView.tableCellBounds(band: 1, column: 0, layout: layout))
+
+        for dy in [CGFloat(2), 30] {
+            let above = cell(NSPoint(x: header.midX, y: -dy))
+            XCTAssertEqual(above?.band, 0, "\(dy) pt above the header")
+            XCTAssertEqual(above?.column, 1, "\(dy) pt above the header")
+            let below = cell(NSPoint(x: last.midX, y: size.height + dy))
+            XCTAssertEqual(below?.band, layout.bandCount - 1, "\(dy) pt below the last band")
+            XCTAssertEqual(below?.column, 1, "\(dy) pt below the last band")
+        }
+        let beside = cell(NSPoint(x: -20, y: band1.midY))
+        XCTAssertEqual(beside?.band, 1)
+        XCTAssertEqual(beside?.column, 0)
+
+        // A text row (`isTable: false`): its edges, as before v1.13.
+        XCTAssertEqual(SelectionRows.hitOffset(at: NSPoint(x: header.midX, y: -2), viewSize: size, length: length,
+                                               isTable: false, characterIndex: hook), 0)
+        XCTAssertEqual(SelectionRows.hitOffset(at: NSPoint(x: last.midX, y: size.height + 2), viewSize: size,
+                                               length: length, isTable: false, characterIndex: hook), length)
     }
 
     private static let multiClickFixtures = [tableMarkdown, """

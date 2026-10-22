@@ -8,7 +8,7 @@ import AppKit
 /// 1. The string layout (TS-D4) — the row's selectable string, so its offsets
 ///    are what the document selection, copy and search index into: header band
 ///    first (only when shown), then rows, left to right; one paragraph per
-///    cell; ragged rows padded; `cellRanges` / `bandRange` / `cell(containing:)`.
+///    cell; ragged rows padded; `cellRanges` / bands / `cell(containing:)`.
 /// 2. Parity (TS-D3) — the row is `.exact`, so the measurer's height must be
 ///    the height the table really takes in a text view configured as
 ///    `TableTextView` is (`configureForSelfSizing` +
@@ -159,15 +159,22 @@ final class TableTextTests: XCTestCase {
         }
     }
 
-    func testBandRangeAndCellContaining() {
+    /// A band: from its first cell's location to its last cell's "\n" inclusive.
+    private func bandRange(_ layout: TableTextLayout, _ band: Int) -> NSRange {
+        let first = layout.cellRanges[band][0].location
+        return NSRange(location: first,
+                       length: NSMaxRange(layout.cellRanges[band][layout.columnCount - 1]) + 1 - first)
+    }
+
+    func testBandsAreContiguousAndCellContaining() {
         let built = TableTextBuilder.build(headers: ["H1", "H2"], rows: [["a", ""], ["bb", "c"]],
                                            alignments: [], theme: theme, fontScale: 1)
         // "H1\nH2\na\n\nbb\nc\n"
         let layout = built.layout
-        XCTAssertEqual(layout.bandRange(0), NSRange(location: 0, length: 6))
-        XCTAssertEqual(layout.bandRange(1), NSRange(location: 6, length: 3))
-        XCTAssertEqual(layout.bandRange(2), NSRange(location: 9, length: 5))
-        XCTAssertEqual(NSMaxRange(layout.bandRange(2)), built.string.length)
+        XCTAssertEqual(bandRange(layout, 0), NSRange(location: 0, length: 6))
+        XCTAssertEqual(bandRange(layout, 1), NSRange(location: 6, length: 3))
+        XCTAssertEqual(bandRange(layout, 2), NSRange(location: 9, length: 5))
+        XCTAssertEqual(NSMaxRange(bandRange(layout, 2)), built.string.length)
 
         let expected: [(Int, Int)] = [(0, 0), (0, 0), (0, 0), (0, 1), (0, 1), (0, 1),
                                       (1, 0), (1, 0), (1, 1),
@@ -240,9 +247,9 @@ final class TableTextTests: XCTestCase {
         XCTAssertEqual(carried?.string.string, build(t).string.string)
         XCTAssertEqual(carried?.layout, build(t).layout)
         XCTAssertTrue(carried?.matches(headers: t.headers, rows: t.rows, alignments: t.alignments,
-                                       fontScale: 1) ?? false)
+                                       theme: theme, fontScale: 1) ?? false)
         XCTAssertFalse(carried?.matches(headers: t.headers, rows: t.rows, alignments: t.alignments,
-                                        fontScale: 1.5) ?? true, "another zoom is another string")
+                                        theme: theme, fontScale: 1.5) ?? true, "another zoom is another string")
     }
 
     /// measurer row == laid-out view + outer padding, to the point, for every

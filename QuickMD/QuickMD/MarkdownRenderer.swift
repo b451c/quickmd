@@ -5,9 +5,10 @@ import AppKit
 // MARK: - Dual-Scope Styling
 //
 // Rendered AttributedStrings travel down TWO pipelines:
-//  • SwiftUI Text — table cells and the printable/PDF views read the
-//    SwiftUI-scope attributes;
-//  • NSTextView (TextBlockView) — text/heading/blockquote blocks convert via
+//  • SwiftUI Text — the printable/PDF views (`PrintableTableView` included)
+//    read the SwiftUI-scope attributes;
+//  • NSTextView (TextBlockView, TableTextView) — text/heading/blockquote
+//    blocks and on-screen table cells (since v1.13) convert via
 //    `NSAttributedString(_, including: \.appKit)`, which only carries
 //    AppKit-scope (+ Foundation) attributes.
 // Every style the renderer sets MUST stamp both scopes, or one pipeline
