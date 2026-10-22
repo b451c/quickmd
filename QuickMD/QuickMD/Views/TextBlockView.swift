@@ -29,42 +29,8 @@ final class BlockHeightCache {
 
 // MARK: - Shared NSTextView Search Highlight
 
-/// Search highlighting for NSTextView-hosted blocks (code + text + headings +
-/// blockquotes). Applied via the layout manager's temporary attributes — no
-/// rebuild of the text storage. Main-thread by convention (called from
-/// updateNSView); not @MainActor for older-SDK compatibility (see
-/// BlockHeightCache note).
-func applyNSSearchHighlight(in textView: NSTextView, term: String, focusedOccurrence: Int?) {
-    guard let layoutManager = textView.layoutManager,
-          let storage = textView.textStorage else { return }
-    let fullRange = NSRange(location: 0, length: storage.length)
-    layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
-
-    guard !term.isEmpty else { return }
-
-    let plain = storage.string as NSString
-    let needle = term.lowercased() as NSString
-    let lowerHaystack = (storage.string.lowercased()) as NSString
-    guard needle.length > 0, lowerHaystack.length >= needle.length else { return }
-
-    let yellow = NSColor.systemYellow.withAlphaComponent(0.55)
-    let orange = NSColor.systemOrange
-
-    var location = 0
-    var occurrenceIndex = 0
-    while location < lowerHaystack.length {
-        let searchRange = NSRange(location: location, length: lowerHaystack.length - location)
-        let found = lowerHaystack.range(of: needle as String, options: [], range: searchRange)
-        if found.location == NSNotFound { break }
-        let safeRange = NSIntersectionRange(found, NSRange(location: 0, length: plain.length))
-        if safeRange.length > 0 {
-            let color = (focusedOccurrence == occurrenceIndex) ? orange : yellow
-            layoutManager.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: safeRange)
-        }
-        location = found.location + max(found.length, 1)
-        occurrenceIndex += 1
-    }
-}
+// `applyNSSearchHighlight` (used by every NSTextView-hosted block) lives in
+// DocumentSearch.swift, next to the matcher `DocumentSearch` counts with.
 
 // MARK: - Text Block View
 

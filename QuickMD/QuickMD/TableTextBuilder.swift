@@ -136,14 +136,7 @@ enum TableTextBuilder {
     static func build(headers: [String], rows: [[String]], alignments: [TextAlignment],
                       theme: MarkdownTheme, fontScale: CGFloat) -> TableText {
         let renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
-        // The separator row is authoritative (constraints.md "Tables"); ragged
-        // rows widen the table rather than lose cells.
-        let columnCount = max(1, max(headers.count, alignments.count, rows.map(\.count).max() ?? 0))
-        let showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-
-        var bands: [[String]] = []
-        if showsHeader { bands.append(headers) }
-        bands.append(contentsOf: rows)
+        let (columnCount, showsHeader, bands) = grid(headers: headers, rows: rows, alignments: alignments)
 
         let table = NSTextTable()
         table.numberOfColumns = columnCount
@@ -172,15 +165,7 @@ enum TableTextBuilder {
             var ranges: [NSRange] = []
             ranges.reserveCapacity(columnCount)
             for column in 0..<columnCount {
-                let text = column < band.count ? band[column] : ""
-                let cell = NSMutableAttributedString(
-                    attributedString: (try? NSAttributedString(renderer.renderInline(text), including: \.appKit))
-                        ?? NSAttributedString(string: text))
-                // One paragraph per cell is the layout's invariant (TS-D4). A
-                // table row is one source line, so this never fires today; it
-                // keeps the invariant if the renderer ever emits a break.
-                cell.mutableString.replaceOccurrences(of: "\n", with: " ", options: [],
-                                                      range: NSRange(location: 0, length: cell.length))
+                let cell = renderedCell(column < band.count ? band[column] : "", renderer: renderer)
                 ranges.append(NSRange(location: result.length, length: cell.length))
                 cell.append(NSAttributedString(string: "\n", attributes: terminatorAttributes))
 
@@ -214,6 +199,54 @@ enum TableTextBuilder {
             string: result,
             layout: TableTextLayout(columnCount: columnCount, showsHeader: showsHeader, cellRanges: cellRanges),
             source: TableText.Source(headers: headers, rows: rows, alignments: alignments, fontScale: fontScale))
+    }
+
+    /// The characters of `build(...).string` — the cells' rendered text, each
+    /// followed by its "\n", in the same order — without building the table:
+    /// no `NSTextTable`, blocks or paragraph styles. `DocumentSearch` counts a
+    /// table's matches in this string when the measurer has no `TableText` for
+    /// the block, so the count is taken on exactly what the view shows (TS-D9).
+    /// Same `grid` and `renderedCell` as `build`, so the two cannot disagree;
+    /// pinned by `SearchTests`.
+    static func plainString(headers: [String], rows: [[String]], alignments: [TextAlignment],
+                            theme: MarkdownTheme, fontScale: CGFloat) -> String {
+        let renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
+        let (columnCount, _, bands) = grid(headers: headers, rows: rows, alignments: alignments)
+        var result = ""
+        for band in bands {
+            for column in 0..<columnCount {
+                result += renderedCell(column < band.count ? band[column] : "", renderer: renderer).string
+                result += "\n"
+            }
+        }
+        return result
+    }
+
+    /// The bands the string is made of: the header band only when it shows
+    /// (all-blank headers ⇒ no header band), then the rows. The separator row
+    /// is authoritative (constraints.md "Tables"); ragged rows widen the table
+    /// rather than lose cells.
+    private static func grid(headers: [String], rows: [[String]], alignments: [TextAlignment])
+        -> (columnCount: Int, showsHeader: Bool, bands: [[String]]) {
+        let columnCount = max(1, max(headers.count, alignments.count, rows.map(\.count).max() ?? 0))
+        let showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        var bands: [[String]] = []
+        if showsHeader { bands.append(headers) }
+        bands.append(contentsOf: rows)
+        return (columnCount, showsHeader, bands)
+    }
+
+    /// One cell's rendered text (AppKit scope), without its "\n".
+    private static func renderedCell(_ markdown: String, renderer: MarkdownRenderer) -> NSMutableAttributedString {
+        let cell = NSMutableAttributedString(
+            attributedString: (try? NSAttributedString(renderer.renderInline(markdown), including: \.appKit))
+                ?? NSAttributedString(string: markdown))
+        // One paragraph per cell is the layout's invariant (TS-D4). A table row
+        // is one source line, so this never fires today; it keeps the
+        // invariant if the renderer ever emits a break.
+        cell.mutableString.replaceOccurrences(of: "\n", with: " ", options: [],
+                                              range: NSRange(location: 0, length: cell.length))
+        return cell
     }
 
     /// The table's height in a laid-out container — the view's

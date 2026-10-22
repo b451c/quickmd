@@ -1341,8 +1341,15 @@ struct MarkdownView: View {
         // NSTextView wrappers via temporary attributes.)
         let generation = searchGeneration
         let blocks = cachedBlocks
+        // Tables are counted on the strings their views show; the measurer's
+        // are reused (no table rebuilt per keystroke) when they belong to
+        // these blocks — `computeMatches` checks that per table.
+        let measuredBlocks = measured
+        let currentTheme = theme
+        let scale = CGFloat(renderedFontScale)
         Task.detached(priority: .userInitiated) {
-            let results = DocumentSearch.computeMatches(in: blocks, term: term)
+            let results = DocumentSearch.computeMatches(in: blocks, term: term, tables: measuredBlocks.tables,
+                                                        theme: currentTheme, fontScale: scale)
             await MainActor.run {
                 guard generation == searchGeneration else { return }
                 matchBlockIds = results.matchBlockIds

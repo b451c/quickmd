@@ -38,8 +38,6 @@ struct TableTextBlockView: View {
 
         TableTextRepresentable(
             table: table,
-            headers: headers,
-            rows: rows,
             background: theme.backgroundColor,
             searchTerm: searchText,
             focusedOccurrence: focusedOccurrence,
@@ -55,9 +53,6 @@ struct TableTextBlockView: View {
 
 private struct TableTextRepresentable: NSViewRepresentable {
     let table: TableText
-    /// The cells' markdown, for the 1.12 search mapping (`applyTableSearchHighlight`).
-    let headers: [String]
-    let rows: [[String]]
     let background: Color
     let searchTerm: String
     let focusedOccurrence: Int?
@@ -99,8 +94,11 @@ private struct TableTextRepresentable: NSViewRepresentable {
         let searchChanged = (textView.lastSearchTerm != searchTerm) ||
                             (textView.lastFocusedOccurrence != focusedOccurrence)
         if textChanged || searchChanged {
-            applyTableSearchHighlight(in: textView, layout: table.layout, headers: headers, rows: rows,
-                                      term: searchTerm, focusedOccurrence: focusedOccurrence)
+            // The text rows' highlight on the whole table string: `DocumentSearch`
+            // counted this block on the same characters with the same matcher
+            // (TS-D9), so the focused occurrence is the n-th highlight in
+            // reading order.
+            applyNSSearchHighlight(in: textView, term: searchTerm, focusedOccurrence: focusedOccurrence)
             textView.lastSearchTerm = searchTerm
             textView.lastFocusedOccurrence = focusedOccurrence
         }
@@ -149,71 +147,5 @@ final class TableTextView: SelfSizingTextView {
             return super.selectionCharacterIndex(at: point)
         }
         return characterIndex(confinedToCellAt: point, layout: tableLayout)
-    }
-}
-
-// MARK: - Search highlight (1.12 semantics)
-
-/// Search highlighting for a table, with exactly 1.12's mapping (TS-T3 replaces
-/// it with `applyNSSearchHighlight` on the rendered string, TS-D9).
-///
-/// `DocumentSearch` counts a table's matches in the cells' MARKDOWN (headers
-/// first, then rows, left to right), so the block's focused occurrence is an
-/// index into those raw counts. Each cell therefore maps it to a cell-local
-/// index (`focused − occurrences in earlier cells`, if below this cell's raw
-/// count) and highlights the matches in its RENDERED text, the focused one
-/// orange — what 1.12's per-cell `searchHighlight` did. Main-thread by
-/// convention, like `applyNSSearchHighlight`.
-func applyTableSearchHighlight(in textView: NSTextView, layout: TableTextLayout,
-                               headers: [String], rows: [[String]],
-                               term: String, focusedOccurrence: Int?) {
-    guard let layoutManager = textView.layoutManager,
-          let storage = textView.textStorage else { return }
-    layoutManager.removeTemporaryAttribute(.backgroundColor,
-                                           forCharacterRange: NSRange(location: 0, length: storage.length))
-    guard !term.isEmpty, storage.length == layout.length else { return }
-
-    let needle = term.lowercased()
-    let string = storage.string as NSString
-    let yellow = NSColor.systemYellow.withAlphaComponent(0.55)
-    let orange = NSColor.systemOrange
-    var earlier = 0
-
-    func highlight(band: Int?, column: Int, markdown: String) {
-        let rawCount = countOccurrences(in: markdown, of: term)
-        defer { earlier += rawCount }
-        guard let band, band < layout.bandCount else { return }
-        let local = focusedOccurrence.map { $0 - earlier }.flatMap { (0..<rawCount).contains($0) ? $0 : nil }
-        let cell = layout.cellRanges[band][column]
-        guard cell.length > 0 else { return }
-        let haystack = string.substring(with: cell).lowercased() as NSString
-        var location = 0
-        var index = 0
-        while location < haystack.length {
-            let found = haystack.range(of: needle, options: [],
-                                       range: NSRange(location: location, length: haystack.length - location))
-            if found.location == NSNotFound { break }
-            let target = NSIntersectionRange(NSRange(location: cell.location + found.location, length: found.length),
-                                             cell)
-            if target.length > 0 {
-                layoutManager.addTemporaryAttribute(.backgroundColor, value: index == local ? orange : yellow,
-                                                    forCharacterRange: target)
-            }
-            location = found.location + max(found.length, 1)
-            index += 1
-        }
-    }
-
-    // 1.12 counted the header cells even when the band is hidden (all blank).
-    for column in 0..<layout.columnCount {
-        highlight(band: layout.showsHeader ? 0 : nil, column: column,
-                  markdown: column < headers.count ? headers[column] : "")
-    }
-    let firstRowBand = layout.showsHeader ? 1 : 0
-    for (index, row) in rows.enumerated() {
-        for column in 0..<layout.columnCount {
-            highlight(band: firstRowBand + index, column: column,
-                      markdown: column < row.count ? row[column] : "")
-        }
     }
 }
