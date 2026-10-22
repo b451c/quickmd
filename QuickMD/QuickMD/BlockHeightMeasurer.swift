@@ -234,6 +234,99 @@ enum BlockLayout {
         /// title at the same reduced width.
         static let copyButtonReservedWidth: CGFloat = copyButtonSpacing + copyButtonWidth
 
+        // MARK: Horizontal placement of the copy button
+
+        /// The width the title wraps at inside a heading row `rowWidth` wide —
+        /// the row minus the reserved strip, as the title's padding gives it.
+        static func titleWrapWidth(rowWidth: CGFloat) -> CGFloat {
+            BlockLayout.clampedWidth(rowWidth - copyButtonReservedWidth)
+        }
+
+        /// Leading edge of the copy button, from the row's leading edge.
+        ///
+        /// v1.10's `HStack { Text(title); button; Spacer }` put the button
+        /// `copyButtonSpacing` after the title's widest laid-out line; the
+        /// overlay reproduces that. Clamped to the row's trailing edge (and to
+        /// zero for a row narrower than the button), so a title that fills its
+        /// line lands the button where it sat in v1.11–1.13. The reserved strip
+        /// keeps the title off the button in every case.
+        static func copyButtonLeading(titleUsedWidth: CGFloat, rowWidth: CGFloat) -> CGFloat {
+            max(0, min(titleUsedWidth + copyButtonSpacing, rowWidth - copyButtonWidth))
+        }
+
+        /// Width of the widest line TextKit 1 lays `title` out in at
+        /// `wrapWidth` — the same settings the title's `SelfSizingTextView`
+        /// uses (`lineFragmentPadding = 0`, unbounded height).
+        static func titleUsedWidth(_ title: NSAttributedString, wrapWidth: CGFloat) -> CGFloat {
+            let storage = NSTextStorage(attributedString: title)
+            let layoutManager = NSLayoutManager()
+            let container = NSTextContainer(size: NSSize(width: max(0, wrapWidth),
+                                                        height: CGFloat.greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            container.widthTracksTextView = false
+            container.heightTracksTextView = false
+            layoutManager.addTextContainer(container)
+            storage.addLayoutManager(layoutManager)
+            layoutManager.ensureLayout(for: container)
+            var widest: CGFloat = 0
+            layoutManager.enumerateLineFragments(
+                forGlyphRange: NSRange(location: 0, length: layoutManager.numberOfGlyphs)
+            ) { _, usedRect, _, _, _ in
+                widest = max(widest, usedRect.maxX)
+            }
+            return ceil(widest)
+        }
+
+        /// The cache key for a heading title's layout: exactly the inputs that
+        /// decide its laid-out width — the title, the level, the zoom and the
+        /// document fonts. Colours (theme, light/dark) and the parse version do
+        /// not change a glyph's advance, so they stay out: a reload, a Source
+        /// Edit save or a theme switch keeps hitting the same entry.
+        static func titleLayoutKey(title: String, level: Int, fontScale: CGFloat,
+                                   fonts: DocumentFonts) -> String {
+            "\(level)|\(fontScale)|\(fonts.body ?? "")|\(fonts.code ?? "")|\(title)"
+        }
+
+        /// `titleUsedWidth` behind two caches, for `HeadingBlockView.body`: a
+        /// hover toggle re-evaluates the body and must cost a lookup, and a
+        /// live-resize step must cost one TextKit layout — the converted title
+        /// is width-independent, so it is cached once per `key`
+        /// (`titleLayoutKey`) and only the used width is cached per wrap width.
+        /// `makeTitle` runs when the string is not cached. The cached string
+        /// may carry another theme's colours; it is only ever measured. NSCache
+        /// is thread-safe and evicts under memory pressure.
+        static func titleUsedWidth(cachedAs key: String, wrapWidth: CGFloat,
+                                   makeTitle: () -> NSAttributedString) -> CGFloat {
+            let widthKey = "\(wrapWidth)|\(key)" as NSString
+            if let hit = usedWidthCache.object(forKey: widthKey) {
+                return CGFloat(hit.doubleValue)
+            }
+            let titleKey = key as NSString
+            let title: NSAttributedString
+            if let cached = titleCache.object(forKey: titleKey) {
+                title = cached
+            } else {
+                title = makeTitle()
+                titleCache.setObject(title, forKey: titleKey)
+            }
+            let width = titleUsedWidth(title, wrapWidth: wrapWidth)
+            usedWidthCache.setObject(NSNumber(value: Double(width)), forKey: widthKey)
+            return width
+        }
+
+        private static let titleCache: NSCache<NSString, NSAttributedString> = {
+            let cache = NSCache<NSString, NSAttributedString>()
+            cache.countLimit = 1024
+            return cache
+        }()
+
+        private static let usedWidthCache: NSCache<NSString, NSNumber> = {
+            let cache = NSCache<NSString, NSNumber>()
+            // A few hundred visible headings × a handful of widths per resize.
+            cache.countLimit = 2048
+            return cache
+        }()
+
         /// Vertical placement of a heading's title and its copy button.
         ///
         /// Until v1.11 the heading was `HStack(alignment: .firstTextBaseline)
@@ -932,8 +1025,7 @@ enum BlockHeightMeasurer {
         let attributed = renderer.renderHeader(title, level: level)
         let ns = (try? NSAttributedString(attributed, including: \.appKit))
             ?? NSAttributedString(string: title)
-        let textWidth = BlockLayout.clampedWidth(contentWidth
-                                                 - BlockLayout.Heading.copyButtonReservedWidth)
+        let textWidth = BlockLayout.Heading.titleWrapWidth(rowWidth: contentWidth)
         return max(exactHeight(text: ns, width: textWidth), BlockLayout.Heading.copyButtonHeight)
     }
 

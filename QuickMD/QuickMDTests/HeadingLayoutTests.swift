@@ -239,6 +239,154 @@ final class HeadingLayoutTests: XCTestCase {
         }
     }
 
+    // MARK: - Copy button: right after the title (as in v1.10)
+
+    func testCopyButtonLeadingFollowsTheTitleAndStopsAtTheEdge() {
+        let s = Metrics.copyButtonSpacing
+        let w = Metrics.copyButtonWidth
+        XCTAssertEqual(Metrics.copyButtonLeading(titleUsedWidth: 0, rowWidth: 300), s)
+        XCTAssertEqual(Metrics.copyButtonLeading(titleUsedWidth: 120, rowWidth: 300), 120 + s)
+        // A title that fills its wrap width: the button sits at the trailing
+        // edge, where it was in v1.11–1.13.
+        let full = Metrics.titleWrapWidth(rowWidth: 300)
+        XCTAssertEqual(full, 300 - Metrics.copyButtonReservedWidth)
+        XCTAssertEqual(Metrics.copyButtonLeading(titleUsedWidth: full, rowWidth: 300), 300 - w)
+        // Never past the edge, never negative.
+        XCTAssertEqual(Metrics.copyButtonLeading(titleUsedWidth: 500, rowWidth: 300), 300 - w)
+        XCTAssertEqual(Metrics.copyButtonLeading(titleUsedWidth: 10, rowWidth: w - 5), 0)
+    }
+
+    /// Real heading strings, H1–H6, 100 % / 150 %, a narrow column and the
+    /// reading-mode one: the button's leading edge is the widest laid-out
+    /// line + spacing — cross-checked against `usedRect(for:)` of a separate
+    /// TextKit stack and, for single lines, CoreText's typographic width —
+    /// and a wrapped title keeps it inside the row.
+    func testCopyButtonSitsAfterTheTitlesWidestLine() {
+        let titles = ["Heading", "Title with `code` and [a link](https://example.com)",
+                      "Emoji \u{1F680} heading", Self.longTitle]
+        var singleLines = 0
+        var wrapped = 0
+        for fonts in [DocumentFonts.system, DocumentFonts(body: "Georgia", code: nil)] {
+            var theme = MarkdownTheme.cached(for: .light)
+            theme.fonts = fonts
+            for scale in [1.0, 1.5] as [CGFloat] {
+                for level in 1...6 {
+                    for title in titles {
+                        let (_, ns) = headingString(title, level: level, theme: theme, fontScale: scale)
+                        for width in [300, 700] as [CGFloat] {
+                            let wrapWidth = Metrics.titleWrapWidth(rowWidth: width)
+                            let used = Metrics.titleUsedWidth(ns, wrapWidth: wrapWidth)
+                            let leading = Metrics.copyButtonLeading(titleUsedWidth: used, rowWidth: width)
+                            let lines = lineCount(ns, width: wrapWidth)
+                            let context = "H\(level) @\(scale) \(fonts) w=\(width) lines=\(lines) '\(title)'"
+
+                            XCTAssertEqual(used, independentUsedWidth(ns, width: wrapWidth), accuracy: 1, context)
+                            XCTAssertLessThanOrEqual(used, wrapWidth, context)
+                            XCTAssertLessThanOrEqual(leading, width - Metrics.copyButtonWidth, context)
+                            if lines == 1 {
+                                singleLines += 1
+                                let line = CTLineCreateWithAttributedString(ns)
+                                let typographic = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+                                XCTAssertEqual(used, typographic, accuracy: 1, context)
+                                XCTAssertEqual(leading, used + Metrics.copyButtonSpacing, context)
+                            } else {
+                                wrapped += 1
+                                XCTAssertEqual(leading, min(used + Metrics.copyButtonSpacing,
+                                                            width - Metrics.copyButtonWidth), context)
+                                // After the widest line, i.e. well into the row.
+                                XCTAssertGreaterThan(leading, wrapWidth / 2, context)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        XCTAssertGreaterThan(singleLines, 0)
+        XCTAssertGreaterThan(wrapped, 0)
+    }
+
+    /// The cached lookup the view uses returns the uncached answer, builds the
+    /// string once per key — a new wrap width (a resize step) re-lays it out
+    /// without converting it again — and keys the width on the wrap width.
+    func testCachedTitleUsedWidthMatchesAndBuildsOnce() {
+        let (_, ns) = headingString("Cached heading", level: 2,
+                                    theme: MarkdownTheme.cached(for: .light), fontScale: 1)
+        let key = "test|\(UUID().uuidString)"
+        var builds = 0
+        let make: () -> NSAttributedString = { builds += 1; return ns }
+        let first = Metrics.titleUsedWidth(cachedAs: key, wrapWidth: 400, makeTitle: make)
+        let second = Metrics.titleUsedWidth(cachedAs: key, wrapWidth: 400, makeTitle: make)
+        XCTAssertEqual(first, Metrics.titleUsedWidth(ns, wrapWidth: 400))
+        XCTAssertEqual(second, first)
+        XCTAssertEqual(builds, 1)
+        let narrow = Metrics.titleUsedWidth(cachedAs: key, wrapWidth: 60, makeTitle: make)
+        XCTAssertEqual(builds, 1)
+        XCTAssertEqual(narrow, Metrics.titleUsedWidth(ns, wrapWidth: 60))
+        XCTAssertLessThan(narrow, first)
+    }
+
+    /// The layout key holds exactly what decides the title's width: inputs
+    /// that only colour it (light/dark theme) or re-parse it share an entry;
+    /// a different title, level, zoom or font family does not.
+    func testTitleLayoutKeySharesOnlyWidthIrrelevantInputs() {
+        let title = "Key heading \(UUID().uuidString)"
+        let light = MarkdownTheme.cached(for: .light)
+        let dark = MarkdownTheme.cached(for: .dark)
+        func key(_ title: String, _ level: Int, _ scale: CGFloat, _ theme: MarkdownTheme) -> String {
+            Metrics.titleLayoutKey(title: title, level: level, fontScale: scale, fonts: theme.fonts)
+        }
+        var builds = 0
+        func lookup(_ key: String, _ theme: MarkdownTheme, _ level: Int, _ scale: CGFloat,
+                    _ title: String) -> CGFloat {
+            Metrics.titleUsedWidth(cachedAs: key, wrapWidth: 500) {
+                builds += 1
+                return headingString(title, level: level, theme: theme, fontScale: scale).1
+            }
+        }
+
+        let base = lookup(key(title, 2, 1, light), light, 2, 1, title)
+        XCTAssertEqual(builds, 1)
+        // Dark theme: other colours, same key, same entry, no rebuild.
+        XCTAssertEqual(key(title, 2, 1, dark), key(title, 2, 1, light))
+        XCTAssertEqual(lookup(key(title, 2, 1, dark), dark, 2, 1, title), base)
+        XCTAssertEqual(builds, 1)
+
+        var georgia = light
+        georgia.fonts = DocumentFonts(body: "Georgia", code: nil)
+        var mono = light
+        mono.fonts = DocumentFonts(body: nil, code: "Menlo")
+        let changed: [(String, MarkdownTheme, Int, CGFloat, String)] = [
+            ("title", light, 2, 1, title + " longer"),
+            ("level", light, 1, 1, title),
+            ("scale", light, 2, 1.5, title),
+            ("body font", georgia, 2, 1, title),
+            ("code font", mono, 2, 1, title),
+        ]
+        var keys: Set<String> = [key(title, 2, 1, light)]
+        for (name, theme, level, scale, changedTitle) in changed {
+            let changedKey = key(changedTitle, level, scale, theme)
+            XCTAssertTrue(keys.insert(changedKey).inserted, "\(name) must change the key")
+            let before = builds
+            let width = lookup(changedKey, theme, level, scale, changedTitle)
+            XCTAssertEqual(builds, before + 1, "\(name) must not reuse the entry")
+            XCTAssertEqual(width, Metrics.titleUsedWidth(
+                headingString(changedTitle, level: level, theme: theme, fontScale: scale).1,
+                wrapWidth: 500), name)
+        }
+    }
+
+    /// The widest line as a fresh TextKit stack's `usedRect(for:)` reports it.
+    private func independentUsedWidth(_ ns: NSAttributedString, width: CGFloat) -> CGFloat {
+        let storage = NSTextStorage(attributedString: ns)
+        let layoutManager = NSLayoutManager()
+        storage.addLayoutManager(layoutManager)
+        let container = NSTextContainer(size: NSSize(width: width, height: CGFloat.greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+        layoutManager.ensureLayout(for: container)
+        return layoutManager.usedRect(for: container).maxX
+    }
+
     /// Lines TextKit breaks `ns` into at `width`.
     private func lineCount(_ ns: NSAttributedString, width: CGFloat) -> Int {
         let storage = NSTextStorage(attributedString: ns)
