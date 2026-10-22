@@ -276,17 +276,26 @@ enum BlockLayout {
 
     // MARK: Tables
 
+    /// Since v1.13 a table is one NSTextView over an `NSTextTable` built by
+    /// `TableTextBuilder`; the builder (cell paddings, rules, font) and
+    /// `TableTextView` (clip, outline) read these, and the row is `.exact`.
     enum Table {
         static let cellHorizontalPadding: CGFloat = 12
         static let headerCellVerticalPadding: CGFloat = 8
         static let cellVerticalPadding: CGFloat = 6
-        /// Vertical rule between columns.
+        /// Vertical rule between columns (a cell's trailing border).
         static let dividerWidth: CGFloat = 1
-        /// Horizontal rule under the header and between rows.
+        /// Horizontal rule under the header and between rows (a cell's bottom
+        /// border).
         static let separatorHeight: CGFloat = 1
-        /// The rounded outline around the whole table.
+        /// The rounded outline around the whole table, centred on its edge.
         static let borderWidth: CGFloat = 1
-        static let cellFontSize: CGFloat = 13
+        /// Every cell, header included, at this size × zoom, regular weight:
+        /// the size `MarkdownRenderer.renderInline` stamps on each run, i.e.
+        /// what 1.12 actually drew (its 13 pt / semibold header modifiers lost
+        /// to the runs' own font). The builder gives each cell's terminating
+        /// "\n" this font too, so an empty cell is one line of it.
+        static let cellFontSize: CGFloat = 14
         static let cornerRadius: CGFloat = 4
     }
 
@@ -577,6 +586,10 @@ struct MeasuredBlocks: @unchecked Sendable {
     /// Keyed by `MarkdownBlock.id`, for the blocks whose text renders through
     /// `TextBlockView` (paragraphs/footnotes, quote bodies, alert bodies).
     let converted: [String: NSAttributedString]
+    /// Keyed by `MarkdownBlock.id`, for every `.table` block: the string and
+    /// cell layout the row was measured with, which `TableTextView` installs
+    /// as is (same D12 hand-off as `converted`).
+    let tables: [String: TableText]
     /// Rows whose height could not be computed because `measure` was called
     /// without the math engine (`math: nil` — the off-main call, see the file
     /// header): paragraphs containing inline `$…$` and `.mathBlock` rows. Their
@@ -586,7 +599,7 @@ struct MeasuredBlocks: @unchecked Sendable {
     /// got a real engine.
     let mathPendingRows: [Int]
 
-    static let empty = MeasuredBlocks(table: .empty, converted: [:], mathPendingRows: [])
+    static let empty = MeasuredBlocks(table: .empty, converted: [:], tables: [:], mathPendingRows: [])
 }
 
 // MARK: - Measurer
@@ -594,10 +607,10 @@ struct MeasuredBlocks: @unchecked Sendable {
 /// Computes a whole document's `BlockHeightTable` off the main thread.
 ///
 /// Exact for the NSTextView-backed kinds (`.text`, `.blockquote`, `.alert`,
-/// `.codeBlock`): the same string, the same width, the same TextKit 1 settings.
-/// An estimate for the kinds whose size only exists once a view is placed
-/// (`.heading`, `.table`, `.mathBlock`, `.image`, `.mermaidDiagram`) — those rows
-/// are `.reported` and get corrected once by the placed view.
+/// `.codeBlock`, and since v1.13 `.table`): the same string, the same width, the
+/// same TextKit 1 settings. An estimate for the kinds whose size only exists once
+/// a view is placed (`.heading`, `.mathBlock`, `.image`, `.mermaidDiagram`) —
+/// those rows are `.reported` and get corrected once by the placed view.
 enum BlockHeightMeasurer {
 
     /// Height of `ns` laid out at `width` by a standalone TextKit 1 stack.
@@ -682,6 +695,7 @@ enum BlockHeightMeasurer {
         var heights: [CGFloat] = []
         var kinds: [RowKind] = []
         var converted: [String: NSAttributedString] = [:]
+        var tables: [String: TableText] = [:]
         var mathPendingRows: [Int] = []
         heights.reserveCapacity(blocks.count)
         kinds.reserveCapacity(blocks.count)
@@ -752,10 +766,14 @@ enum BlockHeightMeasurer {
                 kinds.append(.reported)
 
             case .table(let headers, let rows, let alignments):
-                heights.append(tableEstimate(headers: headers, rows: rows, alignments: alignments,
-                                             renderer: renderer, theme: theme, fontScale: fontScale,
-                                             contentWidth: contentWidth))
-                kinds.append(.reported)
+                // The string `TableTextView` installs (it is handed this very
+                // instance), at the width its frame gets: the whole column.
+                let table = TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
+                                                   theme: theme, fontScale: fontScale)
+                tables[block.id] = table
+                heights.append(TableTextBuilder.height(of: table.string, width: textWidth)
+                               + 2 * BlockLayout.Document.tableOuterVerticalPadding)
+                kinds.append(.exact)
 
             case .mathBlock(let latex):
                 if let math {
@@ -800,6 +818,7 @@ enum BlockHeightMeasurer {
         return MeasuredBlocks(
             table: BlockHeightTable(heights: heights, kinds: kinds, contentWidth: contentWidth),
             converted: converted,
+            tables: tables,
             mathPendingRows: mathPendingRows)
     }
 
@@ -842,7 +861,7 @@ enum BlockHeightMeasurer {
                                 reusing: [String: NSAttributedString] = [:]) -> MeasuredBlocks {
         guard !pending.isEmpty else {
             return MeasuredBlocks(table: measured.table, converted: measured.converted,
-                                  mathPendingRows: [])
+                                  tables: measured.tables, mathPendingRows: [])
         }
 
         #if DEBUG
@@ -894,6 +913,7 @@ enum BlockHeightMeasurer {
             table: BlockHeightTable(heights: heights, kinds: measured.table.kinds,
                                     contentWidth: measured.table.contentWidth),
             converted: converted,
+            tables: measured.tables,
             mathPendingRows: [])
     }
 
@@ -915,47 +935,6 @@ enum BlockHeightMeasurer {
         let textWidth = BlockLayout.clampedWidth(contentWidth
                                                  - BlockLayout.Heading.copyButtonReservedWidth)
         return max(exactHeight(text: ns, width: textWidth), BlockLayout.Heading.copyButtonHeight)
-    }
-
-    /// `.table` — cells are SwiftUI `Text`, laid out in equal-width columns.
-    /// TextKit per cell is affordable because tables are rare and small.
-    private static func tableEstimate(headers: [String], rows: [[String]],
-                                      alignments: [TextAlignment],
-                                      renderer: MarkdownRenderer,
-                                      theme: MarkdownTheme, fontScale: CGFloat,
-                                      contentWidth: CGFloat) -> CGFloat {
-        let columnCount = max(1, max(headers.count, alignments.count, rows.map(\.count).max() ?? 0))
-        let showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        let dividers = CGFloat(columnCount - 1) * BlockLayout.Table.dividerWidth
-        let columnWidth = (contentWidth - dividers) / CGFloat(columnCount)
-        let cellWidth = BlockLayout.clampedWidth(columnWidth - 2 * BlockLayout.Table.cellHorizontalPadding)
-        // Floor: an empty cell still occupies one line in SwiftUI, where an
-        // empty text container reports no used height.
-        let minCellHeight = BlockLayout.singleLineHeight(
-            for: theme.fonts.appKit(size: BlockLayout.Table.cellFontSize * fontScale))
-
-        func bandHeight(_ cells: [String], padding: CGFloat) -> CGFloat {
-            var tallest = minCellHeight
-            for index in 0..<columnCount {
-                let text = index < cells.count ? cells[index] : ""
-                guard !text.isEmpty else { continue }
-                let ns = (try? NSAttributedString(renderer.renderInline(text), including: \.appKit))
-                    ?? NSAttributedString(string: text)
-                tallest = max(tallest, exactHeight(text: ns, width: cellWidth))
-            }
-            return tallest + 2 * padding
-        }
-
-        var height = 2 * BlockLayout.Document.tableOuterVerticalPadding
-        if showsHeader {
-            height += bandHeight(headers, padding: BlockLayout.Table.headerCellVerticalPadding)
-            height += BlockLayout.Table.separatorHeight
-        }
-        for (index, row) in rows.enumerated() {
-            height += bandHeight(row, padding: BlockLayout.Table.cellVerticalPadding)
-            if index < rows.count - 1 { height += BlockLayout.Table.separatorHeight }
-        }
-        return height
     }
 
 }

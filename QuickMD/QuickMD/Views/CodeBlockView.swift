@@ -309,7 +309,10 @@ private struct CodeTextView: NSViewRepresentable {
 
 /// Read-only NSTextView whose height is a pure function of the proposed width,
 /// answered synchronously from the wrapper's `sizeThatFits` via
-/// `size(fitting:)`. Used by `CodeTextView` and `BlockTextView`.
+/// `size(fitting:)`. Used by `CodeTextView` and `BlockTextView`, and subclassed
+/// by `TableTextView` (v1.13), which overrides only the two hooks below
+/// (`layoutHeight`, `selectionCharacterIndex`) so a table row shares every
+/// piece of the selection plumbing with the text rows.
 ///
 /// Measurement runs on a *second* layout manager attached to the same text
 /// storage (`measureLayoutManager`), never on the display container: the
@@ -328,7 +331,7 @@ private struct CodeTextView: NSViewRepresentable {
 /// measured the text and pushed it into SwiftUI `@State` (`.frame(height:)`)
 /// on the next runloop turn, so every freshly created block changed size after
 /// appearing. See constraints.md ("Block heights are synchronous").
-final class SelfSizingTextView: NSTextView {
+class SelfSizingTextView: NSTextView {
     /// Identity reference to the last-applied attributed string. Lets the wrapper
     /// short-circuit `updateNSView` work when SwiftUI hands us the same instance.
     var cachedAttributed: NSAttributedString?
@@ -372,9 +375,16 @@ final class SelfSizingTextView: NSTextView {
         let lm = measureLayoutManager
         measureContainer.containerSize = NSSize(width: width, height: CGFloat.greatestFiniteMagnitude)
         lm.ensureLayout(for: measureContainer)
-        measuredHeight = ceil(lm.usedRect(for: measureContainer).height)
+        measuredHeight = layoutHeight(layoutManager: lm, container: measureContainer)
         measuredWidth = width
         return measuredHeight
+    }
+
+    /// The height of the laid-out text in `container`: `ceil(usedRect)`.
+    /// Overridden by `TableTextView`, whose string ends in an extra line
+    /// fragment that is not part of the table (`TableTextBuilder.tableHeight`).
+    func layoutHeight(layoutManager: NSLayoutManager, container: NSTextContainer) -> CGFloat {
+        ceil(layoutManager.usedRect(for: container).height)
     }
 
     /// `sizeThatFits` implementation shared by both wrappers. A concrete width
@@ -420,6 +430,13 @@ final class SelfSizingTextView: NSTextView {
     /// UTF-16 length of the displayed string — the row length the selection's
     /// offsets index into.
     var selectionTextLength: Int { textStorage?.length ?? 0 }
+
+    /// The selection's hit-test hook (v1.13 TS-D6): the insertion index for
+    /// `point`, in view coordinates. TextKit's own answer for text rows;
+    /// `TableTextView` confines it to the cell under the point.
+    func selectionCharacterIndex(at point: NSPoint) -> Int {
+        characterIndexForInsertion(at: point)
+    }
 
     /// Join (or move to) the document selection named by the environment the
     /// hosting cell injects. Called from every `updateNSView` — i.e. after

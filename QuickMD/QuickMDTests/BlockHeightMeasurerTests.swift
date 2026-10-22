@@ -414,10 +414,10 @@ final class BlockHeightMeasurerTests: XCTestCase {
             XCTAssertGreaterThan(height, 0, "block \(block.id) measured to \(height)")
 
             switch block.content {
-            case .text, .blockquote, .alert, .codeBlock:
+            case .text, .blockquote, .alert, .codeBlock, .table:
                 XCTAssertEqual(kind, .exact, "\(block.id) should be exact")
                 seen.insert(exemplar(block))
-            case .heading, .table, .mathBlock, .image, .mermaidDiagram, .svgImage:
+            case .heading, .mathBlock, .image, .mermaidDiagram, .svgImage:
                 XCTAssertEqual(kind, .reported, "\(block.id) should be reported")
                 seen.insert(exemplar(block))
             }
@@ -435,6 +435,12 @@ final class BlockHeightMeasurerTests: XCTestCase {
                 XCTAssertNotNil(measured.converted[block.id], "missing conversion for \(block.id)")
             default:
                 XCTAssertNil(measured.converted[block.id], "unexpected conversion for \(block.id)")
+            }
+            // …and table strings for exactly the tables (v1.13).
+            if case .table = block.content {
+                XCTAssertNotNil(measured.tables[block.id], "missing table string for \(block.id)")
+            } else {
+                XCTAssertNil(measured.tables[block.id], "unexpected table string for \(block.id)")
             }
         }
 
@@ -519,7 +525,7 @@ final class BlockHeightMeasurerTests: XCTestCase {
         XCTAssertGreaterThan(long, short)
     }
 
-    func testTableEstimateGrowsWithRows() {
+    func testTableHeightGrowsWithRows() {
         let twoRows = parse("| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |")
         let fiveRows = parse("| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n| 5 | 6 |\n| 7 | 8 |\n| 9 | 0 |")
         let small = measure(twoRows, width: 600).table.heights[0]

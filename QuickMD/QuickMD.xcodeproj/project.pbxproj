@@ -24,8 +24,11 @@
 		A1B2C3D401000009 /* MarkdownExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000C /* MarkdownExport.swift */; };
 		A1B2C3D40100000A /* MarkdownBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000D /* MarkdownBlock.swift */; };
 		A1B2C3D40100000B /* MarkdownBlockParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000E /* MarkdownBlockParser.swift */; };
-		A1B2C3D40100000C /* TableBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000000F /* TableBlockView.swift */; };
 		A1B2C3D40100000D /* CodeBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000011 /* CodeBlockView.swift */; };
+		A1B2C3D4010001B0 /* TableTextBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000001B0 /* TableTextBuilder.swift */; };
+		A1B2C3D4010001B1 /* TableTextBuilder.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000001B0 /* TableTextBuilder.swift */; };
+		A1B2C3D4010001B2 /* TableTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000001B1 /* TableTextView.swift */; };
+		A1B2C3D4010001B3 /* TableTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000001B2 /* TableTextTests.swift */; };
 		A1B2C3D40100000E /* ImageBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000012 /* ImageBlockView.swift */; };
 		A1B2C3D40100000F /* BlockquoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000013 /* BlockquoteView.swift */; };
 		A1B2C3D401000010 /* SearchBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000014 /* SearchBar.swift */; };
@@ -202,9 +205,11 @@
 		A1B2C3D40000000C /* MarkdownExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownExport.swift; sourceTree = "<group>"; };
 		A1B2C3D40000000D /* MarkdownBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlock.swift; sourceTree = "<group>"; };
 		A1B2C3D40000000E /* MarkdownBlockParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownBlockParser.swift; sourceTree = "<group>"; };
-		A1B2C3D40000000F /* TableBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableBlockView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000010 /* QuickMD.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = QuickMD.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D400000011 /* CodeBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeBlockView.swift; sourceTree = "<group>"; };
+		A1B2C3D4000001B0 /* TableTextBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableTextBuilder.swift; sourceTree = "<group>"; };
+		A1B2C3D4000001B1 /* TableTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableTextView.swift; sourceTree = "<group>"; };
+		A1B2C3D4000001B2 /* TableTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableTextTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000012 /* ImageBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageBlockView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000013 /* BlockquoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockquoteView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000014 /* SearchBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchBar.swift; sourceTree = "<group>"; };
@@ -313,6 +318,7 @@
 				A1B2C3D400000082 /* ImageLoadingTests.swift */,
 				A1B2C3D4000000E1 /* HTMLImageTests.swift */,
 				A1B2C3D4000000F0 /* HeadingLayoutTests.swift */,
+				A1B2C3D4000001B2 /* TableTextTests.swift */,
 				A1B2C3D4000000C1 /* DocumentSelectionTests.swift */,
 				A1B2C3D400000111 /* ExternalEditorLineTests.swift */,
 				A1B2C3D400000122 /* DocumentFileFormatTests.swift */,
@@ -339,6 +345,7 @@
 				A1B2C3D40000000D /* MarkdownBlock.swift */,
 				A1B2C3D40000000E /* MarkdownBlockParser.swift */,
 				A1B2C3D400000069 /* BlockHeightMeasurer.swift */,
+				A1B2C3D4000001B0 /* TableTextBuilder.swift */,
 				A1B2C3D40000006E /* SVGImageDecoder.swift */,
 				A1B2C3D400000080 /* DataImageURI.swift */,
 				A1B2C3D400000081 /* ImageLoader.swift */,
@@ -382,7 +389,7 @@
 		A1B2C3D403000004 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				A1B2C3D40000000F /* TableBlockView.swift */,
+				A1B2C3D4000001B1 /* TableTextView.swift */,
 				A1B2C3D400000011 /* CodeBlockView.swift */,
 				A1B2C3D400000012 /* ImageBlockView.swift */,
 				A1B2C3D400000013 /* BlockquoteView.swift */,
@@ -567,7 +574,6 @@
 				A1B2C3D401000006 /* MarkdownTheme.swift in Sources */,
 				A1B2C3D40100000A /* MarkdownBlock.swift in Sources */,
 				A1B2C3D40100000B /* MarkdownBlockParser.swift in Sources */,
-				A1B2C3D40100000C /* TableBlockView.swift in Sources */,
 				A1B2C3D40100000D /* CodeBlockView.swift in Sources */,
 				A1B2C3D40100000E /* ImageBlockView.swift in Sources */,
 				A1B2C3D401000007 /* TipJarManager.swift in Sources */,
@@ -629,6 +635,8 @@
 				A1B2C3D401000062 /* DocumentFonts.swift in Sources */,
 				A1B2C3D401000063 /* FontPickerView.swift in Sources */,
 				A1B2C3D401000069 /* BlockHeightMeasurer.swift in Sources */,
+				A1B2C3D4010001B0 /* TableTextBuilder.swift in Sources */,
+				A1B2C3D4010001B2 /* TableTextView.swift in Sources */,
 				A1B2C3D40100006C /* VirtualBlockList.swift in Sources */,
 				A1B2C3D40100006D /* SVGBlockView.swift in Sources */,
 				A1B2C3D40100006E /* SVGImageDecoder.swift in Sources */,
@@ -677,6 +685,7 @@
 				A1B2C3D401000068 /* ChromeHoverState.swift in Sources (Tests) */,
 				A1B2C3D40100006A /* BlockHeightMeasurerTests.swift in Sources */,
 				A1B2C3D40100006B /* BlockHeightMeasurer.swift in Sources (Tests) */,
+				A1B2C3D4010001B1 /* TableTextBuilder.swift in Sources (Tests) */,
 				A1B2C3D40100006F /* SVGImageDecoder.swift in Sources (Tests) */,
 				A1B2C3D401000081 /* DataImageURI.swift in Sources (Tests) */,
 				A1B2C3D401000083 /* ImageLoader.swift in Sources (Tests) */,
@@ -705,6 +714,7 @@
 				A1B2C3D401000181 /* SourceEditLanding.swift in Sources (Tests) */,
 				A1B2C3D401000182 /* SourceEditLandingTests.swift in Sources */,
 				A1B2C3D4010000F0 /* HeadingLayoutTests.swift in Sources */,
+				A1B2C3D4010001B3 /* TableTextTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

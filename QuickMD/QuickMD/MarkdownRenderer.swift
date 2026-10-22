@@ -591,7 +591,7 @@ struct MarkdownRenderer: Sendable {
 
     // MARK: - Inline Formatting (refactored into smaller methods)
 
-    /// Public method for rendering inline formatting (used by TableBlockView)
+    /// Public method for rendering inline formatting (table cells: `TableTextBuilder`, `PrintableTableView`)
     func renderInline(_ text: String) -> AttributedString {
         renderInlineFormatting(text)
     }

@@ -194,7 +194,7 @@ private struct BlockTextView: NSViewRepresentable {
     let focusedOccurrence: Int?
     let onLink: (URL) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onLink: onLink) }
+    func makeCoordinator() -> TextViewLinkDelegate { TextViewLinkDelegate(onLink: onLink) }
 
     func makeNSView(context: Context) -> SelfSizingTextView {
         let textView = SelfSizingTextView()
@@ -236,25 +236,31 @@ private struct BlockTextView: NSViewRepresentable {
         textView.attachSelection(context.environment.blockSelection)
     }
 
-    static func dismantleNSView(_ textView: SelfSizingTextView, coordinator: Coordinator) {
+    static func dismantleNSView(_ textView: SelfSizingTextView, coordinator: TextViewLinkDelegate) {
         textView.detachSelection()
     }
+}
 
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var onLink: (URL) -> Void
+// MARK: - Link delegate
 
-        init(onLink: @escaping (URL) -> Void) { self.onLink = onLink }
+/// The delegate of every NSTextView-backed row (text, headings, quote and alert
+/// bodies, tables): a link click — the document selection's click-through
+/// (`SelectionController` → `clicked(onLink:at:)`) — goes to `onLink`, i.e.
+/// `MarkdownView.handleLinkActivation`.
+final class TextViewLinkDelegate: NSObject, NSTextViewDelegate {
+    var onLink: (URL) -> Void
 
-        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-            if let url = link as? URL {
-                onLink(url)
-                return true
-            }
-            if let string = link as? String, let url = URL(string: string) {
-                onLink(url)
-                return true
-            }
-            return false
+    init(onLink: @escaping (URL) -> Void) { self.onLink = onLink }
+
+    func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+        if let url = link as? URL {
+            onLink(url)
+            return true
         }
+        if let string = link as? String, let url = URL(string: string) {
+            onLink(url)
+            return true
+        }
+        return false
     }
 }

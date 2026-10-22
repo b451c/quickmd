@@ -1903,7 +1903,7 @@ final class SelectionController: NSObject {
             switch block.content {
             case .table(let headers, let rows, _):
                 guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                // Same rule as `TableBlockView.showsHeader`: an all-blank header
+                // Same rule as `TableTextLayout.showsHeader`: an all-blank header
                 // row is not shown, so it is not copied either.
                 let showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
                 pieces.append(.table(headers: showsHeader ? headers.map(renderedCell) : nil,

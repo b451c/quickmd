@@ -976,11 +976,12 @@ struct MarkdownView: View {
     ///
     /// `NSViewRepresentable` is an environment boundary: nothing applied to the
     /// SwiftUI tree AROUND `VirtualBlockList` reaches the views inside its cells.
-    /// The link action matters — table cells render their links as SwiftUI
-    /// `Text` with a Foundation `.link` attribute, which SwiftUI opens
-    /// through `openURL`; without this they would bypass
-    /// `handleLinkActivation` (relative paths unresolved, `.md` files opened by
-    /// whatever app claims them, no confirmation for exotic schemes).
+    /// The link action matters — any SwiftUI `Text` with a Foundation `.link`
+    /// attribute inside a cell is opened by SwiftUI through `openURL`; without
+    /// this it would bypass `handleLinkActivation` (relative paths unresolved,
+    /// `.md` files opened by whatever app claims them, no confirmation for
+    /// exotic schemes). The NSTextView-backed rows (text, headings, tables
+    /// since v1.13) open links through their delegate's `onLink` instead.
     private func hostedBlockView(for block: MarkdownBlock) -> some View {
         blockView(for: block)
             .environment(\.openURL, OpenURLAction { url in
@@ -1028,8 +1029,12 @@ struct MarkdownView: View {
                 )
 
             case .table(let headers, let rows, let alignments):
-                TableBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme,
-                               fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc)
+                // One NSTextView over the measurer's own `TableText` (v1.13
+                // TS-D1/TS-D3) — an `.exact` row like the text kinds.
+                TableTextBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme,
+                                   fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc,
+                                   preconverted: measured.tables[block.id],
+                                   onLink: { handleLinkActivation($0) })
                     .padding(.vertical, Metrics.tableOuterVerticalPadding)
 
             case .codeBlock(let code, let language):
@@ -1133,8 +1138,10 @@ struct MarkdownView: View {
     // MARK: - Selectable strings (v1.11 S-D2)
 
     /// The string `block`'s text view displays — the string the document
-    /// selection's offsets index into — or nil for atomic rows (tables,
-    /// images, math, diagrams), which are selected whole.
+    /// selection's offsets index into — or nil for rows without one (images,
+    /// math, diagrams), which are selected whole. A table's is its
+    /// `TableTextBuilder` string (v1.13 TS-D4): cells in reading order, one
+    /// paragraph each.
     ///
     /// Built WITHOUT the view, so ⌘A + ⌘C works for rows that were never
     /// materialized. Each case is the same construction the block's view uses
@@ -1179,7 +1186,16 @@ struct MarkdownView: View {
             return TextBlockView.makeNSAttributedString(
                 from: MarkdownRenderer(theme: theme, fontScale: scale).renderHeader(title, level: level),
                 hasInlineMath: false, theme: theme, fontScale: scale)
-        case .table, .image, .svgImage, .mathBlock, .mermaidDiagram:
+        case .table(let headers, let rows, let alignments):
+            // The measurer's instance when it belongs to this parse; otherwise
+            // the same builder `TableTextBlockView` falls back to.
+            if installedVersion == contentVersion, let table = measured.tables[block.id],
+               table.matches(headers: headers, rows: rows, alignments: alignments, fontScale: scale) {
+                return table.string
+            }
+            return TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
+                                          theme: theme, fontScale: scale).string
+        case .image, .svgImage, .mathBlock, .mermaidDiagram:
             return nil
         }
     }
@@ -1274,6 +1290,7 @@ struct MarkdownView: View {
             table: BlockHeightTable(heights: heights, kinds: table.kinds,
                                     contentWidth: table.contentWidth),
             converted: measured.converted,
+            tables: measured.tables,
             mathPendingRows: measured.mathPendingRows)
     }
 
