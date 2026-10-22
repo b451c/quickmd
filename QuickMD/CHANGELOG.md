@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Full screen and Split View: opening another file adds a tab in place. Before, the tab group moved to a full-screen Space of its own, leaving the Split View broken, half the screen black and no menu bar. A full-screen window size is also no longer remembered as the size for new windows. Contributed by [@onemannoplan](https://github.com/onemannoplan) (#36).
 - The Support pill (GitHub build) no longer keeps a blue focus ring after a click when keyboard navigation is on in System Settings.
 - Search highlights no longer shift after letters that change length when lowercased (such as the Turkish dotted capital İ).
+- A heading's copy-section button sits right after the heading text again, as before 1.11 (it had moved to the far right of the column), and shows the arrow cursor.
 
 ## [1.12.0] - 2026-10-05
 
