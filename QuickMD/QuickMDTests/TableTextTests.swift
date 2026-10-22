@@ -199,16 +199,36 @@ final class TableTextTests: XCTestCase {
         XCTAssertEqual(TableTextBuilder.height(of: built.string, width: 500), 0)
     }
 
-    /// What 1.12 drew: the renderer's 14·scale regular in EVERY cell, header
-    /// included; header band background; rules on trailing/bottom edges only,
-    /// the header always keeping its bottom rule.
+    private func weight(of font: NSFont) -> CGFloat {
+        let traits = font.fontDescriptor.object(forKey: .traits) as? [NSFontDescriptor.TraitKey: Any]
+        return (traits?[.weight] as? CGFloat) ?? NSFont.Weight.regular.rawValue
+    }
+
+    /// The renderer's 14·scale in every cell: semibold in the header band
+    /// (v1.13), regular in the data bands (as 1.12 drew every cell); header
+    /// band background; rules on trailing/bottom edges only, the header always
+    /// keeping its bottom rule.
     func testCellFontsBackgroundsAndRules() {
         for scale in [CGFloat(0.75), 1.0, 1.5] {
             let built = build(table(Self.fixtures[0].markdown, fontScale: scale), fontScale: scale)
             built.string.enumerateAttribute(.font, in: NSRange(location: 0, length: built.string.length)) { value, range, _ in
                 guard let font = value as? NSFont else { return XCTFail("no font at \(range)") }
                 XCTAssertEqual(font.pointSize, BlockLayout.Table.cellFontSize * scale, accuracy: 0.001)
-                XCTAssertFalse(font.fontDescriptor.symbolicTraits.contains(.bold), "bold at \(range)")
+            }
+            // Cell text only: the "\n" terminators keep the plain font (never drawn).
+            for (band, cells) in built.layout.cellRanges.enumerated() {
+                for cell in cells {
+                    built.string.enumerateAttribute(.font, in: cell) { value, range, _ in
+                        guard let font = value as? NSFont else { return }
+                        if band == 0 {
+                            XCTAssertGreaterThanOrEqual(weight(of: font), NSFont.Weight.semibold.rawValue,
+                                                        "header at \(range)")
+                        } else {
+                            XCTAssertLessThan(weight(of: font), NSFont.Weight.semibold.rawValue, "data at \(range)")
+                            XCTAssertFalse(font.fontDescriptor.symbolicTraits.contains(.bold), "bold at \(range)")
+                        }
+                    }
+                }
             }
         }
         let built = build(table(Self.fixtures[0].markdown))
@@ -230,6 +250,31 @@ final class TableTextTests: XCTestCase {
         let headerStyle = headerOnly.string.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as! NSParagraphStyle
         XCTAssertEqual(headerStyle.textBlocks[0].width(for: .border, edge: .maxY), BlockLayout.Table.separatorHeight,
                        "the header separator is drawn even with no rows below it (as 1.12)")
+    }
+
+    /// The header weight only goes UP: bold stays bold, italic keeps its
+    /// slant, inline code stays monospaced — each at least semibold. The
+    /// characters do not change (search and copy read them).
+    func testHeaderMarkupKeepsItsFaceAndIsAtLeastSemibold() {
+        let built = build(table("""
+        | **Bold** | *Italic* | `code` | plain |
+        |---|---|---|---|
+        | a | b | c | d |
+        """))
+        let cells = built.layout.cellRanges[0]
+        func font(_ column: Int) -> NSFont {
+            built.string.attribute(.font, at: cells[column].location, effectiveRange: nil) as! NSFont
+        }
+        XCTAssertGreaterThanOrEqual(weight(of: font(0)), NSFont.Weight.bold.rawValue, "bold stays bold")
+        XCTAssertTrue(font(1).fontDescriptor.symbolicTraits.contains(.italic), "italic keeps its slant")
+        XCTAssertTrue(font(2).fontDescriptor.symbolicTraits.contains(.monoSpace), "code stays monospaced")
+        for column in 0..<4 {
+            XCTAssertGreaterThanOrEqual(weight(of: font(column)), NSFont.Weight.semibold.rawValue, "column \(column)")
+        }
+        XCTAssertEqual(built.string.string, "Bold\nItalic\ncode\nplain\na\nb\nc\nd\n")
+        XCTAssertLessThan(weight(of: built.string.attribute(.font, at: built.layout.cellRanges[1][3].location,
+                                                             effectiveRange: nil) as! NSFont),
+                          NSFont.Weight.semibold.rawValue)
     }
 
     // MARK: - Measurer (TS-D3)

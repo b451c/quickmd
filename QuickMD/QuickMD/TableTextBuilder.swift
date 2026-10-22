@@ -168,9 +168,10 @@ final class FullWidthTextTable: NSTextTable {
 /// - header cells get `headerBackgroundColor`; the table's own background, the
 ///   rounded clip and the outline are the hosting view's job.
 ///
-/// Font: every run carries the renderer's explicit `cellFontSize`·scale font,
-/// header included — that is what 1.12 drew (its `.font(13 [semibold])`
-/// modifiers lost to the runs' own font).
+/// Font: every run carries the renderer's explicit `cellFontSize`·scale font;
+/// header cells are raised to semibold (v1.13, the user's call). 1.12's
+/// SwiftUI view asked for a semibold header too, but its `.font` modifier lost
+/// to the runs' own font, so headers drew regular until v1.13.
 ///
 /// Pure: value types plus objects it creates, no actor isolation — safe off-main
 /// (the measurer calls it from the parse task).
@@ -211,6 +212,7 @@ enum TableTextBuilder {
             ranges.reserveCapacity(columnCount)
             for column in 0..<columnCount {
                 let cell = renderedCell(column < band.count ? band[column] : "", renderer: renderer)
+                if isHeader { raiseToHeaderWeight(cell) }
                 ranges.append(NSRange(location: result.length, length: cell.length))
                 cell.append(NSAttributedString(string: "\n", attributes: terminatorAttributes))
 
@@ -293,6 +295,31 @@ enum TableTextBuilder {
         cell.mutableString.replaceOccurrences(of: "\n", with: " ", options: [],
                                               range: NSRange(location: 0, length: cell.length))
         return cell
+    }
+
+    /// Header cells are semibold. Only raises the weight: a `**bold**` run
+    /// stays bold, italic and monospaced runs keep their face. A family
+    /// without a semibold face (a Settings font) falls back to its bold.
+    /// Attributes only — the characters (search, copy) are unchanged.
+    static func raiseToHeaderWeight(_ cell: NSMutableAttributedString) {
+        let semibold = NSFont.Weight.semibold.rawValue
+        func weight(of font: NSFont) -> CGFloat {
+            let traits = font.fontDescriptor.object(forKey: .traits) as? [NSFontDescriptor.TraitKey: Any]
+            return (traits?[.weight] as? CGFloat) ?? NSFont.Weight.regular.rawValue
+        }
+        cell.enumerateAttribute(.font, in: NSRange(location: 0, length: cell.length)) { value, range, _ in
+            guard let font = value as? NSFont, weight(of: font) < semibold else { return }
+            var traits = font.fontDescriptor.object(forKey: .traits) as? [NSFontDescriptor.TraitKey: Any] ?? [:]
+            traits[.weight] = semibold
+            let descriptor = font.fontDescriptor.addingAttributes([.traits: traits])
+            var raised = NSFont(descriptor: descriptor, size: font.pointSize) ?? font
+            if weight(of: raised) < semibold {
+                // Descriptor, not NSFontManager: build runs off-main (measurer).
+                let bold = font.fontDescriptor.withSymbolicTraits(font.fontDescriptor.symbolicTraits.union(.bold))
+                raised = NSFont(descriptor: bold, size: font.pointSize) ?? font
+            }
+            cell.addAttribute(.font, value: raised, range: range)
+        }
     }
 
     /// The table's height in a laid-out container — the view's

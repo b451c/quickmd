@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Select text inside tables:** a word, a whole cell (triple-click) or any range of cells, starting or ending anywhere in the document. A selection inside one cell copies as plain text, across cells as tab-separated values; a whole table copies exactly as before. Asked for by [@sporto](https://github.com/sporto) (#33).
 
 ### Changed
+- Table headers are semibold, so the first row reads as a header in light themes too. The table view always asked for it, but the cells' own font won and headers drew in the regular weight.
 - Search inside tables counts what the table shows: a term that appears only in Markdown markup or in a link's address is no longer counted (it was counted but never highlighted), and stepping with ⌘G follows the cells in reading order.
 
 ### Fixed
