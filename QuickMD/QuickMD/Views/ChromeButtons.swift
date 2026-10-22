@@ -84,6 +84,12 @@ struct HeadingBlockView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Copy section")
+                // The button lies on the title's text view, whose I-beam would
+                // otherwise show over the icon; re-set on every move, as the
+                // text view updates its cursor on mouse moves too.
+                .onContinuousHover { phase in
+                    if case .active = phase { NSCursor.arrow.set() }
+                }
                 .opacity(isHovered ? 1 : 0)
                 .padding(.top, geometry.buttonTopInset)
                 .padding(.leading, copyButtonLeading(rowWidth: proxy.size.width, headingAttr: headingAttr))
