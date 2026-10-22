@@ -306,7 +306,8 @@ final class HeadingLayoutTests: XCTestCase {
     }
 
     /// The cached lookup the view uses returns the uncached answer, builds the
-    /// string once per key, and keys on the wrap width.
+    /// string once per key — a new wrap width (a resize step) re-lays it out
+    /// without converting it again — and keys the width on the wrap width.
     func testCachedTitleUsedWidthMatchesAndBuildsOnce() {
         let (_, ns) = headingString("Cached heading", level: 2,
                                     theme: MarkdownTheme.cached(for: .light), fontScale: 1)
@@ -319,8 +320,59 @@ final class HeadingLayoutTests: XCTestCase {
         XCTAssertEqual(second, first)
         XCTAssertEqual(builds, 1)
         let narrow = Metrics.titleUsedWidth(cachedAs: key, wrapWidth: 60, makeTitle: make)
-        XCTAssertEqual(builds, 2)
+        XCTAssertEqual(builds, 1)
         XCTAssertEqual(narrow, Metrics.titleUsedWidth(ns, wrapWidth: 60))
+        XCTAssertLessThan(narrow, first)
+    }
+
+    /// The layout key holds exactly what decides the title's width: inputs
+    /// that only colour it (light/dark theme) or re-parse it share an entry;
+    /// a different title, level, zoom or font family does not.
+    func testTitleLayoutKeySharesOnlyWidthIrrelevantInputs() {
+        let title = "Key heading \(UUID().uuidString)"
+        let light = MarkdownTheme.cached(for: .light)
+        let dark = MarkdownTheme.cached(for: .dark)
+        func key(_ title: String, _ level: Int, _ scale: CGFloat, _ theme: MarkdownTheme) -> String {
+            Metrics.titleLayoutKey(title: title, level: level, fontScale: scale, fonts: theme.fonts)
+        }
+        var builds = 0
+        func lookup(_ key: String, _ theme: MarkdownTheme, _ level: Int, _ scale: CGFloat,
+                    _ title: String) -> CGFloat {
+            Metrics.titleUsedWidth(cachedAs: key, wrapWidth: 500) {
+                builds += 1
+                return headingString(title, level: level, theme: theme, fontScale: scale).1
+            }
+        }
+
+        let base = lookup(key(title, 2, 1, light), light, 2, 1, title)
+        XCTAssertEqual(builds, 1)
+        // Dark theme: other colours, same key, same entry, no rebuild.
+        XCTAssertEqual(key(title, 2, 1, dark), key(title, 2, 1, light))
+        XCTAssertEqual(lookup(key(title, 2, 1, dark), dark, 2, 1, title), base)
+        XCTAssertEqual(builds, 1)
+
+        var georgia = light
+        georgia.fonts = DocumentFonts(body: "Georgia", code: nil)
+        var mono = light
+        mono.fonts = DocumentFonts(body: nil, code: "Menlo")
+        let changed: [(String, MarkdownTheme, Int, CGFloat, String)] = [
+            ("title", light, 2, 1, title + " longer"),
+            ("level", light, 1, 1, title),
+            ("scale", light, 2, 1.5, title),
+            ("body font", georgia, 2, 1, title),
+            ("code font", mono, 2, 1, title),
+        ]
+        var keys: Set<String> = [key(title, 2, 1, light)]
+        for (name, theme, level, scale, changedTitle) in changed {
+            let changedKey = key(changedTitle, level, scale, theme)
+            XCTAssertTrue(keys.insert(changedKey).inserted, "\(name) must change the key")
+            let before = builds
+            let width = lookup(changedKey, theme, level, scale, changedTitle)
+            XCTAssertEqual(builds, before + 1, "\(name) must not reuse the entry")
+            XCTAssertEqual(width, Metrics.titleUsedWidth(
+                headingString(changedTitle, level: level, theme: theme, fontScale: scale).1,
+                wrapWidth: 500), name)
+        }
     }
 
     /// The widest line as a fresh TextKit stack's `usedRect(for:)` reports it.

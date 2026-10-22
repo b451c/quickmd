@@ -105,10 +105,11 @@ struct HeadingBlockView: View {
     /// The button's leading inset in a row `rowWidth` wide: right after the
     /// title's widest line at the width the title wraps at. The string is the
     /// one the title shows (the same conversion `MarkdownView.selectableText`
-    /// applies to headings); it is only built on a cache miss — the key pins
-    /// what decides its layout, so a hover toggle is a lookup.
+    /// applies to headings); it is built once per layout key and laid out
+    /// once per wrap width, so a hover toggle is a lookup.
     private func copyButtonLeading(rowWidth: CGFloat, headingAttr: AttributedString) -> CGFloat {
-        let key = "\(contentVersion)|\(level)|\(fontScale)|\(theme.fonts)|\(title)"
+        let key = Metrics.titleLayoutKey(title: title, level: level, fontScale: fontScale,
+                                         fonts: theme.fonts)
         let usedWidth = Metrics.titleUsedWidth(
             cachedAs: key, wrapWidth: Metrics.titleWrapWidth(rowWidth: rowWidth)
         ) {

@@ -277,22 +277,48 @@ enum BlockLayout {
             return ceil(widest)
         }
 
-        /// `titleUsedWidth` behind a cache, for `HeadingBlockView.body`: a
-        /// hover toggle re-evaluates the body, and that must not cost a
-        /// conversion plus a TextKit layout. `key` has to pin everything that
-        /// decides the laid-out string (content version, level, title, zoom,
-        /// fonts); the wrap width is appended here. `makeTitle` runs on a miss
-        /// only. NSCache is thread-safe and evicts under memory pressure.
+        /// The cache key for a heading title's layout: exactly the inputs that
+        /// decide its laid-out width — the title, the level, the zoom and the
+        /// document fonts. Colours (theme, light/dark) and the parse version do
+        /// not change a glyph's advance, so they stay out: a reload, a Source
+        /// Edit save or a theme switch keeps hitting the same entry.
+        static func titleLayoutKey(title: String, level: Int, fontScale: CGFloat,
+                                   fonts: DocumentFonts) -> String {
+            "\(level)|\(fontScale)|\(fonts.body ?? "")|\(fonts.code ?? "")|\(title)"
+        }
+
+        /// `titleUsedWidth` behind two caches, for `HeadingBlockView.body`: a
+        /// hover toggle re-evaluates the body and must cost a lookup, and a
+        /// live-resize step must cost one TextKit layout — the converted title
+        /// is width-independent, so it is cached once per `key`
+        /// (`titleLayoutKey`) and only the used width is cached per wrap width.
+        /// `makeTitle` runs when the string is not cached. The cached string
+        /// may carry another theme's colours; it is only ever measured. NSCache
+        /// is thread-safe and evicts under memory pressure.
         static func titleUsedWidth(cachedAs key: String, wrapWidth: CGFloat,
                                    makeTitle: () -> NSAttributedString) -> CGFloat {
-            let fullKey = "\(wrapWidth)|\(key)" as NSString
-            if let hit = usedWidthCache.object(forKey: fullKey) {
+            let widthKey = "\(wrapWidth)|\(key)" as NSString
+            if let hit = usedWidthCache.object(forKey: widthKey) {
                 return CGFloat(hit.doubleValue)
             }
-            let width = titleUsedWidth(makeTitle(), wrapWidth: wrapWidth)
-            usedWidthCache.setObject(NSNumber(value: Double(width)), forKey: fullKey)
+            let titleKey = key as NSString
+            let title: NSAttributedString
+            if let cached = titleCache.object(forKey: titleKey) {
+                title = cached
+            } else {
+                title = makeTitle()
+                titleCache.setObject(title, forKey: titleKey)
+            }
+            let width = titleUsedWidth(title, wrapWidth: wrapWidth)
+            usedWidthCache.setObject(NSNumber(value: Double(width)), forKey: widthKey)
             return width
         }
+
+        private static let titleCache: NSCache<NSString, NSAttributedString> = {
+            let cache = NSCache<NSString, NSAttributedString>()
+            cache.countLimit = 1024
+            return cache
+        }()
 
         private static let usedWidthCache: NSCache<NSString, NSNumber> = {
             let cache = NSCache<NSString, NSNumber>()
