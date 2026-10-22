@@ -248,6 +248,9 @@ struct MarkdownView: View {
                     selectableText: { block, version in
                         selectableText(for: block, installedVersion: version)
                     },
+                    selectableTable: { block, version in
+                        selectableTable(for: block, installedVersion: version)
+                    },
                     onCopySelection: { output in copySelectionToClipboard(output) },
                     focusRequest: documentFocusRequest,
                     // Stays mounted under the editor (its anchor and offset
@@ -1186,18 +1189,26 @@ struct MarkdownView: View {
             return TextBlockView.makeNSAttributedString(
                 from: MarkdownRenderer(theme: theme, fontScale: scale).renderHeader(title, level: level),
                 hasInlineMath: false, theme: theme, fontScale: scale)
-        case .table(let headers, let rows, let alignments):
-            // The measurer's instance when it belongs to this parse; otherwise
-            // the same builder `TableTextBlockView` falls back to.
-            if installedVersion == contentVersion, let table = measured.tables[block.id],
-               table.matches(headers: headers, rows: rows, alignments: alignments, fontScale: scale) {
-                return table.string
-            }
-            return TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
-                                          theme: theme, fontScale: scale).string
+        case .table:
+            return selectableTable(for: block, installedVersion: installedVersion)?.string
         case .image, .svgImage, .mathBlock, .mermaidDiagram:
             return nil
         }
+    }
+
+    /// A `.table` block's selectable string with its cell layout (TS-D4 /
+    /// TS-D8): the measurer's instance when it belongs to this parse;
+    /// otherwise the same builder `TableTextBlockView` falls back to. Nil for
+    /// any other block.
+    private func selectableTable(for block: MarkdownBlock, installedVersion: Int) -> TableText? {
+        guard case .table(let headers, let rows, let alignments) = block.content else { return nil }
+        let scale = CGFloat(renderedFontScale)
+        if installedVersion == contentVersion, let table = measured.tables[block.id],
+           table.matches(headers: headers, rows: rows, alignments: alignments, fontScale: scale) {
+            return table
+        }
+        return TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
+                                      theme: theme, fontScale: scale)
     }
 
     /// ⌘+ / ⌘− / ⌘0 (menu, shortcuts, the zoom pill). Announces the resulting

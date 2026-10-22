@@ -21,8 +21,9 @@ import AppKit
 /// `offset` is a UTF-16 offset into the row's SELECTABLE STRING — exactly the
 /// string the row's text view displays (`NSString` indexing, the same unit
 /// TextKit uses, so a point maps to a glyph without conversion). For an atomic
-/// row (table, image, display math, diagram) the string is a single unit:
-/// `0` = before the row, `1` = after it.
+/// row (image, display math, diagram — `SelectionRows.isAtomic`) the string is
+/// a single unit: `0` = before the row, `1` = after it. A table is a text row
+/// since v1.13 (TS-D5): its string is its cells (`TableTextLayout`).
 struct SelectionPoint: Comparable, Hashable {
     var row: Int
     var offset: Int
@@ -103,7 +104,7 @@ struct DocumentSelection: Equatable {
     ///
     /// When the drag started INSIDE an atomic row the row is selected whole as
     /// soon as the pointer leaves it — in whichever direction — and a drag that
-    /// stays inside it selects nothing (there is no per-cell selection; S-D3).
+    /// stays inside it selects nothing (an image or a diagram has no text; S-D3).
     /// So the anchor's offset is not where the press happened but the edge
     /// that puts the row inside the selection: before it (0) when the focus is
     /// below, after it (1) when the focus is above.
@@ -287,9 +288,15 @@ enum SelectionPiece {
     /// A code block's covered substring — VERBATIM. Blank lines inside code are
     /// content, so none of the paragraph clean-up applies.
     case code(NSAttributedString)
-    /// A table, as tab-separated values of the cells' RENDERED text (no `**`).
-    /// `headers` is nil for a headerless table (the view shows no header band).
+    /// A WHOLE table, as tab-separated values of the cells' RENDERED text (no
+    /// `**`) — exactly 1.12's copy. `headers` is nil for a headerless table
+    /// (the view shows no header band).
     case table(headers: [String]?, rows: [[String]])
+    /// PART of a table spanning several cells (v1.13 TS-D8): the covered part
+    /// of each covered cell, per band — tab-separated, one line per band. The
+    /// first and last band hold only the cells from / up to where the
+    /// selection starts / ends (`SelectionRows.tablePiece`).
+    case tableCells(bands: [[String]])
     /// An image or SVG block: its alt text, or nothing when it has none.
     case image(alt: String)
     /// A display-math block: `$$\n<latex>\n$$`.
@@ -342,6 +349,9 @@ enum DocumentCopyBuilder {
             return replacingAttachments(in: code)
         case .table(let headers, let rows):
             return NSAttributedString(string: tsv(headers: headers, rows: rows))
+        case .tableCells(let bands):
+            return NSAttributedString(string: bands.map { $0.map(tsvField).joined(separator: "\t") }
+                .joined(separator: "\n"))
         case .image(let alt):
             return NSAttributedString(string: alt.trimmingCharacters(in: .whitespacesAndNewlines))
         case .displayMath(let latex):
@@ -357,15 +367,20 @@ enum DocumentCopyBuilder {
         let columnCount = max(headers?.count ?? 0, rows.map(\.count).max() ?? 0)
         func line(_ cells: [String]) -> String {
             (0..<columnCount).map { index in
-                let cell = index < cells.count ? cells[index] : ""
-                return cell.components(separatedBy: CharacterSet(charactersIn: "\t\n\r\u{2028}\u{2029}"))
-                    .joined(separator: " ")
+                tsvField(index < cells.count ? cells[index] : "")
             }.joined(separator: "\t")
         }
         var lines: [String] = []
         if let headers { lines.append(line(headers)) }
         lines.append(contentsOf: rows.map(line))
         return lines.joined(separator: "\n")
+    }
+
+    /// One TSV field: a tab or line break inside a cell would split it, so
+    /// those become spaces.
+    private static func tsvField(_ cell: String) -> String {
+        cell.components(separatedBy: CharacterSet(charactersIn: "\t\n\r\u{2028}\u{2029}"))
+            .joined(separator: " ")
     }
 
     /// Inline-math attachments become `$<latex>$` in the font of the text
