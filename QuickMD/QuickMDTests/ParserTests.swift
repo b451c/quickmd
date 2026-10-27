@@ -337,6 +337,26 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(rows[1], ["**Toaster**", "Two slots, one crumb tray"])
     }
 
+    func testEscapedPipeStaysInsideItsCell() {
+        let md = """
+        | Command | Purpose |
+        | --- | --- |
+        | `collect [--part 1\\|2]` | a \\| b |
+        | path\\\\ | after an escaped backslash |
+        | ends with pipe \\| | x |
+        """
+        let blocks = parse(md)
+        guard case .table(let headers, let rows, _) = blocks[0].content else {
+            return XCTFail("expected table")
+        }
+        XCTAssertEqual(headers, ["Command", "Purpose"])
+        // `\\|` is a literal pipe, also inside a code span (GFM)
+        XCTAssertEqual(rows[0], ["`collect [--part 1|2]`", "a | b"])
+        // `\\\\|`: the backslash is escaped, the pipe still splits
+        XCTAssertEqual(rows[1], ["path\\\\", "after an escaped backslash"])
+        XCTAssertEqual(rows[2], ["ends with pipe |", "x"])
+    }
+
     // MARK: - Blockquotes
 
     func testBlockquoteNestingLevels() {
