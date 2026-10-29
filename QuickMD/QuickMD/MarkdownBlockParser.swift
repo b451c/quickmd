@@ -461,25 +461,42 @@ struct MarkdownBlockParser: Sendable {
     }
 
     /// Parse a table row into array of cell strings
-    /// Handles leading/trailing pipes and filters out empty cells from malformed rows
+    /// Handles leading/trailing pipes and filters out empty cells from malformed rows.
+    /// An escaped pipe (`\|`) does not split the row: as in GFM it becomes a
+    /// literal `|` in the cell, inside code spans too (`` `a\|b` `` shows `a|b`).
+    /// `\\|` is an escaped backslash followed by a real column pipe.
     private func parseTableRow(_ line: String) -> [String] {
-        var trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Remove leading pipe if present
+        var cells: [String] = []
+        var cell = ""
+        var escaping = false
+        for ch in trimmed {
+            if escaping {
+                // Other escapes stay for the inline renderer to resolve
+                if ch != "|" { cell.append("\\") }
+                cell.append(ch)
+                escaping = false
+            } else if ch == "\\" {
+                escaping = true
+            } else if ch == "|" {
+                cells.append(cell)
+                cell = ""
+            } else {
+                cell.append(ch)
+            }
+        }
+        if escaping { cell.append("\\") }
+        cells.append(cell)
+
+        // A leading pipe opens the row rather than ending an empty first cell
         if trimmed.hasPrefix("|") {
-            trimmed = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
+            cells.removeFirst()
         }
 
-        // Remove trailing pipe if present
-        if trimmed.hasSuffix("|") {
-            trimmed = String(trimmed.dropLast()).trimmingCharacters(in: .whitespaces)
-        }
-
-        // Split and trim each cell, filter out completely empty cells that result from trailing/leading pipes
-        let cells = trimmed.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
-
-        // Only filter trailing empty cells (preserve intentional empty cells in middle)
-        var result = cells
+        // Only filter trailing empty cells (preserve intentional empty cells in middle).
+        // This also drops the empty remainder after a trailing pipe.
+        var result = cells.map { $0.trimmingCharacters(in: .whitespaces) }
         while result.last?.isEmpty == true {
             result.removeLast()
         }

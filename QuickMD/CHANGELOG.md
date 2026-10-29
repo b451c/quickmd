@@ -5,6 +5,11 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Tables: an escaped pipe (`\|`) no longer splits a cell. It shows as a literal `|`, inside inline code too (`` `--part 1\|2` `` reads `--part 1|2`), as GitHub renders it; before, the row gained a column and the code span broke apart.
+
 ## [1.13.0] - 2026-10-22
 
 Tables you can select, reload on demand, and tabs that behave in full screen. Thanks to [@sporto](https://github.com/sporto) (#33), [@rinh](https://github.com/rinh) (#37) and [@onemannoplan](https://github.com/onemannoplan) (#36)!
