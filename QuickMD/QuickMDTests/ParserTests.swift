@@ -42,6 +42,19 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(headings[2].line, 3)
     }
 
+    /// CommonMark's closing sequence is not heading text; the same rows on
+    /// GitHub show "Install", "Issue", "", "C#", "foo ###" and "Tag #42".
+    func testATXClosingSequenceIsNotPartOfTheTitle() {
+        // Built line by line: the second keeps its trailing spaces
+        let md = ["## Install ##", "## Issue #  ", "### ###", "# C#", "## foo \\###", "## Tag #42"]
+            .joined(separator: "\n")
+        let titles: [String] = parse(md).compactMap {
+            if case .heading(_, let title, _) = $0.content { return title }
+            return nil
+        }
+        XCTAssertEqual(titles, ["Install", "Issue", "", "C#", "foo \\###", "Tag #42"])
+    }
+
     func testSetextHeadings() {
         let md = """
         Title

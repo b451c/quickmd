@@ -202,7 +202,8 @@ struct MarkdownBlockParser: Sendable {
                let contentRange = Range(match.range(at: 2), in: line) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
                 let level = min(max(line[hashRange].count, 1), 6)
-                let title = String(line[contentRange]).trimmingCharacters(in: .whitespaces)
+                let title = Self.withoutClosingSequence(
+                    String(line[contentRange]).trimmingCharacters(in: .whitespaces))
                 blocks.append(.heading(index: blockIndex, level: level, title: title, sourceLine: sourceLine))
                 blockIndex += 1
                 i += 1
@@ -450,6 +451,24 @@ struct MarkdownBlockParser: Sendable {
         }
 
         return blocks
+    }
+
+    // MARK: - Heading Helpers
+
+    /// An ATX heading's optional closing sequence (CommonMark): a run of `#`
+    /// at the end of the (trimmed) title, after a space or tab, is not text —
+    /// `## Install ##` is "Install", `## ##` is empty, while `# C#` and
+    /// `## foo \##` keep theirs. GitHub's heading ids depend on it (#43).
+    static func withoutClosingSequence(_ title: String) -> String {
+        var start = title.endIndex
+        while start > title.startIndex, title[title.index(before: start)] == "#" {
+            start = title.index(before: start)
+        }
+        if start == title.endIndex { return title }
+        if start == title.startIndex { return "" }
+        let before = title[title.index(before: start)]
+        guard before == " " || before == "\t" else { return title }
+        return title[..<start].trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - Table Helpers
