@@ -464,29 +464,26 @@ struct MarkdownBlockParser: Sendable {
     /// Handles leading/trailing pipes and filters out empty cells from malformed rows.
     /// An escaped pipe (`\|`) does not split the row: as in GFM it becomes a
     /// literal `|` in the cell, inside code spans too (`` `a\|b` `` shows `a|b`).
-    /// `\\|` is an escaped backslash followed by a real column pipe.
+    /// Like GitHub (cmark-gfm `unescape_pipes`), a pipe right after a backslash
+    /// never splits, even after `\\`: only that one backslash is dropped, so
+    /// `\\|` leaves `\|` for the inline renderer (`|` in text, `\|` in code).
+    /// Other escapes stay in the text for the inline renderer.
     private func parseTableRow(_ line: String) -> [String] {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
         var cells: [String] = []
         var cell = ""
-        var escaping = false
         for ch in trimmed {
-            if escaping {
-                // Other escapes stay for the inline renderer to resolve
-                if ch != "|" { cell.append("\\") }
+            if ch != "|" {
                 cell.append(ch)
-                escaping = false
-            } else if ch == "\\" {
-                escaping = true
-            } else if ch == "|" {
+            } else if cell.last == "\\" {
+                cell.removeLast()
+                cell.append("|")
+            } else {
                 cells.append(cell)
                 cell = ""
-            } else {
-                cell.append(ch)
             }
         }
-        if escaping { cell.append("\\") }
         cells.append(cell)
 
         // A leading pipe opens the row rather than ending an empty first cell

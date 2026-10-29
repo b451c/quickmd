@@ -344,6 +344,8 @@ final class ParserTests: XCTestCase {
         | `collect [--part 1\\|2]` | a \\| b |
         | path\\\\ | after an escaped backslash |
         | ends with pipe \\| | x |
+        | path\\\\| c |
+        | `p\\\\|q` | c |
         """
         let blocks = parse(md)
         guard case .table(let headers, let rows, _) = blocks[0].content else {
@@ -352,9 +354,14 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(headers, ["Command", "Purpose"])
         // `\\|` is a literal pipe, also inside a code span (GFM)
         XCTAssertEqual(rows[0], ["`collect [--part 1|2]`", "a | b"])
-        // `\\\\|`: the backslash is escaped, the pipe still splits
+        // `\\\\ |`: a space before the pipe, so it splits
         XCTAssertEqual(rows[1], ["path\\\\", "after an escaped backslash"])
         XCTAssertEqual(rows[2], ["ends with pipe |", "x"])
+        // `\\\\|`: a pipe right after a backslash never splits, as on GitHub
+        // (checked with its renderer: "path| c" in one cell, code `p\|q`);
+        // one backslash is dropped and the inline renderer handles the rest
+        XCTAssertEqual(rows[3], ["path\\| c", ""])
+        XCTAssertEqual(rows[4], ["`p\\|q`", "c"])
     }
 
     // MARK: - Blockquotes

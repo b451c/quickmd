@@ -126,6 +126,20 @@ final class TableTextTests: XCTestCase {
                        "the last cell's \\n is the last character")
     }
 
+    /// PR #44: what escaped pipes DRAW, as GitHub's renderer shows the same
+    /// rows (checked 2026-10-29): `a | b`, code `x | y`, `path| c` in one
+    /// cell, code `p\|q`.
+    func testEscapedPipesDrawAsGitHubRendersThem() {
+        let t = table("""
+        | A | B |
+        |---|---|
+        | a \\| b | `x \\| y` |
+        | path\\\\| c |
+        | `p\\\\|q` | c |
+        """)
+        XCTAssertEqual(build(t).string.string, "A\nB\na | b\nx | y\npath| c\n\np\\|q\nc\n")
+    }
+
     func testRaggedRowsArePaddedWithEmptyCells() {
         let built = TableTextBuilder.build(headers: ["A", "B"], rows: [["1"], ["2", "3", "4"]],
                                            alignments: [.leading, .trailing], theme: theme, fontScale: 1)
