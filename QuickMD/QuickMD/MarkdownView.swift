@@ -1375,6 +1375,13 @@ struct MarkdownView: View {
     }
 
     private func handleLinkActivation(_ url: URL) {
+        // In-document link (`#install`, #43). Never a file: it used to resolve
+        // to the document's folder and open it in Finder.
+        if let fragment = HeadingAnchors.inDocumentFragment(of: url) {
+            followAnchor(fragment)
+            return
+        }
+
         // Web and mail links open normally
         switch url.scheme?.lowercased() {
         case "http", "https", "mailto":
@@ -1412,6 +1419,13 @@ struct MarkdownView: View {
                 // It's a relative path, resolve it against the document's directory
                 finalURL = documentDir.appendingPathComponent(url.path)
             }
+            // This very document with a fragment (`README.md#install` inside
+            // README.md) is the same jump as `#install`
+            if let fragment = url.fragment(percentEncoded: false),
+               finalURL.standardizedFileURL.path == documentURL.standardizedFileURL.path {
+                followAnchor(fragment)
+                return
+            }
         }
 
         // Open the resolved file URL
@@ -1424,6 +1438,21 @@ struct MarkdownView: View {
         } else {
             // Open in the default application for that file type
             NSWorkspace.shared.open(finalURL)
+        }
+    }
+
+    /// Scrolls to the heading an in-document link names, as a ToC click does.
+    /// `#` and `#top` with no such heading go to the top, as in a browser; an
+    /// id no heading has beeps.
+    private func followAnchor(_ fragment: String) {
+        let renderer = MarkdownRenderer(theme: theme, fontScale: CGFloat(renderedFontScale))
+        let headings = HeadingAnchors.headings(of: cachedBlocks, renderer: renderer)
+        if let target = HeadingAnchors.headingId(forFragment: fragment, in: headings) {
+            selectHeading(target)
+        } else if fragment.isEmpty || fragment.lowercased() == "top", let first = cachedBlocks.first {
+            requestScroll(to: first.id, anchor: .top, animated: true)
+        } else {
+            NSSound.beep()
         }
     }
 

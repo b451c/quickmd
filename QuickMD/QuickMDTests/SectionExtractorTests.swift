@@ -104,4 +104,87 @@ final class SectionExtractorTests: XCTestCase {
         let stranger = ToCEntry(id: "heading-999", level: 2, title: "X", sourceLine: 0)
         XCTAssertNil(SectionExtractor.extractSection(from: md, entry: stranger, headings: toc))
     }
+
+    // MARK: - Heading anchors (#43)
+
+    private func anchorHeadings(of markdown: String) -> [(id: String, text: String)] {
+        let theme = MarkdownTheme.cached(for: .light)
+        return HeadingAnchors.headings(of: MarkdownBlockParser(theme: theme).parse(markdown),
+                                       renderer: MarkdownRenderer(theme: theme))
+    }
+
+    /// The ids GitHub's renderer gave the same headings (2026-10-29): markup
+    /// is gone before the slug, repeats count like github-slugger.
+    func testHeadingIdsMatchGitHub() {
+        let md = """
+        ## Some Header
+        ## What's new in 1.2?
+        ## C++ & C# notes
+        ## API: `fetch()` returns **data**
+        ## See [the docs](https://example.com) here
+        ## Zażółć gęślą jaźń
+        ## Hello  World
+        ## foo_bar-baz
+        ## Émoji 🎉 party
+        ## Intro
+        ## Intro
+        ## Intro-1
+        ## Intro
+        ## 1. Getting Started
+        ## A — B – C
+        ## Ünïcödé Straße
+        ## Trailing spaces ##
+        ## Path/to\\file.md
+        ## “Quoted” ‘text’
+        ## 100% done (really!)
+        ## x² Ⅳ ½ 3
+        ## Love ❤️ it
+        ## Family 👨‍👩‍👧 here
+        ## foo \\###
+        ## Ω Σ Δ
+        ## 中文 标题
+        ## İstanbul
+        """
+        let ids = HeadingAnchors.ids(for: anchorHeadings(of: md).map(\.text))
+        XCTAssertEqual(ids, [
+            "some-header", "whats-new-in-12", "c--c-notes", "api-fetch-returns-data",
+            "see-the-docs-here", "zażółć-gęślą-jaźń", "hello--world", "foo_bar-baz",
+            "émoji--party", "intro", "intro-1", "intro-1-1", "intro-2", "1-getting-started",
+            "a--b--c", "ünïcödé-straße", "trailing-spaces", "pathtofilemd", "quoted-text",
+            "100-done-really", "x-\u{2173}--3", "love-\u{FE0F}-it", "family-\u{200D}\u{200D}-here",
+            "foo-", "ω-σ-δ", "中文-标题", "i\u{307}stanbul",
+        ])
+    }
+
+    func testFragmentFindsItsHeading() {
+        let headings = anchorHeadings(of: """
+        # Guide
+        ## Install Guide
+        ## Intro
+        ## Intro
+        """)
+        let id = { HeadingAnchors.headingId(forFragment: $0, in: headings) }
+        XCTAssertEqual(id("install-guide"), headings[1].id)
+        // Hand-written: the fragment's own slug
+        XCTAssertEqual(id("Install Guide"), headings[1].id)
+        XCTAssertEqual(id("Install-Guide"), headings[1].id)
+        // The second "Intro" is `intro-1`
+        XCTAssertEqual(id("intro"), headings[2].id)
+        XCTAssertEqual(id("intro-1"), headings[3].id)
+        XCTAssertNil(id("missing"))
+        XCTAssertNil(id(""))
+    }
+
+    func testInDocumentFragmentOfALink() {
+        let fragment = { HeadingAnchors.inDocumentFragment(of: URL(string: $0)!) }
+        XCTAssertEqual(fragment("#install"), "install")
+        XCTAssertEqual(fragment("#"), "")
+        XCTAssertEqual(fragment("#za%C5%BC%C3%B3%C5%82%C4%87"), "zażółć")
+        // The renderer's fallback for a destination URL(string:) rejects
+        XCTAssertEqual(fragment("%23some%20header"), "some header")
+        XCTAssertNil(fragment("other.md#install"))
+        XCTAssertNil(fragment("https://example.com/#install"))
+        XCTAssertNil(fragment("file:///tmp/a.md#install"))
+        XCTAssertNil(fragment("docs/install"))
+    }
 }
