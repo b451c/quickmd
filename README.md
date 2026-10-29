@@ -119,9 +119,10 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 ### Homebrew (Recommended)
 
 ```bash
-brew tap b451c/quickmd
-brew install --cask quickmd
+brew install --cask b451c/quickmd/quickmd
 ```
+
+Installed earlier with `brew tap` and `brew upgrade` now reports an "untrusted tap" (Homebrew 7)? Run `brew upgrade --cask b451c/quickmd/quickmd` once.
 
 ### Direct Download
 
