@@ -55,7 +55,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more; click any diagram or image for a window-filling preview with pinch-to-zoom
 - **Inline SVG** — fenced ```svg blocks and `.svg` image links render natively (no web view), scale with the text and print as vectors
 - Images — local files, remote URLs, embedded `data:` images, reference-style `![alt][ref]`, and HTML `<img>` tags with `width` (the logo/screenshot idiom of GitHub READMEs, `<p align="center">` wrappers included)
-- Links (inline, reference-style, autolinks), footnotes (`[^id]`), nested blockquotes
+- Links (inline, reference-style, autolinks), footnotes (`[^id]`), nested blockquotes; `#heading` links jump within the document, using GitHub's heading ids
 - YAML frontmatter (rendered as a neutral code block)
 - CommonMark soft breaks; Windows (CRLF) and legacy line endings; UTF-16 and Latin-1 files
 
@@ -63,7 +63,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Zoom the whole document (`⌘+` / `⌘-` / `⌘0`) — per window, everything scales
 - Find in document (`⌘F`) with match count and per-word navigation
 - Word-level highlighting across all block types (text, code, tables, blockquotes)
-- Table of Contents sidebar (`⌘⇧T`) — auto-generated from headings
+- Table of Contents sidebar (`⌘⇧T`) — auto-generated from headings; right-click it to list every level or stop at H2, H3 or H4
 - Reading mode (`⌘⇧R`) — hides both sidebars and the hover buttons and centres the text in a 720 pt column; `Esc` brings everything back
 - **Select across the whole document** — drag through paragraphs, headings, lists, quotes, code and tables (a word, a cell or a range of cells), it scrolls for you, Shift-click to extend, `⌘A` / `⌘C` to copy clean text (table cells as tab-separated values, math as LaTeX). Every copy shows how many characters and words were copied; optional auto-copy of selections in Settings → General
 - Copy entire document (`⌘⇧C`) or individual sections (hover heading → copy icon)

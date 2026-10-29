@@ -5,7 +5,9 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.14.0] - 2026-10-29
+
+Links to headings, a Contents sidebar as deep as you want it, and tables that keep an escaped pipe. Thanks to [@rinh](https://github.com/rinh) (#44) and [@SteveHigham](https://github.com/SteveHigham) (#42, #43)!
 
 ### Added
 - **Links to headings in the same document** (`[Install](#install)`) scroll to that heading, so a hand-written table of contents works. Headings get the ids GitHub gives them; a link written as the heading text (`#Install Guide`) or to the file itself (`README.md#install`) works too. Before, such a link tried to open the document's folder instead (in Finder, or with a permission error in the Mac App Store version). Asked for by [@SteveHigham](https://github.com/SteveHigham) (#43).
