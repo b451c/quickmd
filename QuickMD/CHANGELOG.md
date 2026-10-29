@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Links to headings in the same document** (`[Install](#install)`) scroll to that heading, so a hand-written table of contents works. Headings get the ids GitHub gives them; a link written as the heading text (`#Install Guide`) or to the file itself (`README.md#install`) works too. Before, such a link opened the document's folder in Finder. Asked for by [@SteveHigham](https://github.com/SteveHigham) (#43).
+- **How deep the Contents sidebar goes:** All Headings, or up to H2, H3 or H4. Right-click the sidebar, or Settings ▸ General; both change the same setting. Copying a section still ends at the next heading, shown or not. Asked for by [@SteveHigham](https://github.com/SteveHigham) (#42).
 
 ### Fixed
 - Tables: an escaped pipe (`\|`) no longer splits a cell. It shows as a literal `|`, inside inline code too (`` `--part 1\|2` `` reads `--part 1|2`), as GitHub renders it; before, the row gained a column and the code span broke apart. Contributed by [@rinh](https://github.com/rinh) (#44).

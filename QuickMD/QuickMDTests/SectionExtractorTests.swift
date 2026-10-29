@@ -105,6 +105,16 @@ final class SectionExtractorTests: XCTestCase {
         XCTAssertNil(SectionExtractor.extractSection(from: md, entry: stranger, headings: toc))
     }
 
+    // MARK: - Contents depth (#42)
+
+    func testContentsDepthFiltersByLevel() {
+        let toc = headings(of: "# A\n## B\n### C\n#### D\n##### E\n###### F")
+        XCTAssertEqual(ToCDepth.visible(toc, maxLevel: ToCDepth.all).map(\.title), ["A", "B", "C", "D", "E", "F"])
+        XCTAssertEqual(ToCDepth.visible(toc, maxLevel: 2).map(\.title), ["A", "B"])
+        XCTAssertEqual(ToCDepth.visible(toc, maxLevel: 4).map(\.title), ["A", "B", "C", "D"])
+        XCTAssertEqual(ToCDepth.choices.first?.maxLevel, ToCDepth.all, "All Headings is the default and first")
+    }
+
     // MARK: - Heading anchors (#43)
 
     private func anchorHeadings(of markdown: String) -> [(id: String, text: String)] {

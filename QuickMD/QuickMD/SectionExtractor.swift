@@ -13,6 +13,25 @@ struct ToCEntry: Identifiable, Sendable {
     let sourceLine: Int
 }
 
+// MARK: - Contents Depth
+
+/// How deep the Contents sidebar lists headings (#42): one stored value,
+/// edited from the sidebar's context menu and from Settings ▸ General. It
+/// only filters what the sidebar shows; section copy and in-document links
+/// still see every heading.
+enum ToCDepth {
+    static let defaultsKey = "tocMaxHeadingLevel"
+    /// Lists every heading (the default).
+    static let all = 6
+    static let choices: [(maxLevel: Int, title: String)] = [
+        (all, "All Headings"), (2, "Up to H2"), (3, "Up to H3"), (4, "Up to H4"),
+    ]
+
+    static func visible(_ headings: [ToCEntry], maxLevel: Int) -> [ToCEntry] {
+        maxLevel >= all ? headings : headings.filter { $0.level <= maxLevel }
+    }
+}
+
 // MARK: - Heading Anchors
 
 /// In-document links (`[Install](#install)`, #43) use the ids GitHub gives

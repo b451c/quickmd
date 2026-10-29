@@ -11,12 +11,14 @@ struct TableOfContentsView: View {
     let onCollapse: () -> Void
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("selectedTheme") private var selectedThemeName: String = "Auto"
+    @AppStorage(ToCDepth.defaultsKey) private var maxLevel: Int = ToCDepth.all
 
     private var theme: MarkdownTheme {
         MarkdownTheme.theme(named: selectedThemeName, colorScheme: colorScheme)
     }
 
     var body: some View {
+        let shown = ToCDepth.visible(headings, maxLevel: maxLevel)
         VStack(alignment: .leading, spacing: 0) {
             // Header
             HStack(spacing: 6) {
@@ -49,7 +51,7 @@ struct TableOfContentsView: View {
             // Headings list
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(headings) { entry in
+                    ForEach(shown) { entry in
                         ToCEntryRow(entry: entry, theme: theme, onSelect: {
                             onSelect(entry.id)
                         }, onCopy: onCopy != nil ? {
@@ -58,9 +60,29 @@ struct TableOfContentsView: View {
                     }
                 }
                 .padding(.vertical, 4)
+
+                // Every heading is deeper than the chosen depth
+                if shown.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("No headings up to H\(maxLevel)")
+                            .foregroundColor(.secondary)
+                        Button("Show All Headings") { maxLevel = ToCDepth.all }
+                            .buttonStyle(.link)
+                    }
+                    .font(.system(size: 11))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                }
             }
         }
         .background(theme.backgroundColor.opacity(0.5))
+        .contextMenu {
+            Picker("Show Headings", selection: $maxLevel) {
+                ForEach(ToCDepth.choices, id: \.maxLevel) { choice in
+                    Text(choice.title).tag(choice.maxLevel)
+                }
+            }
+        }
     }
 }
 
