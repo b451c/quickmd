@@ -1441,17 +1441,18 @@ struct MarkdownView: View {
         }
     }
 
-    /// Scrolls to the heading an in-document link names, as a ToC click does.
-    /// `#` and `#top` with no such heading go to the top, as in a browser; an
+    /// Scrolls to the heading an in-document link names, as a ToC click does
+    /// (`HeadingAnchors.target`: `#` and an unclaimed `#top` are the top); an
     /// id no heading has beeps.
     private func followAnchor(_ fragment: String) {
         let renderer = MarkdownRenderer(theme: theme, fontScale: CGFloat(renderedFontScale))
         let headings = HeadingAnchors.headings(of: cachedBlocks, renderer: renderer)
-        if let target = HeadingAnchors.headingId(forFragment: fragment, in: headings) {
-            selectHeading(target)
-        } else if fragment.isEmpty || fragment.lowercased() == "top", let first = cachedBlocks.first {
-            requestScroll(to: first.id, anchor: .top, animated: true)
-        } else {
+        switch HeadingAnchors.target(forFragment: fragment, in: headings) {
+        case .heading(let id):
+            selectHeading(id)
+        case .top where !cachedBlocks.isEmpty:
+            requestScroll(to: cachedBlocks[0].id, anchor: .top, animated: true)
+        case .top, .none:
             NSSound.beep()
         }
     }

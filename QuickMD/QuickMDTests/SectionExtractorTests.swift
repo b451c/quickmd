@@ -185,6 +185,18 @@ final class SectionExtractorTests: XCTestCase {
         XCTAssertNil(id(""))
     }
 
+    func testEmptyFragmentAndTopAreTheTopOfTheDocument() {
+        // `## 🚀` slugs to "", the id `#` would otherwise match (review 2026-10-29)
+        let emoji = anchorHeadings(of: "# Guide\n## 🚀\n## Usage")
+        XCTAssertEqual(HeadingAnchors.target(forFragment: "", in: emoji), .top)
+        XCTAssertEqual(HeadingAnchors.target(forFragment: "top", in: emoji), .top)
+        XCTAssertEqual(HeadingAnchors.target(forFragment: "usage", in: emoji), .heading(emoji[2].id))
+        XCTAssertEqual(HeadingAnchors.target(forFragment: "nope", in: emoji), .none)
+        // A heading that claims `top` wins, as an element with that id does in a browser
+        let claimed = anchorHeadings(of: "# Intro\n## Top")
+        XCTAssertEqual(HeadingAnchors.target(forFragment: "top", in: claimed), .heading(claimed[1].id))
+    }
+
     func testInDocumentFragmentOfALink() {
         let fragment = { HeadingAnchors.inDocumentFragment(of: URL(string: $0)!) }
         XCTAssertEqual(fragment("#install"), "install")

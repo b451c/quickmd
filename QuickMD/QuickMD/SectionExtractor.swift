@@ -107,10 +107,27 @@ enum HeadingAnchors {
         return headings[index].id
     }
 
+    enum Target: Equatable {
+        case heading(String)
+        case top
+        case none
+    }
+
+    /// Where an in-document link goes, as in a browser: `#` is the top of the
+    /// document (even when a heading of only an emoji, `## 🚀`, has the empty
+    /// id), `#top` is the top unless a heading claims that id.
+    static func target(forFragment fragment: String,
+                       in headings: [(id: String, text: String)]) -> Target {
+        if fragment.isEmpty { return .top }
+        if let id = headingId(forFragment: fragment, in: headings) { return .heading(id) }
+        return fragment.lowercased() == "top" ? .top : .none
+    }
+
     /// The percent-decoded fragment of an in-document link (`#install`), nil
     /// for any other link. Read from the link as written: a destination
     /// `URL(string:)` rejects (non-ASCII or spaces on macOS 13) arrives
-    /// percent-encoded, its `#` as `%23`.
+    /// percent-encoded, its `#` as `%23`. The accepted cost: a file whose
+    /// name starts with `#`, linked as `%23notes.md`, reads as an anchor.
     static func inDocumentFragment(of url: URL) -> String? {
         guard url.scheme == nil else { return nil }
         let written = url.relativeString.removingPercentEncoding ?? url.relativeString
