@@ -666,7 +666,7 @@ final class VerticalRhythmTests: XCTestCase {
     /// in a nested quote, a list item or an alert too, and on a line with
     /// fewer markers than the quote. Our parser ended the quote and made the
     /// line a paragraph of its own. Every expected shape is GitHub's
-    /// (`gh api markdown`, scratchpad/audit/gfm/lazy_*.html).
+    /// (`gh api markdown`).
     func testALazyLineContinuesTheParagraphAQuoteEndsIn() throws {
         // Continues: a plain line, a hard-wrapped quote, `===`, an indented
         // line, an item that may not start a list here (none may: a lazy

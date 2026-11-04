@@ -20,8 +20,7 @@ final class TableTextTests: XCTestCase {
 
     private var theme: MarkdownTheme { MarkdownTheme.cached(for: .light) }
 
-    /// The prototype's fixtures (scratchpad/table-proto, 2026-10-22) plus a
-    /// header-only table.
+    /// The table prototype's fixtures (2026-10-22) plus a header-only table.
     private static let fixtures: [(name: String, markdown: String)] = [
         ("simple", """
         | Name | Role | Since |
