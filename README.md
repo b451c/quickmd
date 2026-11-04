@@ -64,7 +64,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Find in document (`⌘F`) with match count and per-word navigation
 - Word-level highlighting across all block types (text, code, tables, blockquotes)
 - Table of Contents sidebar (`⌘⇧T`) — auto-generated from headings; right-click it to list every level or stop at H2, H3 or H4
-- Reading mode (`⌘⇧R`) — hides both sidebars and the hover buttons and centres the text in a 720 pt column; `Esc` brings everything back
+- Reading mode (`⌘⇧R`) — hides both sidebars and the hover buttons and centres the text in a comfortable column (720 pt at 100 %, growing with zoom); `Esc` brings everything back
 - **Select across the whole document** — drag through paragraphs, headings, lists, quotes, code and tables (a word, a cell or a range of cells), it scrolls for you, Shift-click to extend, `⌘A` / `⌘C` to copy clean text (table cells as tab-separated values, math as LaTeX). Every copy shows how many characters and words were copied; optional auto-copy of selections in Settings → General
 - Copy entire document (`⌘⇧C`) or individual sections (hover heading → copy icon)
 - Export to PDF (`⌘⇧E`) — **vector text** (selectable, searchable) with **rendered Mermaid diagrams** — and Print (`⌘P`)
