@@ -389,6 +389,24 @@ struct VirtualBlockList: NSViewRepresentable {
         /// `.reported` blocks whose view has told this table its height: their
         /// height is no longer an estimate (`RowGeometry.anchorPlacement`).
         private var reportedBlocks: Set<String> = []
+        /// The layout style changed and the table measured for the new width
+        /// is not installed yet. Meanwhile the cells re-lay out at the new
+        /// width inside the old rows, and the clip origin can move without
+        /// this list moving it (seen: -37.5 pt between leaving Reading Mode
+        /// and the new table, which re-anchored the reader on the block
+        /// above). The anchor holds through the switch whatever the clip does;
+        /// the install puts the reader back on it.
+        private var isSwitchingLayout = false
+        private var layoutSwitchGeneration = 0
+        #if DEBUG
+        /// Where the last `setContentTop` left the content top, to tell a clip
+        /// move this list made from one something else made (logged with the
+        /// stack that made it — `clipBoundsChanged`).
+        private var expectedContentTop: CGFloat?
+        private var isSettingContentTop = false
+        private var isLiveScrolling = false
+        private var debugObservers: [NSObjectProtocol] = []
+        #endif
 
         private struct ReaderAnchor {
             let blockId: String
@@ -443,6 +461,9 @@ struct VirtualBlockList: NSViewRepresentable {
         deinit {
             widthWork?.cancel()
             if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
+            #if DEBUG
+            debugObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            #endif
         }
 
         func attach(scrollView: BlockScrollView, tableView: BlockTableView) {
@@ -461,7 +482,45 @@ struct VirtualBlockList: NSViewRepresentable {
             ) { [weak self] _ in
                 self?.clipFrameChanged(afterLiveResize: false)
             }
+            #if DEBUG
+            observeClipMoves(scrollView)
+            #endif
         }
+
+        #if DEBUG
+        /// DEBUG: logs every move of the clip origin that `setContentTop` did
+        /// not make — outside a jump and a live (wheel, trackpad) scroll — with
+        /// the stack that made it.
+        private func observeClipMoves(_ scrollView: NSScrollView) {
+            let center = NotificationCenter.default
+            scrollView.contentView.postsBoundsChangedNotifications = true
+            debugObservers.append(center.addObserver(forName: NSView.boundsDidChangeNotification,
+                                                     object: scrollView.contentView, queue: nil) { [weak self] _ in
+                self?.clipBoundsChanged()
+            })
+            debugObservers.append(center.addObserver(forName: NSScrollView.willStartLiveScrollNotification,
+                                                     object: scrollView, queue: nil) { [weak self] _ in
+                self?.isLiveScrolling = true
+            })
+            debugObservers.append(center.addObserver(forName: NSScrollView.didEndLiveScrollNotification,
+                                                     object: scrollView, queue: nil) { [weak self] _ in
+                self?.isLiveScrolling = false
+                self?.expectedContentTop = self?.contentTopY()
+            })
+        }
+
+        private func clipBoundsChanged() {
+            guard !isSettingContentTop, !isJumping, !isLiveScrolling,
+                  let expected = expectedContentTop else { return }
+            let top = contentTopY()
+            guard abs(top - expected) > 0.5 else { return }
+            expectedContentTop = top
+            listLog.debug("clipMoved: content top \(expected, format: .fixed(precision: 1)) → \(top, format: .fixed(precision: 1)) NOT by setContentTop\(self.isSwitchingLayout ? " (layout switch)" : "", privacy: .public)")
+            for (index, frame) in Thread.callStackSymbols.prefix(40).enumerated() {
+                listLog.debug("clipMoved #\(index): \(frame, privacy: .public)")
+            }
+        }
+        #endif
 
         /// One turn later: the request arrives in the same SwiftUI update that
         /// removes the overlay, whose views may still hold focus until then.
@@ -514,6 +573,7 @@ struct VirtualBlockList: NSViewRepresentable {
             let previousCount = blocks.count
             self.anchor = nil
             isJumping = false
+            isSwitchingLayout = false
             reportedBlocks = []
 
             blocks = newBlocks
@@ -733,7 +793,7 @@ struct VirtualBlockList: NSViewRepresentable {
         private func anchoredRow(contentTop: CGFloat) -> Int? {
             guard let anchor, let tableView, let row = rowForBlockId[anchor.blockId],
                   row < tableView.numberOfRows, row < blocks.count else { return nil }
-            if isJumping { return row }
+            if isJumping || isSwitchingLayout { return row }
             return RowGeometry.isAt(anchorOffset: anchor.placed, contentTop: contentTop,
                                     rowRect: tableView.rect(ofRow: row), spacingAbove: table.spacing(row))
                 ? row : nil
@@ -834,9 +894,11 @@ struct VirtualBlockList: NSViewRepresentable {
                 switch action {
                 case .keep:
                     break
-                case .shift where self.isJumping, .placeAnchor:
-                    // Re-aim a jump in flight at its target's new place, or put
-                    // the reader back into the block that just reported.
+                case .shift where self.isJumping || self.isSwitchingLayout, .placeAnchor:
+                    // Re-aim a jump in flight at its target's new place, put the
+                    // reader back on the anchor during a layout switch (the clip
+                    // may have moved under it), or into the block that just
+                    // reported.
                     if let anchorRow, let anchor = self.anchor {
                         self.place(row: anchorRow, offset: anchor.offset, animated: self.isJumping)
                     }
@@ -938,16 +1000,26 @@ struct VirtualBlockList: NSViewRepresentable {
                     context.duration = 0.25
                     context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                     clipView.animator().setBoundsOrigin(constrained)
-                }, completionHandler: { [weak scrollView] in
+                }, completionHandler: { [weak scrollView, weak self] in
                     if let scrollView { scrollView.reflectScrolledClipView(scrollView.contentView) }
+                    #if DEBUG
+                    self?.expectedContentTop = self?.contentTopY()
+                    #endif
                     completion?()
                 })
                 scrollView.reflectScrolledClipView(clipView)
             } else {
+                #if DEBUG
+                isSettingContentTop = true
+                defer { isSettingContentTop = false }
+                #endif
                 clipView.scroll(to: constrained)
                 scrollView.reflectScrolledClipView(clipView)
                 completion?()
             }
+            #if DEBUG
+            expectedContentTop = reached
+            #endif
             return reached
         }
 
@@ -1038,6 +1110,7 @@ struct VirtualBlockList: NSViewRepresentable {
                     let delta = layoutStyle.edgeInset - previousInset
                     place(row: anchor.row, offset: anchor.offsetFromBlockTop - delta, animated: false)
                 }
+                beginLayoutSwitch()
             }
             #if DEBUG
             listLog.debug("layoutStyle: cap=\(style.maxContentWidth.map { "\(Int($0))" } ?? "none", privacy: .public) padding=\(style.verticalPadding, format: .fixed(precision: 0))")
@@ -1048,6 +1121,20 @@ struct VirtualBlockList: NSViewRepresentable {
             // width and then again at the settled one. The re-arming debounce
             // collapses entry and exit to exactly one measure each.
             scheduleWidthReport()
+        }
+
+        /// `isSwitchingLayout` until the next install — or until the width
+        /// report finds nothing to re-measure, or two seconds, whichever comes
+        /// first, so a switch that never brings a new table cannot pin the
+        /// anchor for good.
+        private func beginLayoutSwitch() {
+            isSwitchingLayout = true
+            layoutSwitchGeneration += 1
+            let switchGeneration = layoutSwitchGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self, self.layoutSwitchGeneration == switchGeneration else { return }
+                self.isSwitchingLayout = false
+            }
         }
 
         private func applyContentInsets() {
@@ -1118,7 +1205,11 @@ struct VirtualBlockList: NSViewRepresentable {
                     return
                 }
                 let width = self.currentContentWidth()
-                guard width > 0, abs(width - self.reportedContentWidth) >= 1 else { return }
+                guard width > 0, abs(width - self.reportedContentWidth) >= 1 else {
+                    // Same width: no new table is coming to end a layout switch.
+                    self.isSwitchingLayout = false
+                    return
+                }
                 self.publish(width: width)
             }
             widthWork = work

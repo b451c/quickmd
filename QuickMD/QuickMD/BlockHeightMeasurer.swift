@@ -685,6 +685,77 @@ extension NSTextView {
     }
 }
 
+// MARK: - Block Height Cache
+
+/// Remembers the last measured height of each block, keyed by block id.
+/// LazyVStack destroys and recreates views during scroll; without this a
+/// recreated view starts at a placeholder height and "jumps" when its real
+/// height arrives, making upward scrolling stutter. Since 1.8.0 text and code
+/// blocks size synchronously (`SelfSizingTextView.size(fitting:)`) and no longer
+/// need it — Mermaid diagrams (height arrives from the WebView) still do.
+///
+/// Main-thread only BY CONVENTION (all reads/writes happen from SwiftUI view
+/// inits / height callbacks dispatched to main). Deliberately NOT @MainActor:
+/// view initializers are nonisolated on older SDKs where the SwiftUI View
+/// protocol annotates only `body`, and an isolated init call there is a hard
+/// compile error (caught by CI on the GitHub runner toolchain).
+final class BlockHeightCache {
+    private var heights: [String: CGFloat] = [:]
+    /// Row heights reported by placed pictures and diagrams, by
+    /// `ReportedHeights.key` — content keys, so a re-parse keeps them.
+    private var reported: [String: CGFloat] = [:]
+
+    func height(for id: String) -> CGFloat? { heights[id] }
+    func set(_ height: CGFloat, for id: String) { heights[id] = height }
+    /// Forgets the block-id heights (a re-parse: ids are positional). The
+    /// reported heights stay — they are keyed by content.
+    func removeAll() { heights.removeAll() }
+
+    func setReported(_ height: CGFloat, forKey key: String) {
+        // A live resize reports at every width it passes through: keep the
+        // cache small rather than complete.
+        if reported.count >= Self.reportedLimit, reported[key] == nil { reported.removeAll() }
+        reported[key] = height
+    }
+    static let reportedLimit = 512
+
+    /// A value copy for `BlockHeightMeasurer.measure(heightSeeds:)` — the
+    /// measurer runs off-main and must not read this reference type from there.
+    var snapshot: [String: CGFloat] { heights }
+    /// The same for `measure(reportedHeights:)`.
+    var reportedSnapshot: [String: CGFloat] { reported }
+}
+
+// MARK: - Reported heights
+
+/// The heights the placed views of pictures and diagrams reported, by what
+/// they show: a block id is a position, which a re-parse (zoom, an edit
+/// elsewhere) reassigns, and a width change re-measures every row — the
+/// image went back to its 116 pt placeholder and the diagram to the 200 pt
+/// default each time, swinging the table by hundreds of points and moving
+/// the reader with it. Keyed by the block's content and the width, zoom and
+/// theme it was laid out at, a reported height is valid wherever the key
+/// matches: Reading Mode on and off, a zoom and back.
+enum ReportedHeights {
+    /// The key of `block`'s row at `contentWidth`, `fontScale` and `theme`;
+    /// nil for the kinds the measurer computes exactly (or estimates from
+    /// text, a heading).
+    static func key(for block: MarkdownBlock, contentWidth: CGFloat, fontScale: CGFloat,
+                    theme: MarkdownTheme) -> String? {
+        let place = "\(Int(contentWidth.rounded()))|\(fontScale)|\(theme.name)|\(theme.isDark)"
+        switch block.content {
+        case .image(let url, let alt, let width):
+            return "image|\(place)|\(url)|\(alt)|\(String(describing: width))"
+        case .svgImage(let source):
+            return "svg|\(place)|\(source)"
+        case .mermaidDiagram(let source):
+            return "mermaid|\(place)|\(source)"
+        default:
+            return nil
+        }
+    }
+}
+
 // MARK: - Height table
 
 /// How a row's height was obtained, and therefore whether the placed view is
@@ -866,6 +937,10 @@ enum BlockHeightMeasurer {
     ///     the list column width minus `2 * Document.contentHorizontalPadding`.
     ///   - heightSeeds: last-known heights (`BlockHeightCache`) used to seed
     ///     Mermaid rows so a re-created diagram doesn't start at the default.
+    ///   - reportedHeights: row heights the placed views of pictures and
+    ///     diagrams reported, by `ReportedHeights.key` — what the block shows,
+    ///     at which width, zoom and theme. Such a row starts at the height it
+    ///     had there instead of the placeholder.
     ///   - math: the math engine, or `nil` when the call is NOT on the main
     ///     thread — see the thread rule in the file header. With `nil`, rows
     ///     that need the engine come back at a placeholder height, listed in
@@ -885,6 +960,7 @@ enum BlockHeightMeasurer {
                         fontScale: CGFloat,
                         contentWidth: CGFloat,
                         heightSeeds: [String: CGFloat] = [:],
+                        reportedHeights: [String: CGFloat] = [:],
                         math: MathRendering?) -> MeasuredBlocks {
         #if DEBUG
         let signpostID = heightSignpost.makeSignpostID()
@@ -1026,22 +1102,29 @@ enum BlockHeightMeasurer {
                 // is a two-view tuple (image + italic caption `Text`), so the
                 // placed view reports a taller row than this. It is `.reported`
                 // precisely because the real size — decoded bitmap, caption or
-                // no caption — only exists once the view is placed.
-                heights.append(BlockLayout.ImageBlock.placeholderHeight
-                               + 2 * BlockLayout.Document.imageOuterVerticalPadding)
+                // no caption — only exists once the view is placed. Unless it
+                // was placed before at this width and zoom (`reportedHeights`).
+                heights.append(reportedHeights[ReportedHeights.key(for: block, contentWidth: contentWidth,
+                                                                   fontScale: fontScale, theme: theme) ?? ""]
+                               ?? BlockLayout.ImageBlock.placeholderHeight
+                                  + 2 * BlockLayout.Document.imageOuterVerticalPadding)
                 kinds.append(.reported)
 
             case .svgImage:
                 // Same shape as `.image`: the decoded size only exists once the
                 // view is placed (decode is off-main), so the row is reported.
-                heights.append(BlockLayout.ImageBlock.placeholderHeight
-                               + 2 * BlockLayout.Document.imageOuterVerticalPadding)
+                heights.append(reportedHeights[ReportedHeights.key(for: block, contentWidth: contentWidth,
+                                                                   fontScale: fontScale, theme: theme) ?? ""]
+                               ?? BlockLayout.ImageBlock.placeholderHeight
+                                  + 2 * BlockLayout.Document.imageOuterVerticalPadding)
                 kinds.append(.reported)
 
             case .mermaidDiagram:
-                heights.append((heightSeeds[block.id] ?? BlockLayout.Mermaid.defaultHeight)
-                               + 2 * BlockLayout.Mermaid.verticalPadding
-                               + 2 * BlockLayout.Document.mermaidOuterVerticalPadding)
+                heights.append(reportedHeights[ReportedHeights.key(for: block, contentWidth: contentWidth,
+                                                                   fontScale: fontScale, theme: theme) ?? ""]
+                               ?? (heightSeeds[block.id] ?? BlockLayout.Mermaid.defaultHeight)
+                                  + 2 * BlockLayout.Mermaid.verticalPadding
+                                  + 2 * BlockLayout.Document.mermaidOuterVerticalPadding)
                 kinds.append(.reported)
             }
             rhythm.append(textEdges.map { rhythmRow(block, edges: $0) }

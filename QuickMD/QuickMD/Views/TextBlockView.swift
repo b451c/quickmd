@@ -1,31 +1,8 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Block Height Cache
-
-/// Remembers the last measured height of each block, keyed by block id.
-/// LazyVStack destroys and recreates views during scroll; without this a
-/// recreated view starts at a placeholder height and "jumps" when its real
-/// height arrives, making upward scrolling stutter. Since 1.8.0 text and code
-/// blocks size synchronously (`SelfSizingTextView.size(fitting:)`) and no longer
-/// need it — Mermaid diagrams (height arrives from the WebView) still do.
-///
-/// Main-thread only BY CONVENTION (all reads/writes happen from SwiftUI view
-/// inits / height callbacks dispatched to main). Deliberately NOT @MainActor:
-/// view initializers are nonisolated on older SDKs where the SwiftUI View
-/// protocol annotates only `body`, and an isolated init call there is a hard
-/// compile error (caught by CI on the GitHub runner toolchain).
-final class BlockHeightCache {
-    private var heights: [String: CGFloat] = [:]
-
-    func height(for id: String) -> CGFloat? { heights[id] }
-    func set(_ height: CGFloat, for id: String) { heights[id] = height }
-    func removeAll() { heights.removeAll() }
-
-    /// A value copy for `BlockHeightMeasurer.measure(heightSeeds:)` — the
-    /// measurer runs off-main and must not read this reference type from there.
-    var snapshot: [String: CGFloat] { heights }
-}
+// `BlockHeightCache` lives in BlockHeightMeasurer.swift, next to the
+// measurer that reads it (and the tests, which compile that file).
 
 // MARK: - Shared NSTextView Search Highlight
 

@@ -467,6 +467,9 @@ final class VerticalRhythmTests: XCTestCase {
         var jumpTarget: CGFloat?
         /// Rows whose view reported since the last table (`reportedBlocks`).
         var confirmed: Set<Int> = []
+        /// A layout switch is under way (`isSwitchingLayout`): from the
+        /// style toggle to the install of the table for the new width.
+        var switching = false
 
         var rects: [NSRect] {
             var y: CGFloat = 0
@@ -492,7 +495,7 @@ final class VerticalRhythmTests: XCTestCase {
 
         func anchoredRow() -> Int? {
             guard current, let anchor else { return nil }
-            if jumpTarget != nil { return anchor.row }
+            if jumpTarget != nil || switching { return anchor.row }
             return RowGeometry.isAt(anchorOffset: anchor.placed, contentTop: contentTop,
                                     rowRect: rects[anchor.row], spacingAbove: rows[anchor.row].spacing)
                 ? anchor.row : nil
@@ -528,7 +531,7 @@ final class VerticalRhythmTests: XCTestCase {
             switch RowGeometry.reportAction(row: row, anchorRow: anchorRow, blockTop: blockTop, contentTop: top) {
             case .keep:
                 break
-            case .shift where jumpTarget != nil, .placeAnchor:
+            case .shift where jumpTarget != nil || switching, .placeAnchor:
                 if let anchor { place(anchor.row, anchor.offset) }
             case .shift:
                 contentTop = top + delta
@@ -551,6 +554,7 @@ final class VerticalRhythmTests: XCTestCase {
             rows = new
             anchor = nil
             jumpTarget = nil
+            switching = false
             confirmed = []
             place(captured.row, captured.offset)
             if settling { settle() }
@@ -561,7 +565,10 @@ final class VerticalRhythmTests: XCTestCase {
             let delta = newInset - inset
             inset = newInset
             place(captured.row, captured.offset - delta)
+            switching = current
         }
+        /// Something other than the list moves the clip origin.
+        mutating func clipMoved(by dy: CGFloat) { contentTop += dy }
         /// A `.center` jump that lands after the views on screen reported.
         mutating func centerJump(to row: Int) {
             let target = RowGeometry.centerTarget(rowRect: rects[row], spacingAbove: rows[row].spacing,
@@ -585,7 +592,8 @@ final class VerticalRhythmTests: XCTestCase {
     /// image is a placeholder in every new table (`imageEstimate`) and
     /// `imageReal` once loaded; the diagram starts at the 200 pt default.
     private func fixtureRows(scale s: CGFloat = 1, wrap: CGFloat = 1, imageReal: CGFloat = 655,
-                             imageEstimate: CGFloat = 116, diagram: CGFloat = 94) -> [ListModel.Row] {
+                             imageEstimate: CGFloat = 116, diagram: CGFloat = 94,
+                             diagramEstimate: CGFloat = 224) -> [ListModel.Row] {
         let paragraph = { (spacing: CGFloat) in ListModel.Row.exact(spacing * s, 17 * s * wrap) }
         var rows: [ListModel.Row] = [.reported(0, 39 * s, real: 39 * s)]           // # Rhythm fixture
         rows += (0..<10).map { _ in paragraph(25) }                                 // the long list
@@ -600,14 +608,45 @@ final class VerticalRhythmTests: XCTestCase {
             .exact(21 * s, 66 * s),                                                 // the latex fallback
             paragraph(21),
             .reported(50 * s, 33 * s, real: 33 * s),                                // ## Diagram
-            .reported(12 * s, 224, real: diagram + 24),                             // the diagram
+            .reported(12 * s, diagramEstimate, real: diagram + 24),                 // the diagram
             .exact(5 * s, 79 * s),                                                  // a table
             .reported(50 * s, 39 * s, real: 39 * s),                                // # Second part
         ]
         rows += (0..<12).map { _ in paragraph(25) }
         return rows
     }
-    private let image = 12, secondPart = 23
+    private let image = 12, textAfterFormulas = 19, secondPart = 23
+
+    /// The debug log of the drift (`full.log`): at 819 pt every height real,
+    /// the content top 11.5 pt above "Text after the formulas"; Reading Mode
+    /// re-measures at 720 (the image back at its placeholder, the diagram
+    /// seeded); between leaving Reading Mode and the 819 table the clip moves
+    /// by -37.5 pt without the list moving it; the 819 re-measure has the
+    /// image at its placeholder again. The reader comes back to the point.
+    func testReadingModeRoundTripSurvivesAClipMoveDuringTheSwitch() {
+        for current in [true, false] {
+            var rows = fixtureRows()
+            for index in rows.indices { rows[index].height = rows[index].real }
+            var list = ListModel(rows: rows, contentTop: 0, current: current)
+            list.contentTop = list.blockTop(textAfterFormulas) - 11.5
+            list.confirmed = Set(rows.indices)
+            let seen = list.screenY(textAfterFormulas)
+
+            list.toggleStyle(inset: 48)
+            list.install(fixtureRows(wrap: 2, diagramEstimate: 118))
+            list.toggleStyle(inset: 24)
+            list.clipMoved(by: -37.5)
+            list.install(fixtureRows(diagramEstimate: 118))
+
+            if current {
+                XCTAssertEqual(list.screenY(textAfterFormulas), seen, accuracy: 1)
+                XCTAssertEqual(list.contentTop - list.blockTop(textAfterFormulas), -11.5, accuracy: 0.001)
+            } else {
+                // Re-anchored by geometry on the latex block: 37.5 pt off.
+                XCTAssertEqual(list.screenY(textAfterFormulas) - seen, 37.5, accuracy: 1)
+            }
+        }
+    }
 
     /// A model list on fixture.md with every view reported, the content top
     /// `offset` below the image's top.
@@ -729,6 +768,35 @@ final class VerticalRhythmTests: XCTestCase {
                 XCTAssertGreaterThan(list.offCentre(secondPart), 300)
             }
         }
+    }
+
+    /// A picture or a diagram measured again where it was placed before
+    /// (Reading Mode off, a zoom back) starts at the height it reported
+    /// there, not at the placeholder; elsewhere it still starts at the
+    /// placeholder. Keyed by content, so a re-parse keeps it.
+    func testAReportedPictureHeightSeedsTheNextMeasureAtThatWidth() {
+        let blocks = parse("Text.\n\n![QuickMD icon](icon.png)\n\n```mermaid\ngraph TD; A-->B\n```")
+        let keys = [1, 2].map { ReportedHeights.key(for: blocks[$0], contentWidth: 819, fontScale: 1, theme: theme)! }
+        let seeds = [keys[0]: 655, keys[1]: 94] as [String: CGFloat]
+        let seeded = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1, contentWidth: 819,
+                                                 reportedHeights: seeds, math: math)
+        XCTAssertEqual(seeded.table.heights[1], 655)
+        XCTAssertEqual(seeded.table.heights[2], 94)
+        let elsewhere = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1, contentWidth: 720,
+                                                    reportedHeights: seeds, math: math)
+        XCTAssertEqual(elsewhere.table.heights[1], BlockLayout.ImageBlock.placeholderHeight
+                       + 2 * BlockLayout.Document.imageOuterVerticalPadding)
+        XCTAssertNotEqual(elsewhere.table.heights[2], 94)
+        // Another picture at the same position is another key.
+        XCTAssertNotEqual(ReportedHeights.key(for: parse("Text.\n\n![other](other.png)")[1], contentWidth: 819,
+                                              fontScale: 1, theme: theme), keys[0])
+        // A re-parse forgets the block-id heights, not the reported ones.
+        let cache = BlockHeightCache()
+        cache.set(70, for: "mermaid-2")
+        cache.setReported(655, forKey: keys[0])
+        cache.removeAll()
+        XCTAssertNil(cache.height(for: "mermaid-2"))
+        XCTAssertEqual(cache.reportedSnapshot[keys[0]], 655)
     }
 
     func testAnchorIsRelativeToTheBlockNotTheRowEdge() {
