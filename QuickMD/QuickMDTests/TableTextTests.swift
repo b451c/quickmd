@@ -531,6 +531,41 @@ final class TableTextTests: XCTestCase {
         let bold = built.string.attribute(.font, at: built.layout.cellRanges[0][1].location,
                                           effectiveRange: nil) as? NSFont
         XCTAssertTrue(bold?.fontDescriptor.symbolicTraits.contains(.bold) ?? false, "value markup renders")
+
+        // Each key that `renderInline` would parse or unescape, alone.
+        for key in [#"\<x"#, "~~x~~", "https://x.y", "*x*", "`x`", #"a\|b"#] {
+            let one = TableTextBuilder.build(headers: [], rows: [[key, "a | b"]], alignments: [.leading, .leading],
+                                             style: .properties, theme: theme, fontScale: 1)
+            XCTAssertEqual(one.string.string, key + "\na | b\n", key)
+            XCTAssertEqual(one.layout.columnCount, 2, key)
+            one.string.enumerateAttributes(in: one.layout.cellRanges[0][0]) { attributes, _, _ in
+                XCTAssertNil(attributes[.link], key)
+                XCTAssertNil(attributes[.strikethroughStyle], key)
+            }
+        }
+    }
+
+    /// Keys take the CURRENT theme's secondary colour, in both scopes (one
+    /// helper for screen, search, copy and print), never a fixed system colour.
+    func testPropertiesKeyColourFollowsTheTheme() {
+        for theme in [MarkdownTheme.cached(for: .light), MarkdownTheme.cached(for: .dark)] {
+            let renderer = MarkdownRenderer(theme: theme)
+            let key = TableTextBuilder.keyCell("status", renderer: renderer)
+            let run = key.runs.first!
+            XCTAssertEqual(run.foregroundColor, theme.secondaryTextColor, theme.name)
+            XCTAssertEqual(run[AttributeScopes.AppKitAttributes.ForegroundColorAttribute.self],
+                           NSColor(theme.secondaryTextColor), theme.name)
+            XCTAssertNotNil(run.font, "SwiftUI-scope font")
+            XCTAssertNotNil(run[AttributeScopes.AppKitAttributes.FontAttribute.self], "AppKit-scope font")
+            let built = TableTextBuilder.build(headers: [], rows: [["status", "draft"]],
+                                               alignments: [.leading, .leading], style: .properties,
+                                               theme: theme, fontScale: 1)
+            XCTAssertEqual(built.string.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+                           NSColor(theme.secondaryTextColor), theme.name)
+        }
+        XCTAssertNotEqual(NSColor(MarkdownTheme.cached(for: .light).secondaryTextColor),
+                          NSColor(MarkdownTheme.cached(for: .dark).secondaryTextColor),
+                          "the two palettes differ, so the check above means something")
     }
 
     /// Column 0 = widest key + paddings + its divider (whole points) when that

@@ -577,6 +577,12 @@ final class SearchTests: XCTestCase {
 
         let textView = tableTextView(build(table))
         applyNSSearchHighlight(in: textView, term: "needle", focusedOccurrence: nil)
-        XCTAssertEqual(highlights(in: textView).count, 3, "every counted table match is drawn")
+        let drawn = highlights(in: textView)
+        XCTAssertEqual(drawn.count, 3, "every counted table match is drawn")
+        // One of them is inside the KEY cell "needle key" (band 1, column 0).
+        let built = build(table)
+        let key = built.layout.cellRanges[1][0]
+        XCTAssertTrue(drawn.contains { NSIntersectionRange($0.range, key).length == 6 }, "a key match is highlighted")
+        XCTAssertEqual(count("key", in: markdown), 1, "a term only in a key is counted")
     }
 }
