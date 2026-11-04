@@ -78,7 +78,8 @@ enum SourceTint {
         func isBlank(_ line: Int) -> Bool {
             let start = lineStarts[line]
             let range = NSRange(location: start, length: max(0, contentEnd(line) - start))
-            // The parser's notion of blank: nothing but `.whitespaces`.
+            // The parser's notion of blank (`MarkdownRenderer.isBlankLine`):
+            // nothing but spaces and tabs.
             return text.rangeOfCharacter(from: nonWhitespace, options: [], range: range).location == NSNotFound
         }
 
@@ -93,12 +94,9 @@ enum SourceTint {
             let boundary = blocks[(index + 1)...].first(where: { $0.sourceLine > first })?.sourceLine ?? lineCount
             let limit = min(boundary, lineCount) - 1
             var last: Int
-            if case .heading(_, let title, _) = block.content {
-                last = first
-                if first + 1 <= limit, isSetext(line: first, title: title, in: text, contentEnd: contentEnd(first),
-                                                lineStarts: lineStarts) {
-                    last = first + 1
-                }
+            if case .heading = block.content {
+                last = setextUnderline(from: first, through: limit, in: text, lineStarts: lineStarts,
+                                       contentEnd: contentEnd) ?? first
             } else {
                 last = limit
                 while last > first, isBlank(last) { last -= 1 }
@@ -112,8 +110,9 @@ enum SourceTint {
         return spans
     }
 
-    /// Non-blank characters, by the parser's `.whitespaces` trimming rule.
-    private static let nonWhitespace = CharacterSet.whitespaces.inverted
+    /// Non-blank characters, by the parser's blank-line rule: anything but a
+    /// space or a tab (a no-break space is text).
+    private static let nonWhitespace = MarkdownRenderer.markerWhitespace.inverted
 
     static func kind(of block: MarkdownBlock) -> Kind? {
         switch block.content {
@@ -132,12 +131,27 @@ enum SourceTint {
         }
     }
 
-    /// Whether the heading on `line` is a Setext one: its line, trimmed the
-    /// way the parser trims it, IS the parser's title.
-    private static func isSetext(line: Int, title: String, in text: NSString, contentEnd: Int,
-                                 lineStarts: [Int]) -> Bool {
-        let start = lineStarts[line]
-        let content = text.substring(with: NSRange(location: start, length: max(0, contentEnd - start)))
-        return content.trimmingCharacters(in: .whitespaces) == title
+    /// The underline of the heading starting on `first` when it is a Setext
+    /// one — its title may run over several lines (the whole paragraph
+    /// above the underline, CommonMark) — or nil for an ATX heading, whose
+    /// one line is all of it. The first underline line before `limit`.
+    private static func setextUnderline(from first: Int, through limit: Int, in text: NSString,
+                                        lineStarts: [Int], contentEnd: (Int) -> Int) -> Int? {
+        func line(_ index: Int) -> String {
+            let start = lineStarts[index]
+            return text.substring(with: NSRange(location: start, length: max(0, contentEnd(index) - start)))
+        }
+        let opening = line(first)
+        guard MarkdownBlockParser.headerRegex.firstMatch(in: opening, range: NSRange(opening.startIndex...,
+                                                                                    in: opening)) == nil,
+              first < limit else { return nil }
+        for index in (first + 1)...limit {
+            let marker = MarkdownBlockParser.markerLine(line(index))
+            if marker.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil
+                || marker.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
+                return index
+            }
+        }
+        return nil
     }
 }

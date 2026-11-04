@@ -7,13 +7,7 @@ import XCTest
 final class SectionExtractorTests: XCTestCase {
 
     private func headings(of markdown: String) -> [ToCEntry] {
-        let blocks = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light)).parse(markdown)
-        return blocks.compactMap { block in
-            if case .heading(let level, let title, let sourceLine) = block.content {
-                return ToCEntry(id: block.id, level: level, title: title, sourceLine: sourceLine)
-            }
-            return nil
-        }
+        ToCEntry.entries(of: MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light)).parse(markdown))
     }
 
     func testSectionEndsAtNextSameLevelHeading() {
@@ -203,6 +197,75 @@ final class SectionExtractorTests: XCTestCase {
         let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
         let italic = renderer.renderHeader("a &#42;b&#42;", level: 2)
         XCTAssertEqual(italic.runs.count, 1, "no emphasis run from a decoded asterisk")
+    }
+
+    /// A Setext title over several lines: GitHub keeps its line breaks in
+    /// the heading's text, and the id DROPS them — `Alpha⏎Beta` is
+    /// `alphabeta`, after a hard break too (gfm/h1_*.html). The title was
+    /// joined with spaces, which the slug made `-` (`alpha-beta`), so
+    /// `[go](#alphabeta)` went nowhere. Shown — the heading, the Contents
+    /// sidebar, search — each break is a space; Copy Section is the source.
+    func testAMultiLineSetextTitleHasGitHubsId() {
+        let md = "Alpha\nBeta\n===\n\nAlphaBeta\n===\n\nAlpha\nBeta\n---\n\nPara one\nline two\n---\n\n"
+            + "One  \nTwo\\\nThree\n---\n\n**Bold\nend**\n===\n\n[go](#alphabeta)\n"
+        let anchors = anchorHeadings(of: md)
+        XCTAssertEqual(HeadingAnchors.ids(for: anchors.map(\.text)), [
+            "alphabeta", "alphabeta-1", "alphabeta-2", "para-oneline-two", "onetwothree", "boldend",
+        ])
+        XCTAssertEqual(HeadingAnchors.target(forFragment: "alphabeta", in: anchors), .heading(anchors[0].id))
+        XCTAssertEqual(HeadingAnchors.target(forFragment: "para-oneline-two", in: anchors),
+                       .heading(anchors[3].id))
+
+        let theme = MarkdownTheme.cached(for: .light)
+        let blocks = MarkdownBlockParser(theme: theme).parse(md)
+        let renderer = MarkdownRenderer(theme: theme)
+        let shown = blocks.compactMap { block -> String? in
+            guard case .heading(let level, let title, _) = block.content else { return nil }
+            return String(renderer.renderHeader(title, level: level).characters)
+        }
+        XCTAssertEqual(shown, ["Alpha Beta", "AlphaBeta", "Alpha Beta", "Para one line two", "One Two Three",
+                               "Bold end"])
+        let entries = headings(of: md)
+        XCTAssertEqual(entries.map(\.title), ["Alpha Beta", "AlphaBeta", "Alpha Beta", "Para one line two",
+                                              "One Two Three", "**Bold end**"])
+        XCTAssertEqual(SectionExtractor.extractSection(from: md, entry: entries[0], headings: entries),
+                       "Alpha\nBeta\n===")
+        XCTAssertEqual(SectionExtractor.extractSection(from: md, entry: entries[4], headings: entries),
+                       "One  \nTwo\\\nThree\n---")
+    }
+
+    /// A line break inside a code span is a space (CommonMark), so a code
+    /// span across a Setext title's break keeps one in the id: `code-span`.
+    /// Outside a code span the break is dropped, also between two spans
+    /// (GitHub, gfm/h6_*.html). The span kept the break, which the slug
+    /// dropped: `codespan`.
+    func testACodeSpanAcrossASetextBreakKeepsASpaceInTheId() {
+        let md = "`code\nspan`\n===\n\n`code`\n`span`\n===\n\n``a\nb``\n===\n\nUse `a\nb` and\nmore\n---\n"
+        let anchors = anchorHeadings(of: md)
+        XCTAssertEqual(HeadingAnchors.ids(for: anchors.map(\.text)),
+                       ["code-span", "codespan", "a-b", "use-a-b-andmore"])
+        XCTAssertEqual(HeadingAnchors.target(forFragment: "code-span", in: anchors), .heading(anchors[0].id))
+        XCTAssertEqual(headings(of: md).map(\.title), ["`code span`", "`code` `span`", "``a b``", "Use `a b` and more"])
+    }
+
+    /// Merge check: every consumer of a multi-line Setext title reads one
+    /// text. The heading, Contents and the id's source differ only in the
+    /// kept line break: entities decoded, a link's text, and a formula's
+    /// source WITH its LaTeX escapes (R14) — also in the id's text.
+    func testMultiLineSetextTitleIsOneTextForEveryConsumer() {
+        let md = "Q&amp;A \\% $a\\,b$\n[the *link*](https://e.x) &lt;end&gt;\n===\n\nOne $x\\,\ny$ two\n---\n"
+        let theme = MarkdownTheme.cached(for: .light)
+        let blocks = MarkdownBlockParser(theme: theme).parse(md)
+        let renderer = MarkdownRenderer(theme: theme)
+        let shown = blocks.compactMap { block -> String? in
+            guard case .heading(let level, let title, _) = block.content else { return nil }
+            return String(renderer.renderHeader(title, level: level).characters)
+        }
+        XCTAssertEqual(shown[0], "Q&A % $a\\,b$ the link <end>")
+        let anchors = anchorHeadings(of: md)
+        XCTAssertEqual(anchors.map { $0.text.replacingOccurrences(of: "\n", with: " ") }, shown)
+        XCTAssertEqual(anchors[0].text, "Q&A % $a\\,b$\nthe link <end>")
+        XCTAssertEqual(headings(of: md).map { $0.shownTitle(renderer: renderer) }, shown)
     }
 
     func testFragmentFindsItsHeading() {

@@ -82,8 +82,12 @@ struct BlockquoteView: View {
 
     /// One attributed string for the whole quote body — see
     /// `MarkdownRenderer.renderQuotedBody` (shared with the alert view and the
-    /// height measurer).
+    /// height measurer) — rendered only when the measurer has not built the
+    /// string: `TextBlockView` reads `attributed` only without `preconverted`,
+    /// and this body runs on the main thread on every update of the row (it
+    /// comes into view, a search keystroke, ⌘G). A long quote's render is
+    /// hundreds of milliseconds; a paragraph's string is stored in its block.
     private func renderedContent() -> AttributedString {
-        renderer.renderQuotedBody(content)
+        preconverted == nil ? renderer.renderQuotedBody(content) : AttributedString()
     }
 }

@@ -13,7 +13,7 @@ struct MarkdownBlockParser: Sendable {
     private let renderer: MarkdownRenderer
 
     // Static precompiled regex (avoid recompilation per parse call)
-    private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
+    static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
     private static let refLinkDefRegex = try! NSRegularExpression(pattern: MarkdownTheme.referenceLinkDefinitionPattern)
     private static let footnoteDefRegex = try! NSRegularExpression(pattern: MarkdownTheme.footnoteDefinitionPattern)
 
@@ -45,11 +45,11 @@ struct MarkdownBlockParser: Sendable {
         // this step the setext-H2 rule would promote the first frontmatter key
         // to a giant heading.
         var firstContentLine = 0
-        if allLines.first?.trimmingCharacters(in: .whitespaces) == "---" {
+        if allLines.first.map(Self.markerLine) == "---" {
             var closingIndex: Int?
             var j = 1
             while j < allLines.count {
-                let t = allLines[j].trimmingCharacters(in: .whitespaces)
+                let t = Self.markerLine(allLines[j])
                 if t == "---" || t == "..." { closingIndex = j; break }
                 j += 1
             }
@@ -84,9 +84,20 @@ struct MarkdownBlockParser: Sendable {
         // Headings carry the original line number so section copy can slice the
         // raw text without re-detecting headings itself.
         var lineMap: [Int] = []
+        // Fenced code and `$$` blocks, read as the block loop reads them: a
+        // definition inside one is that block's text (GitHub).
+        var verbatim = VerbatimRegions()
+        // A link definition cannot interrupt a paragraph (`DefinitionPlacement`).
+        var placement = DefinitionPlacement()
         for originalIndex in firstContentLine..<allLines.count {
             let line = allLines[originalIndex]
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let trimmed = Self.markerLine(line)
+            if verbatim.contains(trimmed) {
+                lines.append(line)
+                lineMap.append(originalIndex)
+                placement.verbatim()
+                continue
+            }
             let nsRange = NSRange(trimmed.startIndex..., in: trimmed)
             // Footnote definitions must be checked BEFORE reference links
             // because [^id]: text also matches the reference link pattern [id]: url
@@ -97,15 +108,19 @@ struct MarkdownBlockParser: Sendable {
                 let fnContent = String(trimmed[contentRange])
                 footnoteDefinitions.append((id: fnId, content: fnContent))
                 if !footnoteIds.contains(fnId) { footnoteIds.append(fnId) }
-            } else if let match = Self.refLinkDefRegex.firstMatch(in: trimmed, range: nsRange),
-                      let idRange = Range(match.range(at: 1), in: trimmed),
-                      let urlRange = Range(match.range(at: 2), in: trimmed) {
+                placement.definition()
+            } else if let text = placement.linkDefinitionText(trimmed),
+                      let match = Self.refLinkDefRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                      let idRange = Range(match.range(at: 1), in: text),
+                      let urlRange = Range(match.range(at: 2), in: text) {
                 // Character references in the destination are decoded, as in
                 // an inline link's (`InlineSyntaxScanner.unescaped`).
-                referenceDefinitions[String(trimmed[idRange]).lowercased()] = HTMLEntities.decode(String(trimmed[urlRange]))
+                referenceDefinitions[String(text[idRange]).lowercased()] = HTMLEntities.decode(String(text[urlRange]))
+                placement.definition()
             } else {
                 lines.append(line)
                 lineMap.append(originalIndex)
+                placement.kept(line)
             }
         }
 
@@ -124,24 +139,34 @@ struct MarkdownBlockParser: Sendable {
         var pendingRows: [PendingTextRow] = []
 
         while i < lines.count {
+            // Every turn consumes at least one line. A branch that decides on a
+            // line its own loop then refuses would otherwise re-enter it for
+            // ever (a quote marker after a no-break space did, 9bbf6ae): DEBUG
+            // stops there, Release keeps the line as text and goes on.
+            let turnStart = i
+            defer {
+                if i <= turnStart {
+                    assertionFailure("MarkdownBlockParser: no line consumed at \(turnStart)")
+                    textBuffer.append((line: lines[turnStart], originalIndex: lineMap[turnStart]))
+                    i = turnStart + 1
+                }
+            }
             let line = lines[i]
             // Original-document line of the block that starts here (definition
             // lines were dropped from `lines`, so `i` alone is not the answer).
             let sourceLine = lineMap[i]
 
-            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            // What every block marker below is looked for in (`markerLine`).
+            let trimmedLine = Self.markerLine(line)
 
             // Fenced code block — check BEFORE math to protect $$ inside code blocks
-            if trimmedLine.hasPrefix("```") || trimmedLine.hasPrefix("~~~") {
+            if let opening = Self.fenceOpening(trimmedLine) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-
-                // Store the fence characters (just the backticks/tildes prefix)
-                guard let fenceChar = trimmedLine.first else { i += 1; continue }
-                var fenceLength = 0
-                for ch in trimmedLine {
-                    if ch == fenceChar { fenceLength += 1 } else { break }
-                }
-                let openingFence = String(repeating: fenceChar, count: fenceLength)
+                let fenceLength = opening.length
+                // CommonMark: a fence indented N columns drops up to N columns
+                // of indentation from each of its lines (a fence under a list
+                // item is not drawn shifted right).
+                let fenceIndent = Self.indentColumns(line)
 
                 // Extract language after fence
                 let language = String(trimmedLine.dropFirst(fenceLength)).trimmingCharacters(in: .whitespaces)
@@ -150,12 +175,11 @@ struct MarkdownBlockParser: Sendable {
 
                 // Closing fence must be same char, same or greater length, nothing else
                 while i < lines.count {
-                    let closeLine = lines[i].trimmingCharacters(in: .whitespaces)
-                    if closeLine.hasPrefix(openingFence) && MarkdownRenderer.isBlankLine(closeLine.drop(while: { $0 == fenceChar })) {
+                    if Self.closesFence(Self.markerLine(lines[i]), opening) {
                         i += 1
                         break
                     }
-                    codeLines.append(lines[i])
+                    codeLines.append(Self.removingIndentation(lines[i], upTo: fenceIndent))
                     i += 1
                 }
 
@@ -180,7 +204,7 @@ struct MarkdownBlockParser: Sendable {
                 let afterDollar = String(trimmedLine.dropFirst(2)).trimmingCharacters(in: .whitespaces)
 
                 // Single-line: $$content$$ (must have content between delimiters)
-                if afterDollar.hasSuffix("$$") {
+                if !Self.opensMultilineMath(trimmedLine) {
                     let latex = String(afterDollar.dropLast(2)).trimmingCharacters(in: .whitespaces)
                     if !latex.isEmpty {
                         blocks.append(.mathBlock(index: blockIndex, latex: latex, sourceLine: sourceLine))
@@ -195,8 +219,7 @@ struct MarkdownBlockParser: Sendable {
                 if !afterDollar.isEmpty { mathLines.append(afterDollar) }
                 i += 1
                 while i < lines.count {
-                    let mLine = lines[i].trimmingCharacters(in: .whitespaces)
-                    if mLine == "$$" {
+                    if Self.closesMath(Self.markerLine(lines[i])) {
                         i += 1
                         break
                     }
@@ -289,29 +312,37 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
-            // Setext headers (underlined headers)
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if i + 1 < lines.count && !trimmed.isEmpty && !trimmed.contains("|") {
-                let nextLine = lines[i + 1].trimmingCharacters(in: .whitespaces)
-
+            // Setext headers (underlined headers): the WHOLE paragraph above
+            // the underline is the heading (CommonMark, GitHub), on the
+            // paragraph's first line. Its title keeps the lines' breaks
+            // (`setextTitle`): shown as spaces, dropped by the anchor. Not a
+            // list item's paragraph (`- a` over `===` is the item's text, over
+            // `---` the list and a rule) nor a quote line's (the quote branch
+            // takes those, lazy lines included).
+            //
+            // NOTE: no `!isTableSeparator(nextLine)` guard — a line of pure
+            // dashes ALWAYS matches the table-separator pattern (pipes are
+            // optional in it), which once made setext H2 unreachable. A
+            // pipe-bearing separator can't match setextH2Pattern anyway.
+            // (Caught by ParserTests.testSetextHeadings.)
+            let trimmed = trimmedLine
+            if i + 1 < lines.count && !trimmed.isEmpty && !trimmed.contains("|") && !trimmed.hasPrefix(">") {
+                let nextLine = Self.markerLine(lines[i + 1])
+                let level: Int?
                 if nextLine.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil {
-                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-                    // Setext: the TEXT line owns the heading, not the `===` underline.
-                    blocks.append(.heading(index: blockIndex, level: 1, title: trimmed, sourceLine: sourceLine))
-                    blockIndex += 1
-                    i += 2
-                    continue
+                    level = 1
+                } else if nextLine.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
+                    level = 2
+                } else {
+                    level = nil
                 }
-
-                // NOTE: no `!isTableSeparator(nextLine)` guard here — a line of
-                // pure dashes ALWAYS matches the table-separator pattern (pipes
-                // are optional in it), which made this branch unreachable and
-                // silently disabled setext H2 for years. A pipe-bearing table
-                // separator can't match setextH2Pattern anyway, so the guard
-                // added nothing. (Caught by ParserTests.testSetextHeadings.)
-                if nextLine.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
-                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-                    blocks.append(.heading(index: blockIndex, level: 2, title: trimmed, sourceLine: sourceLine))
+                if let level, let start = Self.setextParagraphStart(in: textBuffer, endingWith: line) {
+                    let title = Self.setextTitle(textBuffer[start...].map(\.line) + [line])
+                    let headingLine = start < textBuffer.count ? textBuffer[start].originalIndex : sourceLine
+                    var preceding = Array(textBuffer[..<start])
+                    textBuffer.removeAll()
+                    flushTextBuffer(&preceding, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                    blocks.append(.heading(index: blockIndex, level: level, title: title, sourceLine: headingLine))
                     blockIndex += 1
                     i += 2
                     continue
@@ -332,7 +363,8 @@ struct MarkdownBlockParser: Sendable {
                     var rows: [[String]] = []
                     i += 2 // Skip header and separator
 
-                    while i < lines.count && lines[i].unicodeScalars.contains("|") && !isTableSeparator(lines[i]) {
+                    while i < lines.count && lines[i].unicodeScalars.contains("|") && !isTableSeparator(lines[i])
+                            && !Self.interruptsTable(lines[i]) {
                         rows.append(parseTableRow(lines[i]))
                         i += 1
                     }
@@ -365,9 +397,9 @@ struct MarkdownBlockParser: Sendable {
                 var previousGroupWasQuote = false
 
                 while i < lines.count {
-                    // Spaces and tabs only: a quote line of no-break spaces
-                    // (`> \u{00A0}`) is text, not an empty quote line.
-                    let qLine = lines[i].trimmingCharacters(in: Self.spacesAndTabs)
+                    // The predicate the branch was entered on (`markerLine`),
+                    // so the first line is always taken.
+                    let qLine = Self.markerLine(lines[i])
                     guard qLine.hasPrefix(">") else { break }
 
                     // Count nesting level (number of leading > chars)
@@ -388,11 +420,24 @@ struct MarkdownBlockParser: Sendable {
                     let groupSourceLine = lineMap[i]
                     let groupLevel = level
                     var groupLines = [String(scanner)]
+                    var tip = QuoteTip()
+                    tip.take(groupLines[0])
                     i += 1
 
                     while i < lines.count {
-                        let nextLine = lines[i].trimmingCharacters(in: Self.spacesAndTabs)
-                        guard nextLine.hasPrefix(">") else { break }
+                        let nextLine = Self.markerLine(lines[i])
+                        guard nextLine.hasPrefix(">") else {
+                            // No marker: a lazy continuation of the paragraph
+                            // the group ends in (CommonMark), or the quote's end.
+                            guard tip.endsInParagraph,
+                                  continuesQuoteLazily(lines[i], htmlImageLine: htmlImageLine(lines, at: i) != nil,
+                                                       references: referenceDefinitions)
+                            else { break }
+                            groupLines.append(lines[i])
+                            tip.takeLazy()
+                            i += 1
+                            continue
+                        }
 
                         var nextLevel = 0
                         var nextScanner = nextLine[...]
@@ -404,11 +449,28 @@ struct MarkdownBlockParser: Sendable {
                             }
                         }
 
-                        guard nextLevel == groupLevel else { break }
+                        if nextLevel != groupLevel {
+                            // Fewer markers than the group: what follows them may
+                            // continue the group's paragraph lazily (`> > a` then
+                            // `> b` is one paragraph of the inner quote).
+                            let content = String(nextScanner)
+                            guard nextLevel < groupLevel, tip.endsInParagraph,
+                                  continuesQuoteLazily(content,
+                                                       htmlImageLine: HTMLImageSyntax.scan(content[...]) != nil,
+                                                       references: referenceDefinitions)
+                            else { break }
+                            groupLines.append(content)
+                            tip.takeLazy()
+                            i += 1
+                            continue
+                        }
                         groupLines.append(String(nextScanner))
+                        tip.take(groupLines[groupLines.count - 1])
                         i += 1
                     }
 
+                    // One paragraph break per run of blank lines (`collapsingBlankRuns`).
+                    groupLines = Self.collapsingBlankRuns(groupLines)
                     // Quote and alert bodies are rendered later without the
                     // definitions, so references are resolved here, once per
                     // body (`ReferenceLinks`, soft-break groups as one line).
@@ -540,7 +602,7 @@ struct MarkdownBlockParser: Sendable {
 
     /// Check if line matches table separator pattern (e.g., |---|---|)
     private func isTableSeparator(_ line: String) -> Bool {
-        line.trimmingCharacters(in: .whitespaces)
+        Self.markerLine(line)
             .range(of: MarkdownTheme.tableSeparatorPattern, options: .regularExpression) != nil
     }
 
@@ -656,7 +718,18 @@ struct MarkdownBlockParser: Sendable {
 
     /// CommonMark's white space around block markers: spaces and tabs, not
     /// every Unicode space separator (`isBlank`).
-    static let spacesAndTabs = CharacterSet(charactersIn: " \t")
+    static let spacesAndTabs = MarkdownRenderer.markerWhitespace
+
+    /// `line` without the spaces and tabs around it: what EVERY block marker
+    /// (fence, `$$`, quote, setext underline, table separator, front-matter
+    /// fence, link definition) is looked for in, at the branch that decides
+    /// AND in the loop that then walks the block. CommonMark indents with
+    /// spaces and tabs only — a no-break, em or ideographic space before a
+    /// marker leaves the line paragraph text, as on GitHub. Two predicates
+    /// for one decision once hung the parser (a quote marker after U+00A0).
+    static func markerLine(_ line: String) -> String {
+        line.trimmingCharacters(in: spacesAndTabs)
+    }
 
     /// CommonMark's blank line (`MarkdownRenderer.isBlankLine`): a line of
     /// no-break spaces is text, not a separator.
@@ -675,7 +748,7 @@ struct MarkdownBlockParser: Sendable {
     /// definitions: a shortcut-reference image line (`![logo]`) is an image
     /// block, so it must not be a term either.
     private func isTermCandidate(_ line: String, references: [String: String]) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let trimmed = Self.markerLine(line)
         guard !Self.isBlank(line), Self.definitionText(of: line) == nil else { return false }
 
         // Fences, quotes, display math
@@ -684,7 +757,7 @@ struct MarkdownBlockParser: Sendable {
 
         // List items — bullets (task items included, they start `- [ ]`) and ordered
         if ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) { return false }
-        if trimmed.range(of: #"^(\d+)\.\s"#, options: .regularExpression) != nil { return false }
+        if trimmed.range(of: #"^(\d+)\.[ \t]"#, options: .regularExpression) != nil { return false }
 
         // Table rows (the table branch needs a separator to fire, but a pipe row
         // is still a table row, not a term) and separators
@@ -975,6 +1048,434 @@ struct MarkdownBlockParser: Sendable {
         }
         flushRow()
     }
+
+    // MARK: - Setext headings
+
+    /// A Setext heading's title: its lines, trimmed, joined with the line
+    /// breaks between them — GitHub's heading text keeps them, and its id
+    /// drops them (`Alpha⏎Beta` is `alphabeta`, where a space would be a
+    /// `-`); `MarkdownRenderer.shownHeadingTitle` shows each as a space. A
+    /// hard break's backslash is not text (an odd run of them ends the
+    /// line; trailing spaces are trimmed anyway).
+    static func setextTitle(_ lines: [String]) -> String {
+        let trimmed = lines.map(markerLine)
+        return trimmed.enumerated().map { index, text in
+            guard index < trimmed.count - 1 else { return text }
+            let backslashes = text.reversed().prefix(while: { $0 == "\\" }).count
+            return backslashes % 2 == 1 ? String(text.dropLast()) : text
+        }.joined(separator: "\n")
+    }
+
+    /// Where the paragraph that `line` (the line over a Setext underline)
+    /// ends starts in the text buffer: after its last blank line or rule.
+    /// Nil when that paragraph is a list item's — an item line starts it or
+    /// interrupts it, by the rule rows are cut by (`flushTextBuffer`).
+    static func setextParagraphStart(in buffer: [(line: String, originalIndex: Int)],
+                                     endingWith line: String) -> Int? {
+        var start = buffer.count
+        while start > 0, !isBlank(buffer[start - 1].line), !MarkdownRenderer.isThematicBreak(buffer[start - 1].line) {
+            start -= 1
+        }
+        let paragraph = buffer[start...].map(\.line) + [line]
+        for (offset, text) in paragraph.enumerated() where MarkdownRenderer.isListItem(text) {
+            if offset == 0 || MarkdownRenderer.canInterruptParagraph(text) { return nil }
+        }
+        return start
+    }
+
+    // MARK: - Fences and `$$` blocks
+
+    /// A quote's or alert's lines with each run of blank lines made ONE: a
+    /// blank line only separates paragraphs, and any run of them is one
+    /// paragraph break (GitHub, every nesting level; a definition the
+    /// pre-pass took out between two blank lines leaves none of its own).
+    /// Inside the quote's fence a blank line is code and stays.
+    static func collapsingBlankRuns(_ lines: [String]) -> [String] {
+        var result: [String] = []
+        result.reserveCapacity(lines.count)
+        var fence: Fence?
+        for line in lines {
+            let marker = markerLine(line)
+            if let open = fence {
+                if closesFence(marker, open) { fence = nil }
+            } else if let opening = fenceOpening(marker) {
+                fence = opening
+            } else if isBlank(line), let last = result.last, isBlank(last) {
+                continue
+            }
+            result.append(line)
+        }
+        return result
+    }
+
+    /// Columns of the spaces and tabs a line starts with (a tab runs to the
+    /// next multiple of 4, CommonMark).
+    static func indentColumns(_ line: String) -> Int {
+        var columns = 0
+        for character in line {
+            if character == " " {
+                columns += 1
+            } else if character == "\t" {
+                columns += 4 - columns % 4
+            } else {
+                break
+            }
+        }
+        return columns
+    }
+
+    /// `line` without up to `columns` columns of its leading spaces and tabs.
+    /// A tab that reaches past them leaves the columns it has left as spaces
+    /// (CommonMark: `\tTab` under a fence indented 2 is `  Tab`).
+    static func removingIndentation(_ line: String, upTo columns: Int) -> String {
+        guard columns > 0 else { return line }
+        var used = 0
+        var index = line.startIndex
+        while index < line.endIndex, used < columns {
+            let character = line[index]
+            let width: Int
+            if character == " " {
+                width = 1
+            } else if character == "\t" {
+                width = 4 - used % 4
+            } else {
+                break
+            }
+            index = line.index(after: index)
+            if used + width > columns {
+                return String(repeating: " ", count: used + width - columns) + line[index...]
+            }
+            used += width
+        }
+        return String(line[index...])
+    }
+
+    /// A code fence's marker character and length.
+    typealias Fence = (marker: Character, length: Int)
+
+    /// The fence `marker` (a `markerLine`) opens: three or more backticks or
+    /// tildes. THE opening test — the block loop, quote groups and the
+    /// definition pre-pass all ask it.
+    static func fenceOpening(_ marker: String) -> Fence? {
+        guard let first = marker.first, first == "`" || first == "~" else { return nil }
+        let length = marker.prefix(while: { $0 == first }).count
+        return length >= 3 ? (first, length) : nil
+    }
+
+    /// Whether `marker` closes `fence`: the same character, at least as many,
+    /// and nothing after them but spaces and tabs.
+    static func closesFence(_ marker: String, _ fence: Fence) -> Bool {
+        marker.hasPrefix(String(repeating: fence.marker, count: fence.length))
+            && MarkdownRenderer.isBlankLine(marker.drop(while: { $0 == fence.marker }))
+    }
+
+    /// Whether `marker` opens a `$$` block that runs to a `$$` line — not a
+    /// one-line `$$…$$` formula.
+    static func opensMultilineMath(_ marker: String) -> Bool {
+        marker.hasPrefix("$$")
+            && !String(marker.dropFirst(2)).trimmingCharacters(in: .whitespaces).hasSuffix("$$")
+    }
+
+    /// Whether `marker` closes a `$$` block.
+    static func closesMath(_ marker: String) -> Bool { marker == "$$" }
+
+    /// The fenced code and `$$` blocks of a document, followed line by line
+    /// the way the block loop reads them (fence first, then `$$`; inside one,
+    /// only its closing line matters). The definition pre-pass leaves their
+    /// lines alone: a definition inside one is that block's text.
+    struct VerbatimRegions {
+        private var fence: Fence?
+        private var inMath = false
+
+        /// Whether the line (its `markerLine`) opens, continues or closes
+        /// such a block.
+        mutating func contains(_ marker: String) -> Bool {
+            if let open = fence {
+                if MarkdownBlockParser.closesFence(marker, open) { fence = nil }
+                return true
+            }
+            if inMath {
+                if MarkdownBlockParser.closesMath(marker) { inMath = false }
+                return true
+            }
+            if let opening = MarkdownBlockParser.fenceOpening(marker) {
+                fence = opening
+                return true
+            }
+            if marker.hasPrefix("$$") {
+                inMath = MarkdownBlockParser.opensMultilineMath(marker)
+                return true
+            }
+            return false
+        }
+    }
+
+    // MARK: - Quote laziness
+
+    /// What a quote group's lines end in, as CommonMark reads them: an OPEN
+    /// paragraph (a paragraph's or a list item's text) is the one block a
+    /// lazy line may continue. A blank or empty quote line closes it, as do a
+    /// fenced code block (open or just closed), an ATX heading, a Setext
+    /// underline, a rule and a table.
+    struct QuoteTip {
+        private(set) var endsInParagraph = false
+        private var fence: Fence?
+        private var inTable = false
+        private var previousHadPipe = false
+
+        /// Whether the group's next line would start a paragraph: none is
+        /// open, and it is not in the quote's fence or table — where a link
+        /// definition may stand (`DefinitionPlacement`).
+        var admitsDefinition: Bool { fence == nil && !inTable && !endsInParagraph }
+
+        /// Inside the quote's fence.
+        var inFence: Bool { fence != nil }
+
+        /// A lazily continued line (no marker, or fewer markers than the
+        /// group): paragraph text whatever it looks like — CommonMark never
+        /// reads a lazy line as a table separator, a Setext underline or any
+        /// other structure, so the paragraph stays open for the next one.
+        mutating func takeLazy() {
+            endsInParagraph = true
+            previousHadPipe = false
+        }
+
+        /// A line of the group itself (marked at the group's level).
+        mutating func take(_ content: String) {
+            let marker = MarkdownBlockParser.markerLine(content)
+            if let open = fence {
+                // Inside the quote's fence: only its closing line matters.
+                if MarkdownBlockParser.closesFence(marker, open) { fence = nil }
+                endsInParagraph = false
+                return
+            }
+            defer { previousHadPipe = content.contains("|") }
+            if MarkdownRenderer.isBlankLine(content) {
+                endsInParagraph = false
+                inTable = false
+                return
+            }
+            if let opening = MarkdownBlockParser.fenceOpening(marker) {
+                fence = opening
+                endsInParagraph = false
+                inTable = false
+                return
+            }
+            // A row; a block start ends the table (`interruptsTable`).
+            if inTable, content.contains("|"), !MarkdownBlockParser.interruptsTable(content) {
+                endsInParagraph = false
+                return
+            }
+            inTable = false
+            if endsInParagraph, previousHadPipe,
+               marker.range(of: MarkdownTheme.tableSeparatorPattern, options: .regularExpression) != nil {
+                inTable = true
+                endsInParagraph = false
+                return
+            }
+            let nsRange = NSRange(content.startIndex..., in: content)
+            if MarkdownBlockParser.headerRegex.firstMatch(in: content, range: nsRange) != nil
+                || MarkdownRenderer.isThematicBreak(content) {
+                endsInParagraph = false
+                return
+            }
+            if endsInParagraph,
+               marker.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil
+                || marker.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
+                endsInParagraph = false
+                return
+            }
+            endsInParagraph = true
+        }
+    }
+
+    /// Whether `line` — a line without a quote marker, or what follows fewer
+    /// markers than the quote has — continues the paragraph a quote ends in
+    /// (CommonMark laziness): it is not blank and starts no block. Checked as
+    /// cmark does, against the DOCUMENT, not the paragraph: any list item ends
+    /// the quote (`2. b` too), and so does a lone HTML tag; `===`, an indented
+    /// line, a pipe row or `<span>` text continue it (GitHub, gh api markdown).
+    /// Our own block starts end it as well: a picture line (Markdown or HTML)
+    /// and `$$` stay the picture and the formula they are everywhere else.
+    private func continuesQuoteLazily(_ line: String, htmlImageLine: Bool,
+                                      references: [String: String]) -> Bool {
+        guard !htmlImageLine, Self.startsNoBlock(line) else { return false }
+        if InlineSyntaxScanner.standaloneImages(in: line[...], references: references) != nil { return false }
+        return true
+    }
+
+    /// Whether a block starts on `line`, which ends a table's body: GitHub
+    /// closes a table for any block start — a fence, a quote, an ATX
+    /// heading, a list item, an HTML block (gfm/h2_*.html) — and `$$` opens
+    /// a formula here. A fence or `$$` line taken as a row disagreed with the
+    /// definition pre-pass (`VerbatimRegions`), which reads it as a block.
+    static func interruptsTable(_ line: String) -> Bool {
+        !startsNoBlock(line) || markerLine(line).hasPrefix(">")
+    }
+
+    /// CommonMark's part of `continuesQuoteLazily`: not blank, and no block
+    /// starts on the line (fence, `$$`, ATX heading, rule, list item, HTML
+    /// block) — checked against the document, as cmark does.
+    static func startsNoBlock(_ line: String) -> Bool {
+        guard !isBlank(line) else { return false }
+        let marker = markerLine(line)
+        if fenceOpening(marker) != nil || marker.hasPrefix("$$") { return false }
+        let nsRange = NSRange(line.startIndex..., in: line)
+        if headerRegex.firstMatch(in: line, range: nsRange) != nil { return false }
+        if MarkdownRenderer.isThematicBreak(line) || MarkdownRenderer.isListItem(line) { return false }
+        if ["-", "*", "+"].contains(marker) { return false }   // an empty item
+        if startsHTMLBlock(marker) { return false }
+        return true
+    }
+
+    /// Whether the definition pre-pass may take a LINK definition out on the
+    /// next line: not where it would continue a paragraph. CommonMark: a
+    /// link definition cannot interrupt a paragraph; GitHub keeps such a
+    /// line as the paragraph's text — a list item's, a table's (its rows run
+    /// on) and a quote's lazy line included. (A footnote definition may
+    /// interrupt one, GitHub: the pre-pass takes those wherever they stand
+    /// outside fenced code.)
+    struct DefinitionPlacement {
+        private(set) var paragraphOpen = false
+        /// The quote group being read, grouped as the block loop groups it:
+        /// what its lines end in (`QuoteTip`) and its `>` count. A line with
+        /// more markers opens a nested quote, a new group; one with fewer
+        /// goes on lazily or starts a new group.
+        private var quote: QuoteTip?
+        private var quoteLevel = 0
+
+        /// A line of a fenced code or `$$` block (`VerbatimRegions`).
+        mutating func verbatim() {
+            paragraphOpen = false
+            quote = nil
+        }
+
+        /// A definition the pre-pass took out: it ends what came before.
+        mutating func definition() {
+            paragraphOpen = false
+            quote = nil
+        }
+
+        /// What a LINK definition on the next line (its `markerLine`) would
+        /// be read from, or nil where none may stand: the line itself where
+        /// no paragraph is open; what follows a quote line's markers where
+        /// the line starts a paragraph of its quote (GitHub: `> [x]: url`
+        /// defines `x` and leaves the quote empty) — a new quote, a deeper
+        /// one opened under the quote's text (`> a`, then `>> [x]: url`), or
+        /// a line of the group after no open paragraph. Not lazy text, nor
+        /// in the quote's fence or table.
+        func linkDefinitionText(_ marker: String) -> String? {
+            guard marker.hasPrefix(">") else { return paragraphOpen ? nil : marker }
+            let (level, content) = Self.quoteMarkers(of: marker)
+            let text = MarkdownBlockParser.markerLine(String(content))
+            switch step(level: level, content: String(content)) {
+            case .same:
+                return quote?.admitsDefinition == true ? text : nil
+            case .lazy:
+                return nil
+            case .newGroup:
+                // A deeper `>` inside the quote's fence is that fence's code.
+                if level > quoteLevel, quote?.inFence == true { return nil }
+                return text
+            }
+        }
+
+        /// How a quote line goes on from the group being read — the block
+        /// loop's grouping (lazy: fewer markers, continuing its paragraph).
+        private enum QuoteStep { case same, lazy, newGroup }
+
+        private func step(level: Int, content: String) -> QuoteStep {
+            guard let tip = quote else { return .newGroup }
+            if level == quoteLevel { return .same }
+            if level < quoteLevel, tip.endsInParagraph, MarkdownBlockParser.startsNoBlock(content) {
+                return .lazy
+            }
+            return .newGroup
+        }
+
+        /// A quote line's `>` count and what follows its markers (each `>`
+        /// with one optional space after it).
+        static func quoteMarkers(of marker: String) -> (level: Int, content: Substring) {
+            var content = marker[...]
+            var level = 0
+            while content.hasPrefix(">") {
+                content = content.dropFirst()
+                level += 1
+                if content.hasPrefix(" ") { content = content.dropFirst() }
+            }
+            return (level, content)
+        }
+
+        /// Any other line, kept for the block loop.
+        mutating func kept(_ line: String) {
+            if MarkdownRenderer.isBlankLine(line) {
+                paragraphOpen = false
+                quote = nil
+                return
+            }
+            let marker = MarkdownBlockParser.markerLine(line)
+            if marker.hasPrefix(">") {
+                let (level, content) = Self.quoteMarkers(of: marker)
+                var tip = quote ?? QuoteTip()
+                switch step(level: level, content: String(content)) {
+                case .same:
+                    tip.take(String(content))
+                case .lazy:
+                    tip.takeLazy()
+                case .newGroup:
+                    tip = QuoteTip()
+                    tip.take(String(content))
+                    quoteLevel = level
+                }
+                quote = tip
+                paragraphOpen = tip.endsInParagraph
+                return
+            }
+            if var tip = quote, tip.endsInParagraph, MarkdownBlockParser.startsNoBlock(line) {
+                tip.takeLazy()
+                quote = tip
+                paragraphOpen = true
+                return
+            }
+            quote = nil
+            let nsRange = NSRange(line.startIndex..., in: line)
+            if MarkdownBlockParser.headerRegex.firstMatch(in: line, range: nsRange) != nil
+                || MarkdownRenderer.isThematicBreak(line)
+                || (paragraphOpen && marker.range(of: MarkdownTheme.setextH1Pattern,
+                                                   options: .regularExpression) != nil) {
+                paragraphOpen = false
+                return
+            }
+            paragraphOpen = true
+        }
+    }
+
+    /// CommonMark's HTML block starts (kinds 1-7), as far as a lazy line needs
+    /// them: `<!…`/`<?…`, a block-level or raw tag (`<div`, `</p>`, `<pre`),
+    /// or a line that is one complete tag. `<span>text` is inline HTML.
+    static func startsHTMLBlock(_ marker: String) -> Bool {
+        guard marker.hasPrefix("<") else { return false }
+        if marker.hasPrefix("<!") || marker.hasPrefix("<?") { return true }
+        let afterBracket = marker.dropFirst().drop(while: { $0 == "/" })
+        let name = afterBracket.prefix(while: { $0.isLetter || $0.isNumber || $0 == "-" }).lowercased()
+        guard !name.isEmpty, name.first!.isLetter else { return false }
+        let rest = afterBracket.dropFirst(name.count)
+        let ends = rest.isEmpty || rest.first == " " || rest.first == "\t" || rest.first == ">" || rest.hasPrefix("/>")
+        if ends, htmlBlockTags.contains(name) { return true }
+        return marker.range(of: #"^</?[A-Za-z][A-Za-z0-9-]*(\s[^<>]*)?/?>[ \t]*$"#,
+                            options: .regularExpression) != nil
+    }
+
+    /// CommonMark HTML block kinds 1 and 6.
+    private static let htmlBlockTags: Set<String> = [
+        "pre", "script", "style", "textarea",
+        "address", "article", "aside", "base", "basefont", "blockquote", "body", "caption", "center",
+        "col", "colgroup", "dd", "details", "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption",
+        "figure", "footer", "form", "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head",
+        "header", "hr", "html", "iframe", "legend", "li", "link", "main", "menu", "menuitem", "nav",
+        "noframes", "ol", "optgroup", "option", "p", "param", "search", "section", "summary", "table",
+        "tbody", "td", "tfoot", "th", "thead", "title", "tr", "track", "ul",
+    ]
 
     /// A text row waiting for `renderPendingRows`: its soft-break joined lines
     /// and where its block sits in the block list.

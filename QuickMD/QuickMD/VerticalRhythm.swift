@@ -329,6 +329,46 @@ enum RowGeometry {
     }
 }
 
+// MARK: - Search jump: the aim at the match
+
+/// A search jump into a block taller than the window whose match could not
+/// be located yet (its view was not on display): the jump goes to the block,
+/// and this aims it at the match once it has landed
+/// (`VirtualBlockList.aimAtPendingMatch`, `RowGeometry.searchTarget`).
+///
+/// Anything the reader does to the scroll position after the request — the
+/// wheel or trackpad, a scroller drag, a scroll key, a drag-select at the
+/// edge — takes the aim away: they have taken over, and a glide to the match
+/// when the jump lands would yank the view from where they scrolled to. A
+/// new table drops it too.
+struct PendingMatchAim: Equatable {
+    /// The block the jump went to; nil when nothing is pending.
+    private(set) var blockId: String?
+
+    /// A search jump was sent to `blockId`; `needsMatch`: its match is not
+    /// known yet (`RowGeometry.searchTarget`).
+    mutating func jumped(to blockId: String, needsMatch: Bool) {
+        self.blockId = needsMatch ? blockId : nil
+    }
+
+    /// The reader moved the document themselves.
+    mutating func readerScrolled() { blockId = nil }
+
+    /// Taken, given up, or a new table.
+    mutating func drop() { blockId = nil }
+
+    /// Whether a scroll-wheel event is the reader's scroll: it moves the
+    /// document (a vertical delta), or a gesture or its momentum begins or
+    /// goes on. Fingers resting on the trackpad (`.mayBegin`), a gesture's
+    /// end and zero-delta events move nothing and leave the aim alone.
+    static func isReaderScroll(_ phase: NSEvent.Phase, _ momentumPhase: NSEvent.Phase,
+                               _ deltaY: CGFloat) -> Bool {
+        if deltaY != 0 { return true }
+        let moving: NSEvent.Phase = [.began, .changed]
+        return !phase.isDisjoint(with: moving) || !momentumPhase.isDisjoint(with: moving)
+    }
+}
+
 // MARK: - Print / PDF
 
 /// The rhythm for print and PDF (`PDFExportManager.generateMultiPagePDF`):

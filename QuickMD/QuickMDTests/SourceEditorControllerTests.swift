@@ -611,6 +611,63 @@ final class SourceEditorControllerTests: XCTestCase {
         XCTAssertEqual(narrow, .init(horizontalInset: 320, columnWidth: 360, verticalInset: 48))
     }
 
+    /// ⌘+ in Reading Mode with the editor open: the list keeps showing the
+    /// blocks of the old zoom, with that zoom's column cap, until the zoom's
+    /// parse lands. The editor's COLUMN follows the zoom the document is
+    /// shown at (1.14.4 took the requested one: a 1440 pt column over a
+    /// 720 pt list column, and leaving Source Edit then moved the text
+    /// sideways); its FONT follows the requested zoom at once
+    /// (`testTheEditorFontFollowsTheRequestedZoomAtOnce`).
+    func testTheEditorColumnFollowsTheZoomTheDocumentIsShownAt() {
+        let requested = 2.0, shown = 1.0
+        let (controller, scrollView, _) = makeEditor(
+            "text", width: 1800,
+            style: .overDocument(theme: light, fontScale: requested, shownFontScale: shown, isReadingMode: true))
+        let inner = floor(scrollView.contentView.bounds.width) - 64
+        func listColumn(_ scale: Double) -> CGFloat {
+            BlockLayout.Document.columnWidth(inner: inner,
+                                             cap: BlockLayout.Document.readingColumnCap(fontScale: CGFloat(scale)))
+        }
+        XCTAssertEqual(listColumn(shown), 720)
+        XCTAssertEqual(listColumn(requested), 1440)   // the column the editor used to take
+        XCTAssertEqual(controller.textView.textContainer!.size.width, listColumn(shown))
+        // The zoom's parse lands: the list and the editor move together.
+        controller.apply(style: .overDocument(theme: light, fontScale: requested, shownFontScale: requested,
+                                              isReadingMode: true))
+        XCTAssertEqual(controller.textView.textContainer!.size.width, listColumn(requested))
+    }
+
+    /// The editor's text changes size the moment ⌘+ is pressed, as before
+    /// 636de0e — not when the zoom's re-parse lands (about 2 s on an
+    /// 11.7K-line document, and only once at the end of ⌘+⌘+⌘+, whose earlier
+    /// parses are superseded). Only the Reading Mode column waits for it.
+    func testTheEditorFontFollowsTheRequestedZoomAtOnce() {
+        let (controller, scrollView, _) = makeEditor(
+            "text", width: 1800,
+            style: .overDocument(theme: light, fontScale: 1, shownFontScale: 1, isReadingMode: true))
+        let base = BlockLayout.Code.codeFontSize
+        XCTAssertEqual(controller.textView.font?.pointSize, base)
+        let inner = floor(scrollView.contentView.bounds.width) - 64
+        for requested in [1.25, 1.5, 2.0] {
+            // ⌘+ pressed, the parse still out: new font, the list's column.
+            controller.apply(style: .overDocument(theme: light, fontScale: requested, shownFontScale: 1,
+                                                  isReadingMode: true))
+            XCTAssertEqual(controller.textView.font?.pointSize, base * CGFloat(requested), "× \(requested)")
+            XCTAssertEqual(controller.textView.textContainer!.size.width, 720, "× \(requested)")
+        }
+        // The last parse lands: the column follows; the font stays.
+        controller.apply(style: .overDocument(theme: light, fontScale: 2, shownFontScale: 2, isReadingMode: true))
+        XCTAssertEqual(controller.textView.font?.pointSize, base * 2)
+        XCTAssertEqual(controller.textView.textContainer!.size.width,
+                       BlockLayout.Document.columnWidth(inner: inner,
+                                                        cap: BlockLayout.Document.readingColumnCap(fontScale: 2)))
+        // Outside Reading Mode there is no cap to wait for.
+        let standard = SourceEditorController.Style.overDocument(theme: light, fontScale: 1.5, shownFontScale: 1,
+                                                                 isReadingMode: false)
+        XCTAssertEqual(standard.fontScale, 1.5)
+        XCTAssertEqual(standard.columnFontScale, 1)
+    }
+
     func testTextContainerFollowsTheViewWidthAndTheLayoutStyle() {
         let (controller, scrollView, window) = makeEditor("text", width: 1000)
         let view = controller.textView

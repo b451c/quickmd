@@ -254,7 +254,7 @@ struct MarkdownRenderer: Sendable {
     /// `(prefix, level)` of an ordered list item, prefix exactly as
     /// `renderListItem` will emit it (indent spaces + normalised number).
     private static func orderedItem(_ line: String) -> (prefix: String, level: Int)? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let trimmed = markerLine(line)
         guard trimmed.range(of: Self.orderedMarkerPattern, options: .regularExpression) != nil else { return nil }
         let level = listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" }))
         let number = Int(trimmed.prefix(while: { $0.isNumber })) ?? 1
@@ -353,6 +353,19 @@ struct MarkdownRenderer: Sendable {
         line.allSatisfy { $0 == " " || $0 == "\t" }
     }
 
+    /// CommonMark's white space around block and list markers: spaces and
+    /// tabs only. A no-break, em or ideographic space before a marker (or
+    /// after `#`, a list marker or a rule) leaves the line paragraph text, as
+    /// on GitHub; the patterns in `MarkdownTheme` say `[ \t]` for the same
+    /// reason. `MarkdownBlockParser.markerLine` trims with it too.
+    static let markerWhitespace = CharacterSet(charactersIn: " \t")
+
+    /// `line` without the spaces and tabs around it — what every list,
+    /// rule and heading marker is looked for in.
+    private static func markerLine(_ line: String) -> String {
+        line.trimmingCharacters(in: markerWhitespace)
+    }
+
     /// A continuation line's text: CommonMark strips its leading spaces and
     /// tabs, and nothing else (a no-break space is text).
     private static func continuationText(_ text: String) -> String {
@@ -362,13 +375,13 @@ struct MarkdownRenderer: Sendable {
     /// An ordered item's marker (CommonMark): one to nine digits, then `.` or
     /// `)`, then white space. Drawn as `n.` whichever delimiter it had, as
     /// GitHub draws both (an HTML list).
-    static let orderedMarkerPattern = #"^(\d{1,9})[.)]\s"#
+    static let orderedMarkerPattern = #"^(\d{1,9})[.)][ \t]"#
 
     /// `line` (an ordered item line that may not interrupt a paragraph) as
     /// paragraph text: its delimiter backslash-escaped, so `renderLine` draws
     /// `1984. A year` as the words it is and never as an item.
     static func asParagraphText(_ line: String) -> String {
-        line.replacingOccurrences(of: #"^(\s*\d{1,9})([.)])"#, with: "$1\\\\$2", options: .regularExpression)
+        line.replacingOccurrences(of: #"^([ \t]*\d{1,9})([.)])"#, with: "$1\\\\$2", options: .regularExpression)
     }
 
     /// Whether this item line may interrupt a paragraph (CommonMark): a
@@ -378,17 +391,17 @@ struct MarkdownRenderer: Sendable {
     /// it paragraph text, so it is no item and no block boundary.
     static func canInterruptParagraph(_ line: String) -> Bool {
         guard isListItem(line) else { return false }
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let trimmed = markerLine(line)
         if let marker = trimmed.range(of: #"^\d{1,9}[.)]"#, options: .regularExpression) {
             guard Int(trimmed[marker].dropLast()) == 1 else { return false }
-            return !trimmed[marker.upperBound...].trimmingCharacters(in: .whitespaces).isEmpty
+            return !isBlankLine(trimmed[marker.upperBound...])
         }
-        return !trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces).isEmpty
+        return !isBlankLine(trimmed.dropFirst(2))
     }
 
     /// A thematic break (`---`, `***`, `___`) — `renderLine` draws it as a rule.
     static func isThematicBreak(_ line: String) -> Bool {
-        line.trimmingCharacters(in: .whitespaces)
+        markerLine(line)
             .range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil
     }
 
@@ -396,7 +409,7 @@ struct MarkdownRenderer: Sendable {
     /// get glued into the paragraph before it.
     private static func classify(_ line: String) -> LineKind {
         if isBlankLine(line) { return .structural }
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let trimmed = markerLine(line)
         let nsRange = NSRange(line.startIndex..., in: line)
         if headerRegex.firstMatch(in: line, range: nsRange) != nil { return .structural }
         if trimmed.range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil { return .structural }
@@ -416,7 +429,7 @@ struct MarkdownRenderer: Sendable {
     // MARK: - Line Rendering
 
     private func renderLine(_ line: String, hangingPrefix: String? = nil) -> AttributedString {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let trimmed = Self.markerLine(line)
 
         // Header - extract hash count from regex group, not space position
         let nsRange = NSRange(line.startIndex..., in: line)
@@ -465,8 +478,23 @@ struct MarkdownRenderer: Sendable {
 
     // MARK: - Block Renderers
 
+    /// A heading's title as shown: a Setext title keeps its paragraph's line
+    /// breaks (`MarkdownBlockParser.setextTitle`) and each reads as a space,
+    /// like a soft break in a paragraph — in the heading, the Contents
+    /// sidebar and search alike.
+    static func shownHeadingTitle(_ title: String) -> String {
+        title.replacingOccurrences(of: "\n", with: " ")
+    }
+
+    /// The text GitHub takes a heading's id from: the rendered title with a
+    /// Setext title's line breaks KEPT — the slug drops them (`Alpha⏎Beta`
+    /// is `alphabeta`), where the space shown would be a `-`.
+    func headingAnchorText(_ title: String) -> String {
+        String(Self.formulaSourceWithEscapes(renderInlineFormatting(title)).characters)
+    }
+
     func renderHeader(_ text: String, level: Int) -> AttributedString {
-        var attr = Self.formulaSourceWithEscapes(renderInlineFormatting(text))
+        var attr = Self.formulaSourceWithEscapes(renderInlineFormatting(Self.shownHeadingTitle(text)))
         attr.setDualFont(size: headerFontSize(level: level), bold: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         return attr
@@ -878,7 +906,10 @@ struct MarkdownRenderer: Sendable {
             }
         }
 
-        var code = String(afterOpening[..<closeRange.lowerBound])
+        // A line break inside a code span is a space (CommonMark). Only a
+        // Setext title's anchor text still has one here
+        // (`headingAnchorText`): `code⏎span` is `code-span` on GitHub.
+        var code = String(afterOpening[..<closeRange.lowerBound]).replacingOccurrences(of: "\n", with: " ")
 
         // Strip one leading and one trailing space for double-backtick (CommonMark spec)
         if backtickCount == 2 && code.hasPrefix(" ") && code.hasSuffix(" ") && code.count > 1 {

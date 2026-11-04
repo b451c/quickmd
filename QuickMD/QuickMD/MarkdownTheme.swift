@@ -291,18 +291,18 @@ struct MarkdownTheme: Sendable, Identifiable {
 
     /// Matches table separator row: |---|---|---| or variants with alignment colons
     /// Examples: |:---|:---:|---:|, |---|---|
-    static let tableSeparatorPattern = #"^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$"#
+    static let tableSeparatorPattern = #"^\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$"#
 
     /// Matches ATX-style headers: # H1, ## H2, ... ###### H6
     /// Captures: (1) hash marks, (2) header text
-    static let headerPattern = #"^(#{1,6})\s+(.*)$"#
+    static let headerPattern = #"^(#{1,6})[ \t]+(.*)$"#
 
     /// Matches horizontal rules: ***, ---, ___ (3 or more)
-    static let horizontalRulePattern = #"^(\*{3,}|-{3,}|_{3,})\s*$"#
+    static let horizontalRulePattern = #"^(\*{3,}|-{3,}|_{3,})[ \t]*$"#
 
     /// Matches task list items: - [ ] or - [x] with optional indentation
     /// Captures: (1) indent whitespace, (2) check state (space or x), (3) content
-    static let taskListPattern = #"^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$"#
+    static let taskListPattern = #"^([ \t]*)[-*+][ \t]+\[([ xX])\][ \t]+(.*)$"#
 
     // MARK: - Escape Characters
 
@@ -321,11 +321,11 @@ struct MarkdownTheme: Sendable, Identifiable {
 
     /// Matches reference link definitions: [id]: url or [id]: <url> with optional title
     /// Captures: (1) reference ID, (2) URL
-    static let referenceLinkDefinitionPattern = #"^\s*\[([^\]]+)\]:\s+<?([^\s>]+)>?"#
+    static let referenceLinkDefinitionPattern = #"^[ \t]*\[([^\]]+)\]:[ \t]+<?([^\s>]+)>?"#
 
     /// Matches footnote definitions: [^id]: text
     /// Captures: (1) footnote ID, (2) content
-    static let footnoteDefinitionPattern = #"^\s*\[\^([^\]]+)\]:\s+(.*)"#
+    static let footnoteDefinitionPattern = #"^[ \t]*\[\^([^\]]+)\]:[ \t]+(.*)"#
 
     // MARK: - URL Autolinking
 
@@ -337,12 +337,12 @@ struct MarkdownTheme: Sendable, Identifiable {
 
     /// Matches setext H1 underline: one or more = signs
     /// Example: Title\n=====
-    static let setextH1Pattern = #"^=+\s*$"#
+    static let setextH1Pattern = #"^=+[ \t]*$"#
 
     /// Matches setext H2 underline: three or more - signs
     /// Example: Subtitle\n-------
     /// Note: Must be 3+ to distinguish from horizontal rule in some contexts
-    static let setextH2Pattern = #"^-{3,}\s*$"#
+    static let setextH2Pattern = #"^-{3,}[ \t]*$"#
 }
 
 // MARK: - Color Hex Extension

@@ -9,6 +9,7 @@ import Foundation
 struct ToCEntry: Identifiable, Sendable {
     let id: String
     let level: Int
+    /// As shown (`MarkdownRenderer.shownHeadingTitle`): one line.
     let title: String
     let sourceLine: Int
 
@@ -17,6 +18,15 @@ struct ToCEntry: Identifiable, Sendable {
     /// span's `&lt;` kept), the same text the heading's id is made from.
     func shownTitle(renderer: MarkdownRenderer) -> String {
         String(renderer.renderHeader(title, level: level).characters)
+    }
+
+    /// The headings of `blocks`, in document order.
+    static func entries(of blocks: [MarkdownBlock]) -> [ToCEntry] {
+        blocks.compactMap { block in
+            guard case .heading(let level, let title, let sourceLine) = block.content else { return nil }
+            return ToCEntry(id: block.id, level: level, title: MarkdownRenderer.shownHeadingTitle(title),
+                            sourceLine: sourceLine)
+        }
     }
 }
 
@@ -106,12 +116,14 @@ enum HeadingAnchors {
     }
 
     /// The headings of `blocks` as links see them: block id and the text the
-    /// heading shows (`renderHeader`'s characters, as `HeadingBlockView`).
+    /// heading shows (`renderHeader`'s characters, as `HeadingBlockView`),
+    /// with a Setext title's line breaks kept for the slug to drop
+    /// (`MarkdownRenderer.headingAnchorText`).
     static func headings(of blocks: [MarkdownBlock],
                          renderer: MarkdownRenderer) -> [(id: String, text: String)] {
         blocks.compactMap { block in
-            guard case .heading(let level, let title, _) = block.content else { return nil }
-            return (block.id, String(renderer.renderHeader(title, level: level).characters))
+            guard case .heading(_, let title, _) = block.content else { return nil }
+            return (block.id, renderer.headingAnchorText(title))
         }
     }
 

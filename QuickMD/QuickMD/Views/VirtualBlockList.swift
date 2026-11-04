@@ -385,8 +385,10 @@ struct VirtualBlockList: NSViewRepresentable {
         private var isSwitchingLayout = false
         private var layoutSwitchGeneration = 0
         /// A search jump into a block taller than the content area whose match
-        /// could not be located yet (`aimAtPendingMatch`): that block's id.
-        private var pendingMatchRow: String?
+        /// could not be located yet (`aimAtPendingMatch`).
+        private var matchAim = PendingMatchAim()
+        /// Scroller drags and trackpad scrolls (`PendingMatchAim.readerScrolled`).
+        private var liveScrollObserver: NSObjectProtocol?
         #if DEBUG
         /// Where the last `setContentTop` left the content top, to tell a clip
         /// move this list made from one something else made (logged with the
@@ -453,6 +455,7 @@ struct VirtualBlockList: NSViewRepresentable {
         deinit {
             widthWork?.cancel()
             if let frameObserver { NotificationCenter.default.removeObserver(frameObserver) }
+            if let liveScrollObserver { NotificationCenter.default.removeObserver(liveScrollObserver) }
             #if DEBUG
             debugObservers.forEach { NotificationCenter.default.removeObserver($0) }
             #endif
@@ -467,6 +470,12 @@ struct VirtualBlockList: NSViewRepresentable {
             scrollView.selectionController = selection
             scrollView.onEndLiveResize = { [weak self] in
                 self?.clipFrameChanged(afterLiveResize: true)
+            }
+            scrollView.onReaderScroll = { [weak self] in self?.matchAim.readerScrolled() }
+            liveScrollObserver = NotificationCenter.default.addObserver(
+                forName: NSScrollView.willStartLiveScrollNotification, object: scrollView, queue: nil
+            ) { [weak self] _ in
+                self?.matchAim.readerScrolled()
             }
             frameObserver = NotificationCenter.default.addObserver(
                 forName: NSView.frameDidChangeNotification,
@@ -566,7 +575,7 @@ struct VirtualBlockList: NSViewRepresentable {
             self.anchor = nil
             isJumping = false
             isSwitchingLayout = false
-            pendingMatchRow = nil
+            matchAim.drop()
             reportedBlocks = []
 
             blocks = newBlocks
@@ -951,7 +960,7 @@ struct VirtualBlockList: NSViewRepresentable {
             listLog.debug("scrollRequest: \(request.blockId, privacy: .public) row \(row) anchor=\(String(describing: request.anchor), privacy: .public) target=\(target, format: .fixed(precision: 1))")
             #endif
             place(row: row, offset: target - blockTopY(row), animated: request.animated)
-            pendingMatchRow = needsMatch ? request.blockId : nil
+            matchAim.jumped(to: request.blockId, needsMatch: needsMatch)
             if needsMatch, !isJumping {
                 // No glide to wait for (not animated, or already there).
                 DispatchQueue.main.async { [weak self] in self?.aimAtPendingMatch() }
@@ -975,11 +984,12 @@ struct VirtualBlockList: NSViewRepresentable {
         /// the next layout pass; one is forced, and failing that it is asked
         /// again on the next turns of the run loop.
         private func aimAtPendingMatch(retries: Int = 2) {
-            guard let blockId = pendingMatchRow else { return }
-            // Not if the reader has scrolled on meanwhile.
+            guard let blockId = matchAim.blockId else { return }
+            // Not if the reader has scrolled on meanwhile (their scroll drops
+            // `matchAim`; the anchor check is the belt to those braces).
             guard let tableView, let scrollView, let row = rowForBlockId[blockId],
                   anchoredRow(contentTop: contentTopY()) == row else {
-                pendingMatchRow = nil
+                matchAim.drop()
                 return
             }
             var matchMidY = focusedMatchMidY(row: row)
@@ -991,11 +1001,11 @@ struct VirtualBlockList: NSViewRepresentable {
                 if retries > 0 {
                     DispatchQueue.main.async { [weak self] in self?.aimAtPendingMatch(retries: retries - 1) }
                 } else {
-                    pendingMatchRow = nil
+                    matchAim.drop()
                 }
                 return
             }
-            pendingMatchRow = nil
+            matchAim.drop()
             let insets = scrollView.contentInsets
             let contentHeight = scrollView.contentView.bounds.height - insets.top - insets.bottom
             let target = matchMidY - contentHeight / 2
@@ -1507,6 +1517,16 @@ private struct RowHeightReporter: ViewModifier {
 /// or two of the user letting go instead of waiting out the debounce.
 final class BlockScrollView: NSScrollView {
     var onEndLiveResize: (() -> Void)?
+    /// The reader scrolled: wheel or trackpad here, a scroll key or a
+    /// drag-select at the edge (`BlockTableView.scrollVertically`).
+    var onReaderScroll: (() -> Void)?
+
+    override func scrollWheel(with event: NSEvent) {
+        if PendingMatchAim.isReaderScroll(event.phase, event.momentumPhase, event.scrollingDeltaY) {
+            onReaderScroll?()
+        }
+        super.scrollWheel(with: event)
+    }
     /// Clicks in the content insets above the first / below the last row land
     /// on the clip view, whose responder chain ends here, not at the table —
     /// they still belong to the document (a click there clears the selection,
@@ -1719,8 +1739,10 @@ final class BlockTableView: NSTableView {
         enclosingScrollView?.verticalLineScroll ?? 10
     }
 
+    /// The reader's own scroll (keys, a drag-select at the edge).
     func scrollVertically(by dy: CGFloat) {
         guard let scrollView = enclosingScrollView else { return }
+        (scrollView as? BlockScrollView)?.onReaderScroll?()
         let clipView = scrollView.contentView
         let proposed = NSRect(origin: NSPoint(x: clipView.bounds.origin.x,
                                              y: clipView.bounds.origin.y + dy),

@@ -326,8 +326,9 @@ struct MarkdownView: View {
                 Group {
                     if editSession.isActive {
                         SourceEditorView(controller: editSession.editor,
-                                         style: .init(theme: theme, fontScale: fontScale,
-                                                      isReadingLayout: isReadingMode))
+                                         style: .overDocument(theme: theme, fontScale: fontScale,
+                                                              shownFontScale: renderedFontScale,
+                                                              isReadingMode: isReadingMode))
                     }
                 }
                 // An animated transaction from elsewhere (a toast, a sidebar)
@@ -733,12 +734,7 @@ struct MarkdownView: View {
                                                       theme: currentTheme, fontScale: scale,
                                                       contentWidth: width, math: .swiftMath)
                 : .empty
-            headings = blocks.compactMap { block in
-                if case .heading(let level, let title, let sourceLine) = block.content {
-                    return ToCEntry(id: block.id, level: level, title: title, sourceLine: sourceLine)
-                }
-                return nil
-            }
+            headings = ToCEntry.entries(of: blocks)
             // A landing that waited for THIS parse (Source Edit saved, then
             // left before the re-parse arrived): requested in the transaction
             // that installs the blocks, so it wins over the list's own anchor
@@ -774,17 +770,19 @@ struct MarkdownView: View {
             let seeds = heightCache.snapshot
             // Images shown before: their rows are computed at the new width.
             let imageSizes = heightCache.imageSizesSnapshot
-            // Inline-math paragraphs: hand the previous pass's strings back so the
-            // main-actor step re-wraps them instead of re-rendering every `$…$`
-            // segment through SwiftMath. Safe only because this task never runs
-            // across a content change — the guard below drops the result if a
-            // parse landed meanwhile, and everything that alters the characters
-            // (text, theme, fonts, zoom) goes through a re-parse.
+            // The previous pass's strings, handed back so they are only re-wrapped:
+            // quote and alert bodies (off-main, `measure` — not rendered from
+            // their source again) and inline-math paragraphs (the main-actor
+            // step — not every `$…$` segment through SwiftMath again). Safe
+            // only because this task never runs across a content change — the
+            // guard below drops the result if a parse landed meanwhile, and
+            // everything that alters the characters (text, theme, fonts, zoom)
+            // goes through a re-parse.
             let reusableStrings = measured.converted
             let raw: MeasuredBlocks = await Task.detached(priority: .userInitiated) {
                 BlockHeightMeasurer.measure(blocks: blocks, theme: currentTheme, fontScale: scale,
                                             contentWidth: width, heightSeeds: seeds,
-                                            imageSizes: imageSizes, math: nil)
+                                            imageSizes: imageSizes, reusing: reusableStrings, math: nil)
             }.value
             // A parse that landed while we were measuring owns the state now —
             // its own transaction published a matching table.

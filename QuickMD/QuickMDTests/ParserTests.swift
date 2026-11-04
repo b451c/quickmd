@@ -628,6 +628,26 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(linked, ["the guide"])
     }
 
+    /// Merge check (vertical-rhythm × reference inlining): a quote's lazy
+    /// lines and collapsed blank runs are part of the stored body the
+    /// references are resolved in; a definition taken out of a quote
+    /// (`DefinitionPlacement`) has its destination's character references
+    /// decoded like any other; a quote's footnote keeps the document's number.
+    func testQuoteReferencesSurviveLazyLinesBlankRunsAndQuoteDefinitions() {
+        let md = "> [q]: https://e.x/a&amp;b\n>\n> See [q] and\nlazy [the\n> guide][d][^b].\n>\n>\n>\n> Then [q].\n\n"
+            + "Body[^a].\n\n[d]: https://e.x/d&#38;e\n[^a]: First.\n[^b]: Second.\n"
+        let blocks = parse(md)
+        guard case .blockquote(let quote, _) = blocks[0].content else { return XCTFail("quote") }
+        let plain = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
+        let shown = plain.renderQuotedBody(quote)
+        let links = shown.runs.compactMap { run -> String? in
+            run.link.map { "\(String(shown[run.range].characters))=\($0.absoluteString)" }
+        }
+        XCTAssertEqual(links, ["q=https://e.x/a&b", "the guide=https://e.x/d&e", "q=https://e.x/a&b"])
+        XCTAssertTrue(String(shown.characters).contains("guide\u{00B2}."), String(shown.characters))
+        XCTAssertFalse(quote.contains("\n\n\n"), "one paragraph break per blank run")
+    }
+
     /// The rewrite must draw exactly what the paragraph renderer (which HAS the
     /// definitions) draws for the same line: characters and links.
     func testReferenceInliningMatchesTheDefinitionAwareRenderer() {

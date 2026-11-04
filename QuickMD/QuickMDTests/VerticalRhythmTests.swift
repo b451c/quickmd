@@ -381,7 +381,9 @@ final class VerticalRhythmTests: XCTestCase {
     }
 
     func testNestedQuoteGroupsJoinTheirQuote() {
-        let blocks = parse("Text.\n\n> outer\n>> inner\n> outer again\n\n> separate quote")
+        // The empty `>` line closes the inner quote's paragraph: without it
+        // `> outer again` would continue that paragraph lazily (CommonMark).
+        let blocks = parse("Text.\n\n> outer\n>> inner\n>\n> outer again\n\n> separate quote")
         XCTAssertEqual(blocks.count, 5)
         XCTAssertEqual(blocks.map(\.joinsPrevious), [false, false, true, true, false])
         let measured = measure(blocks)
@@ -470,6 +472,584 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(separate.count, 3)
         XCTAssertEqual(separate[0], separate[1])
         XCTAssertNotEqual(separate[1], separate[2])
+    }
+
+    /// ⌘G into a block taller than the window whose view is not on display:
+    /// the jump goes to the block and aims at the match when it lands. The
+    /// reader scrolling inside the block during the glide used to leave the
+    /// aim in place (only "is the anchor row still there" was checked, and
+    /// the glide ends on it), so the view was yanked to the match. Their
+    /// scroll takes the aim away now; nothing else does until it is taken.
+    func testASearchJumpsAimAtItsMatchIsDroppedWhenTheReaderScrolls() {
+        var aim = PendingMatchAim()
+        aim.jumped(to: "code-3", needsMatch: true)
+        XCTAssertEqual(aim.blockId, "code-3")   // lands untouched: aims
+        aim.readerScrolled()
+        XCTAssertNil(aim.blockId)               // a wheel during the glide: stays where they are
+        aim.jumped(to: "code-3", needsMatch: false)
+        XCTAssertNil(aim.blockId)               // the match was known: centred at once
+        aim.jumped(to: "table-1", needsMatch: true)
+        aim.jumped(to: "code-9", needsMatch: true)
+        XCTAssertEqual(aim.blockId, "code-9")   // the latest jump's
+        aim.drop()
+        XCTAssertNil(aim.blockId)               // a new table
+    }
+
+    /// An alert marker is `[!KIND]` with spaces or tabs around it (GitHub,
+    /// gh api markdown in gfm mode): a no-break space after it leaves a
+    /// plain quote; two trailing spaces still make the alert.
+    func testAnAlertMarkerTakesSpacesAndTabsOnly() throws {
+        XCTAssertEqual(try quoteShape("> [!NOTE]\u{00A0}\n> body\n"), ["q1:[!NOTE]\u{00A0}\nbody"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]  \n> body\n"), ["alert:note:body"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\t\n> body\n"), ["alert:note:body"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> body\n"), ["alert:note:body"])
+        XCTAssertNil(AlertKind(markerLine: "\u{2003}[!TIP]"))
+        XCTAssertEqual(AlertKind(markerLine: " [!TIP] "), .tip)
+    }
+
+    /// Which wheel events are the reader's scroll and drop a jump's aim: the
+    /// ones that move the document. Fingers resting on the trackpad
+    /// (`.mayBegin`), a gesture's end and zero-delta events used to drop it
+    /// too, so ⌘G with fingers on the trackpad landed on the block's centre.
+    func testOnlyAWheelEventThatScrollsDropsTheAim() {
+        let scrolls = PendingMatchAim.isReaderScroll
+        XCTAssertFalse(scrolls([.mayBegin], [], 0))           // fingers resting
+        XCTAssertFalse(scrolls([], [], 0))                    // a zero-delta event
+        XCTAssertFalse(scrolls([.ended], [], 0))              // the gesture lifts
+        XCTAssertFalse(scrolls([.cancelled], [], 0))
+        XCTAssertFalse(scrolls([.stationary], [], 0))
+        XCTAssertFalse(scrolls([], [.ended], 0))              // momentum runs out
+        XCTAssertTrue(scrolls([], [], -3))                    // a mouse wheel notch
+        XCTAssertTrue(scrolls([.began], [], 0))               // a gesture starts
+        XCTAssertTrue(scrolls([.changed], [], 1.5))
+        XCTAssertTrue(scrolls([], [.began], 0))               // momentum
+        XCTAssertTrue(scrolls([], [.changed], -12))
+    }
+
+    // MARK: - Block markers: spaces and tabs only
+
+    /// Parses on a worker thread: a parser that never returns fails the test
+    /// after `seconds` instead of stalling the suite (its thread keeps
+    /// spinning, so a failure here is worth stopping the run for).
+    private func parseReturning(_ markdown: String, within seconds: Double = 5,
+                                file: StaticString = #filePath, line: UInt = #line) -> [MarkdownBlock]? {
+        final class Box: @unchecked Sendable { var blocks: [MarkdownBlock]? }
+        let box = Box()
+        let done = DispatchSemaphore(value: 0)
+        let theme = self.theme
+        Thread.detachNewThread {
+            box.blocks = MarkdownBlockParser(theme: theme).parse(markdown)
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + seconds) == .success else {
+            XCTFail("the parser did not return within \(seconds) s", file: file, line: line)
+            return nil
+        }
+        return box.blocks
+    }
+
+    private func plain(_ block: MarkdownBlock) -> String? {
+        if case .text(let attributed) = block.content { return String(attributed.characters) }
+        return nil
+    }
+
+    /// A quote marker after a no-break, em or ideographic space: the block
+    /// loop entered the quote branch on a line trimmed of EVERY Unicode
+    /// space, the quote's own loop (spaces and tabs only, 9bbf6ae) refused
+    /// the same line without consuming it, and the branch re-entered it for
+    /// ever — 100 % CPU, the document never shown. CommonMark indents with
+    /// spaces and tabs only, and GitHub shows each such line as paragraph
+    /// text (`gh api markdown`: `<p> &gt; quoted</p>`).
+    func testAQuoteMarkerAfterAUnicodeSpaceIsTextAndTheParserReturns() throws {
+        for space in ["\u{00A0}", "\u{2003}", "\u{3000}"] {
+            let name = String(format: "U+%04X", space.unicodeScalars.first!.value)
+            let blocks = try XCTUnwrap(parseReturning("Intro\n\n\(space)> quoted\n"), name)
+            XCTAssertEqual(blocks.map(plain), ["Intro", "\(space)> quoted"], name)
+            // Inside a quote run too: no marker, so the line is the quote
+            // paragraph's lazy continuation, text and all (GitHub:
+            // `<blockquote><p>a  &gt; b</p></blockquote>`), and the parser goes on.
+            let inside = try XCTUnwrap(parseReturning("> a\n\(space)> b\n\nAfter."), name)
+            if case .blockquote(let content, _) = inside.first?.content {
+                XCTAssertEqual(content, "a\n\(space)> b", name)
+            } else {
+                XCTFail("\(name): \(String(describing: inside.first?.content))")
+            }
+            XCTAssertEqual(inside.last.flatMap(plain), "After.", name)
+        }
+        // Spaces still indent a quote marker.
+        let indented = try XCTUnwrap(parseReturning("Intro\n\n   > quoted\n"))
+        if case .blockquote(let content, _) = indented.last?.content {
+            XCTAssertEqual(content, "quoted")
+        } else {
+            XCTFail("\(String(describing: indented.last?.content))")
+        }
+    }
+
+    /// Every other block marker the same way, as GitHub reads them
+    /// (`gh api markdown`, 2026-11-04): a no-break space before a fence,
+    /// `$$`, a setext underline, a table separator, a list marker, a rule or
+    /// a link definition — or after `#` — leaves the line paragraph text.
+    func testBlockMarkersAfterAUnicodeSpaceAreText() throws {
+        let nbsp = "\u{00A0}"
+        func kinds(_ markdown: String) throws -> [String] {
+            try XCTUnwrap(parseReturning(markdown)).map { block in
+                switch block.content {
+                case .text: return "text"
+                case .codeBlock: return "code"
+                case .mathBlock: return "math"
+                case .heading: return "heading"
+                case .table: return "table"
+                case .blockquote, .alert: return "quote"
+                default: return "other"
+                }
+            }
+        }
+        // A fence: `<p> ``` code</p>` then the bare ``` opens an empty one.
+        XCTAssertEqual(try kinds("\(nbsp)```\ncode\n```\n"), ["text", "code"])
+        // Not a closing fence: one before it, one with a no-break space after.
+        let closers = try XCTUnwrap(parseReturning("```\ncode\n\(nbsp)```\nmid\n```\(nbsp)\nend\n```\n"))
+        XCTAssertEqual(closers.count, 1)
+        if case .codeBlock(let code, _) = closers.first?.content {
+            XCTAssertEqual(code, "code\n\(nbsp)```\nmid\n```\(nbsp)\nend")
+        } else {
+            XCTFail("\(String(describing: closers.first?.content))")
+        }
+        XCTAssertFalse(try kinds("\(nbsp)$$\nx^2\n$$\n").contains("math"))
+        XCTAssertEqual(try kinds("Title\n\(nbsp)===\n"), ["text"])
+        XCTAssertEqual(try kinds("#\(nbsp)Title\n"), ["text"])
+        XCTAssertEqual(try kinds("| a | b |\n\(nbsp)|---|---|\n| 1 | 2 |\n"), ["text"])
+        // Text, not an item or a rule: the characters are drawn as written.
+        let blocks = try XCTUnwrap(parseReturning("\(nbsp)- item\n\npara\n\n\(nbsp)---\n\n1.\(nbsp)one\n"))
+        XCTAssertEqual(blocks.map(plain), ["\(nbsp)- item", "para", "\(nbsp)---", "1.\(nbsp)one"])
+        XCTAssertFalse(MarkdownRenderer.isListItem("\(nbsp)- item"))
+        XCTAssertFalse(MarkdownRenderer.isListItem("1.\(nbsp)one"))
+        XCTAssertFalse(MarkdownRenderer.isThematicBreak("\(nbsp)---"))
+        XCTAssertFalse(MarkdownRenderer.isThematicBreak("---\(nbsp)"))
+        // A link definition is not one: it stays in the text.
+        let definition = try XCTUnwrap(parseReturning("[x]\n\n\(nbsp)[x]: https://example.com\n"))
+        XCTAssertEqual(definition.count, 2)
+        XCTAssertEqual(definition.last.flatMap(plain), "\(nbsp)[x]: https://example.com")
+
+        // Spaces and tabs still indent every one of them.
+        XCTAssertEqual(try kinds("  ```\ncode\n  ```\n"), ["code"])
+        XCTAssertEqual(try kinds("Title\n  ===\n"), ["heading"])
+        XCTAssertEqual(try kinds("# Title\n"), ["heading"])
+        XCTAssertEqual(try kinds("#\tTitle\n"), ["heading"])
+        XCTAssertEqual(try kinds("| a | b |\n |---|---|\n| 1 | 2 |\n"), ["table"])
+        XCTAssertTrue(MarkdownRenderer.isListItem(" - item"))
+        XCTAssertTrue(MarkdownRenderer.isListItem("1.\tone"))
+        XCTAssertTrue(MarkdownRenderer.isThematicBreak(" ---\t"))
+    }
+
+    // MARK: - Quote laziness
+
+    /// The parse in short: `q<level>:<content>` for a quote, `alert:<kind>:<body>`,
+    /// `t:<shown text>`, `c:<code>`, `h:<title>`, `img`, `table`.
+    private func quoteShape(_ markdown: String, file: StaticString = #filePath,
+                            line: UInt = #line) throws -> [String] {
+        try XCTUnwrap(parseReturning(markdown, file: file, line: line), file: file, line: line).map { block in
+            switch block.content {
+            case .blockquote(let content, let level): return "q\(level):\(content)"
+            case .alert(let kind, let content): return "alert:\(kind.rawValue):\(content)"
+            case .text(let attributed): return "t:" + String(attributed.characters)
+            case .codeBlock(let code, _): return "c:\(code)"
+            case .heading(_, let title, _): return "h:" + MarkdownRenderer.shownHeadingTitle(title)
+            case .image: return "img"
+            case .table: return "table"
+            default: return "other"
+            }
+        }
+    }
+
+    /// CommonMark laziness: a line without the quote marker that would be a
+    /// paragraph's continuation continues the paragraph the quote ends in —
+    /// in a nested quote, a list item or an alert too, and on a line with
+    /// fewer markers than the quote. Our parser ended the quote and made the
+    /// line a paragraph of its own. Every expected shape is GitHub's
+    /// (`gh api markdown`, scratchpad/audit/gfm/lazy_*.html).
+    func testALazyLineContinuesTheParagraphAQuoteEndsIn() throws {
+        // Continues: a plain line, a hard-wrapped quote, `===`, an indented
+        // line, an item that may not start a list here (none may: a lazy
+        // line is checked against the document, not the paragraph).
+        XCTAssertEqual(try quoteShape("> a\nb\n"), ["q1:a\nb"])
+        XCTAssertEqual(try quoteShape("> line one\nline two\nline three\n\nAfter\n"),
+                       ["q1:line one\nline two\nline three", "t:After"])
+        XCTAssertEqual(try quoteShape("> a\n===\n"), ["q1:a\n==="])
+        XCTAssertEqual(try quoteShape("> a\n    b\n"), ["q1:a\n    b"])
+        XCTAssertEqual(try quoteShape("> a\n<span>x</span>\n").first, "q1:a\n<span>x</span>")
+        XCTAssertEqual(try quoteShape("> a\nb\n> c\n"), ["q1:a\nb\nc"])
+        // In a list item, a nested quote, an alert; and with fewer markers.
+        XCTAssertEqual(try quoteShape("> - a\nb\n"), ["q1:- a\nb"])
+        XCTAssertEqual(try quoteShape("> > a\nb\n"), ["q2:a\nb"])
+        XCTAssertEqual(try quoteShape("> > a\n> b\n"), ["q2:a\nb"])
+        XCTAssertEqual(try quoteShape("> > > a\n> b\n"), ["q3:a\nb"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> text\nlazy\n"), ["alert:note:text\nlazy"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\nlazy\n"), ["alert:note:lazy"])
+
+        // Ends the quote: a blank line, an empty quote line, a block start.
+        XCTAssertEqual(try quoteShape("> a\n\nb\n"), ["q1:a", "t:b"])
+        XCTAssertEqual(try quoteShape("> a\n>\nb\n"), ["q1:a", "t:b"])
+        XCTAssertEqual(try quoteShape("> a\n```\ncode\n```\n"), ["q1:a", "c:code"])
+        XCTAssertEqual(try quoteShape("> a\n~~~\ncode\n~~~\n"), ["q1:a", "c:code"])
+        XCTAssertEqual(try quoteShape("> a\n# H\n"), ["q1:a", "h:H"])
+        XCTAssertEqual(try quoteShape("> a\n---\n").count, 2)
+        XCTAssertEqual(try quoteShape("> a\n***\n").count, 2)
+        XCTAssertEqual(try quoteShape("> a\n- b\n"), ["q1:a", "t:• b"])
+        XCTAssertEqual(try quoteShape("> a\n2. b\n").first, "q1:a")
+        XCTAssertEqual(try quoteShape("> a\n2. b\n").count, 2)
+        XCTAssertEqual(try quoteShape("> a\n<div>x</div>\n").first, "q1:a")
+        XCTAssertEqual(try quoteShape("> a\n<!-- c -->\n").first, "q1:a")
+        XCTAssertEqual(try quoteShape("> > a\n> - b\n"), ["q2:a", "q1:- b"])
+        // Our own block starts end it too: a picture line, `$$` (GitHub reads
+        // both as the paragraph's text; here they stay the picture and the
+        // formula they are everywhere else).
+        XCTAssertEqual(try quoteShape("> a\n![img](x.png)\n"), ["q1:a", "img"])
+        XCTAssertEqual(try quoteShape("> a\n$$\nx\n$$\n").first, "q1:a")
+
+        // Nothing to continue: the quote does not end in a paragraph.
+        XCTAssertEqual(try quoteShape("> ```\n> code\nb\n"), ["q1:```\ncode", "t:b"])
+        XCTAssertEqual(try quoteShape("> # H\nb\n"), ["q1:# H", "t:b"])
+        XCTAssertEqual(try quoteShape("> a\n> ===\nb\n"), ["q1:a\n===", "t:b"])
+        XCTAssertEqual(try quoteShape("> | x | y |\n> |---|---|\n> | 1 | 2 |\nlazy\n"),
+                       ["q1:| x | y |\n|---|---|\n| 1 | 2 |", "t:lazy"])
+    }
+
+    /// A lazy line is paragraph text, never structure: a lazy `|---|` or
+    /// `===` read as a table separator or a Setext underline closed the
+    /// quote's paragraph, and the NEXT lazy line fell out of the quote.
+    /// GitHub keeps every one of them in the paragraph (gfm/g5_*.html).
+    func testALazyLineIsNeverReadAsStructure() throws {
+        XCTAssertEqual(try quoteShape("> a\n| x | y |\n|---|---|\n| 1 | 2 |\n"),
+                       ["q1:a\n| x | y |\n|---|---|\n| 1 | 2 |"])
+        XCTAssertEqual(try quoteShape("> a\nb\n===\nc\n"), ["q1:a\nb\n===\nc"])
+        XCTAssertEqual(try quoteShape("> > a\n> ===\n> c\n"), ["q2:a\n===\nc"])
+        XCTAssertEqual(try quoteShape("> > a\n> | x |\n> |---|\n> c\n"), ["q2:a\n| x |\n|---|\nc"])
+        // Marked lines still are structure: a marked table, then an
+        // unmarked row, ends the quote (GitHub too).
+        XCTAssertEqual(try quoteShape("> | x | y |\n> |---|---|\n> | 1 | 2 |\nlazy\n"),
+                       ["q1:| x | y |\n|---|---|\n| 1 | 2 |", "t:lazy"])
+        XCTAssertEqual(try quoteShape("> a\n> ===\nb\n"), ["q1:a\n===", "t:b"])
+    }
+
+    // MARK: - Link and footnote definitions
+
+    /// A definition inside a fenced code block is the block's text: the
+    /// pre-pass took it out wherever it stood, so the code block came out
+    /// EMPTY and the definition linked `[x]` in the rest of the document.
+    /// GitHub (gfm/def_fence*.html, def_fn_fence.html) keeps it as code —
+    /// `~~~`, a longer opening fence and an unclosed one alike. A `$$` block
+    /// is read the way the block loop reads it.
+    func testADefinitionInsideAFencedBlockIsCode() throws {
+        XCTAssertEqual(try quoteShape("```\n[x]: https://example.com\n```\n\n[x]\n"),
+                       ["c:[x]: https://example.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("~~~~\n[x]: https://example.com\n~~~\nstill code\n~~~~\n\n[x]\n"),
+                       ["c:[x]: https://example.com\n~~~\nstill code", "t:[x]"])
+        XCTAssertEqual(try quoteShape("```\n[x]: https://example.com\n\n[x]"),   // unclosed: to the end
+                       ["c:[x]: https://example.com\n\n[x]"])
+        XCTAssertEqual(try quoteShape("Text[^1]\n\n```\n[^1]: in code\n```\n"),
+                       ["t:Text[^1]", "c:[^1]: in code"])
+        // A fence inside a `$$` block is the formula's; the definition after
+        // the block is one.
+        XCTAssertEqual(try quoteShape("$$\n```\n$$\n\n[x]: http://e.com\n\n[x]\n"), ["other", "t:x"])
+        // Outside the fence it still is one.
+        XCTAssertEqual(try quoteShape("```\ncode\n```\n\n[x]: http://e.com\n\n[x]\n"), ["c:code", "t:x"])
+    }
+
+    /// A link definition cannot interrupt a paragraph (CommonMark): on a
+    /// line that would continue one — plain text, a list item's, a quote's
+    /// lazy line, a table's — it is that text, and `[x]` stays literal.
+    /// The pre-pass took it out anywhere. A footnote definition MAY
+    /// interrupt a paragraph (GitHub). Every shape: gfm/def_*.html, fn_*.html.
+    /// A link definition that starts a paragraph of a quote is a definition
+    /// (GitHub, gfm/h4_*.html): `> [x]: url` defines `x` and leaves the
+    /// quote empty — it was the quote's text. After the quote's text it is
+    /// that text (G7), in the quote's fence code, in its table a row, after
+    /// an alert's marker the alert's text.
+    /// A run of blank lines in a quote or an alert is ONE paragraph break,
+    /// at every nesting level (GitHub, gfm/h5_*.html; at the top level our
+    /// spacing comes from structure, not from blank lines): two blank `>`
+    /// lines drew two gaps. Blank lines at a quote's start or end add
+    /// nothing; inside the quote's fence they are code. The body every
+    /// consumer reads (view, measurer, search, copy, print) has one.
+    func testARunOfBlankQuoteLinesIsOneParagraphBreak() throws {
+        XCTAssertEqual(try quoteShape("> a\n>\n>\n> b\n"), ["q1:a\n\nb"])
+        XCTAssertEqual(try quoteShape("> a\n>\n>\n>\n> b\n>\n>\n> c\n"), ["q1:a\n\nb\n\nc"])
+        XCTAssertEqual(try quoteShape("> > a\n> >\n> >\n> > b\n"), ["q2:a\n\nb"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> a\n>\n>\n> b\n"), ["alert:note:a\n\nb"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n>\n>\n> a\n>\n>\n"), ["alert:note:a"])
+        XCTAssertEqual(try quoteShape(">\n>\n> a\n>\n>\n\nafter\n"), ["q1:a", "t:after"])
+        XCTAssertEqual(try quoteShape("> a\n>\n>\n> > b\n> >\n> >\n> c\n"), ["q1:a", "q2:b", "q1:c"])
+        // A definition taken out (H4) leaves no gap of its own.
+        XCTAssertEqual(try quoteShape("> text\n>\n> [x]: http://e.com\n>\n> more\n\n[x]\n"),
+                       ["q1:text\n\nmore", "t:x"])
+        // Code keeps its blank lines.
+        XCTAssertEqual(try quoteShape("> ```\n> a\n>\n>\n> b\n> ```\n"), ["q1:```\na\n\n\nb\n```"])
+
+        let theme = MarkdownTheme.cached(for: .light)
+        let blocks = try XCTUnwrap(parseReturning("> a\n>\n>\n> b\n\n> [!TIP]\n> c\n>\n>\n> d\n"))
+        let measured = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,
+                                                   contentWidth: 600, math: nil)
+        XCTAssertEqual(blocks.map { measured.converted[$0.id]?.string }, ["a\n \nb", "c\n \nd"])
+        let all = try XCTUnwrap(DocumentSelection.selectAll(rowCount: blocks.count,
+                                                            lengths: { measured.converted[blocks[$0].id]?.length ?? 0 }))
+        let parts = SelectionRows.parts(of: all, blocks: blocks, text: { measured.converted[$0.id] },
+                                        table: { _ in nil })
+        XCTAssertEqual(DocumentCopyBuilder.build(parts: parts).plain, "a\n\nb\n\nc\n\nd")
+    }
+
+    func testALinkDefinitionMayStartAQuoteParagraph() throws {
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n\n[x]\n"), ["t:x"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n> text\n\n[x]\n"), ["q1:text", "t:x"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n> [y]: http://f.com\n\n[x] [y]\n"), ["t:x y"])
+        XCTAssertEqual(try quoteShape("> > [x]: http://e.com\n\n[x]\n"), ["t:x"])
+        XCTAssertEqual(try quoteShape("Para\n> [x]: http://e.com\n\n[x]\n"), ["t:Para", "t:x"])
+        XCTAssertEqual(try quoteShape("> # H\n> [x]: http://e.com\n\n[x]\n"), ["q1:# H", "t:x"])
+        XCTAssertEqual(try quoteShape("> text\n>\n> [x]: http://e.com\n\n[x]\n"), ["q1:text", "t:x"])
+        // Text where GitHub has text.
+        XCTAssertEqual(try quoteShape("> text\n> [x]: http://e.com\n\n[x]\n"),
+                       ["q1:text\n[x]: http://e.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("> ```\n> [x]: http://e.com\n> ```\n\n[x]\n").last, "t:[x]")
+        XCTAssertEqual(try quoteShape("> | a |\n> |---|\n> | 1 |\n> [x]: http://e.com\n\n[x]\n").last, "t:[x]")
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> [x]: http://e.com\n\n[x]\n").last, "t:[x]")
+        XCTAssertEqual(try quoteShape("> > a\n> [x]: http://e.com\n\n[x]\n").last, "t:[x]")
+        // What follows keeps its source line.
+        let blocks = try XCTUnwrap(parseReturning("> [x]: http://e.com\n> text\n\n[x]\n"))
+        XCTAssertEqual(blocks.map(\.sourceLine), [1, 3])
+    }
+
+    /// A deeper `>` opens a nested quote, whose first line starts a new
+    /// paragraph: a link definition there is a definition, also right under
+    /// the quote's text (GitHub, gfm/h7_*.html). The pre-pass read every
+    /// level as one quote, so `> a` then `>> [x]: url` was the nested
+    /// quote's text and `[x]` stayed literal. Fewer markers still continue
+    /// the paragraph lazily, and so does a nested quote a lazy line kept
+    /// open; inside the quote's fence a deeper `>` is code.
+    func testADefinitionOpeningADeeperQuoteIsADefinition() throws {
+        XCTAssertEqual(try quoteShape("> a\n>> [x]: http://e.com\n\n[x]\n"), ["q1:a", "t:x"])
+        XCTAssertEqual(try quoteShape("> a\n> > [x]: http://e.com\n\n[x]\n"), ["q1:a", "t:x"])
+        XCTAssertEqual(try quoteShape("> a\n> > b\n> > > [x]: http://e.com\n\n[x]\n"), ["q1:a", "q2:b", "t:x"])
+        XCTAssertEqual(try quoteShape("> | a |\n> |---|\n> | 1 |\n>> [x]: http://e.com\n\n[x]\n").last, "t:x")
+        XCTAssertEqual(try quoteShape("> > ```\n> > c\n> > ```\n> [x]: http://e.com\n\n[x]\n").last, "t:x")
+        // Text where GitHub has text.
+        XCTAssertEqual(try quoteShape(">> a\n> [x]: http://e.com\n\n[x]\n"), ["q2:a\n[x]: http://e.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("> > a\n> b\n> > [x]: http://e.com\n\n[x]\n").last, "t:[x]")
+        XCTAssertEqual(try quoteShape("> ```\n>> [x]: http://e.com\n> ```\n\n[x]\n").last, "t:[x]")
+    }
+
+    func testALinkDefinitionCannotInterruptAParagraph() throws {
+        XCTAssertEqual(try quoteShape("> a\n[x]: http://e.com\n\n[x]\n"), ["q1:a\n[x]: http://e.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("Para\n[x]: http://e.com\n\n[x]\n"), ["t:Para [x]: http://e.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("- a\n[x]: http://e.com\n\n[x]\n"), ["t:• a [x]: http://e.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("| a |\n|---|\n| 1 |\n[x]: http://e.com\n\n[x]\n").last, "t:[x]")
+        // Where no paragraph goes on, it is a definition.
+        XCTAssertEqual(try quoteShape("Para\n\n[x]: http://e.com\n\n[x]\n"), ["t:Para", "t:x"])
+        XCTAssertEqual(try quoteShape("# H\n[x]: http://e.com\n\n[x]\n"), ["h:H", "t:x"])
+        XCTAssertEqual(try quoteShape("---\n[x]: http://e.com\n\n[x]\n").last, "t:x")
+        XCTAssertEqual(try quoteShape("Title\n===\n[x]: http://e.com\n\n[x]\n"), ["h:Title", "t:x"])
+        XCTAssertEqual(try quoteShape("```\ncode\n```\n[x]: http://e.com\n\n[x]\n"), ["c:code", "t:x"])
+        XCTAssertEqual(try quoteShape("[x]: http://e.com\n[y]: http://f.com\n\n[x] [y]\n"), ["t:x y"])
+        XCTAssertEqual(try quoteShape("> a\n>\n[x]: http://e.com\n\n[x]\n"), ["q1:a", "t:x"])
+        XCTAssertEqual(try quoteShape("> ```\n> code\n[x]: http://e.com\n\n[x]\n"), ["q1:```\ncode", "t:x"])
+        // Footnote definitions interrupt a paragraph, as before.
+        XCTAssertEqual(try quoteShape("Text[^1]\n\nPara\n[^1]: note\n").prefix(2), ["t:Text¹", "t:Para"])
+        XCTAssertEqual(try quoteShape("Text[^1]\n\n> a\n[^1]: note\n").prefix(2), ["t:Text¹", "q1:a"])
+    }
+
+    // MARK: - Indented fences
+
+    /// A fence indented N spaces drops up to N spaces from each of its lines
+    /// (CommonMark; GitHub, gfm/b1_*.html). It kept them: every code block
+    /// of a numbered-steps list was drawn, searched and copied shifted right.
+    func testAnIndentedFenceDropsItsIndentationFromItsLines() throws {
+        XCTAssertEqual(try quoteShape("1. Step\n\n    ```bash\n    cmd\n      nested\n    ```\n"),
+                       ["t:1. Step", "c:cmd\n  nested"])
+        XCTAssertEqual(try quoteShape("  ```\n code\n   code2\nflush\n  ```\n"), ["c:code\n code2\nflush"])
+        XCTAssertEqual(try quoteShape("1. Step\n   ```\n   cmd\n   ```\n"), ["t:1. Step", "c:cmd"])
+        XCTAssertEqual(try quoteShape("```\n  keep\n```\n"), ["c:  keep"])
+        XCTAssertEqual(try quoteShape("    ~~~\n    a\n\n    b\n    ~~~\n"), ["c:a\n\nb"])
+        // Search counts, and copy reads, what is drawn.
+        let blocks = try XCTUnwrap(parseReturning("1. Step\n\n    ```\n    let needle = 1\n    ```\n"))
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "    let").matchBlockIds, [])
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "let needle").matchBlockIds, [blocks[1].id])
+    }
+
+    /// A tab that reaches past the fence's indentation keeps the columns it
+    /// has left, as spaces (CommonMark; GitHub, gfm/h3_*.html): the tab was
+    /// kept whole, a code line drawn two columns too deep. A later tab stays.
+    func testAnIndentedFenceKeepsWhatATabHasLeft() throws {
+        XCTAssertEqual(try quoteShape("- a\n\n  ```\n\tTab\n  ```\n"), ["t:• a", "c:  Tab"])
+        XCTAssertEqual(try quoteShape("  ```\n\tTab\n  ```\n"), ["c:  Tab"])
+        XCTAssertEqual(try quoteShape(" ```\n\tTab\n ```\n"), ["c:   Tab"])
+        XCTAssertEqual(try quoteShape("  ```\n\t\tTab\n  ```\n"), ["c:  \tTab"])
+        XCTAssertEqual(try quoteShape("  ```\n \tTab\n  ```\n"), ["c:  Tab"])
+        // A tab inside the indentation goes, one after it stays whole.
+        XCTAssertEqual(MarkdownBlockParser.removingIndentation("\tx", upTo: 4), "x")
+        XCTAssertEqual(MarkdownBlockParser.removingIndentation("  \tx", upTo: 2), "\tx")
+        XCTAssertEqual(MarkdownBlockParser.removingIndentation("x", upTo: 2), "x")
+    }
+
+    /// Source Edit finds a selection made in such a block in the source,
+    /// whose lines still carry the indentation: a multi-line selection is
+    /// matched with the spaces and tabs at the start of each source line
+    /// skipped (a literal match finds it no longer).
+    func testASelectionInAnIndentedFenceIsFoundInTheSource() {
+        let source = "1. Step\n\n    ```\n    cmd\n      nested\n    ```\n" as NSString
+        let range = SourceEditSupport.sourceRange(ofSelection: "cmd\n  nested", before: "", after: "",
+                                                  in: source, lines: 3..<5)
+        XCTAssertEqual(range.map { source.substring(with: $0) }, "cmd\n      nested")
+        // A literal match wins where there is one.
+        let flat = "```\ncmd\n  nested\n```\n" as NSString
+        let literal = SourceEditSupport.sourceRange(ofSelection: "cmd\n  nested", before: "", after: "",
+                                                    in: flat, lines: 1..<3)
+        XCTAssertEqual(literal.map { flat.substring(with: $0) }, "cmd\n  nested")
+    }
+
+    // MARK: - Setext headings over a paragraph
+
+    /// A Setext underline makes the WHOLE paragraph above it the heading
+    /// (CommonMark; GitHub, gfm/g4_*.html), its lines joined like soft
+    /// breaks, on the paragraph's first line. Only the last line was the
+    /// heading; the lines above stayed a paragraph. A paragraph that is a
+    /// list item's is no heading (its `===` goes on as text, its `---` is a
+    /// rule), and a quote's lazy lines are the quote's (F6).
+    func testASetextUnderlineMakesTheWholeParagraphTheHeading() throws {
+        XCTAssertEqual(try quoteShape("Para one\nline two\n===\n"), ["h:Para one line two"])
+        XCTAssertEqual(try quoteShape("one\ntwo\nthree\n---\n"), ["h:one two three"])
+        let markdown = "Intro\n\nPara one\nline two\n---\n\nAfter\n"
+        let blocks = try XCTUnwrap(parseReturning(markdown))
+        XCTAssertEqual(try quoteShape(markdown), ["t:Intro", "h:Para one line two", "t:After"])
+        XCTAssertEqual(blocks.map(\.sourceLine), [0, 2, 6])
+        if case .heading(let level, _, let line) = blocks[1].content {
+            XCTAssertEqual(level, 2)
+            XCTAssertEqual(line, 2)
+        }
+        // After blocks that close a paragraph.
+        XCTAssertEqual(try quoteShape("# H\nline a\nline b\n===\n"), ["h:H", "h:line a line b"])
+        XCTAssertEqual(try quoteShape("```\nx\n```\nline a\nline b\n===\n"), ["c:x", "h:line a line b"])
+        XCTAssertEqual(try quoteShape("***\nline a\nline b\n===\n").last, "h:line a line b")
+        // A list item's paragraph is no heading.
+        XCTAssertEqual(try quoteShape("- a\nb\n===\n"), ["t:• a b ==="])
+        XCTAssertEqual(try quoteShape("- a\nb\n---\n").first, "t:• a b")
+        XCTAssertEqual(try quoteShape("- a\nb\n---\n").count, 2)
+        XCTAssertEqual(try quoteShape("Para\n- item\nb\n===\n"), ["t:Para", "t:• item b ==="])
+        XCTAssertEqual(try quoteShape("1984. A year\nline\n===\n"), ["t:1984. A year line ==="])
+        XCTAssertEqual(try quoteShape("> a\nb\n===\n"), ["q1:a\nb\n==="])
+
+        // The tint spans the paragraph and its underline; Section copy
+        // starts at its first line; the anchor is the whole title's.
+        let ns = markdown as NSString
+        let spans = SourceTint.spans(for: blocks, lineStarts: SourceEditSupport.lineStarts(in: ns), in: ns)
+        XCTAssertEqual(spans.filter { $0.kind == .heading }.map { ns.substring(with: $0.range) },
+                       ["Para one\nline two\n---"])
+        let entries = ToCEntry.entries(of: blocks)
+        XCTAssertEqual(SectionExtractor.extractSection(from: markdown, entry: entries[0], headings: entries),
+                       "Para one\nline two\n---\n\nAfter")
+        // GitHub's id drops the line break (gfm/h1_words.html).
+        let anchors = HeadingAnchors.headings(of: blocks, renderer: MarkdownRenderer(theme: .cached(for: .light)))
+        XCTAssertEqual(HeadingAnchors.ids(for: anchors.map(\.text)), ["para-oneline-two"])
+    }
+
+    // MARK: - Long quotes
+
+    /// A width change lays a quote or alert body out again WITHOUT rendering
+    /// it: the measurer takes the string the previous measurement of the same
+    /// parse built (`reusing`, the caller's `measured.converted`), as a
+    /// paragraph's string is stored in its block. It rendered the body again
+    /// on every width change and reading-mode toggle — a 5,000-line quote
+    /// cost ~530 ms per re-measure (-O) against ~160 ms for the same text as
+    /// a paragraph. The heights and the rhythm are a fresh measurement's.
+    func testAWidthChangeLaysAQuoteOutAgainWithoutRenderingIt() throws {
+        let long = "words that wrap at a narrow column but not at a wide one, and a few more of them"
+        let markdown = "Para\n\n> \(long)\nand a lazy line\n\n> > nested \(long)\n\n"
+            + "> [!NOTE]\n> \(long)\n\n> [!TIP]\n\nEnd\n"
+        let blocks = try XCTUnwrap(parseReturning(markdown))
+        let theme = MarkdownTheme.cached(for: .light)
+        let first = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,
+                                                contentWidth: 700, math: nil)
+        let again = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,
+                                                contentWidth: 260, reusing: first.converted, math: nil)
+        let fresh = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,
+                                                contentWidth: 260, math: nil)
+        XCTAssertNotEqual(first.table.heights, fresh.table.heights)   // the wrap moved
+        XCTAssertEqual(again.table.heights, fresh.table.heights)
+        XCTAssertEqual(again.rhythm, fresh.rhythm)
+        let bodies = blocks.filter { block in
+            switch block.content {
+            case .blockquote: return true
+            case .alert(_, let content): return !content.isEmpty
+            default: return false
+            }
+        }
+        XCTAssertEqual(bodies.count, 3)
+        for block in bodies {
+            let reused = try XCTUnwrap(again.converted[block.id], block.id)
+            XCTAssertTrue(reused === first.converted[block.id], block.id)
+            XCTAssertEqual(reused, fresh.converted[block.id], block.id)
+        }
+        // Only those: a paragraph's string is built from its block again.
+        let paragraph = try XCTUnwrap(blocks.first)
+        XCTAssertFalse(again.converted[paragraph.id] === first.converted[paragraph.id])
+    }
+
+    // MARK: - Tables
+
+    /// A block start ends a table's body (GFM: GitHub closes the table for
+    /// any of them — a fence, a quote, an ATX heading, a list item, an HTML
+    /// block; gfm/h2_*.html — and `$$` opens a formula here). The body took
+    /// every line with a `|`: a fence line with one became a row while the
+    /// definition pre-pass read it as a fence, and the fence's closing line
+    /// then opened a fence that ran to the end of the document.
+    func testABlockStartEndsATablesBody() throws {
+        let table = "| a |\n|---|\n| 1 |\n"
+        func bodyRows(_ markdown: String) throws -> [Int] {
+            try XCTUnwrap(parseReturning(markdown)).compactMap { block in
+                guard case .table(_, let rows, _, _) = block.content else { return nil }
+                return rows.count
+            }
+        }
+        XCTAssertEqual(try quoteShape(table + "```x|\ncode\n```\nafter\n"), ["table", "c:code", "t:after"])
+        XCTAssertEqual(try quoteShape(table + "~~~ |\ncode\n~~~\n"), ["table", "c:code"])
+        XCTAssertEqual(try quoteShape(table + "> q | r\n"), ["table", "q1:q | r"])
+        XCTAssertEqual(try quoteShape(table + "# H | x\n"), ["table", "h:H | x"])
+        XCTAssertEqual(try quoteShape(table + "- b | c\n"), ["table", "t:• b | c"])
+        XCTAssertEqual(try quoteShape(table + "2. b | c\n"), ["table", "t:2. b | c"])
+        XCTAssertEqual(try bodyRows(table + "<div>|</div>\n"), [1])
+        XCTAssertEqual(try bodyRows(table + "$$ |\nx\n$$\n\n[x]: http://e.com\n\n[x]\n"), [1])
+        XCTAssertEqual(try quoteShape(table + "$$ |\nx\n$$\n\n[x]: http://e.com\n\n[x]\n").last, "t:x")
+        // A row stays a row.
+        XCTAssertEqual(try bodyRows(table + "b | c\n| 3 |\n"), [3])
+        // In a quote too: the item's paragraph goes on lazily, a heading's
+        // does not (gfm/h2_quote_table_*_lazy.html).
+        let quoted = "> | a |\n> |---|\n> | 1 |\n"
+        XCTAssertEqual(try quoteShape(quoted + "> - b | c\nlazy\n"), ["q1:| a |\n|---|\n| 1 |\n- b | c\nlazy"])
+        XCTAssertEqual(try quoteShape(quoted + "> # H | x\nlazy\n"), ["q1:| a |\n|---|\n| 1 |\n# H | x", "t:lazy"])
+    }
+
+    /// The lines a quote absorbed are the quote's: its source line is its
+    /// first, the next block starts after them, the tint spans them, search
+    /// finds and copy reads them in the quote — and a long hard-wrapped quote
+    /// with a marker on its first line only parses (the hang guard) into one
+    /// quote row.
+    func testTheLinesAQuoteAbsorbedAreTheQuotes() throws {
+        let markdown = "Intro\n\n> Quoted start\nlazy middle word\nlazy end\n\nAfter\n"
+        let blocks = try XCTUnwrap(parseReturning(markdown))
+        XCTAssertEqual(blocks.count, 3)
+        XCTAssertEqual(blocks.map(\.sourceLine), [0, 2, 6])
+        let ns = markdown as NSString
+        let spans = SourceTint.spans(for: blocks, lineStarts: SourceEditSupport.lineStarts(in: ns), in: ns)
+        XCTAssertEqual(spans.map { ns.substring(with: $0.range) }, ["> Quoted start\nlazy middle word\nlazy end"])
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "middle").matchBlockIds, [blocks[1].id])
+        let measured = measure(blocks)
+        XCTAssertEqual(measured.converted[blocks[1].id].map(\.string), "Quoted start lazy middle word lazy end")
+
+        let long = "> first\n" + String(repeating: "a hard-wrapped line of the quote\n", count: 5_000) + "\nAfter\n"
+        let longBlocks = try XCTUnwrap(parseReturning(long, within: 10))
+        XCTAssertEqual(longBlocks.count, 2)
+        if case .blockquote(let content, _) = longBlocks[0].content {
+            XCTAssertEqual(content.components(separatedBy: "\n").count, 5_001)
+        } else {
+            XCTFail("\(longBlocks[0].content)")
+        }
     }
 
     // MARK: - Anchor signatures

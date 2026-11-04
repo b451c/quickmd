@@ -12,8 +12,10 @@ enum AlertKind: String, Sendable, CaseIterable {
     /// Parses a marker line (already stripped of `>` prefixes). The marker must
     /// be the only thing on the line — `[!NOTE] text` is a regular blockquote.
     /// Case-insensitive, matching GitHub's behavior.
+    /// Spaces and tabs around the marker only (`MarkdownRenderer.markerWhitespace`):
+    /// GitHub reads `[!NOTE]` + a no-break space as a plain quote.
     init?(markerLine: String) {
-        let trimmed = markerLine.trimmingCharacters(in: .whitespaces)
+        let trimmed = markerLine.trimmingCharacters(in: MarkdownRenderer.markerWhitespace)
         guard trimmed.hasPrefix("[!"), trimmed.hasSuffix("]") else { return nil }
         let name = trimmed.dropFirst(2).dropLast().lowercased()
         self.init(rawValue: name)
