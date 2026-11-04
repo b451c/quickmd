@@ -89,28 +89,95 @@ enum DocumentSearch {
         let matchBlockIds: [String]
     }
 
-    /// `tables`, `theme` and `fontScale` locate the string each `.table`
-    /// block's view shows: the measurer's `TableText` when it was built from
-    /// this block for this look (the rule `TableTextRepresentable` applies —
-    /// pass the theme the view renders with), otherwise
-    /// `TableTextBuilder.plainString` — the same characters, rendered without
-    /// building the table. Rendered characters do not depend on the theme or
-    /// the scale, so the defaults are exact for callers without a view (tests);
+    // MARK: Focus after a (re-)run
+
+    /// Why a search runs. Decides where the focused match lands and whether
+    /// the document scrolls to it.
+    enum Trigger: Equatable {
+        /// The reader typed: focus the first match and scroll to it.
+        case termChanged
+        /// A new parse landed with the find bar open (reload, ⌘R, zoom, theme,
+        /// fonts): the same term over new blocks. The focus stays where the
+        /// reader left it and the document does NOT move — a reload must not
+        /// jump the reader.
+        case reparsed
+    }
+
+    /// The match index focused when a run's results land. `previous` is the
+    /// index focused at that moment (⌘G may have moved it while the run was
+    /// in flight); a re-parse keeps it when it still exists and clamps it to
+    /// the last match otherwise.
+    static func focusedIndex(after trigger: Trigger, previous: Int, matchCount: Int) -> Int {
+        guard matchCount > 0 else { return 0 }
+        switch trigger {
+        case .termChanged: return 0
+        case .reparsed: return min(max(previous, 0), matchCount - 1)
+        }
+    }
+
+    /// Whether landing results scroll the document to the focused match.
+    static func scrollsToFocus(after trigger: Trigger, matchCount: Int) -> Bool {
+        trigger == .termChanged && matchCount > 0
+    }
+
+    /// The focused block and the occurrence within it that the block's
+    /// highlight paints orange: match `index` is the k-th entry of its block
+    /// in `matchBlockIds` (one entry per occurrence, reading order). Nil when
+    /// `index` is out of range.
+    static func focus(in matchBlockIds: [String], at index: Int) -> (blockId: String, occurrence: Int)? {
+        guard index >= 0, index < matchBlockIds.count else { return nil }
+        let blockId = matchBlockIds[index]
+        let occurrence = matchBlockIds[..<index].lazy.filter { $0 == blockId }.count
+        return (blockId, occurrence)
+    }
+
+    /// Every block a `TextBlockView` draws (paragraphs, quote and alert
+    /// bodies, headings) and every table is counted on the string its view
+    /// SHOWS, with the matcher its highlight uses — so a block's count is its
+    /// number of highlights and the focused occurrence indexes them in
+    /// reading order (TS-D9 for tables, since 1.14.1 for the text kinds; until
+    /// then quotes, alerts and headings were counted on their markdown and an
+    /// inline-math paragraph on its `$…$` source, so a term in markup, a URL
+    /// or a formula was counted but never drawn and ⌘G drifted).
+    ///
+    /// `converted` and `tables` are the measurer's strings for THESE blocks
+    /// (`MeasuredBlocks` of the same parse — the views install exactly those);
+    /// a missing entry falls back to `displayedString`'s own construction,
+    /// which yields the same characters. A table's `TableText` is only used
+    /// when it was built from this block for this look (the rule
+    /// `TableTextRepresentable` applies — pass the theme the view renders
+    /// with). Rendered characters do not depend on the theme or the scale, so
+    /// the defaults are exact for callers without a view (tests);
     /// `MarkdownView` passes its own so the measured strings are reused.
+    ///
+    /// Off-main safe: the renderer and `BlockTextConverter` are what the
+    /// background measurer runs, and the math engine is never touched
+    /// (`displayedString`).
     static func computeMatches(in blocks: [MarkdownBlock], term: String,
+                               converted: [String: NSAttributedString] = [:],
                                tables: [String: TableText] = [:],
                                theme: MarkdownTheme = .cached(for: .light),
                                fontScale: CGFloat = 1) -> Results {
         guard !term.isEmpty else { return Results(matchBlockIds: []) }
 
         var matches: [String] = []
+        let renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
 
         for block in blocks {
+            // Text kinds: the string their TextBlockView shows.
+            if let shown = displayedString(of: block, converted: converted, renderer: renderer) {
+                let count = searchMatchRanges(in: shown, term: term).count
+                matches.append(contentsOf: repeatElement(block.id, count: count))
+                continue
+            }
+
             // Collect the text segments for this block
             let segments: [String]
             switch block.content {
-            case .text(let attr):
-                segments = [String(attr.characters)]
+            case .text, .blockquote, .alert, .heading:
+                // Handled above (`displayedString` covers every one of them;
+                // an alert without a body has no text view and counts 0).
+                segments = []
             case .table(let headers, let rows, let alignments):
                 // Counted on the RENDERED string the table view shows (no
                 // markup, no link URLs), with the matcher its highlight uses:
@@ -131,14 +198,8 @@ enum DocumentSearch {
                 continue
             case .codeBlock(let code, _):
                 segments = [code]
-            case .blockquote(let content, _):
-                segments = [content]
-            case .alert(_, let content):
-                segments = [content]
             case .image(_, let alt, _):
                 segments = [alt]
-            case .heading(_, let title, _):
-                segments = [title]
             case .mathBlock(let latex):
                 segments = [latex]
             case .mermaidDiagram(let source):
@@ -161,4 +222,60 @@ enum DocumentSearch {
 
         return Results(matchBlockIds: matches)
     }
+
+    /// The characters a `TextBlockView`-hosted block shows — the string its
+    /// `applyNSSearchHighlight` searches — or nil for the other kinds.
+    ///
+    /// - The measurer's converted string when there is one: it IS the string
+    ///   the view installs (`preconverted`, v1.9 D12).
+    /// - Otherwise the construction the view itself runs: the renderer's
+    ///   output (`renderQuotedBody` for quote and alert bodies, `renderHeader`
+    ///   for headings, the parsed paragraph for `.text`) through
+    ///   `BlockTextConverter.makeNSAttributedString`. Without inline math the
+    ///   converter's string is the AttributedString's characters (it only
+    ///   bridges attributes), so those are taken directly — pinned by
+    ///   `SearchTests`. A paragraph WITH inline math shows one attachment
+    ///   character (U+FFFC) per `$…$` segment; the converter is run with
+    ///   `searchMathPlaceholder`, an engine that never touches SwiftMath
+    ///   (main-thread only), so the characters come out of the same code.
+    ///   Known limit of this fallback only: a formula SwiftMath refuses to
+    ///   typeset is drawn as its italic LaTeX, which the placeholder cannot
+    ///   know. `MarkdownView` passes the measured strings (built with the real
+    ///   engine) and re-runs the search when they land, so the fallback is
+    ///   used only before the first layout.
+    static func displayedString(of block: MarkdownBlock,
+                                converted: [String: NSAttributedString],
+                                renderer: MarkdownRenderer) -> String? {
+        switch block.content {
+        case .text(let attributed):
+            if let shown = converted[block.id] { return shown.string }
+            let plain = String(attributed.characters)
+            guard BlockTextConverter.containsInlineMath(plain) else { return plain }
+            return BlockTextConverter.makeNSAttributedString(
+                from: attributed, hasInlineMath: true,
+                theme: renderer.theme, fontScale: renderer.fontScale,
+                math: searchMathPlaceholder).string
+        case .blockquote(let content, _):
+            if let shown = converted[block.id] { return shown.string }
+            return String(renderer.renderQuotedBody(content).characters)
+        case .alert(_, let content):
+            // The title is chrome; an empty body has no text view at all.
+            guard !content.isEmpty else { return "" }
+            if let shown = converted[block.id] { return shown.string }
+            return String(renderer.renderQuotedBody(content).characters)
+        case .heading(let level, let title, _):
+            // Never measured into `converted` (a `.reported` row): rendered
+            // here exactly as `HeadingBlockView` renders it.
+            return String(renderer.renderHeader(title, level: level).characters)
+        case .table, .codeBlock, .image, .svgImage, .mathBlock, .mermaidDiagram:
+            return nil
+        }
+    }
+
+    /// A math engine for `displayedString` only: every formula "typesets" to
+    /// an empty 1×1 image, so the converter emits the attachment character a
+    /// typeset formula is drawn as. Thread-safe (no SwiftMath, just NSImage).
+    static let searchMathPlaceholder = MathRendering(
+        inlineImage: { _, _, _ in NSImage(size: NSSize(width: 1, height: 1)) },
+        displayHeight: { _, _, _ in 0 })
 }
