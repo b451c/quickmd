@@ -79,22 +79,26 @@ struct TableTextLayout: Equatable {
 struct TableText {
     /// The block's cells plus what `MarkdownView.DocumentIdentity` re-parses
     /// for: theme (name + light/dark variant — "Auto" is one name for two
-    /// palettes), document fonts, zoom. An instance built for another theme or
-    /// font therefore never matches, whatever the parse ordering.
+    /// palettes), document fonts, zoom — and the style: a `.properties` and a
+    /// `.grid` table of the same cells are different strings (key colour, key
+    /// column width). An instance built for another theme or font therefore
+    /// never matches, whatever the parse ordering.
     struct Source: Equatable {
         let headers: [String]
         let rows: [[String]]
         let alignments: [TextAlignment]
+        let style: TableStyle
         let fontScale: CGFloat
         let themeName: String
         let isDark: Bool
         let fonts: DocumentFonts
 
-        init(headers: [String], rows: [[String]], alignments: [TextAlignment],
+        init(headers: [String], rows: [[String]], alignments: [TextAlignment], style: TableStyle,
              theme: MarkdownTheme, fontScale: CGFloat) {
             self.headers = headers
             self.rows = rows
             self.alignments = alignments
+            self.style = style
             self.fontScale = fontScale
             themeName = theme.name
             isDark = theme.isDark
@@ -106,9 +110,10 @@ struct TableText {
     let layout: TableTextLayout
     let source: Source
 
-    func matches(headers: [String], rows: [[String]], alignments: [TextAlignment],
+    func matches(headers: [String], rows: [[String]], alignments: [TextAlignment], style: TableStyle,
                  theme: MarkdownTheme, fontScale: CGFloat) -> Bool {
-        source == Source(headers: headers, rows: rows, alignments: alignments, theme: theme, fontScale: fontScale)
+        source == Source(headers: headers, rows: rows, alignments: alignments, style: style,
+                         theme: theme, fontScale: fontScale)
     }
 }
 
@@ -123,7 +128,18 @@ struct TableText {
 /// last one), so they tile `rect` with no gap. Only x and width of the content
 /// rect change; TextKit still decides the row heights and the vertical layout,
 /// and the measurer lays out the same subclass, so parity is unaffected.
+///
+/// `fixedFirstColumnWidth` (a `.properties` table's key column): column 0 gets
+/// that many whole points, capped at `Metrics.keyColumnMaxFraction` of the
+/// width, and the other columns tile the rest exactly as above. The value is a
+/// property of the table object INSIDE the string, so the view and the
+/// measurer — which lay out the same string at the same width — agree; the cap
+/// makes the split width-dependent, which `.exact` heights already are (every
+/// table re-measures per `contentWidth`, as wrapping does).
 final class FullWidthTextTable: NSTextTable {
+    /// Column 0's natural width (whole points), or nil for equal columns.
+    var fixedFirstColumnWidth: CGFloat?
+
     override func rect(for block: NSTextTableBlock, layoutAt startingPoint: NSPoint, in rect: NSRect,
                        textContainer: NSTextContainer, characterRange charRange: NSRange) -> NSRect {
         var layoutRect = super.rect(for: block, layoutAt: startingPoint, in: rect,
@@ -131,10 +147,26 @@ final class FullWidthTextTable: NSTextTable {
         let columns = max(1, numberOfColumns)
         let column = min(max(0, block.startingColumn), columns - 1)
         let whole = floor(rect.width)
-        let base = floor(whole / CGFloat(columns))
-        let remainder = Int(whole - base * CGFloat(columns))
-        let x = rect.minX + base * CGFloat(column) + CGFloat(min(column, remainder))
-        var width = base + (column < remainder ? 1 : 0)
+        // A fixed first column is taken off the front; the remaining columns
+        // share what is left (equal whole points, remainder to the first).
+        let fixed = columns > 1 ? fixedFirstColumnWidth.map {
+            min(ceil($0), floor(whole * BlockLayout.Table.keyColumnMaxFraction))
+        } : nil
+        var x: CGFloat
+        var width: CGFloat
+        if let fixed, column == 0 {
+            x = rect.minX
+            width = fixed
+        } else {
+            let leadingFixed = fixed ?? 0
+            let shared = fixed == nil ? columns : columns - 1
+            let index = fixed == nil ? column : column - 1
+            let available = whole - leadingFixed
+            let base = floor(available / CGFloat(shared))
+            let remainder = Int(available - base * CGFloat(shared))
+            x = rect.minX + leadingFixed + base * CGFloat(index) + CGFloat(min(index, remainder))
+            width = base + (index < remainder ? 1 : 0)
+        }
         if column == columns - 1 { width += rect.width - whole }
         let leading = block.width(for: .margin, edge: .minX) + block.width(for: .border, edge: .minX)
             + block.width(for: .padding, edge: .minX)
@@ -179,16 +211,26 @@ enum TableTextBuilder {
 
     typealias Metrics = BlockLayout.Table
 
-    static func build(headers: [String], rows: [[String]], alignments: [TextAlignment],
+    static func build(headers: [String], rows: [[String]], alignments: [TextAlignment], style: TableStyle,
                       theme: MarkdownTheme, fontScale: CGFloat) -> TableText {
         let renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
         let (columnCount, showsHeader, bands) = grid(headers: headers, rows: rows, alignments: alignments)
+        // Rendered once: the key column's width is measured on these very cells.
+        let renderedBands = bands.map { band in
+            (0..<columnCount).map { column in
+                renderedCell(column < band.count ? band[column] : "", column: column, style: style,
+                             renderer: renderer)
+            }
+        }
 
         let table = FullWidthTextTable()
         table.numberOfColumns = columnCount
         table.layoutAlgorithm = .fixedLayoutAlgorithm
         table.collapsesBorders = false
         table.hidesEmptyCells = false
+        if style == .properties, columnCount > 1 {
+            table.fixedFirstColumnWidth = keyColumnWidth(textWidth: naturalWidth(of: renderedBands.map { $0[0] }))
+        }
 
         let border = NSColor(theme.borderColor)
         let headerBackground = NSColor(theme.headerBackgroundColor)
@@ -206,12 +248,12 @@ enum TableTextBuilder {
         var cellRanges: [[NSRange]] = []
         cellRanges.reserveCapacity(bands.count)
         let lastDataBand = bands.count - 1
-        for (bandIndex, band) in bands.enumerated() {
+        for (bandIndex, band) in renderedBands.enumerated() {
             let isHeader = showsHeader && bandIndex == 0
             var ranges: [NSRange] = []
             ranges.reserveCapacity(columnCount)
             for column in 0..<columnCount {
-                let cell = renderedCell(column < band.count ? band[column] : "", renderer: renderer)
+                let cell = band[column]
                 if isHeader { raiseToHeaderWeight(cell) }
                 ranges.append(NSRange(location: result.length, length: cell.length))
                 cell.append(NSAttributedString(string: "\n", attributes: terminatorAttributes))
@@ -245,8 +287,40 @@ enum TableTextBuilder {
         return TableText(
             string: result,
             layout: TableTextLayout(columnCount: columnCount, showsHeader: showsHeader, cellRanges: cellRanges),
-            source: TableText.Source(headers: headers, rows: rows, alignments: alignments,
+            source: TableText.Source(headers: headers, rows: rows, alignments: alignments, style: style,
                                      theme: theme, fontScale: fontScale))
+    }
+
+    /// The key column's fixed width for a widest key of `textWidth`: the text
+    /// plus the cell's horizontal paddings and its trailing divider (a border
+    /// inside the column), so the widest key fits on one line. The 40 % cap is
+    /// applied at layout time (`FullWidthTextTable`), where the width is known.
+    static func keyColumnWidth(textWidth: CGFloat) -> CGFloat {
+        ceil(textWidth) + 2 * Metrics.cellHorizontalPadding + Metrics.dividerWidth
+    }
+
+    /// The widest line of `cells`, each laid out unwrapped by TextKit 1 — the
+    /// engine that lays the cells out in the table, so a key measured here fits
+    /// its column. Off-main safe (standalone stack, like `height(of:width:)`).
+    /// Paragraph styles are dropped: a cell that already sits in a table
+    /// would otherwise be laid out in its table block, not unwrapped.
+    static func naturalWidth(of cells: [NSAttributedString]) -> CGFloat {
+        let joined = NSMutableAttributedString()
+        for (index, cell) in cells.enumerated() {
+            if index > 0 { joined.append(NSAttributedString(string: "\n")) }
+            joined.append(cell)
+        }
+        guard joined.length > 0 else { return 0 }
+        joined.removeAttribute(.paragraphStyle, range: NSRange(location: 0, length: joined.length))
+        let storage = NSTextStorage(attributedString: joined)
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                                    height: CGFloat.greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+        layoutManager.ensureLayout(for: container)
+        return ceil(layoutManager.usedRect(for: container).width)
     }
 
     /// The characters of `build(...).string` — the cells' rendered text, each
@@ -256,14 +330,15 @@ enum TableTextBuilder {
     /// the block, so the count is taken on exactly what the view shows (TS-D9).
     /// Same `grid` and `renderedCell` as `build`, so the two cannot disagree;
     /// pinned by `SearchTests`.
-    static func plainString(headers: [String], rows: [[String]], alignments: [TextAlignment],
+    static func plainString(headers: [String], rows: [[String]], alignments: [TextAlignment], style: TableStyle,
                             theme: MarkdownTheme, fontScale: CGFloat) -> String {
         let renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
         let (columnCount, _, bands) = grid(headers: headers, rows: rows, alignments: alignments)
         var result = ""
         for band in bands {
             for column in 0..<columnCount {
-                result += renderedCell(column < band.count ? band[column] : "", renderer: renderer).string
+                result += renderedCell(column < band.count ? band[column] : "", column: column, style: style,
+                                       renderer: renderer).string
                 result += "\n"
             }
         }
@@ -284,16 +359,33 @@ enum TableTextBuilder {
         return (columnCount, showsHeader, bands)
     }
 
-    /// One cell's rendered text (AppKit scope), without its "\n".
-    private static func renderedCell(_ markdown: String, renderer: MarkdownRenderer) -> NSMutableAttributedString {
+    /// One cell's rendered text (AppKit scope), without its "\n". A
+    /// `.properties` key (column 0) is literal (`keyCell`), every other cell
+    /// inline Markdown.
+    private static func renderedCell(_ markdown: String, column: Int, style: TableStyle,
+                                     renderer: MarkdownRenderer) -> NSMutableAttributedString {
+        let attributed = style == .properties && column == 0
+            ? keyCell(markdown, renderer: renderer) : renderer.renderInline(markdown)
         let cell = NSMutableAttributedString(
-            attributedString: (try? NSAttributedString(renderer.renderInline(markdown), including: \.appKit))
+            attributedString: (try? NSAttributedString(attributed, including: \.appKit))
                 ?? NSAttributedString(string: markdown))
         // One paragraph per cell is the layout's invariant (TS-D4). A table row
         // is one source line, so this never fires today; it keeps the
         // invariant if the renderer ever emits a break.
         cell.mutableString.replaceOccurrences(of: "\n", with: " ", options: [],
                                               range: NSRange(location: 0, length: cell.length))
+        return cell
+    }
+
+    /// A `.properties` key: the key's characters exactly as written — never
+    /// through `renderInline`, so `*`, `_`, `~~`, `[x]` or a URL in a key are
+    /// not markup — in the font `renderInline` gives plain text (cell size ×
+    /// zoom, regular) and the theme's secondary colour, both scopes (screen
+    /// table: AppKit; print: SwiftUI `Text`).
+    static func keyCell(_ key: String, renderer: MarkdownRenderer) -> AttributedString {
+        var cell = AttributedString(key)
+        cell.setDualFont(size: renderer.scaled(Metrics.cellFontSize), fonts: renderer.theme.fonts)
+        cell.setDualForeground(renderer.theme.secondaryTextColor)
         return cell
     }
 
@@ -362,6 +454,20 @@ enum TableTextBuilder {
         return raisedCell
     }
 
+    /// A printed `.properties` table's key column (`PrintableTableView`): the
+    /// widest key in the export font, plus the printed cell's paddings and
+    /// 1 pt, because SwiftUI `Text` may round its width up past TextKit's
+    /// `ceil` by a fraction — which would wrap the widest key. The 40 % cap is
+    /// `PropertiesRowLayout`'s, where the width is known.
+    static func printableKeyColumnWidth(keys: [String], renderer: MarkdownRenderer,
+                                        horizontalPadding: CGFloat) -> CGFloat {
+        let cells = keys.map { key -> NSAttributedString in
+            (try? NSAttributedString(keyCell(key, renderer: renderer), including: \.appKit))
+                ?? NSAttributedString(string: key)
+        }
+        return naturalWidth(of: cells) + 2 * horizontalPadding + 1
+    }
+
     /// The table's height in a laid-out container — the view's
     /// (`TableTextView.layoutHeight`) and the measurer's (`height(of:width:)`).
     ///
@@ -403,6 +509,51 @@ enum TableTextBuilder {
         case .trailing: return .right
         @unknown default: return .left
         }
+    }
+}
+
+// MARK: - Printed properties row
+
+/// One printed `.properties` row: key cell, 1 pt divider, value cell. The key
+/// column is `keyColumnWidth` capped at `keyColumnMaxFraction` of the width
+/// the row is offered (every row of a table is offered the same width, so the
+/// column lines up); the value takes the rest. Cells are centred vertically and
+/// the divider spans the row, as in the grid's HStack.
+struct PropertiesRowLayout: Layout {
+    let keyColumnWidth: CGFloat
+
+    private func columns(for width: CGFloat) -> (key: CGFloat, value: CGFloat) {
+        let key = min(keyColumnWidth, floor(width * BlockLayout.Table.keyColumnMaxFraction))
+        return (key, max(0, width - key - 1))
+    }
+
+    private func rowHeight(width: CGFloat, subviews: Subviews) -> CGFloat {
+        guard subviews.count == 3 else { return 0 }
+        let (key, value) = columns(for: width)
+        return max(subviews[0].sizeThatFits(ProposedViewSize(width: key, height: nil)).height,
+                   subviews[2].sizeThatFits(ProposedViewSize(width: value, height: nil)).height)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width: CGFloat
+        if let proposed = proposal.width, proposed.isFinite {
+            width = proposed
+        } else {
+            let value = subviews.count == 3 ? subviews[2].sizeThatFits(.unspecified).width : 0
+            width = keyColumnWidth + 1 + value
+        }
+        return CGSize(width: width, height: rowHeight(width: width, subviews: subviews))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 3 else { return }
+        let (key, value) = columns(for: bounds.width)
+        subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading,
+                          proposal: ProposedViewSize(width: key, height: nil))
+        subviews[1].place(at: CGPoint(x: bounds.minX + key, y: bounds.minY), anchor: .topLeading,
+                          proposal: ProposedViewSize(width: 1, height: bounds.height))
+        subviews[2].place(at: CGPoint(x: bounds.minX + key + 1, y: bounds.midY), anchor: .leading,
+                          proposal: ProposedViewSize(width: value, height: nil))
     }
 }
 

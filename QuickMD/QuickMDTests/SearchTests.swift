@@ -94,12 +94,13 @@ final class SearchTests: XCTestCase {
         let headers: [String]
         let rows: [[String]]
         let alignments: [TextAlignment]
+        var style: TableStyle = .grid
     }
 
     private func tables(in blocks: [MarkdownBlock]) -> [Table] {
         blocks.compactMap { block in
-            guard case .table(let headers, let rows, let alignments) = block.content else { return nil }
-            return Table(block: block, headers: headers, rows: rows, alignments: alignments)
+            guard case .table(let headers, let rows, let alignments, let style) = block.content else { return nil }
+            return Table(block: block, headers: headers, rows: rows, alignments: alignments, style: style)
         }
     }
 
@@ -111,7 +112,7 @@ final class SearchTests: XCTestCase {
 
     private func build(_ table: Table, theme: MarkdownTheme? = nil, fontScale: CGFloat = 1) -> TableText {
         TableTextBuilder.build(headers: table.headers, rows: table.rows, alignments: table.alignments,
-                               theme: theme ?? self.theme, fontScale: fontScale)
+                               style: table.style, theme: theme ?? self.theme, fontScale: fontScale)
     }
 
     /// A text view set up as `TableTextRepresentable.makeNSView` sets it up,
@@ -164,7 +165,7 @@ final class SearchTests: XCTestCase {
             for (theme, scale) in [(self.theme, CGFloat(1)), (MarkdownTheme.cached(for: .dark), 1.5),
                                    (self.theme, 0.75)] {
                 XCTAssertEqual(TableTextBuilder.plainString(headers: table.headers, rows: table.rows,
-                                                            alignments: table.alignments,
+                                                            alignments: table.alignments, style: table.style,
                                                             theme: theme, fontScale: scale),
                                viewString, markdown)
                 XCTAssertEqual(build(table, theme: theme, fontScale: scale).string.string, viewString, markdown)
@@ -552,5 +553,30 @@ final class SearchTests: XCTestCase {
 
         let edited = DocumentSearch.computeMatches(in: parse("needle"), term: "needle").matchBlockIds
         XCTAssertEqual(DocumentSearch.focusedIndex(after: .reparsed, previous: 3, matchCount: edited.count), 0)
+    }
+
+    // MARK: - Properties tables (front matter, v1.14.2)
+
+    /// Front matter is counted on the rendered properties string (literal
+    /// keys, rendered values) — the string the view highlights — and the
+    /// off-main `plainString` equals the view string for the style.
+    func testPropertiesTableCountsOnTheRenderedString() throws {
+        let markdown = "---\ntitle: The **needle** post\nneedle key: \"[a](https://needle.example)\"\n"
+            + "tags: [needle, x]\n---\nBody needle."
+        let table = try XCTUnwrap(tables(in: parse(markdown)).first)
+        XCTAssertEqual(table.style, .properties)
+        let viewString = build(table).string.string
+        XCTAssertEqual(viewString, "title\nThe needle post\nneedle key\na\ntags\nneedle, x\n")
+        XCTAssertEqual(TableTextBuilder.plainString(headers: table.headers, rows: table.rows,
+                                                    alignments: table.alignments, style: .properties,
+                                                    theme: theme, fontScale: 1), viewString)
+        // value, key, list item + the body; not the link URL.
+        XCTAssertEqual(count("needle", in: markdown), 4)
+        XCTAssertEqual(count("**", in: markdown), 0, "value markup is not text")
+        XCTAssertEqual(count("example", in: markdown), 0, "link URL")
+
+        let textView = tableTextView(build(table))
+        applyNSSearchHighlight(in: textView, term: "needle", focusedOccurrence: nil)
+        XCTAssertEqual(highlights(in: textView).count, 3, "every counted table match is drawn")
     }
 }

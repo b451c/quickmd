@@ -178,7 +178,7 @@ enum DocumentSearch {
                 // Handled above (`displayedString` covers every one of them;
                 // an alert without a body has no text view and counts 0).
                 segments = []
-            case .table(let headers, let rows, let alignments):
+            case .table(let headers, let rows, let alignments, let style):
                 // Counted on the RENDERED string the table view shows (no
                 // markup, no link URLs), with the matcher its highlight uses:
                 // every counted match is drawn, and the block's focused
@@ -186,12 +186,12 @@ enum DocumentSearch {
                 // reading order (TS-D9). 1.12 counted the cells' markdown.
                 let string: String
                 if let measured = tables[block.id],
-                   measured.matches(headers: headers, rows: rows, alignments: alignments,
+                   measured.matches(headers: headers, rows: rows, alignments: alignments, style: style,
                                     theme: theme, fontScale: fontScale) {
                     string = measured.string.string
                 } else {
                     string = TableTextBuilder.plainString(headers: headers, rows: rows, alignments: alignments,
-                                                          theme: theme, fontScale: fontScale)
+                                                          style: style, theme: theme, fontScale: fontScale)
                 }
                 let count = searchMatchRanges(in: string, term: term).count
                 matches.append(contentsOf: repeatElement(block.id, count: count))

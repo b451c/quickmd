@@ -86,11 +86,14 @@ final class ParserTests: XCTestCase {
 
     // MARK: - YAML frontmatter
 
+    /// Front matter outside `FrontMatter`'s subset (here a nested mapping)
+    /// stays the yaml code block, verbatim.
     func testYAMLFrontmatterRendersAsCodeBlock() {
         let md = """
         ---
         title: My Post
-        date: 2026-01-01
+        author:
+          name: Ann
         ---
         # Real Heading
         """
@@ -99,13 +102,14 @@ final class ParserTests: XCTestCase {
             return XCTFail("expected yaml code block first, got \(blocks.map(\.id))")
         }
         XCTAssertEqual(language, "yaml")
-        XCTAssertEqual(code, "title: My Post\ndate: 2026-01-01")
+        XCTAssertEqual(code, "title: My Post\nauthor:\n  name: Ann")
+        XCTAssertEqual(blocks[0].sourceLine, 0)
         // The first frontmatter key must NOT become a setext heading
         guard case .heading(_, let title, let sourceLine) = blocks[1].content else {
             return XCTFail("expected heading after frontmatter")
         }
         XCTAssertEqual(title, "Real Heading")
-        XCTAssertEqual(sourceLine, 4)
+        XCTAssertEqual(sourceLine, 5)
     }
 
     func testUnclosedLeadingDashesAreNotFrontmatter() {
@@ -321,7 +325,7 @@ final class ParserTests: XCTestCase {
         | 1 | 2 | 3 | 4 |
         """
         let blocks = parse(md)
-        guard case .table(let headers, let rows, let alignments) = blocks[0].content else {
+        guard case .table(let headers, let rows, let alignments, .grid) = blocks[0].content else {
             return XCTFail("expected table")
         }
         XCTAssertEqual(headers, ["A", "B", "C"])
@@ -339,7 +343,7 @@ final class ParserTests: XCTestCase {
         | **Toaster** | Two slots, one crumb tray |
         """
         let blocks = parse(md)
-        guard case .table(let headers, let rows, let alignments) = blocks[0].content else {
+        guard case .table(let headers, let rows, let alignments, .grid) = blocks[0].content else {
             return XCTFail("expected table")
         }
         // Empty header row must not collapse the table — separator defines 2 columns
@@ -361,7 +365,7 @@ final class ParserTests: XCTestCase {
         | `p\\\\|q` | c |
         """
         let blocks = parse(md)
-        guard case .table(let headers, let rows, _) = blocks[0].content else {
+        guard case .table(let headers, let rows, _, .grid) = blocks[0].content else {
             return XCTFail("expected table")
         }
         XCTAssertEqual(headers, ["Command", "Purpose"])
@@ -755,11 +759,10 @@ final class ParserTests: XCTestCase {
 
         let blocks = parse(md)
 
-        // Front matter → the line of its opening `---`
-        guard case .codeBlock(_, let frontMatterLanguage) = blocks.first?.content else {
-            return XCTFail("expected the yaml front-matter block first, got \(blocks.map(\.id))")
+        // Front matter (a properties table since v1.14.2) → the line of its opening `---`
+        guard case .table(_, _, _, .properties) = blocks.first?.content else {
+            return XCTFail("expected the front-matter properties table first, got \(blocks.map(\.id))")
         }
-        XCTAssertEqual(frontMatterLanguage, "yaml")
         XCTAssertEqual(blocks[0].sourceLine, 0, "front matter starts at its opening ---")
 
         // Heading — stored value and the associated one section copy reads
@@ -784,7 +787,9 @@ final class ParserTests: XCTestCase {
         }
         XCTAssertEqual(swiftFence?.sourceLine, 10)
 
-        XCTAssertEqual(firstBlock("table-", in: blocks)?.sourceLine, 14, "table starts at its header row")
+        // The grid table, not the front matter's properties table (table-0).
+        let gridTable = blocks.first { if case .table(_, _, _, .grid) = $0.content { return true } else { return false } }
+        XCTAssertEqual(gridTable?.sourceLine, 14, "table starts at its header row")
         XCTAssertEqual(firstBlock("blockquote-", in: blocks)?.sourceLine, 18)
         XCTAssertEqual(firstBlock("alert-", in: blocks)?.sourceLine, 20)
         XCTAssertEqual(firstBlock("image-", in: blocks)?.sourceLine, 23)
@@ -1037,7 +1042,7 @@ final class ParserTests: XCTestCase {
         : definition
         """
         let blocks = parse(md)
-        guard case .table(let headers, let rows, _) = blocks.first?.content else {
+        guard case .table(let headers, let rows, _, .grid) = blocks.first?.content else {
             return XCTFail("expected the table to survive, got \(blocks.map(\.id))")
         }
         XCTAssertEqual(headers, ["A", "B"])

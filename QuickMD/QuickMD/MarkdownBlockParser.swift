@@ -39,9 +39,11 @@ struct MarkdownBlockParser: Sendable {
         let allLines = markdown.components(separatedBy: "\n")
 
         // YAML frontmatter (Jekyll/Hugo/Obsidian convention): a "---" fence on
-        // the VERY FIRST line, closed by "---" or "...". Rendered as a neutral
-        // yaml code block. Without this, the setext-H2 rule would promote the
-        // first frontmatter key to a giant heading.
+        // the VERY FIRST line, closed by "---" or "...". Rendered as a
+        // properties table when `FrontMatter` reads it (flat keys, scalar
+        // lists), otherwise as a neutral yaml code block — lossless. Without
+        // this step the setext-H2 rule would promote the first frontmatter key
+        // to a giant heading.
         var firstContentLine = 0
         if allLines.first?.trimmingCharacters(in: .whitespaces) == "---" {
             var closingIndex: Int?
@@ -56,7 +58,16 @@ struct MarkdownBlockParser: Sendable {
                 if !yaml.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     // Front matter starts at the opening `---`, which the branch
                     // condition pins to line 0 of the original document.
-                    blocks.append(.codeBlock(index: blockIndex, code: yaml, language: "yaml", sourceLine: 0))
+                    if let properties = FrontMatter.properties(fromYAML: yaml) {
+                        // Rows built here never pass `parseTableRow`, so a `|`
+                        // in a value is already one cell — nothing to escape.
+                        blocks.append(.table(index: blockIndex, headers: [],
+                                             rows: properties.map { [$0.key, $0.value] },
+                                             alignments: [.leading, .leading], style: .properties,
+                                             sourceLine: 0))
+                    } else {
+                        blocks.append(.codeBlock(index: blockIndex, code: yaml, language: "yaml", sourceLine: 0))
+                    }
                     blockIndex += 1
                 }
                 firstContentLine = closingIndex + 1
@@ -309,7 +320,8 @@ struct MarkdownBlockParser: Sendable {
                     rows = rows.map { normalizeArray($0, to: columnCount, default: "") }
 
                     // Header row line — `i` has already walked past the body rows.
-                    blocks.append(.table(index: blockIndex, headers: headers, rows: rows, alignments: alignments, sourceLine: sourceLine))
+                    blocks.append(.table(index: blockIndex, headers: headers, rows: rows, alignments: alignments,
+                                         style: .grid, sourceLine: sourceLine))
                     blockIndex += 1
                     continue
                 }

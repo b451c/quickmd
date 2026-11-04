@@ -46,8 +46,8 @@ final class TableSelectionTests: XCTestCase {
     }
 
     private func table(_ block: MarkdownBlock) -> TableText? {
-        guard case .table(let headers, let rows, let alignments) = block.content else { return nil }
-        return TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
+        guard case .table(let headers, let rows, let alignments, let style) = block.content else { return nil }
+        return TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments, style: style,
                                       theme: theme, fontScale: 1)
     }
 
@@ -60,7 +60,7 @@ final class TableSelectionTests: XCTestCase {
     /// cell's markdown rendered again, the header only when shown) — the
     /// parity oracle for `SelectionRows`, which reads the built cells.
     private func wholeTablePiece(_ block: MarkdownBlock) -> SelectionPiece {
-        guard case .table(let headers, let rows, _) = block.content else { fatalError("not a table") }
+        guard case .table(let headers, let rows, _, _) = block.content else { fatalError("not a table") }
         let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
         func rendered(_ cell: String) -> String { String(renderer.renderInline(cell).characters) }
         let showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
@@ -185,9 +185,9 @@ final class TableSelectionTests: XCTestCase {
 
     func testTabsInsideCellsBecomeSpaces() {
         let built = TableTextBuilder.build(headers: ["H1", "H2"], rows: [["a\tb", "c"]], alignments: [],
-                                           theme: theme, fontScale: 1)
+                                           style: .grid, theme: theme, fontScale: 1)
         let block = MarkdownBlock(id: "table-0", content: .table(headers: ["H1", "H2"], rows: [["a\tb", "c"]],
-                                                                 alignments: []), sourceLine: 0)
+                                                                 alignments: [], style: .grid), sourceLine: 0)
         let layout = built.layout
         let output = copy(span(layout, from: (1, 0, 0), to: (1, 1, 1)), of: (block, built))
         XCTAssertEqual(output?.plain, "a b\tc")
@@ -445,10 +445,10 @@ final class TableSelectionTests: XCTestCase {
 
     func testBandSourceLines() {
         let header = TableTextBuilder.build(headers: ["A"], rows: [["1"], ["2"]], alignments: [],
-                                            theme: theme, fontScale: 1).layout
+                                            style: .grid, theme: theme, fontScale: 1).layout
         XCTAssertEqual((0..<3).map { SelectionRows.sourceLine(ofBand: $0, in: header, tableLine: 7) }, [7, 9, 10])
         let headerless = TableTextBuilder.build(headers: [""], rows: [["1"], ["2"]], alignments: [],
-                                                theme: theme, fontScale: 1).layout
+                                                style: .grid, theme: theme, fontScale: 1).layout
         XCTAssertEqual((0..<2).map { SelectionRows.sourceLine(ofBand: $0, in: headerless, tableLine: 7) }, [9, 10])
     }
 
@@ -730,5 +730,53 @@ final class TableSelectionTests: XCTestCase {
         XCTAssertEqual(parts, whole)
         XCTAssertTrue(manager.selectionRects(in: textView,
                                              limitedTo: NSRange(location: 0, length: 2)).isEmpty)
+    }
+
+    // MARK: - Properties tables (front matter, v1.14.2)
+
+    private static let frontMatterDocument = """
+    ---
+    title: Weekly review
+    tags:
+      - work
+      - review
+    status: draft
+    ---
+    Body.
+    """
+
+    /// Whole table and a cross-cell span copy as TSV `key\tvalue`; inside one
+    /// cell, the covered text.
+    func testPropertiesTableCopiesAsKeyTabValue() throws {
+        let blocks = parse(Self.frontMatterDocument)
+        let block = blocks[0]
+        let built = try XCTUnwrap(table(block))
+        XCTAssertEqual(built.source.style, .properties)
+        let fixture = (block: block, text: built)
+        let length = built.string.length
+        XCTAssertEqual(copy(NSRange(location: 0, length: length), of: fixture)?.plain,
+                       "title\tWeekly review\ntags\twork, review\nstatus\tdraft")
+        XCTAssertEqual(copy(span(built.layout, from: (1, 0, 0), to: (1, 1, 4)), of: fixture)?.plain, "tags\twork")
+        XCTAssertEqual(copy(cellRange(built.layout, 2, 1), of: fixture)?.plain, "draft")
+    }
+
+    /// A properties band is not one source line (a list spans several), so a
+    /// selection inside it names no single line — the hint falls back to the
+    /// rows' own lines; a grid band keeps naming its line (negative control).
+    func testPropertiesHintKeepsTheRowsOwnLines() throws {
+        let blocks = parse(Self.frontMatterDocument)
+        let layout = try XCTUnwrap(table(blocks[0])).layout
+        let draft = layout.cellRanges[2][1]
+        let selection = DocumentSelection(anchor: SelectionPoint(row: 0, offset: draft.location),
+                                          focus: SelectionPoint(row: 0, offset: NSMaxRange(draft)))
+        let h = try XCTUnwrap(hint(selection, blocks))
+        XCTAssertEqual(h.text, "draft")
+        XCTAssertNil(h.lines)
+
+        let (gridBlocks, row) = document()
+        let words = try XCTUnwrap(table(gridBlocks[row])).layout.cellRanges[2][1]
+        let gridSelection = DocumentSelection(anchor: SelectionPoint(row: row, offset: words.location),
+                                              focus: SelectionPoint(row: row, offset: NSMaxRange(words)))
+        XCTAssertNotNil(try XCTUnwrap(hint(gridSelection, gridBlocks)).lines)
     }
 }

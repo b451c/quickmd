@@ -29,6 +29,9 @@
 		A1B2C3D4010001B1 /* TableTextBuilder.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000001B0 /* TableTextBuilder.swift */; };
 		A1B2C3D4010001B2 /* TableTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000001B1 /* TableTextView.swift */; };
 		A1B2C3D4010001B3 /* TableTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000001B2 /* TableTextTests.swift */; };
+		A1B2C3D401000220 /* FrontMatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000220 /* FrontMatter.swift */; };
+		A1B2C3D401000221 /* FrontMatter.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000220 /* FrontMatter.swift */; };
+		A1B2C3D401000222 /* FrontMatterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000221 /* FrontMatterTests.swift */; };
 		A1B2C3D401000201 /* PrintableTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000200 /* PrintableTableTests.swift */; };
 		A1B2C3D4010001C0 /* SelectionRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000001C0 /* SelectionRows.swift */; };
 		A1B2C3D4010001C1 /* SelectionRows.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000001C0 /* SelectionRows.swift */; };
@@ -214,6 +217,8 @@
 		A1B2C3D4000001B0 /* TableTextBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableTextBuilder.swift; sourceTree = "<group>"; };
 		A1B2C3D4000001B1 /* TableTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableTextView.swift; sourceTree = "<group>"; };
 		A1B2C3D4000001B2 /* TableTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableTextTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000220 /* FrontMatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrontMatter.swift; sourceTree = "<group>"; };
+		A1B2C3D400000221 /* FrontMatterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrontMatterTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000200 /* PrintableTableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrintableTableTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4000001C0 /* SelectionRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRows.swift; sourceTree = "<group>"; };
 		A1B2C3D4000001C1 /* TableSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableSelectionTests.swift; sourceTree = "<group>"; };
@@ -326,6 +331,7 @@
 				A1B2C3D4000000E1 /* HTMLImageTests.swift */,
 				A1B2C3D4000000F0 /* HeadingLayoutTests.swift */,
 				A1B2C3D4000001B2 /* TableTextTests.swift */,
+				A1B2C3D400000221 /* FrontMatterTests.swift */,
 				A1B2C3D400000200 /* PrintableTableTests.swift */,
 				A1B2C3D4000001C1 /* TableSelectionTests.swift */,
 				A1B2C3D4000000C1 /* DocumentSelectionTests.swift */,
@@ -355,6 +361,7 @@
 				A1B2C3D40000000E /* MarkdownBlockParser.swift */,
 				A1B2C3D400000069 /* BlockHeightMeasurer.swift */,
 				A1B2C3D4000001B0 /* TableTextBuilder.swift */,
+				A1B2C3D400000220 /* FrontMatter.swift */,
 				A1B2C3D40000006E /* SVGImageDecoder.swift */,
 				A1B2C3D400000080 /* DataImageURI.swift */,
 				A1B2C3D400000081 /* ImageLoader.swift */,
@@ -646,6 +653,7 @@
 				A1B2C3D401000063 /* FontPickerView.swift in Sources */,
 				A1B2C3D401000069 /* BlockHeightMeasurer.swift in Sources */,
 				A1B2C3D4010001B0 /* TableTextBuilder.swift in Sources */,
+				A1B2C3D401000220 /* FrontMatter.swift in Sources */,
 				A1B2C3D4010001B2 /* TableTextView.swift in Sources */,
 				A1B2C3D40100006C /* VirtualBlockList.swift in Sources */,
 				A1B2C3D40100006D /* SVGBlockView.swift in Sources */,
@@ -697,6 +705,7 @@
 				A1B2C3D40100006A /* BlockHeightMeasurerTests.swift in Sources */,
 				A1B2C3D40100006B /* BlockHeightMeasurer.swift in Sources (Tests) */,
 				A1B2C3D4010001B1 /* TableTextBuilder.swift in Sources (Tests) */,
+				A1B2C3D401000221 /* FrontMatter.swift in Sources (Tests) */,
 				A1B2C3D40100006F /* SVGImageDecoder.swift in Sources (Tests) */,
 				A1B2C3D401000081 /* DataImageURI.swift in Sources (Tests) */,
 				A1B2C3D401000083 /* ImageLoader.swift in Sources (Tests) */,
@@ -727,6 +736,7 @@
 				A1B2C3D401000182 /* SourceEditLandingTests.swift in Sources */,
 				A1B2C3D4010000F0 /* HeadingLayoutTests.swift in Sources */,
 				A1B2C3D4010001B3 /* TableTextTests.swift in Sources */,
+				A1B2C3D401000222 /* FrontMatterTests.swift in Sources */,
 				A1B2C3D401000201 /* PrintableTableTests.swift in Sources */,
 				A1B2C3D4010001C2 /* TableSelectionTests.swift in Sources */,
 			);

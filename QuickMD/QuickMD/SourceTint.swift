@@ -121,6 +121,10 @@ enum SourceTint {
             return .heading
         case .codeBlock, .mermaidDiagram, .svgImage, .mathBlock:
             return .verbatim
+        case .table(_, _, _, .properties):
+            // YAML front matter shown as a properties table (v1.14.2): its
+            // source is the same fenced YAML it was as a code block.
+            return .verbatim
         case .blockquote, .alert:
             return .quote
         case .text, .table, .image:

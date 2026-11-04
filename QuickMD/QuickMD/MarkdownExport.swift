@@ -197,8 +197,8 @@ struct MarkdownPrintableView: View {
                     PrintableMath.text(from: attributedString)
                         .foregroundColor(.black)
 
-                case .table(let headers, let rows, let alignments):
-                    PrintableTableView(headers: headers, rows: rows, alignments: alignments)
+                case .table(let headers, let rows, let alignments, let style):
+                    PrintableTableView(headers: headers, rows: rows, alignments: alignments, style: style)
                         .padding(.vertical, 8)
 
                 case .codeBlock(let code, let language):
@@ -279,10 +279,16 @@ extension TableAlignmentProvider {
 /// Cell text comes from `TableTextBuilder.printableCell`: the screen table's
 /// fonts (14 pt runs, semibold header) are on the runs themselves. No `.font`
 /// modifier here — it would lose to the runs' own font and only mislead.
+///
+/// `.properties` (front matter) prints as the screen draws it: no header band,
+/// keys literal in the secondary colour (`TableTextBuilder.keyCell`), the key
+/// column as wide as the widest key (capped at 40 % — `PropertiesRowLayout`,
+/// which reads the width it is offered, no GeometryReader).
 struct PrintableTableView: View, TableAlignmentProvider {
     let headers: [String]
     let rows: [[String]]
     let alignments: [TextAlignment]
+    let style: TableStyle
 
     /// Cached renderer instance - created once on init
     private let renderer: MarkdownRenderer
@@ -296,16 +302,64 @@ struct PrintableTableView: View, TableAlignmentProvider {
     /// Headerless tables (`| | |`) skip the header band entirely
     private let showsHeader: Bool
 
-    init(headers: [String], rows: [[String]], alignments: [TextAlignment]) {
+    /// `.properties`: the key column's natural width (widest key measured with
+    /// the export font, plus the cell's horizontal paddings); nil for `.grid`.
+    private let keyColumnWidth: CGFloat?
+
+    /// The printed cells' horizontal padding (each side).
+    private static let horizontalPadding: CGFloat = 8
+
+    init(headers: [String], rows: [[String]], alignments: [TextAlignment], style: TableStyle) {
         self.headers = headers
         self.rows = rows
         self.alignments = alignments
-        self.renderer = MarkdownRenderer(colorScheme: .light)
+        self.style = style
+        let renderer = MarkdownRenderer(colorScheme: .light)
+        self.renderer = renderer
         self.columnCount = max(headers.count, alignments.count, rows.map(\.count).max() ?? 0)
-        self.showsHeader = headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        self.showsHeader = style == .grid && headers.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        keyColumnWidth = style == .properties
+            ? TableTextBuilder.printableKeyColumnWidth(keys: rows.map { $0.first ?? "" }, renderer: renderer,
+                                                       horizontalPadding: Self.horizontalPadding)
+            : nil
     }
 
     var body: some View {
+        if let keyColumnWidth {
+            propertiesBody(keyColumnWidth: keyColumnWidth)
+        } else {
+            gridBody
+        }
+    }
+
+    private func propertiesBody(keyColumnWidth: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
+                PropertiesRowLayout(keyColumnWidth: keyColumnWidth) {
+                    Text(TableTextBuilder.keyCell(row.first ?? "", renderer: renderer))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, Self.horizontalPadding)
+                        .padding(.vertical, 4)
+                    Rectangle().fill(theme.borderColor)
+                    Text(TableTextBuilder.printableCell(row.count > 1 ? row[1] : "", isHeader: false,
+                                                        renderer: renderer))
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, Self.horizontalPadding)
+                        .padding(.vertical, 4)
+                }
+
+                if rowIndex < rows.count - 1 {
+                    Rectangle().fill(theme.borderColor).frame(height: 1)
+                }
+            }
+        }
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.borderColor, lineWidth: 1))
+    }
+
+    private var gridBody: some View {
         VStack(spacing: 0) {
             if showsHeader {
                 // Header row
@@ -498,8 +552,8 @@ struct MarkdownPrintableBlockView: View {
                 PrintableMath.text(from: attributedString)
                     .foregroundColor(.black)
 
-            case .table(let headers, let rows, let alignments):
-                PrintableTableView(headers: headers, rows: rows, alignments: alignments)
+            case .table(let headers, let rows, let alignments, let style):
+                PrintableTableView(headers: headers, rows: rows, alignments: alignments, style: style)
 
             case .codeBlock(let code, let language):
                 PrintableCodeBlockView(code: code, language: language)

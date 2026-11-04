@@ -390,6 +390,10 @@ enum BlockLayout {
         /// "\n" this font too, so an empty cell is one line of it.
         static let cellFontSize: CGFloat = 14
         static let cornerRadius: CGFloat = 4
+        /// A `.properties` table's key column (widest key + paddings) never
+        /// takes more than this share of the table's width; longer keys wrap.
+        /// Screen (`FullWidthTextTable`) and print (`PrintableTableView`).
+        static let keyColumnMaxFraction: CGFloat = 0.4
     }
 
     // MARK: Images
@@ -858,11 +862,13 @@ enum BlockHeightMeasurer {
                                                renderer: renderer, contentWidth: contentWidth))
                 kinds.append(.reported)
 
-            case .table(let headers, let rows, let alignments):
+            case .table(let headers, let rows, let alignments, let style):
                 // The string `TableTextView` installs (it is handed this very
                 // instance), at the width its frame gets: the whole column.
+                // A `.properties` key column's 40 % cap depends on that width,
+                // so it is part of this measurement like wrapping is.
                 let table = TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
-                                                   theme: theme, fontScale: fontScale)
+                                                   style: style, theme: theme, fontScale: fontScale)
                 tables[block.id] = table
                 heights.append(TableTextBuilder.height(of: table.string, width: textWidth)
                                + 2 * BlockLayout.Document.tableOuterVerticalPadding)

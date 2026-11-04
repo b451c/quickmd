@@ -69,6 +69,19 @@ enum ImageWidth: Sendable, Equatable {
     }
 }
 
+// MARK: - Table Style
+
+/// How a `.table` block is drawn. Every Markdown table is `.grid`; YAML front
+/// matter that `FrontMatter` can read is a `.properties` table — two columns,
+/// key | value, no header band, keys literal and in the secondary text colour
+/// with a column only as wide as the widest key (capped at 40 %). One block
+/// kind for both, so selection, copy, search and the `.exact` measurement are
+/// the table pipeline's, not a parallel one.
+enum TableStyle: Sendable, Equatable {
+    case grid
+    case properties
+}
+
 // MARK: - Content Block Types
 
 /// Represents different types of Markdown content blocks
@@ -100,7 +113,8 @@ struct MarkdownBlock: Identifiable, Sendable {
 
     enum BlockContent: Sendable {
         case text(AttributedString)
-        case table(headers: [String], rows: [[String]], alignments: [TextAlignment])
+        /// `.properties` (front matter): `headers` empty, every row `[key, value]`.
+        case table(headers: [String], rows: [[String]], alignments: [TextAlignment], style: TableStyle)
         case codeBlock(code: String, language: String)
         /// `width` comes from an HTML `<img width>` (nil for Markdown images,
         /// which have no width syntax): it replaces the image's own width in
@@ -127,8 +141,11 @@ struct MarkdownBlock: Identifiable, Sendable {
     static func text(index: Int, _ attributed: AttributedString, sourceLine: Int) -> MarkdownBlock {
         MarkdownBlock(id: "text-\(index)", content: .text(attributed), sourceLine: sourceLine)
     }
-    static func table(index: Int, headers: [String], rows: [[String]], alignments: [TextAlignment], sourceLine: Int) -> MarkdownBlock {
-        MarkdownBlock(id: "table-\(index)", content: .table(headers: headers, rows: rows, alignments: alignments), sourceLine: sourceLine)
+    static func table(index: Int, headers: [String], rows: [[String]], alignments: [TextAlignment],
+                      style: TableStyle, sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "table-\(index)",
+                      content: .table(headers: headers, rows: rows, alignments: alignments, style: style),
+                      sourceLine: sourceLine)
     }
     static func codeBlock(index: Int, code: String, language: String, sourceLine: Int) -> MarkdownBlock {
         MarkdownBlock(id: "code-\(index)", content: .codeBlock(code: code, language: language), sourceLine: sourceLine)

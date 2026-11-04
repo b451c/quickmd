@@ -218,7 +218,9 @@ enum SelectionRows {
                 let stop = min(ceiling, end + contextLength)
                 after = ns.substring(with: NSRange(location: end, length: max(0, stop - end)))
             }
-            if span.count == 1, let layout,
+            // A front-matter table's bands are not one source line each
+            // (lists span several), so it keeps the rows' own lines.
+            if span.count == 1, let layout, case .table(_, _, _, .grid) = block.content,
                let first = layout.cell(containing: range.location)?.band,
                let last = layout.cell(containing: NSMaxRange(range) - 1)?.band, first == last {
                 let line = sourceLine(ofBand: first, in: layout, tableLine: block.sourceLine)

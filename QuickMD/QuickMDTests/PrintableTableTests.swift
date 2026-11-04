@@ -111,6 +111,82 @@ final class PrintableTableTests: XCTestCase {
                        try drawnFonts(reference(.system(size: codeSize, weight: .semibold, design: .monospaced))))
     }
 
+    // MARK: - Properties tables (front matter, v1.14.2)
+
+    /// Printed keys are the screen's key cells: literal, the export theme's
+    /// secondary colour in BOTH scopes, the cell font at regular weight.
+    func testPrintedKeyCellIsLiteralSecondaryRegular() {
+        let theme = MarkdownTheme.cached(for: .light)
+        let key = TableTextBuilder.keyCell("**not bold** [x](y)", renderer: renderer)
+        XCTAssertEqual(String(key.characters), "**not bold** [x](y)")
+        XCTAssertEqual(key.runs.count, 1)
+        let run = key.runs.first!
+        XCTAssertEqual(run.foregroundColor, theme.secondaryTextColor)
+        XCTAssertEqual(run[AttributeScopes.AppKitAttributes.ForegroundColorAttribute.self],
+                       NSColor(theme.secondaryTextColor))
+        let font = run[AttributeScopes.AppKitAttributes.FontAttribute.self]
+        XCTAssertEqual(font?.pointSize, BlockLayout.Table.cellFontSize)
+        XCTAssertLessThan(weight(of: font!), NSFont.Weight.semibold.rawValue)
+        XCTAssertNotNil(run.font, "SwiftUI scope carries the font too")
+    }
+
+    /// `PropertiesRowLayout` as `PrintableTableView` uses it, drawn by
+    /// `ImageRenderer` at the PDF content width: the divider sits at the
+    /// key column's width (short keys) or at 40 % (a long key), the short key
+    /// does not wrap and the long one does.
+    @MainActor
+    func testPrintedKeyColumnWidthAndCap() throws {
+        let width: CGFloat = 532
+        func row(_ keys: [String], _ shown: String) -> some View {
+            let keyWidth = TableTextBuilder.printableKeyColumnWidth(keys: keys, renderer: renderer,
+                                                                    horizontalPadding: 8)
+            return PropertiesRowLayout(keyColumnWidth: keyWidth) {
+                Text(TableTextBuilder.keyCell(shown, renderer: renderer))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                Rectangle().fill(Color(red: 1, green: 0, blue: 0))
+                Text(TableTextBuilder.printableCell("value", isHeader: false, renderer: renderer))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+            }
+            .frame(width: width)
+            .background(Color.white)
+        }
+        let keys = ["title", "created", "cssclasses"]
+        let expected = TableTextBuilder.printableKeyColumnWidth(keys: keys, renderer: renderer, horizontalPadding: 8)
+        XCTAssertLessThan(expected, width * 0.4)
+        let short = try drawn(row(keys, "cssclasses"))
+        XCTAssertEqual(short.dividerX, Int(expected), "divider right after the widest key's column")
+
+        let long = "a property name long enough to wrap at the forty percent cap of the page"
+        let capped = try drawn(row(keys + [long], long))
+        XCTAssertEqual(capped.dividerX, Int(floor(width * 0.4)), "capped at 40 %")
+
+        let oneLine = try drawn(row(keys, "x"))
+        XCTAssertEqual(short.height, oneLine.height, "the widest key fits on one line")
+        XCTAssertGreaterThan(capped.height, oneLine.height, "a capped key wraps")
+    }
+
+    /// The first pure-red pixel column (the divider) and the image height.
+    @MainActor
+    private func drawn(_ view: some View) throws -> (dividerX: Int, height: Int) {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        let y = image.height / 2
+        for x in 0..<image.width {
+            // Raw components of the (sRGB) bitmap: converting the calibrated
+            // NSColor `colorAt` returns would shift pure red.
+            guard let color = bitmap.colorAt(x: x, y: y) else { continue }
+            if color.redComponent > 0.9, color.greenComponent < 0.1, color.blueComponent < 0.1 {
+                return (x, image.height)
+            }
+        }
+        XCTFail("no divider drawn")
+        return (-1, image.height)
+    }
+
     /// "Abc" in `font`, as a run attribute — the way every cell reaches `Text`.
     /// The colour is explicit like the cells' (theme text colour): without one
     /// `ImageRenderer` drew the text so that no font resource was found for it.

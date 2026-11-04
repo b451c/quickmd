@@ -67,7 +67,7 @@ private func blockSignature(_ block: MarkdownBlock) -> String {
     switch block.content {
     case .text(let attributed):
         return "t|" + head(String(attributed.characters))
-    case .table(let headers, let rows, _):
+    case .table(let headers, let rows, _, _):
         return "b|\(rows.count)|" + head(headers.joined(separator: "\u{1F}"))
     case .codeBlock(let code, let language):
         return "c|\(language)|" + head(code)

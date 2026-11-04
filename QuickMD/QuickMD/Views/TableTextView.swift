@@ -18,6 +18,7 @@ struct TableTextBlockView: View {
     let headers: [String]
     let rows: [[String]]
     let alignments: [TextAlignment]
+    let style: TableStyle
     let theme: MarkdownTheme
     var fontScale: CGFloat = 1.0
     var searchText: String = ""
@@ -38,6 +39,7 @@ struct TableTextBlockView: View {
             headers: headers,
             rows: rows,
             alignments: alignments,
+            style: style,
             theme: theme,
             fontScale: fontScale,
             preconverted: preconverted,
@@ -59,6 +61,7 @@ private struct TableTextRepresentable: NSViewRepresentable {
     let headers: [String]
     let rows: [[String]]
     let alignments: [TextAlignment]
+    let style: TableStyle
     let theme: MarkdownTheme
     let fontScale: CGFloat
     let preconverted: TableText?
@@ -95,12 +98,12 @@ private struct TableTextRepresentable: NSViewRepresentable {
 
         // At most one build per source per view: the measurer's instance when
         // it was built from exactly this source, otherwise our own.
-        let source = TableText.Source(headers: headers, rows: rows, alignments: alignments,
+        let source = TableText.Source(headers: headers, rows: rows, alignments: alignments, style: style,
                                       theme: theme, fontScale: fontScale)
         let textChanged = textView.tableSource != source
         if textChanged {
             let table = preconverted.flatMap { $0.source == source ? $0 : nil }
-                ?? TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
+                ?? TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments, style: style,
                                           theme: theme, fontScale: fontScale)
             textView.textStorage?.setAttributedString(table.string)
             textView.cachedAttributed = table.string

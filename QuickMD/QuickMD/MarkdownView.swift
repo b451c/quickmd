@@ -1114,10 +1114,10 @@ struct MarkdownView: View {
                     onLink: { handleLinkActivation($0) }
                 )
 
-            case .table(let headers, let rows, let alignments):
+            case .table(let headers, let rows, let alignments, let style):
                 // One NSTextView over the measurer's own `TableText` (v1.13
                 // TS-D1/TS-D3) — an `.exact` row like the text kinds.
-                TableTextBlockView(headers: headers, rows: rows, alignments: alignments, theme: theme,
+                TableTextBlockView(headers: headers, rows: rows, alignments: alignments, style: style, theme: theme,
                                    fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc,
                                    preconverted: measured.tables[block.id],
                                    onLink: { handleLinkActivation($0) })
@@ -1285,13 +1285,14 @@ struct MarkdownView: View {
     /// `TableTextBlockView` checks it); otherwise the same builder the view
     /// falls back to. Nil for any other block.
     private func selectableTable(for block: MarkdownBlock, installedVersion: Int) -> TableText? {
-        guard case .table(let headers, let rows, let alignments) = block.content else { return nil }
+        guard case .table(let headers, let rows, let alignments, let style) = block.content else { return nil }
         let scale = CGFloat(renderedFontScale)
         if installedVersion == contentVersion, let table = measured.tables[block.id],
-           table.matches(headers: headers, rows: rows, alignments: alignments, theme: theme, fontScale: scale) {
+           table.matches(headers: headers, rows: rows, alignments: alignments, style: style,
+                         theme: theme, fontScale: scale) {
             return table
         }
-        return TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
+        return TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments, style: style,
                                       theme: theme, fontScale: scale)
     }
 

@@ -61,13 +61,14 @@ final class TableTextTests: XCTestCase {
         let headers: [String]
         let rows: [[String]]
         let alignments: [TextAlignment]
+        var style: TableStyle = .grid
     }
 
     private func table(_ markdown: String, fontScale: CGFloat = 1) -> Table {
         let blocks = MarkdownBlockParser(theme: theme, fontScale: fontScale).parse(markdown)
         for block in blocks {
-            if case .table(let headers, let rows, let alignments) = block.content {
-                return Table(block: block, headers: headers, rows: rows, alignments: alignments)
+            if case .table(let headers, let rows, let alignments, let style) = block.content {
+                return Table(block: block, headers: headers, rows: rows, alignments: alignments, style: style)
             }
         }
         XCTFail("no table in fixture")
@@ -75,7 +76,7 @@ final class TableTextTests: XCTestCase {
     }
 
     private func build(_ t: Table, fontScale: CGFloat = 1) -> TableText {
-        TableTextBuilder.build(headers: t.headers, rows: t.rows, alignments: t.alignments,
+        TableTextBuilder.build(headers: t.headers, rows: t.rows, alignments: t.alignments, style: t.style,
                                theme: theme, fontScale: fontScale)
     }
 
@@ -142,7 +143,7 @@ final class TableTextTests: XCTestCase {
 
     func testRaggedRowsArePaddedWithEmptyCells() {
         let built = TableTextBuilder.build(headers: ["A", "B"], rows: [["1"], ["2", "3", "4"]],
-                                           alignments: [.leading, .trailing], theme: theme, fontScale: 1)
+                                           alignments: [.leading, .trailing], style: .grid, theme: theme, fontScale: 1)
         XCTAssertEqual(built.layout.columnCount, 3)
         XCTAssertEqual(built.string.string, "A\nB\n\n1\n\n\n2\n3\n4\n")
         XCTAssertEqual(built.layout.cellRanges, [
@@ -182,7 +183,7 @@ final class TableTextTests: XCTestCase {
 
     func testBandsAreContiguousAndCellContaining() {
         let built = TableTextBuilder.build(headers: ["H1", "H2"], rows: [["a", ""], ["bb", "c"]],
-                                           alignments: [], theme: theme, fontScale: 1)
+                                           alignments: [], style: .grid, theme: theme, fontScale: 1)
         // "H1\nH2\na\n\nbb\nc\n"
         let layout = built.layout
         XCTAssertEqual(bandRange(layout, 0), NSRange(location: 0, length: 6))
@@ -205,7 +206,7 @@ final class TableTextTests: XCTestCase {
 
     func testEmptyTableIsEmptyAndZeroHigh() {
         let built = TableTextBuilder.build(headers: ["", ""], rows: [], alignments: [.leading, .leading],
-                                           theme: theme, fontScale: 1)
+                                           style: .grid, theme: theme, fontScale: 1)
         XCTAssertEqual(built.string.length, 0)
         XCTAssertEqual(built.layout.bandCount, 0)
         XCTAssertEqual(built.layout.length, 0)
@@ -306,9 +307,9 @@ final class TableTextTests: XCTestCase {
         XCTAssertEqual(carried?.string.string, build(t).string.string)
         XCTAssertEqual(carried?.layout, build(t).layout)
         XCTAssertTrue(carried?.matches(headers: t.headers, rows: t.rows, alignments: t.alignments,
-                                       theme: theme, fontScale: 1) ?? false)
+                                       style: t.style, theme: theme, fontScale: 1) ?? false)
         XCTAssertFalse(carried?.matches(headers: t.headers, rows: t.rows, alignments: t.alignments,
-                                        theme: theme, fontScale: 1.5) ?? true, "another zoom is another string")
+                                        style: t.style, theme: theme, fontScale: 1.5) ?? true, "another zoom is another string")
     }
 
     /// measurer row == laid-out view + outer padding, to the point, for every
@@ -362,10 +363,11 @@ final class TableTextTests: XCTestCase {
             let headers = (0..<columns).map { "h\($0)" }
             let rows = (0..<3).map { r in (0..<columns).map { c in c == columns / 2 && r == 1 ? wrapping : "c\(r),\(c)" } }
             let alignments = Array(repeating: TextAlignment.leading, count: columns)
-            let block = MarkdownBlock(id: "table-0", content: .table(headers: headers, rows: rows, alignments: alignments),
+            let block = MarkdownBlock(id: "table-0", content: .table(headers: headers, rows: rows, alignments: alignments,
+                                                                     style: .grid),
                                       sourceLine: 0)
             let built = TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
-                                               theme: theme, fontScale: 1)
+                                               style: .grid, theme: theme, fontScale: 1)
             for width in [CGFloat(397), 401, 653, 999, 1913] {
                 let tag = "\(columns) columns @\(Int(width))"
                 let textView = liveTextView(built, width: width)
@@ -408,17 +410,17 @@ final class TableTextTests: XCTestCase {
         let light = MarkdownTheme.cached(for: .light)
         let dark = MarkdownTheme.cached(for: .dark)
         let built = TableTextBuilder.build(headers: t.headers, rows: t.rows, alignments: t.alignments,
-                                           theme: light, fontScale: 1)
+                                           style: t.style, theme: light, fontScale: 1)
         XCTAssertTrue(built.matches(headers: t.headers, rows: t.rows, alignments: t.alignments,
-                                    theme: light, fontScale: 1))
+                                    style: t.style, theme: light, fontScale: 1))
         XCTAssertFalse(built.matches(headers: t.headers, rows: t.rows, alignments: t.alignments,
-                                     theme: dark, fontScale: 1), "Auto light vs Auto dark")
+                                     style: t.style, theme: dark, fontScale: 1), "Auto light vs Auto dark")
         var serif = light
         serif.fonts = DocumentFonts(body: "Georgia")
         XCTAssertFalse(built.matches(headers: t.headers, rows: t.rows, alignments: t.alignments,
-                                     theme: serif, fontScale: 1), "another body font")
+                                     style: t.style, theme: serif, fontScale: 1), "another body font")
         XCTAssertFalse(built.matches(headers: t.headers, rows: t.rows + [["x"]], alignments: t.alignments,
-                                     theme: light, fontScale: 1), "another row")
+                                     style: t.style, theme: light, fontScale: 1), "another row")
     }
 
     // MARK: - Hit-testing helper (TS-D6 groundwork)
@@ -457,5 +459,169 @@ final class TableTextTests: XCTestCase {
             XCTAssertEqual(layout.cell(containing: above)?.band, 0, fixture.name)
             XCTAssertEqual(layout.cell(containing: above)?.column, layout.columnCount - 1, fixture.name)
         }
+    }
+
+    // MARK: - Properties tables (front matter, v1.14.2)
+
+    private static let propertiesMarkdown = FrontMatterTests.weeklyReview
+
+    private func propertiesTable(keys: [String]? = nil, fontScale: CGFloat = 1) -> Table {
+        if let keys {
+            let rows = keys.map { [$0, "value of \($0)"] }
+            let block = MarkdownBlock(id: "table-0", content: .table(headers: [], rows: rows,
+                                                                     alignments: [.leading, .leading],
+                                                                     style: .properties), sourceLine: 0)
+            return Table(block: block, headers: [], rows: rows, alignments: [.leading, .leading], style: .properties)
+        }
+        let t = table(Self.propertiesMarkdown, fontScale: fontScale)
+        XCTAssertEqual(t.style, .properties)
+        return t
+    }
+
+    func testPropertiesStringHasNoHeaderBandKeysSecondaryValuesRendered() {
+        let built = build(propertiesTable())
+        XCTAssertFalse(built.layout.showsHeader)
+        XCTAssertEqual(built.layout.columnCount, 2)
+        XCTAssertEqual(built.layout.bandCount, 6)
+        XCTAssertEqual(built.string.string, "title\nWeekly review\naliases\nReview 45\ntags\nwork, review\n"
+                       + "created\n2026-11-02\nstatus\ndraft\nsource\nhttps://example.com/article\n")
+        let secondary = NSColor(theme.secondaryTextColor)
+        let text = NSColor(theme.textColor)
+        let ns = built.string.string as NSString
+        for band in 0..<built.layout.bandCount {
+            for column in 0..<2 {
+                let range = built.layout.cellRanges[band][column]
+                let style = built.string.attribute(.paragraphStyle, at: NSMaxRange(range),
+                                                   effectiveRange: nil) as? NSParagraphStyle
+                let block = style?.textBlocks.first as? NSTextTableBlock
+                XCTAssertNil(block?.backgroundColor, "no header band (\(band),\(column))")
+                XCTAssertEqual(block?.width(for: .border, edge: .maxY), band < 5 ? 1 : 0, "row rules as a grid")
+                guard column == 0 else { continue }
+                built.string.enumerateAttributes(in: range) { attributes, _, _ in
+                    XCTAssertEqual(attributes[.foregroundColor] as? NSColor, secondary, ns.substring(with: range))
+                    let font = attributes[.font] as? NSFont
+                    XCTAssertEqual(font?.pointSize, BlockLayout.Table.cellFontSize)
+                    XCTAssertFalse(font?.fontDescriptor.symbolicTraits.contains(.bold) ?? true, "regular weight")
+                }
+            }
+        }
+        // Values are inline Markdown like any cell: the URL is a link, the
+        // plain text is in the text colour.
+        let source = built.layout.cellRanges[5][1]
+        XCTAssertNotNil(built.string.attribute(.link, at: source.location, effectiveRange: nil))
+        let status = built.layout.cellRanges[4][1]
+        XCTAssertEqual(built.string.attribute(.foregroundColor, at: status.location, effectiveRange: nil) as? NSColor,
+                       text)
+        // Negative control: the same cells as a grid have no secondary keys.
+        let grid = TableTextBuilder.build(headers: [], rows: [["title", "x"]], alignments: [.leading, .leading],
+                                          style: .grid, theme: theme, fontScale: 1)
+        XCTAssertEqual(grid.string.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, text)
+    }
+
+    /// Keys are literal — no markup, no links, no escapes eaten — while the
+    /// value next to them is Markdown; a `|` in a value is one cell.
+    func testPropertiesKeysAreLiteralValuesAreMarkdown() {
+        let key = #"**a** _b_ [c](https://d.e) ~~f~~ <g> $h$ `i` j|k \* https://l.m"#
+        let built = TableTextBuilder.build(headers: [], rows: [[key, "**bold** a | b"]],
+                                           alignments: [.leading, .leading], style: .properties,
+                                           theme: theme, fontScale: 1)
+        XCTAssertEqual(built.string.string, key + "\nbold a | b\n")
+        let keyRange = built.layout.cellRanges[0][0]
+        built.string.enumerateAttribute(.link, in: keyRange) { value, _, _ in XCTAssertNil(value) }
+        let bold = built.string.attribute(.font, at: built.layout.cellRanges[0][1].location,
+                                          effectiveRange: nil) as? NSFont
+        XCTAssertTrue(bold?.fontDescriptor.symbolicTraits.contains(.bold) ?? false, "value markup renders")
+    }
+
+    /// Column 0 = widest key + paddings + its divider (whole points) when that
+    /// is under 40 %: narrower than half for short keys, the value column takes
+    /// the rest, the columns tile the width, and every key stays on one line.
+    func testPropertiesKeyColumnFitsTheWidestKey() {
+        let built = build(propertiesTable())
+        // Each key as the builder renders it (the substrings of `built` would
+        // carry the table's paragraph style; `naturalWidth` drops it anyway).
+        let renderer = MarkdownRenderer(theme: theme)
+        let keys = propertiesTable().rows.map {
+            try! NSAttributedString(TableTextBuilder.keyCell($0[0], renderer: renderer), including: \.appKit)
+        }
+        let expected = TableTextBuilder.keyColumnWidth(textWidth: TableTextBuilder.naturalWidth(of: keys))
+        XCTAssertEqual(expected, TableTextBuilder.keyColumnWidth(textWidth: TableTextBuilder.naturalWidth(
+            of: built.layout.cellRanges.map { built.string.attributedSubstring(from: $0[0]) })),
+                       "a cell's table paragraph style does not change its natural width")
+        for width in [CGFloat(400), 653, 1000] {
+            let textView = liveTextView(built, width: width)
+            for band in 0..<built.layout.bandCount {
+                let key = textView.tableCellBounds(band: band, column: 0, layout: built.layout)!
+                let value = textView.tableCellBounds(band: band, column: 1, layout: built.layout)!
+                XCTAssertEqual(key.minX, 0, accuracy: 0.01)
+                XCTAssertEqual(key.width, expected, accuracy: 0.01, "@\(width)")
+                XCTAssertLessThan(key.width, width / 2)
+                XCTAssertEqual(value.minX, key.maxX, accuracy: 0.01, "no gap")
+                XCTAssertEqual(value.maxX, width, accuracy: 0.5, "value column reaches the edge")
+                XCTAssertEqual(lineCount(textView, built.layout.cellRanges[band][0]), 1, "key on one line @\(width)")
+            }
+        }
+    }
+
+    func testPropertiesKeyColumnIsCappedAtFortyPercent() {
+        let long = "an extraordinarily long property name that no sane vault would ever use as a key"
+        let built = build(propertiesTable(keys: ["a", long]))
+        for width in [CGFloat(397), 700, 1000] {
+            let textView = liveTextView(built, width: width)
+            let key = textView.tableCellBounds(band: 1, column: 0, layout: built.layout)!
+            let value = textView.tableCellBounds(band: 1, column: 1, layout: built.layout)!
+            XCTAssertEqual(key.width, floor(width * BlockLayout.Table.keyColumnMaxFraction), accuracy: 0.01)
+            XCTAssertEqual(value.minX, key.maxX, accuracy: 0.01)
+            XCTAssertEqual(value.maxX, width, accuracy: 0.5)
+            XCTAssertGreaterThan(lineCount(textView, built.layout.cellRanges[1][0]), 1, "the long key wraps")
+        }
+    }
+
+    /// The `.exact` row: measurer == laid-out view, at widths where the cap
+    /// binds and where it does not, and with the real (front matter) table.
+    func testPropertiesMeasuredHeightEqualsLaidOutTableView() {
+        let long = "a property name long enough to hit the forty percent cap at narrow widths"
+        for scale in [CGFloat(0.75), 1.0, 1.5] {
+            for t in [propertiesTable(fontScale: scale), propertiesTable(keys: ["a", long, "tags"], fontScale: scale)] {
+                let built = build(t, fontScale: scale)
+                for width in [CGFloat(300), 400, 653, 1000, 1913] {
+                    let row = BlockHeightMeasurer.measure(blocks: [t.block], theme: theme, fontScale: scale,
+                                                          contentWidth: width, math: nil).table.heights[0]
+                    let textView = liveTextView(built, width: width)
+                    let live = TableTextBuilder.tableHeight(layoutManager: textView.layoutManager!,
+                                                            container: textView.textContainer!)
+                    let tag = "\(t.rows.count) rows @\(Int(width)) x\(scale)"
+                    XCTAssertEqual(row - 2 * BlockLayout.Document.tableOuterVerticalPadding, live, tag)
+                    let last = textView.tableCellBounds(band: built.layout.bandCount - 1, column: 1,
+                                                        layout: built.layout)
+                    XCTAssertEqual(live, ceil(last?.maxY ?? 0), tag)
+                }
+            }
+        }
+    }
+
+    /// `matches` tells the styles apart (the measurer's grid string must never
+    /// be adopted for a properties block, or the other way round).
+    func testSourceDistinguishesStyle() {
+        let t = propertiesTable()
+        let built = build(t)
+        XCTAssertTrue(built.matches(headers: t.headers, rows: t.rows, alignments: t.alignments,
+                                    style: .properties, theme: theme, fontScale: 1))
+        XCTAssertFalse(built.matches(headers: t.headers, rows: t.rows, alignments: t.alignments,
+                                     style: .grid, theme: theme, fontScale: 1))
+        let measured = BlockHeightMeasurer.measure(blocks: [t.block], theme: theme, fontScale: 1,
+                                                   contentWidth: 700, math: nil)
+        XCTAssertEqual(measured.table.kinds, [.exact])
+        XCTAssertEqual(measured.tables[t.block.id]?.source.style, .properties)
+    }
+
+    private func lineCount(_ textView: NSTextView, _ range: NSRange) -> Int {
+        guard range.length > 0, let layoutManager = textView.layoutManager else { return 0 }
+        var lines = 0
+        layoutManager.enumerateLineFragments(forGlyphRange: layoutManager.glyphRange(forCharacterRange: range,
+                                                                                      actualCharacterRange: nil)) { _, _, _, _, _ in
+            lines += 1
+        }
+        return lines
     }
 }
