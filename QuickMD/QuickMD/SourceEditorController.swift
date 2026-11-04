@@ -103,14 +103,20 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     /// `apply(style:)`, so SwiftUI may hand the same one on every update.
     struct Style: Equatable {
         var theme: MarkdownTheme
+        /// The editor's font size (the zoom asked for: it follows ⌘+ at once).
         var fontScale: Double
         var isReadingLayout: Bool
+        /// The zoom the Reading Mode column is capped at (`columnGeometry`);
+        /// nil = `fontScale`. Over a rendered document, the zoom the list
+        /// SHOWS (`overDocument`).
+        var columnFontScale: Double? = nil
 
         /// `MarkdownTheme` is not `Equatable`; compare what the editor reads
         /// from it. Colours as well as the name: a custom theme re-imported
         /// under the same name may change them.
         static func == (lhs: Style, rhs: Style) -> Bool {
             lhs.fontScale == rhs.fontScale
+                && lhs.columnFontScale == rhs.columnFontScale
                 && lhs.isReadingLayout == rhs.isReadingLayout
                 && lhs.theme.name == rhs.theme.name
                 && lhs.theme.isDark == rhs.theme.isDark
@@ -118,6 +124,20 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
                 && lhs.theme.backgroundColor == rhs.theme.backgroundColor
                 && lhs.theme.fonts == rhs.theme.fonts
                 && lhs.hasSameTintColors(as: rhs)
+        }
+
+        /// The editor's style over a rendered document. Two zooms, because
+        /// between ⌘+ and the re-parse that follows it they differ:
+        /// - the font follows `fontScale`, the zoom asked for, at once;
+        /// - the Reading Mode column follows `shownFontScale`
+        ///   (`MarkdownView.renderedFontScale` — the zoom the list's blocks
+        ///   were parsed at and its column is capped at), so the editor's
+        ///   column is the list's at every moment and leaving Source Edit
+        ///   before the parse lands does not move the text sideways.
+        static func overDocument(theme: MarkdownTheme, fontScale: Double, shownFontScale: Double,
+                                 isReadingMode: Bool) -> Style {
+            Style(theme: theme, fontScale: fontScale, isReadingLayout: isReadingMode,
+                  columnFontScale: shownFontScale)
         }
 
         /// The colours of the block tint (`paintTint`).
@@ -437,17 +457,19 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     /// The rendered document's column, reproduced so the text does not jump
     /// sideways when the mode toggles. `VirtualBlockList.currentContentWidth()`
     /// computes `inner = floor(clip) − 2 × contentHorizontalPadding` (32 pt)
-    /// and, in reading mode, `floor(min(inner, 720))`; its cells centre that
+    /// and, in reading mode, `floor(min(inner, cap))` with the cap at the
+    /// zoom (`BlockLayout.Document.columnWidth`, `readingColumnCap`, 720 pt at
+    /// 100 %); its cells centre that
     /// column in the `floor(clip)`-wide table column, i.e. the column starts
     /// at `(floor(clip) − column) / 2` — 32 pt exactly in the standard layout,
     /// never less in reading mode. The vertical gap is the list's visible gap
     /// above the first block (`LayoutStyle.verticalPadding`: 24 / 48 pt).
-    static func columnGeometry(clipWidth: CGFloat, isReadingLayout: Bool) -> ColumnGeometry {
+    static func columnGeometry(clipWidth: CGFloat, isReadingLayout: Bool, fontScale: CGFloat) -> ColumnGeometry {
         let available = floor(max(clipWidth, 0))
         let inner = available - 2 * BlockLayout.Document.contentHorizontalPadding
-        let column = isReadingLayout
-            ? max(0, floor(min(inner, BlockLayout.Document.readingMaxContentWidth)))
-            : max(0, inner)
+        let column = BlockLayout.Document.columnWidth(
+            inner: inner,
+            cap: isReadingLayout ? BlockLayout.Document.readingColumnCap(fontScale: fontScale) : nil)
         let vertical = isReadingLayout
             ? BlockLayout.Document.readingContentVerticalPadding
             : BlockLayout.Document.contentVerticalPadding
@@ -464,7 +486,8 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
         isUpdatingGeometry = true
         defer { isUpdatingGeometry = false }
         let clip = scrollView.contentView.bounds.size
-        let geometry = Self.columnGeometry(clipWidth: clip.width, isReadingLayout: style.isReadingLayout)
+        let geometry = Self.columnGeometry(clipWidth: clip.width, isReadingLayout: style.isReadingLayout,
+                                           fontScale: CGFloat(style.columnFontScale ?? style.fontScale))
         let inset = NSSize(width: geometry.horizontalInset, height: geometry.verticalInset)
         // At least as tall as the clip, so a click below a short text still
         // lands in the text view (and places the caret at the end).

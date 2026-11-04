@@ -18,7 +18,8 @@ struct TableOfContentsView: View {
     }
 
     var body: some View {
-        let shown = ToCDepth.visible(headings, maxLevel: maxLevel)
+        let level = ToCDepth.normalized(maxLevel)
+        let shown = ToCDepth.visible(headings, maxLevel: level)
         VStack(alignment: .leading, spacing: 0) {
             // Header
             HStack(spacing: 6) {
@@ -64,7 +65,7 @@ struct TableOfContentsView: View {
                 // Every heading is deeper than the chosen depth
                 if shown.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("No headings up to H\(maxLevel)")
+                        Text("No headings up to H\(level)")
                             .foregroundColor(.secondary)
                         Button("Show All Headings") { maxLevel = ToCDepth.all }
                             .buttonStyle(.link)
@@ -77,7 +78,8 @@ struct TableOfContentsView: View {
         }
         .background(theme.backgroundColor.opacity(0.5))
         .contextMenu {
-            Picker("Show Headings", selection: $maxLevel) {
+            Picker("Show Headings", selection: Binding(get: { ToCDepth.normalized(maxLevel) },
+                                                       set: { maxLevel = $0 })) {
                 ForEach(ToCDepth.choices, id: \.maxLevel) { choice in
                     Text(choice.title).tag(choice.maxLevel)
                 }
@@ -102,7 +104,8 @@ private struct ToCEntryRow: View {
             Button {
                 onSelect()
             } label: {
-                Text(entry.title)
+                // The text the heading shows (markup gone, `Q&amp;A` → `Q&A`).
+                Text(entry.shownTitle(renderer: MarkdownRenderer(theme: theme)))
                     .font(.system(size: fontSize(for: entry.level), weight: fontWeight(for: entry.level)))
                     .foregroundColor(theme.textColor)
                     .lineLimit(2)

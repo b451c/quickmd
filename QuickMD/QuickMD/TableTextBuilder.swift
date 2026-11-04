@@ -44,6 +44,9 @@ struct TableTextLayout: Equatable {
 
     var bandCount: Int { cellRanges.count }
 
+    /// Column 0 of every band — a `.properties` table's key cells.
+    var firstColumnRanges: [NSRange] { cellRanges.compactMap(\.first) }
+
     /// UTF-16 length of the whole string (0 for a table with no bands).
     var length: Int {
         guard let last = cellRanges.last?.last else { return 0 }
@@ -360,12 +363,13 @@ enum TableTextBuilder {
     }
 
     /// One cell's rendered text (AppKit scope), without its "\n". A
-    /// `.properties` key (column 0) is literal (`keyCell`), every other cell
-    /// inline Markdown.
+    /// `.properties` key (column 0) is literal (`keyCell`), its value
+    /// `valueCell`, every grid cell inline Markdown.
     private static func renderedCell(_ markdown: String, column: Int, style: TableStyle,
                                      renderer: MarkdownRenderer) -> NSMutableAttributedString {
-        let attributed = style == .properties && column == 0
-            ? keyCell(markdown, renderer: renderer) : renderer.renderInline(markdown)
+        let attributed = style == .properties
+            ? (column == 0 ? keyCell(markdown, renderer: renderer) : valueCell(markdown, renderer: renderer))
+            : renderer.renderInline(markdown)
         let cell = NSMutableAttributedString(
             attributedString: (try? NSAttributedString(attributed, including: \.appKit))
                 ?? NSAttributedString(string: markdown))
@@ -387,6 +391,15 @@ enum TableTextBuilder {
         cell.setDualFont(size: renderer.scaled(Metrics.cellFontSize), fonts: renderer.theme.fonts)
         cell.setDualForeground(renderer.theme.secondaryTextColor)
         return cell
+    }
+
+    /// A `.properties` value: inline Markdown (a URL is a link, `**x**` is
+    /// bold) except that a backslash is literal, as in the YAML it came from
+    /// (`C:\_tmp` shows `C:\_tmp`, not `C:_tmp`), and so is a character
+    /// reference (`&amp;` stays `&amp;`: GitHub renders front matter as plain
+    /// text). Screen and print.
+    static func valueCell(_ value: String, renderer: MarkdownRenderer) -> AttributedString {
+        renderer.renderInline(value, literalBackslashes: true, literalEntities: true)
     }
 
     /// Header cells are semibold. Only raises the weight: a `**bold**` run

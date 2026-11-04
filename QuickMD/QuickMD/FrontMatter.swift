@@ -26,8 +26,9 @@ enum FrontMatter {
     ///   (or before a trailing `:`), spaces allowed, never starting with a YAML
     ///   indicator.
     /// - `key:` followed by `- item` lines (indented or at column 0, one
-    ///   indentation per list) → the items joined with ", "; `key:` alone → "".
-    /// - `key: [a, b, "c, d"]` → "a, b, c, d"; `[]` → "".
+    ///   indentation per list) → the items joined (`joinedItems`); `key:`
+    ///   alone → "".
+    /// - `key: [a, b]` → "a, b"; `[a, "c, d"]` → one item per line; `[]` → "".
     /// - `"…"` unescapes only `\"` and `\\`; `'…'` turns `''` into `'` (a `#`
     ///   inside quotes is text); plain values are trimmed.
     /// - A comment anywhere in a value (` #`, or a value starting with `#`) →
@@ -42,7 +43,7 @@ enum FrontMatter {
 
         func closeOpenKey() {
             guard let open = openKey else { return }
-            properties[open.index].value = open.items.joined(separator: ", ")
+            properties[open.index].value = joinedItems(open.items)
             openKey = nil
         }
 
@@ -87,6 +88,19 @@ enum FrontMatter {
     }
 
     // MARK: - Pieces
+
+    /// Separates list items when one of them holds a comma: U+2028 LINE
+    /// SEPARATOR, a line break INSIDE the value's paragraph — a table cell is
+    /// exactly one paragraph (`TableTextBuilder`, TS-D4), which a "\n" would
+    /// split (and `renderedCell` turns "\n" into a space).
+    static let itemLineSeparator = "\u{2028}"
+
+    /// A list's items as one value: ", " between them — unless an item itself
+    /// contains a comma, then `"a, b"` and `c` would read as three items, so
+    /// each item gets its own line (`itemLineSeparator`).
+    static func joinedItems(_ items: [String]) -> String {
+        items.joined(separator: items.contains { $0.contains(",") } ? itemLineSeparator : ", ")
+    }
 
     /// Characters that make a line or value something other than a plain
     /// scalar / plain key (YAML indicators). A key starting with one is out of
@@ -227,7 +241,7 @@ enum FrontMatter {
             skipSpaces()
             guard index < text.endIndex else { return nil }
             if text[index] == "]" {
-                return isNothingAfter(text[text.index(after: index)...]) ? items.joined(separator: ", ") : nil
+                return isNothingAfter(text[text.index(after: index)...]) ? joinedItems(items) : nil
             }
             guard text[index] == "," else { return nil }
             index = text.index(after: index)

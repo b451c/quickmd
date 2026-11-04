@@ -170,79 +170,6 @@ extension FocusedValues {
     }
 }
 
-// MARK: - Printable View (Light mode, white background)
-// NOTE: ImageRenderer uses DEFAULT environment, not app's environment
-// So we must explicitly set ALL colors, not rely on colorScheme
-
-struct MarkdownPrintableView: View {
-    let documentText: String
-    /// Base for relative image paths (nil for an untitled buffer).
-    let documentURL: URL?
-
-    /// Parsed blocks with light theme - computed once on init
-    private let lightBlocks: [MarkdownBlock]
-
-    init(documentText: String, documentURL: URL? = nil) {
-        self.documentText = documentText
-        self.documentURL = documentURL
-        self.lightBlocks = MarkdownBlockParser(colorScheme: .light).parse(documentText)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(lightBlocks) { block in
-                switch block.content {
-                case .text(let attributedString):
-                    // Force black text color; inline $math$ as images (PrintableMath)
-                    PrintableMath.text(from: attributedString)
-                        .foregroundColor(.black)
-
-                case .table(let headers, let rows, let alignments, let style):
-                    PrintableTableView(headers: headers, rows: rows, alignments: alignments, style: style)
-                        .padding(.vertical, 8)
-
-                case .codeBlock(let code, let language):
-                    PrintableCodeBlockView(code: code, language: language)
-                        .padding(.vertical, 4)
-
-                case .image(let url, let alt, let width):
-                    PrintableImageView(url: url, alt: alt, width: width, documentURL: documentURL)
-                        .padding(.vertical, 8)
-
-                case .blockquote(let content, let level):
-                    PrintableBlockquoteView(content: content, level: level)
-                        .padding(.vertical, 4)
-
-                case .alert(let kind, let content):
-                    PrintableAlertView(kind: kind, content: content)
-                        .padding(.vertical, 4)
-
-                case .heading(let level, let title, _):
-                    let renderer = MarkdownRenderer(colorScheme: .light)
-                    Text(renderer.renderHeader(title, level: level))
-                        .foregroundColor(.black)
-
-                case .mathBlock(let latex):
-                    PrintableMathBlockView(latex: latex)
-                        .padding(.vertical, 4)
-
-                case .mermaidDiagram(let source):
-                    // Graceful degradation: render as styled code block in PDF
-                    PrintableCodeBlockView(code: source, language: "mermaid")
-                        .padding(.vertical, 4)
-
-                case .svgImage(let source):
-                    PrintableSVGView(source: source)
-                        .padding(.vertical, 4)
-                }
-            }
-        }
-        .padding(40)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
-    }
-}
-
 // MARK: - Table Alignment Protocol
 
 /// Column alignment for the SwiftUI table (`PrintableTableView`). The on-screen
@@ -341,8 +268,7 @@ struct PrintableTableView: View, TableAlignmentProvider {
                         .padding(.horizontal, Self.horizontalPadding)
                         .padding(.vertical, 4)
                     Rectangle().fill(theme.borderColor)
-                    Text(TableTextBuilder.printableCell(row.count > 1 ? row[1] : "", isHeader: false,
-                                                        renderer: renderer))
+                    Text(TableTextBuilder.valueCell(row.count > 1 ? row[1] : "", renderer: renderer))
                         .foregroundColor(.black)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, Self.horizontalPadding)
@@ -534,6 +460,10 @@ enum PrintFolderAccess {
 }
 
 // MARK: - Single Block Printable View (for per-block PDF rendering)
+// NOTE: ImageRenderer uses the DEFAULT environment, not the app's, so every
+// printable view sets ALL its colours explicitly rather than relying on
+// colorScheme. Blocks carry no outer padding: the space between them is
+// `BlockLayout.Spacing`, applied by `PDFExportManager` (`PrintRhythm`).
 
 struct MarkdownPrintableBlockView: View {
     let block: MarkdownBlock
@@ -637,7 +567,7 @@ struct PrintableBlockquoteView: View {
             // quote written one sentence per line prints as one paragraph.
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(MarkdownRenderer.joinSoftBreaks(content.components(separatedBy: "\n")).enumerated()), id: \.offset) { _, line in
-                    if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    if MarkdownRenderer.isBlankLine(line) {
                         Text(" ").font(renderer.theme.fonts.swiftUI(size: 12))
                     } else {
                         Text(renderer.renderInline(line))
@@ -676,7 +606,7 @@ struct PrintableAlertView: View {
 
             // Soft breaks joined first — mirrors AlertBlockView on screen.
             ForEach(Array(MarkdownRenderer.joinSoftBreaks(content.components(separatedBy: "\n")).enumerated()), id: \.offset) { _, line in
-                if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                if MarkdownRenderer.isBlankLine(line) {
                     Text(" ").font(renderer.theme.fonts.swiftUI(size: 12))
                 } else {
                     Text(renderer.renderInline(line))
@@ -810,24 +740,40 @@ class PDFExportManager {
             return nil
         }
 
-        // Paginate: distribute blocks/segments across pages
-        var pages: [[PlacedSegment]] = [[]]
-        var currentY: CGFloat = 0
-
-        for (block, size) in measuredBlocks {
-            let segments = sliceBlockIfOversized(block: block, size: size, maxHeight: contentHeight)
-            for segment in segments {
-                let blockHeight = segment.sliceHeight
-
-                // If block doesn't fit on current page and page isn't empty, start new page
-                if currentY + blockHeight > contentHeight && !pages[pages.count - 1].isEmpty {
-                    pages.append([])
-                    currentY = 0
-                }
-
-                pages[pages.count - 1].append(PlacedSegment(segment: segment, yOffset: currentY))
-                currentY += blockHeight + 8  // 8pt spacing between blocks
+        // The screen's vertical rhythm (`BlockLayout.Spacing`), from the edges
+        // of the PRINTED views, at 1.0 zoom — print never follows the window's.
+        let printRenderer = MarkdownRenderer(colorScheme: .light)
+        let rhythm = measuredBlocks.map { measured in
+            let isPicture: Bool
+            if case .mermaidDiagram(let source) = measured.block.content {
+                isPicture = mermaidImages[source] != nil
+            } else {
+                isPicture = false
             }
+            return PrintRhythm.row(for: measured.block, renderer: printRenderer, width: contentWidth,
+                                   diagramIsPicture: isPicture)
+        }
+        let spacing = BlockLayout.Spacing.column(rhythm, fontScale: 1)
+
+        // Paginate: a block taller than a page is sliced; only its first slice
+        // has the block's space above it, and a heading never ends a page
+        // without the start of the block after it (`PrintRhythm.paginate`).
+        let slices = PrintRhythm.paginate(
+            measuredBlocks.enumerated().map { index, measured in
+                let isHeading: Bool
+                if case .heading = measured.block.content { isHeading = true } else { isHeading = false }
+                return PrintRhythm.Block(height: measured.size.height, spacingAbove: spacing[index],
+                                         keepsWithNext: isHeading)
+            },
+            pageHeight: contentHeight)
+        var pages: [[PlacedSegment]] = [[]]
+        for slice in slices {
+            while pages.count <= slice.page { pages.append([]) }
+            let measured = measuredBlocks[slice.block]
+            pages[slice.page].append(PlacedSegment(
+                segment: BlockSegment(block: measured.block, size: measured.size,
+                                      sliceOffset: slice.offset, sliceHeight: slice.height),
+                yOffset: slice.y))
         }
 
         let pdfData = NSMutableData()
@@ -880,26 +826,6 @@ class PDFExportManager {
 
         pdfContext.closePDF()
         return pdfData as Data
-    }
-
-    private static func sliceBlockIfOversized(block: MarkdownBlock, size: CGSize, maxHeight: CGFloat) -> [BlockSegment] {
-        guard size.height > maxHeight, size.height > 0 else {
-            return [BlockSegment(block: block, size: size, sliceOffset: 0, sliceHeight: size.height)]
-        }
-
-        var segments: [BlockSegment] = []
-        var offset: CGFloat = 0
-        while offset < size.height {
-            let sliceHeight = min(maxHeight, size.height - offset)
-            segments.append(BlockSegment(
-                block: block,
-                size: size,
-                sliceOffset: offset,
-                sliceHeight: sliceHeight
-            ))
-            offset += sliceHeight
-        }
-        return segments
     }
 
     private static func showError(_ message: String) {
@@ -994,7 +920,8 @@ enum PrintableMath {
         var mathImage = MathImage(latex: latex, fontSize: 14, textColor: .black,
                                   labelMode: .text, textAlignment: .left)
         let (error, image, info) = mathImage.asImage()
-        guard error == nil, let image else { return nil }
+        // Nothing drawn: the italic literal, as on screen (`MathInk`).
+        guard error == nil, let image, MathInk.drawsSomething(latex, image: image) else { return nil }
         return (image, info?.descent ?? 0)
     }
 
@@ -1008,16 +935,16 @@ enum PrintableMath {
 
         var result = Text("")
         var index = attributed.startIndex
-        for segment in InlineMathSegmenter.split(plain) {
-            switch segment {
-            case .text(let str):
-                if let end = attributed.characters.index(index, offsetBy: str.count,
+        for piece in InlineMathSegmenter.pieces(of: attributed) {
+            switch piece.segment {
+            case .text:
+                if let end = attributed.characters.index(index, offsetBy: piece.length,
                                                          limitedBy: attributed.endIndex) {
                     result = result + Text(AttributedString(attributed[index..<end]))
                     index = end
                 }
             case .math(let latex):
-                if let end = attributed.characters.index(index, offsetBy: latex.count + 2,
+                if let end = attributed.characters.index(index, offsetBy: piece.length,
                                                          limitedBy: attributed.endIndex) {
                     index = end
                 }

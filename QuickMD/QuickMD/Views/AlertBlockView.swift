@@ -93,8 +93,10 @@ struct AlertBlockView: View {
 
     /// One attributed string for the whole alert body — see
     /// `MarkdownRenderer.renderQuotedBody` (shared with the blockquote view and
-    /// the height measurer).
+    /// the height measurer) — rendered only when the measurer has not built
+    /// the string (`BlockquoteView.renderedContent`: `TextBlockView` reads it
+    /// only without `preconverted`; this body runs on every row update).
     private func renderedContent() -> AttributedString {
-        renderer.renderQuotedBody(content)
+        preconverted == nil ? renderer.renderQuotedBody(content) : AttributedString()
     }
 }

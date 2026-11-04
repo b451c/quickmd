@@ -30,6 +30,8 @@ struct MarkdownView: View {
     @State private var fileWatcher: FileWatcher?
     /// The watched file disappeared from its path (moved/deleted).
     @State private var fileMissing = false
+    /// What the `fileMissing` banner says (gone, or there but unreadable).
+    @State private var fileProblem: FileWatcher.Problem = .missing
     @State private var cachedBlocks: [MarkdownBlock] = []
     /// Incremented on every successful parse. Text blocks use it to invalidate
     /// their NSAttributedString caches — a font-size-only change leaves the
@@ -115,7 +117,8 @@ struct MarkdownView: View {
     @State private var appliedDefaultZoom: Double
     /// ⌘⇧R — distraction-free reading: both sidebars, the top-right chrome pills
     /// and the Support/Tip Jar button step out of the way, and the text column
-    /// stops at `Metrics.readingMaxContentWidth` and centres itself.
+    /// stops at `Metrics.readingColumnCap(fontScale:)` (720 pt at 100 %, scaled
+    /// with the zoom) and centres itself.
     ///
     /// @State, not @AppStorage, for the same reason as `fontScale`: it belongs to
     /// this window and this reading session. A viewer that reopens with its
@@ -139,6 +142,8 @@ struct MarkdownView: View {
     /// on demand. A reference in @State on purpose: the coordinator fills it,
     /// nothing observes it, so scrolling never re-evaluates this body (E-D1).
     @State private var readingPosition = DocumentReadingPosition()
+    /// The list's column room, for a parse at a new zoom in reading mode.
+    @State private var documentColumn = DocumentColumn()
     /// Source Edit (v1.12): the raw-Markdown editor over the rendered list, its
     /// buffer, saving and the close guard's answers. One per window, lives with
     /// the tab. Publishes only rare events (enter / leave, dirty, banner) — the
@@ -286,7 +291,7 @@ struct MarkdownView: View {
                     focusedBlockId: focusedBlockId,
                     focusedOccInBlock: focusedOccInBlock,
                     scrollRequest: scrollRequest,
-                    layoutStyle: isReadingMode ? .reading : .standard,
+                    layoutStyle: isReadingMode ? .reading(fontScale: CGFloat(renderedFontScale)) : .standard,
                     contentWidth: $contentWidth,
                     onHeightReport: { blockId, row, height in
                         applyHeightReport(blockId: blockId, row: row, height: height)
@@ -305,7 +310,8 @@ struct MarkdownView: View {
                     // the focus back while covered, and leaves the
                     // accessibility tree meanwhile (set on the AppKit view).
                     isCovered: graphicPreview != nil || editSession.isActive,
-                    readingPosition: readingPosition
+                    readingPosition: readingPosition,
+                    column: documentColumn
                 )
                 .onChange(of: scrollTrigger) { _ in
                     scrollFocusedMatchIntoView()
@@ -320,8 +326,9 @@ struct MarkdownView: View {
                 Group {
                     if editSession.isActive {
                         SourceEditorView(controller: editSession.editor,
-                                         style: .init(theme: theme, fontScale: fontScale,
-                                                      isReadingLayout: isReadingMode))
+                                         style: .overDocument(theme: theme, fontScale: fontScale,
+                                                              shownFontScale: renderedFontScale,
+                                                              isReadingMode: isReadingMode))
                     }
                 }
                 // An animated transaction from elsewhere (a toast, a sidebar)
@@ -366,7 +373,7 @@ struct MarkdownView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundColor(.yellow)
-                            Text("File no longer exists at \(documentURL?.path ?? "this location")")
+                            Text(fileProblem.bannerText(path: documentURL?.path))
                                 .font(.system(size: 12))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -649,8 +656,17 @@ struct MarkdownView: View {
             let scale = CGFloat(fontScale)
             // The width the list will lay the blocks out at. 0 before the host's
             // first layout — then the heights task below picks it up as soon as
-            // the coordinator reports one.
-            let width = contentWidth
+            // the coordinator reports one. A new zoom in reading mode changes
+            // the column's cap with these blocks (the style is derived from
+            // `renderedFontScale`): measure at THAT column. Only a zoom: any
+            // other parse keeps the list's width, which the list keeps in step
+            // with the window itself.
+            let listWidth = contentWidth
+            let width = BlockLayout.Document.parseWidth(
+                contentWidth: listWidth, inner: documentColumn.innerWidth?() ?? 0,
+                readingFontScale: isReadingMode && Double(scale) != renderedFontScale ? scale : nil)
+            // Keyed by the link, so valid across this re-parse.
+            let imageSizes = heightCache.imageSizesSnapshot
             let out: ParsedAndMeasured = await Task.detached(priority: .userInitiated) {
                 let blocks = MarkdownBlockParser(theme: currentTheme, fontScale: scale).parse(text)
                 // Pre-compute per-text-block metadata on the background thread so the
@@ -674,11 +690,13 @@ struct MarkdownView: View {
                 // the rows it defers are finished on main just below.
                 // No `heightSeeds`: `heightCache` is cleared for this parse, and
                 // block ids are positional, so the previous document's diagram
-                // heights would seed the wrong diagrams.
+                // heights would seed the wrong diagrams. Pictures and diagrams
+                // that were shown before are computed (`imageSizes`, the SVG
+                // decoder, `MermaidGeometryStore`).
                 let measured = width > 0
                     ? BlockHeightMeasurer.measure(blocks: blocks, theme: currentTheme,
                                                   fontScale: scale, contentWidth: width,
-                                                  math: nil)
+                                                  imageSizes: imageSizes, math: nil)
                     : MeasuredBlocks.empty
                 return ParsedAndMeasured(parsed: ParsedDocument(blocks: blocks, textMeta: meta),
                                          measured: measured)
@@ -701,6 +719,10 @@ struct MarkdownView: View {
             cachedBlocks = blocks
             renderedFontScale = Double(scale)
             contentVersion += 1
+            // The column this parse was measured at, in the same transaction
+            // as the cap that gives it — unless the list published another
+            // width meanwhile (then the heights task re-measures at that one).
+            if width != listWidth, contentWidth == listWidth { contentWidth = width }
             textBlockMeta = parsed.textMeta
             installedText = text
             // Inline `$…$` paragraphs and display-math rows were deferred by the
@@ -712,12 +734,7 @@ struct MarkdownView: View {
                                                       theme: currentTheme, fontScale: scale,
                                                       contentWidth: width, math: .swiftMath)
                 : .empty
-            headings = blocks.compactMap { block in
-                if case .heading(let level, let title, let sourceLine) = block.content {
-                    return ToCEntry(id: block.id, level: level, title: title, sourceLine: sourceLine)
-                }
-                return nil
-            }
+            headings = ToCEntry.entries(of: blocks)
             // A landing that waited for THIS parse (Source Edit saved, then
             // left before the re-parse arrived): requested in the transaction
             // that installs the blocks, so it wins over the list's own anchor
@@ -725,6 +742,7 @@ struct MarkdownView: View {
             if let target = landing.blocksInstalled(blocks) {
                 requestScroll(to: target, anchor: .top, animated: false)
             }
+            followCrossDocumentAnchor()
             // The find bar's matches index the PREVIOUS parse's blocks: count
             // again over these (and the measured strings just installed).
             rerunSearchAfterReparse()
@@ -750,16 +768,21 @@ struct MarkdownView: View {
             // Mermaid rows: seed from the heights the WebViews actually reported,
             // so a re-measure doesn't send every diagram back to the 200 pt default.
             let seeds = heightCache.snapshot
-            // Inline-math paragraphs: hand the previous pass's strings back so the
-            // main-actor step re-wraps them instead of re-rendering every `$…$`
-            // segment through SwiftMath. Safe only because this task never runs
-            // across a content change — the guard below drops the result if a
-            // parse landed meanwhile, and everything that alters the characters
-            // (text, theme, fonts, zoom) goes through a re-parse.
+            // Images shown before: their rows are computed at the new width.
+            let imageSizes = heightCache.imageSizesSnapshot
+            // The previous pass's strings, handed back so they are only re-wrapped:
+            // quote and alert bodies (off-main, `measure` — not rendered from
+            // their source again) and inline-math paragraphs (the main-actor
+            // step — not every `$…$` segment through SwiftMath again). Safe
+            // only because this task never runs across a content change — the
+            // guard below drops the result if a parse landed meanwhile, and
+            // everything that alters the characters (text, theme, fonts, zoom)
+            // goes through a re-parse.
             let reusableStrings = measured.converted
             let raw: MeasuredBlocks = await Task.detached(priority: .userInitiated) {
                 BlockHeightMeasurer.measure(blocks: blocks, theme: currentTheme, fontScale: scale,
-                                            contentWidth: width, heightSeeds: seeds, math: nil)
+                                            contentWidth: width, heightSeeds: seeds,
+                                            imageSizes: imageSizes, reusing: reusableStrings, math: nil)
             }.value
             // A parse that landed while we were measuring owns the state now —
             // its own transaction published a matching table.
@@ -769,7 +792,15 @@ struct MarkdownView: View {
                                                           fontScale: scale, contentWidth: width,
                                                           math: .swiftMath,
                                                           reusing: reusableStrings)
-            if firstTableForParse { rerunSearchAfterReparse() }
+            if firstTableForParse {
+                rerunSearchAfterReparse()
+                followCrossDocumentAnchor()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: CrossDocumentAnchors.requested)) { note in
+            // `other.md#section` clicked in another window while this one shows other.md.
+            guard let documentURL, note.object as? String == CrossDocumentAnchors.key(for: documentURL) else { return }
+            followCrossDocumentAnchor()
         }
         .onChange(of: searchText) { newValue in
             searchDebounce?.cancel()
@@ -915,6 +946,11 @@ struct MarkdownView: View {
         let watcher = FileWatcher()
         watcher.onChange = { reloadFromDisk() }
         watcher.onFileMissing = {
+            fileProblem = .missing
+            withAnimation(.easeInOut(duration: 0.2)) { fileMissing = true }
+        }
+        watcher.onFileUnreadable = {
+            fileProblem = .unreadable
             withAnimation(.easeInOut(duration: 0.2)) { fileMissing = true }
         }
         watcher.start(watching: url)
@@ -1062,14 +1098,26 @@ struct MarkdownView: View {
     /// A ToC click. While editing, the EDITOR scrolls to the heading's source
     /// line (S-D13) — best effort until the next save, since the headings come
     /// from the last saved parse; the hidden list stays where the reader was.
-    private func selectHeading(_ targetId: String) {
+    private func selectHeading(_ targetId: String, animated: Bool = true) {
         if editSession.isActive {
             if let entry = headings.first(where: { $0.id == targetId }) {
                 editSession.editor.scroll(toLine: entry.sourceLine)
             }
             return
         }
-        requestScroll(to: targetId, anchor: .top, animated: true)
+        requestScroll(to: targetId, anchor: .top, animated: animated)
+    }
+
+    /// The fragment of an `other.md#section` link that opened (or brought
+    /// forward) this document, followed like an in-document link — once the
+    /// list has a height table for these blocks: a scroll request before that
+    /// finds no row and is dropped, so a new window waits for its first
+    /// layout (parse transaction or the first heights task). A freshly opened
+    /// window jumps without animation.
+    private func followCrossDocumentAnchor() {
+        guard !cachedBlocks.isEmpty, measured.table.count == cachedBlocks.count,
+              let fragment = CrossDocumentAnchors.shared.take(for: documentURL) else { return }
+        followAnchor(fragment, animated: false)
     }
 
     // MARK: - Block Rendering
@@ -1150,7 +1198,7 @@ struct MarkdownView: View {
 
             case .image(let url, let alt, let width):
                 ImageBlockView(url: url, alt: alt, width: width, theme: theme, documentURL: documentURL,
-                               fontScale: scale, contentWidth: contentWidth,
+                               fontScale: scale, contentWidth: contentWidth, heightCache: heightCache,
                                onEnlarge: presentGraphicPreview)
                     .padding(.vertical, Metrics.imageOuterVerticalPadding)
 
@@ -1185,7 +1233,8 @@ struct MarkdownView: View {
                            let section = SectionExtractor.extractSection(from: currentText, entry: entry, headings: headings) {
                             copyToClipboard(section)
                         }
-                    }
+                    },
+                    isReadingMode: isReadingMode
                 )
 
             case .mathBlock(let latex):
@@ -1285,7 +1334,10 @@ struct MarkdownView: View {
         case .heading(let level, let title, _):
             // Exactly what `HeadingBlockView` hands its `TextBlockView`: the
             // same `renderHeader` output through the same converter (no
-            // inline math — a heading shows `$…$` literally, as before).
+            // inline math — a heading shows `$…$` literally, as before). The
+            // measurer kept it (`MeasuredBlocks.converted`): a ⌘C of a
+            // heading-heavy document no longer converts every heading again.
+            if let cached { return cached }
             return TextBlockView.makeNSAttributedString(
                 from: MarkdownRenderer(theme: theme, fontScale: scale).renderHeader(title, level: level),
                 hasInlineMath: false, theme: theme, fontScale: scale)
@@ -1402,14 +1454,8 @@ struct MarkdownView: View {
         // so a stale report can never overwrite an exact height).
         guard row < table.kinds.count, table.kinds[row] == .reported else { return }
         guard row < table.heights.count, abs(table.heights[row] - height) >= 0.5 else { return }
-        var heights = table.heights
-        heights[row] = height
-        measured = MeasuredBlocks(
-            table: BlockHeightTable(heights: heights, kinds: table.kinds,
-                                    contentWidth: table.contentWidth),
-            converted: measured.converted,
-            tables: measured.tables,
-            mathPendingRows: measured.mathPendingRows)
+        // The block's height only: its space above stays as measured.
+        measured = measured.replacingHeight(height, at: row)
     }
 
     /// Recompute focusedBlockId and focusedOccInBlock from currentMatchIndex
@@ -1428,9 +1474,16 @@ struct MarkdownView: View {
             currentMatchIndex = (currentMatchIndex - 1 + matchBlockIds.count) % matchBlockIds.count
         }
         updateFocusState()
-        // Only scroll when moving to a different block
-        if focusedBlockId != oldBlockId {
+        switch DocumentSearch.stepScroll(from: oldBlockId, to: focusedBlockId) {
+        case .toBlock:
             scrollTrigger += 1
+        case .withinBlock:
+            // Another match of the same block: the list brings it to the eye
+            // when the block is taller than the window (a big table, a long
+            // code block); a block that fits stays where it is.
+            if let blockId = focusedBlockId { requestScroll(to: blockId, anchor: .match, animated: true) }
+        case nil:
+            break
         }
     }
 
@@ -1552,6 +1605,10 @@ struct MarkdownView: View {
         // Open the resolved file URL
         let ext = finalURL.pathExtension.lowercased()
         if ext == "md" || ext == "markdown" || ext == "mdown" || ext == "mkd" {
+            // `other.md#section`: the window that shows other.md scrolls there.
+            if let fragment = CrossDocumentAnchors.fragment(of: url) {
+                CrossDocumentAnchors.shared.request(fragment, for: finalURL)
+            }
             // Force open with our own app
             let config = NSWorkspace.OpenConfiguration()
             config.activates = true
@@ -1565,14 +1622,14 @@ struct MarkdownView: View {
     /// Scrolls to the heading an in-document link names, as a ToC click does
     /// (`HeadingAnchors.target`: `#` and an unclaimed `#top` are the top); an
     /// id no heading has beeps.
-    private func followAnchor(_ fragment: String) {
+    private func followAnchor(_ fragment: String, animated: Bool = true) {
         let renderer = MarkdownRenderer(theme: theme, fontScale: CGFloat(renderedFontScale))
         let headings = HeadingAnchors.headings(of: cachedBlocks, renderer: renderer)
         switch HeadingAnchors.target(forFragment: fragment, in: headings) {
         case .heading(let id):
-            selectHeading(id)
+            selectHeading(id, animated: animated)
         case .top where !cachedBlocks.isEmpty:
-            requestScroll(to: cachedBlocks[0].id, anchor: .top, animated: true)
+            requestScroll(to: cachedBlocks[0].id, anchor: .top, animated: animated)
         case .top, .none:
             NSSound.beep()
         }

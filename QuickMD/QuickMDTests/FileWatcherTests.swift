@@ -169,10 +169,17 @@ final class FileWatcherTests: XCTestCase {
     }
 
     /// The file comes back but cannot be opened (mode 000 → EACCES): the poll
-    /// stops instead of failing every second, and the watcher stays missing —
+    /// stops instead of failing every second and reports it unreadable, once —
     /// restoring the permissions later is NOT noticed (pre-poll behaviour).
     func testPermissionDeniedAfterReturnStopsThePoll() throws {
+        try XCTSkipIf(getuid() == 0, "root reads a mode-000 file")
         var missingCount = 0
+        var unreadableCount = 0
+        let denied = expectation(description: "a poll found it unreadable")
+        watcher.onFileUnreadable = {
+            unreadableCount += 1
+            denied.fulfill()
+        }
         let missing = expectation(description: "onFileMissing after delete")
         watcher.onFileMissing = {
             missingCount += 1
@@ -187,16 +194,50 @@ final class FileWatcherTests: XCTestCase {
         XCTAssertEqual(chmod(fileURL.path, 0), 0)
         defer { chmod(fileURL.path, 0o644) }
 
-        // One poll sees it, fails to open it, stops.
-        let denied = expectation(description: "a poll ran")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { denied.fulfill() }
-        wait(for: [denied], timeout: 3)
+        // One poll sees it, fails to open it, reports it, stops.
+        wait(for: [denied], timeout: 10)
 
         XCTAssertEqual(chmod(fileURL.path, 0o644), 0)
         let settle = expectation(description: "no poll after the denial")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { settle.fulfill() }
         wait(for: [settle], timeout: 3)
         XCTAssertEqual(missingCount, 1)
+        XCTAssertEqual(unreadableCount, 1, "back, but off-limits: unreadable, not missing")
+    }
+
+    /// `chmod 000` on the open document (or a sandbox denial): the file is
+    /// there, so the window must not say it no longer exists.
+    func testUnreadableFileIsNotReportedAsMissing() throws {
+        try XCTSkipIf(getuid() == 0, "root reads a mode-000 file")
+        watcher.onFileMissing = { XCTFail("an unreadable file is not a missing one") }
+        watcher.onChange = { XCTFail("nothing changed") }
+        var unreadableCount = 0
+        var replaced: XCTestExpectation?
+        watcher.onFileUnreadable = {
+            unreadableCount += 1
+            replaced?.fulfill()
+        }
+        XCTAssertEqual(chmod(fileURL.path, 0), 0)
+        defer { chmod(fileURL.path, 0o644) }
+
+        watcher.start(watching: fileURL)
+        XCTAssertEqual(unreadableCount, 1, "reported at once, synchronously")
+
+        // An atomic replace by an unreadable file: the same answer.
+        XCTAssertEqual(chmod(fileURL.path, 0o644), 0)
+        watcher.start(watching: fileURL)
+        XCTAssertEqual(unreadableCount, 1, "armed")
+        let replacement = tempDir.appendingPathComponent("replacement.md")
+        try "locked".write(to: replacement, atomically: false, encoding: .utf8)
+        XCTAssertEqual(chmod(replacement.path, 0), 0)
+        replaced = expectation(description: "the replace is reported unreadable")
+        XCTAssertEqual(rename(replacement.path, fileURL.path), 0)
+        wait(for: [replaced!], timeout: 10)
+        XCTAssertEqual(unreadableCount, 2)
+
+        XCTAssertEqual(FileWatcher.Problem.missing.bannerText(path: "/a/b.md"), "File no longer exists at /a/b.md")
+        XCTAssertEqual(FileWatcher.Problem.unreadable.bannerText(path: "/a/b.md"), "File can\u{2019}t be read at /a/b.md")
+        XCTAssertEqual(FileWatcher.Problem.unreadable.bannerText(path: nil), "File can\u{2019}t be read at this location")
     }
 
     func testStopWhileMissingCancelsThePoll() throws {

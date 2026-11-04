@@ -127,6 +127,41 @@ final class SearchTests: XCTestCase {
         return textView
     }
 
+    /// A front-matter key is secondary-colour text; the FOCUSED match on a key
+    /// is drawn in the theme's text colour (on the orange focus the secondary
+    /// colour read poorly), exactly what a focused value shows. Unfocused key
+    /// matches and value matches keep their colours; the next call clears it.
+    func testFocusedMatchOnAPropertiesKeyUsesTheTextColour() throws {
+        let table = onlyTable("---\nauthor: Ann\nnote: by author\n---\n")
+        XCTAssertEqual(table.style, .properties)
+        let built = build(table)
+        let textView = tableTextView(built)
+        let layoutManager = try XCTUnwrap(textView.layoutManager)
+        let keys = built.layout.firstColumnRanges
+        XCTAssertEqual(keys.map { (built.string.string as NSString).substring(with: $0) }, ["author", "note"])
+        let textColor = NSColor(theme.textColor)
+        func temporaryForeground(at index: Int) -> NSColor? {
+            layoutManager.temporaryAttribute(.foregroundColor, atCharacterIndex: index, effectiveRange: nil) as? NSColor
+        }
+        let valueMatch = (built.string.string as NSString).range(of: "author", options: .backwards)
+
+        applyNSSearchHighlight(in: textView, term: "author", focusedOccurrence: 0,
+                               focusedText: (textColor, keys))
+        XCTAssertEqual(temporaryForeground(at: keys[0].location), textColor, "focused key match")
+        XCTAssertEqual(temporaryForeground(at: NSMaxRange(keys[0]) - 1), textColor)
+        XCTAssertNil(temporaryForeground(at: valueMatch.location), "unfocused value match untouched")
+
+        applyNSSearchHighlight(in: textView, term: "author", focusedOccurrence: 1,
+                               focusedText: (textColor, keys))
+        XCTAssertNil(temporaryForeground(at: keys[0].location), "an unfocused key keeps its secondary colour")
+        XCTAssertNil(temporaryForeground(at: valueMatch.location), "a value already has the text colour")
+
+        applyNSSearchHighlight(in: textView, term: "author", focusedOccurrence: 0,
+                               focusedText: (textColor, keys))
+        applyNSSearchHighlight(in: textView, term: "author", focusedOccurrence: 0)
+        XCTAssertNil(temporaryForeground(at: keys[0].location), "cleared for a view reused by a grid table")
+    }
+
     /// The temporary background runs `applyNSSearchHighlight` left, in order.
     private func highlights(in textView: NSTextView) -> [(range: NSRange, focused: Bool)] {
         guard let layoutManager = textView.layoutManager, let length = textView.textStorage?.length else { return [] }
@@ -477,9 +512,10 @@ final class SearchTests: XCTestCase {
         XCTAssertEqual(count("hidden", in: quote), 0, "link URL")
         XCTAssertEqual(count("\\", in: quote), 0, "escape")
         XCTAssertEqual(count("bold code label a*b", in: quote), 1, "rendered text across styles")
-        // HTML entities are drawn as written (the renderer does not decode
-        // them), so the source IS what shows — counted and highlighted alike.
-        XCTAssertEqual(count("&amp;", in: quote), 1)
+        // Character references are drawn decoded (`HTMLEntities`, as on
+        // GitHub): the drawn "&" is counted, the source "&amp;" is not.
+        XCTAssertEqual(count("&amp;", in: quote), 0)
+        XCTAssertEqual(count("a*b & done", in: quote), 1)
 
         let alert = "> [!WARNING]\n> **bold** [label](https://hidden.example)"
         XCTAssertEqual(count("**", in: alert), 0)
@@ -602,5 +638,43 @@ extension SearchTests {
         let results = DocumentSearch.computeMatches(in: blocks, term: "\\not\\le")
         XCTAssertEqual(results.matchBlockIds, [blocks[0].id, blocks[0].id])
         XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "land").matchBlockIds, [blocks[0].id])
+    }
+
+    // MARK: - ⌘G within a block
+
+    /// A step to another match of the SAME block used to scroll nothing — in
+    /// a block taller than the window the next match could be off screen.
+    func testAStepToAnotherMatchOfTheSameBlockScrollsWithinIt() {
+        XCTAssertEqual(DocumentSearch.stepScroll(from: "a", to: "a"), .withinBlock)
+        XCTAssertEqual(DocumentSearch.stepScroll(from: "a", to: "b"), .toBlock)
+        XCTAssertEqual(DocumentSearch.stepScroll(from: nil, to: "b"), .toBlock)
+        XCTAssertNil(DocumentSearch.stepScroll(from: "a", to: nil))
+    }
+
+    /// Where the list centres a match: the rect of the occurrence the
+    /// highlight paints orange, in the text view's coordinates (its container
+    /// inset included).
+    func testTheMatchRectIsWhereTheFocusedHighlightIs() throws {
+        let lines = (0..<120).map { $0 == 3 || $0 == 100 ? "row \($0) needle here" : "row \($0) filler text" }
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 10))
+        textView.textContainerInset = NSSize(width: 7, height: 11)
+        textView.isVerticallyResizable = true
+        textView.string = lines.joined(separator: "\n")
+        textView.sizeToFit()
+
+        let first = try XCTUnwrap(textView.searchMatchRect(term: "NEEDLE", occurrence: 0))
+        let second = try XCTUnwrap(textView.searchMatchRect(term: "NEEDLE", occurrence: 1))
+        XCTAssertNil(textView.searchMatchRect(term: "needle", occurrence: 2))
+        XCTAssertNil(textView.searchMatchRect(term: "absent", occurrence: 0))
+
+        let ranges = searchMatchRanges(in: textView.string, term: "needle")
+        for (rect, range) in zip([first, second], ranges) {
+            XCTAssertGreaterThan(rect.width, 0)
+            let index = textView.characterIndexForInsertion(at: NSPoint(x: rect.midX, y: rect.midY))
+            XCTAssertTrue(NSLocationInRange(index, NSRange(location: range.location, length: range.length + 1)),
+                          "\(index) not in \(range)")
+        }
+        XCTAssertGreaterThan(second.midY - first.midY, 90 * 12)
+        XCTAssertGreaterThanOrEqual(first.minY, 11)
     }
 }

@@ -17,9 +17,11 @@ import Foundation
 /// (debounced) change. `onFileMissing` fires once per disappearance, never per
 /// poll. Polling happens only while the path is ABSENT (ENOENT / ENOTDIR): a
 /// path that exists but cannot be opened or seen (EACCES / EPERM — a sandbox
-/// or permission denial) would fail the same way every second for the life of
-/// the tab, so the watcher then stays missing without polling, as it always
-/// did before polling existed.
+/// or permission denial, `chmod 000`) would fail the same way every second for
+/// the life of the tab, so the watcher then reports `onFileUnreadable` instead
+/// and does not poll (⌘R re-arms it). Until 1.14.4 that case was reported as
+/// missing, and the window said "File no longer exists" about a file that is
+/// right there.
 ///
 /// All callbacks fire on the main queue (the DispatchSource and the debounce
 /// both target `.main`). Changes are debounced 250 ms so an editor that
@@ -38,6 +40,11 @@ final class FileWatcher {
     /// re-created by an atomic save). If it comes back later, `onChange`
     /// follows.
     var onFileMissing: (() -> Void)?
+
+    /// Fired when the file is at its path but cannot be opened (EACCES /
+    /// EPERM) — at start, after an atomic replace, or when a missing file
+    /// comes back without read permission. Not polled.
+    var onFileUnreadable: (() -> Void)?
 
     private var source: DispatchSourceFileSystemObject?
     private var url: URL?
@@ -94,10 +101,15 @@ final class FileWatcher {
         error == ENOENT || error == ENOTDIR
     }
 
-    /// Reports the disappearance ONCE; the poll that follows is silent.
+    /// Reports the disappearance ONCE; the poll that follows is silent. A file
+    /// that is there but off-limits is reported as unreadable, not missing.
     private func fileWentMissing(_ error: Int32) {
+        guard Self.isAbsence(error) else {
+            onFileUnreadable?()
+            return
+        }
         onFileMissing?()
-        if Self.isAbsence(error) { startMissingPoll() }
+        startMissingPoll()
     }
 
     private func startMissingPoll() {
@@ -122,8 +134,11 @@ final class FileWatcher {
         guard let url else { return stopMissingPoll() }
         if access(url.path, F_OK) != 0 {
             // Still absent: keep waiting. Not visible for another reason
-            // (a parent folder became unreadable): give up, stay missing.
-            if !Self.isAbsence(errno) { stopMissingPoll() }
+            // (a parent folder became unreadable): give up, say so.
+            if !Self.isAbsence(errno) {
+                stopMissingPoll()
+                onFileUnreadable?()
+            }
             return
         }
         let error = arm()
@@ -132,8 +147,9 @@ final class FileWatcher {
             scheduleChange()
         } else if !Self.isAbsence(error) {
             // Back, but cannot be opened (EACCES / EPERM): retrying every
-            // second would never succeed — stay missing.
+            // second would never succeed — stop, and say it is unreadable.
             stopMissingPoll()
+            onFileUnreadable?()
         }
         // Absent again between `access` and `open`: already reported, keep polling.
     }
@@ -153,6 +169,21 @@ final class FileWatcher {
             scheduleChange()
         } else if events.contains(.write) || events.contains(.extend) {
             scheduleChange()
+        }
+    }
+
+    // MARK: - What the window says
+
+    /// The banner a document window shows for a file the watcher lost.
+    enum Problem: Equatable {
+        case missing, unreadable
+
+        func bannerText(path: String?) -> String {
+            let location = path ?? "this location"
+            switch self {
+            case .missing: return "File no longer exists at \(location)"
+            case .unreadable: return "File can\u{2019}t be read at \(location)"
+            }
         }
     }
 

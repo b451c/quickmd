@@ -75,9 +75,9 @@ final class FontTests: XCTestCase {
     }
 
     func testUserDefaultsRoundTrip() throws {
-        let suite = "pl.falami.studio.QuickMD.FontTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let suite = try TemporaryDefaults("FontTests")
+        defer { suite.remove() }
+        let defaults = suite.defaults
 
         XCTAssertEqual(DocumentFonts.fromUserDefaults(defaults), .system)
         defaults.set(Self.body, forKey: DocumentFonts.bodyDefaultsKey)

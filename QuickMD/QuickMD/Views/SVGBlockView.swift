@@ -25,6 +25,18 @@ struct SVGBlockView: View {
     @State private var image: NSImage?
     @State private var decodeFailed = false
 
+    init(source: String, theme: MarkdownTheme, fontScale: CGFloat, contentWidth: CGFloat,
+         onEnlarge: @escaping (GraphicPreview) -> Void = { _ in }) {
+        self.source = source
+        self.theme = theme
+        self.fontScale = fontScale
+        self.contentWidth = contentWidth
+        self.onEnlarge = onEnlarge
+        // A re-created row (cell reuse resets `@State`) shows the decoded image
+        // at once — at the size the measurer gave its row — not the loading view.
+        _image = State(initialValue: SVGImageDecoder.cachedImage(source))
+    }
+
     /// Display width cap and the pre-decode placeholder height — shared with
     /// bitmap images and `BlockHeightMeasurer` (`.reported` row, like images).
     typealias Metrics = BlockLayout.ImageBlock
@@ -35,10 +47,11 @@ struct SVGBlockView: View {
                 Button {
                     onEnlarge(.image(Image(nsImage: image), title: "SVG", fileURL: nil))
                 } label: {
+                    let size = pictureSize(for: image.size)
                     Image(nsImage: image)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: displayWidth(for: image))
+                        .frame(width: size.width, height: size.height)
                 }
                 .buttonStyle(.plain)
                 .help("Click to enlarge image")
@@ -48,6 +61,11 @@ struct SVGBlockView: View {
                     .font(.system(size: 12 * fontScale))
                     .foregroundColor(theme.secondaryTextColor)
                     .padding(.vertical, 12)
+            } else if let known = SVGImageDecoder.cachedSize(source) {
+                // Decoded before, evicted since: hold the picture's place.
+                let size = pictureSize(for: known)
+                ProgressView()
+                    .frame(width: size.width, height: size.height)
             } else {
                 ProgressView()
                     .frame(height: Metrics.placeholderHeight)
@@ -55,9 +73,12 @@ struct SVGBlockView: View {
         }
         .task(id: source) {
             decodeFailed = false
-            image = nil
+            // The current markup's cached image, if any (the id also changes
+            // when the markup of a live view does).
+            image = SVGImageDecoder.cachedImage(source)
+            guard image == nil else { return }
             let decoded = await Task.detached(priority: .userInitiated) {
-                SVGImageDecoder.decode(source)
+                SVGImageDecoder.decodeCached(source)
             }.value
             guard !Task.isCancelled else { return }
             if let decoded { image = decoded } else { decodeFailed = true }
@@ -66,10 +87,10 @@ struct SVGBlockView: View {
 
     /// The column cap from `ImageBlock.displayWidth` (fitted width × zoom, never
     /// wider than the column), further capped at the SVG's own declared size ×
-    /// zoom so icons stay icon-sized.
-    private func displayWidth(for image: NSImage) -> CGFloat {
-        let cap = Metrics.displayWidth(fontScale: fontScale, contentWidth: contentWidth)
-        guard image.size.width > 0 else { return cap }
-        return min(cap, image.size.width * fontScale)
+    /// zoom so icons stay icon-sized — `ImageBlock.pictureSize`, the rule the
+    /// measurer sizes the row with.
+    private func pictureSize(for imageSize: CGSize) -> CGSize {
+        Metrics.pictureSize(imageSize: imageSize, htmlWidth: nil, fontScale: fontScale,
+                            contentWidth: contentWidth)
     }
 }

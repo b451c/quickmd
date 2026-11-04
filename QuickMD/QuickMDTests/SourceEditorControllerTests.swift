@@ -573,37 +573,107 @@ final class SourceEditorControllerTests: XCTestCase {
     }
 
     /// The list's arithmetic (`VirtualBlockList.currentContentWidth()` and its
-    /// centred cell column), spelled out independently.
-    private func listColumn(clip: CGFloat, reading: Bool) -> (left: CGFloat, width: CGFloat) {
+    /// centred cell column), spelled out independently: reading mode caps
+    /// the column at 720 pt × the zoom, in whole points.
+    private func listColumn(clip: CGFloat, reading: Bool, scale: CGFloat) -> (left: CGFloat, width: CGFloat) {
         let available = floor(clip)
         let inner = available - 2 * 32
-        let width = reading ? max(0, floor(min(inner, 720))) : max(0, inner)
+        let width = reading ? max(0, floor(min(inner, (720 * scale).rounded()))) : max(0, inner)
         return (32 + (inner - width) / 2, width)
     }
 
     func testColumnGeometryMatchesTheRenderedList() {
-        for clip in [300, 640, 783.5, 800, 1000.6, 1600] as [CGFloat] {
+        for clip in [300, 640, 783.5, 800, 1000.6, 1600, 2400] as [CGFloat] {
             for reading in [false, true] {
-                let geometry = SourceEditorController.columnGeometry(clipWidth: clip, isReadingLayout: reading)
-                let list = listColumn(clip: clip, reading: reading)
-                XCTAssertEqual(geometry.columnWidth, list.width, "clip \(clip) reading \(reading)")
-                XCTAssertEqual(geometry.horizontalInset, list.left, "clip \(clip) reading \(reading)")
-                XCTAssertGreaterThanOrEqual(geometry.horizontalInset, 32)
-                XCTAssertEqual(geometry.verticalInset, reading ? 48 : 24)
+                for scale: CGFloat in [0.5, 1, 1.5, 2, 3] {
+                    let geometry = SourceEditorController.columnGeometry(clipWidth: clip, isReadingLayout: reading,
+                                                                         fontScale: scale)
+                    let list = listColumn(clip: clip, reading: reading, scale: scale)
+                    let label = "clip \(clip) reading \(reading) × \(scale)"
+                    XCTAssertEqual(geometry.columnWidth, list.width, label)
+                    XCTAssertEqual(geometry.horizontalInset, list.left, label)
+                    XCTAssertGreaterThanOrEqual(geometry.horizontalInset, 32)
+                    XCTAssertEqual(geometry.verticalInset, reading ? 48 : 24)
+                    // The ONE definition the list uses.
+                    XCTAssertEqual(geometry.columnWidth, BlockLayout.Document.columnWidth(
+                        inner: floor(clip) - 64,
+                        cap: reading ? BlockLayout.Document.readingColumnCap(fontScale: scale) : nil), label)
+                }
             }
         }
-        let standard = SourceEditorController.columnGeometry(clipWidth: 1000, isReadingLayout: false)
+        let standard = SourceEditorController.columnGeometry(clipWidth: 1000, isReadingLayout: false, fontScale: 1)
         XCTAssertEqual(standard, .init(horizontalInset: 32, columnWidth: 936, verticalInset: 24))
-        let reading = SourceEditorController.columnGeometry(clipWidth: 1000, isReadingLayout: true)
+        let reading = SourceEditorController.columnGeometry(clipWidth: 1000, isReadingLayout: true, fontScale: 1)
         XCTAssertEqual(reading, .init(horizontalInset: 140, columnWidth: 720, verticalInset: 48))
+        let zoomed = SourceEditorController.columnGeometry(clipWidth: 1600, isReadingLayout: true, fontScale: 2)
+        XCTAssertEqual(zoomed, .init(horizontalInset: 80, columnWidth: 1440, verticalInset: 48))
+        let narrow = SourceEditorController.columnGeometry(clipWidth: 1000, isReadingLayout: true, fontScale: 0.5)
+        XCTAssertEqual(narrow, .init(horizontalInset: 320, columnWidth: 360, verticalInset: 48))
+    }
+
+    /// ⌘+ in Reading Mode with the editor open: the list keeps showing the
+    /// blocks of the old zoom, with that zoom's column cap, until the zoom's
+    /// parse lands. The editor's COLUMN follows the zoom the document is
+    /// shown at (1.14.4 took the requested one: a 1440 pt column over a
+    /// 720 pt list column, and leaving Source Edit then moved the text
+    /// sideways); its FONT follows the requested zoom at once
+    /// (`testTheEditorFontFollowsTheRequestedZoomAtOnce`).
+    func testTheEditorColumnFollowsTheZoomTheDocumentIsShownAt() {
+        let requested = 2.0, shown = 1.0
+        let (controller, scrollView, _) = makeEditor(
+            "text", width: 1800,
+            style: .overDocument(theme: light, fontScale: requested, shownFontScale: shown, isReadingMode: true))
+        let inner = floor(scrollView.contentView.bounds.width) - 64
+        func listColumn(_ scale: Double) -> CGFloat {
+            BlockLayout.Document.columnWidth(inner: inner,
+                                             cap: BlockLayout.Document.readingColumnCap(fontScale: CGFloat(scale)))
+        }
+        XCTAssertEqual(listColumn(shown), 720)
+        XCTAssertEqual(listColumn(requested), 1440)   // the column the editor used to take
+        XCTAssertEqual(controller.textView.textContainer!.size.width, listColumn(shown))
+        // The zoom's parse lands: the list and the editor move together.
+        controller.apply(style: .overDocument(theme: light, fontScale: requested, shownFontScale: requested,
+                                              isReadingMode: true))
+        XCTAssertEqual(controller.textView.textContainer!.size.width, listColumn(requested))
+    }
+
+    /// The editor's text changes size the moment ⌘+ is pressed, as before
+    /// 636de0e — not when the zoom's re-parse lands (about 2 s on an
+    /// 11.7K-line document, and only once at the end of ⌘+⌘+⌘+, whose earlier
+    /// parses are superseded). Only the Reading Mode column waits for it.
+    func testTheEditorFontFollowsTheRequestedZoomAtOnce() {
+        let (controller, scrollView, _) = makeEditor(
+            "text", width: 1800,
+            style: .overDocument(theme: light, fontScale: 1, shownFontScale: 1, isReadingMode: true))
+        let base = BlockLayout.Code.codeFontSize
+        XCTAssertEqual(controller.textView.font?.pointSize, base)
+        let inner = floor(scrollView.contentView.bounds.width) - 64
+        for requested in [1.25, 1.5, 2.0] {
+            // ⌘+ pressed, the parse still out: new font, the list's column.
+            controller.apply(style: .overDocument(theme: light, fontScale: requested, shownFontScale: 1,
+                                                  isReadingMode: true))
+            XCTAssertEqual(controller.textView.font?.pointSize, base * CGFloat(requested), "× \(requested)")
+            XCTAssertEqual(controller.textView.textContainer!.size.width, 720, "× \(requested)")
+        }
+        // The last parse lands: the column follows; the font stays.
+        controller.apply(style: .overDocument(theme: light, fontScale: 2, shownFontScale: 2, isReadingMode: true))
+        XCTAssertEqual(controller.textView.font?.pointSize, base * 2)
+        XCTAssertEqual(controller.textView.textContainer!.size.width,
+                       BlockLayout.Document.columnWidth(inner: inner,
+                                                        cap: BlockLayout.Document.readingColumnCap(fontScale: 2)))
+        // Outside Reading Mode there is no cap to wait for.
+        let standard = SourceEditorController.Style.overDocument(theme: light, fontScale: 1.5, shownFontScale: 1,
+                                                                 isReadingMode: false)
+        XCTAssertEqual(standard.fontScale, 1.5)
+        XCTAssertEqual(standard.columnFontScale, 1)
     }
 
     func testTextContainerFollowsTheViewWidthAndTheLayoutStyle() {
         let (controller, scrollView, window) = makeEditor("text", width: 1000)
         let view = controller.textView
-        func check(reading: Bool, line: UInt = #line) {
+        func check(reading: Bool, scale: CGFloat = 1, line: UInt = #line) {
             let clip = scrollView.contentView.bounds.width
-            let list = listColumn(clip: clip, reading: reading)
+            let list = listColumn(clip: clip, reading: reading, scale: scale)
             XCTAssertEqual(view.textContainer!.size.width, list.width, line: line)
             XCTAssertEqual(view.textContainerInset.width, list.left, line: line)
             XCTAssertEqual(view.textContainerInset.height, reading ? 48 : 24, line: line)
@@ -615,6 +685,12 @@ final class SourceEditorControllerTests: XCTestCase {
         window.setContentSize(NSSize(width: 1400, height: 600))
         window.contentView!.layoutSubtreeIfNeeded()
         check(reading: true)
+        // A zoom in reading mode widens the column with the text (1.5 × 720
+        // = 1080 in a 1400 pt window), as the rendered list does.
+        controller.apply(style: style(scale: 1.5, reading: true))
+        check(reading: true, scale: 1.5)
+        controller.apply(style: style(scale: 0.5, reading: true))
+        check(reading: true, scale: 0.5)
         controller.apply(style: style(reading: false))
         check(reading: false)
         window.setContentSize(NSSize(width: 501, height: 600))
@@ -665,7 +741,7 @@ final class SourceEditorControllerTests: XCTestCase {
     func testReadingModeInsetChangeDoesNotShiftTheText() {
         let (controller, scrollView, _) = makeEditor(wrappingLines(2_000), width: 700)
         XCTAssertEqual(SourceEditorController.columnGeometry(clipWidth: scrollView.contentView.bounds.width,
-                                                             isReadingLayout: true).columnWidth,
+                                                             isReadingLayout: true, fontScale: 1).columnWidth,
                        controller.textView.textContainer!.size.width, "same column in both layouts")
         controller.scroll(toLine: 1_200)
         let storage = controller.textView.textStorage!.mutableString

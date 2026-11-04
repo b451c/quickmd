@@ -59,11 +59,20 @@ func searchMatchRanges(in string: String, term: String) -> [NSRange] {
 /// (called from updateNSView); not @MainActor for older-SDK compatibility (see
 /// the BlockHeightCache note in TextBlockView.swift). Lives here, not with the
 /// views, so the tests (which do not compile the views) can run it.
-func applyNSSearchHighlight(in textView: NSTextView, term: String, focusedOccurrence: Int?) {
+///
+/// `focusedText`: the part of the FOCUSED match inside `ranges` is drawn in
+/// `color` (a temporary foreground, removed on the next call). A front-matter
+/// key is secondary-colour text, which on the orange focus read poorly; the
+/// properties table passes its key cells and the theme's text colour, so a
+/// focused key reads like a focused value.
+func applyNSSearchHighlight(in textView: NSTextView, term: String, focusedOccurrence: Int?,
+                            focusedText: (color: NSColor, ranges: [NSRange])? = nil) {
     guard let layoutManager = textView.layoutManager,
           let storage = textView.textStorage else { return }
     let fullRange = NSRange(location: 0, length: storage.length)
     layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
+    // Unconditionally: a reused view may have shown a properties table before.
+    layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
 
     let yellow = NSColor.systemYellow.withAlphaComponent(0.55)
     let orange = NSColor.systemOrange
@@ -71,9 +80,35 @@ func applyNSSearchHighlight(in textView: NSTextView, term: String, focusedOccurr
     for (occurrenceIndex, found) in searchMatchRanges(in: storage.string, term: term).enumerated() {
         let safeRange = NSIntersectionRange(found, fullRange)
         if safeRange.length > 0 {
-            let color = (focusedOccurrence == occurrenceIndex) ? orange : yellow
-            layoutManager.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: safeRange)
+            let focused = focusedOccurrence == occurrenceIndex
+            layoutManager.addTemporaryAttribute(.backgroundColor, value: focused ? orange : yellow,
+                                                forCharacterRange: safeRange)
+            if focused, let focusedText {
+                for range in focusedText.ranges {
+                    let part = NSIntersectionRange(safeRange, range)
+                    guard part.length > 0 else { continue }
+                    layoutManager.addTemporaryAttribute(.foregroundColor, value: focusedText.color,
+                                                        forCharacterRange: part)
+                }
+            }
         }
+    }
+}
+
+extension NSTextView {
+    /// Where the `occurrence`-th match of `term` is in this view's text (view
+    /// coordinates) — the matcher its highlight draws with, so the index is
+    /// the block's focused occurrence. Nil past the last match.
+    func searchMatchRect(term: String, occurrence: Int) -> NSRect? {
+        guard let layoutManager, let textContainer, let storage = textStorage else { return nil }
+        let ranges = searchMatchRanges(in: storage.string, term: term)
+        guard occurrence >= 0, occurrence < ranges.count else { return nil }
+        let range = NSIntersectionRange(ranges[occurrence], NSRange(location: 0, length: storage.length))
+        guard range.length > 0 else { return nil }
+        let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        layoutManager.ensureLayout(forGlyphRange: glyphs)
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+        return rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
     }
 }
 
@@ -118,6 +153,20 @@ enum DocumentSearch {
     /// Whether landing results scroll the document to the focused match.
     static func scrollsToFocus(after trigger: Trigger, matchCount: Int) -> Bool {
         trigger == .termChanged && matchCount > 0
+    }
+
+    /// What a ⌘G / ⇧⌘G step that moved the focus from `oldBlockId` to
+    /// `newBlockId` scrolls: the new block into view, or — the same block —
+    /// the new match within it (which moves only a block taller than the
+    /// window). Nil without a focus.
+    enum StepScroll: Equatable {
+        case toBlock
+        case withinBlock
+    }
+
+    static func stepScroll(from oldBlockId: String?, to newBlockId: String?) -> StepScroll? {
+        guard let newBlockId else { return nil }
+        return newBlockId == oldBlockId ? .withinBlock : .toBlock
     }
 
     /// The focused block and the occurrence within it that the block's
@@ -264,8 +313,9 @@ enum DocumentSearch {
             if let shown = converted[block.id] { return shown.string }
             return String(renderer.renderQuotedBody(content).characters)
         case .heading(let level, let title, _):
-            // Never measured into `converted` (a `.reported` row): rendered
+            // The measurer keeps the title it measured; without it, rendered
             // here exactly as `HeadingBlockView` renders it.
+            if let shown = converted[block.id] { return shown.string }
             return String(renderer.renderHeader(title, level: level).characters)
         case .table, .codeBlock, .image, .svgImage, .mathBlock, .mermaidDiagram:
             return nil

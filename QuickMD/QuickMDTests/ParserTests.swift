@@ -335,6 +335,39 @@ final class ParserTests: XCTestCase {
         XCTAssertTrue(rows.allSatisfy { $0.count == 3 })
     }
 
+    /// GFM spec (tables extension, example 204): "The remainder of the table's
+    /// rows may vary in the number of cells. If a number of cells fewer than
+    /// the number of cells in the header row, empty cells are inserted. If
+    /// greater, the excess is ignored". Dropping the excess is by design.
+    func testBodyRowCellCountFollowsGFM() {
+        let md = """
+        | abc | def |
+        | --- | --- |
+        | bar |
+        | bar | baz | boo |
+        """
+        guard case .table(let headers, let rows, _, .grid) = parse(md)[0].content else {
+            return XCTFail("expected table")
+        }
+        XCTAssertEqual(headers, ["abc", "def"])
+        XCTAssertEqual(rows, [["bar", ""], ["bar", "baz"]])
+    }
+
+    /// A pipe followed by a combining mark is ONE Swift Character; GFM splits on
+    /// the code point, so the cell still ends there and the mark opens the next
+    /// cell. Escaped pipes before a mark stay in the cell, as before.
+    func testPipeBeforeCombiningMarkStillSplits() {
+        let md = "| a |\u{0301}b | c |\n| --- | --- | --- |\n| x |\u{0301}y | z |\n| e \\|\u{0301} f | g |"
+        guard case .table(let headers, let rows, _, .grid) = parse(md)[0].content else {
+            return XCTFail("expected table")
+        }
+        XCTAssertEqual(headers.map { Array($0.unicodeScalars) },
+                       ["a", "\u{0301}b", "c"].map { Array($0.unicodeScalars) })
+        XCTAssertEqual(rows.map { $0.map { Array($0.unicodeScalars) } },
+                       [["x", "\u{0301}y", "z"], ["e |\u{0301} f", "g", ""]]
+                        .map { $0.map { Array($0.unicodeScalars) } })
+    }
+
     func testHeaderlessTableKeepsColumnsFromSeparator() {
         let md = """
         | | |
@@ -379,6 +412,452 @@ final class ParserTests: XCTestCase {
         // one backslash is dropped and the inline renderer handles the rest
         XCTAssertEqual(rows[3], ["path\\| c", ""])
         XCTAssertEqual(rows[4], ["`p\\|q`", "c"])
+    }
+
+    // MARK: - A line that is only one linked image (B16)
+
+    /// `[![alt](img)](url)` alone on a line is the picture, like `![alt](img)`
+    /// and `<a href><img></a>` — an `.image` block on that line (Section copy,
+    /// search of the alt and copy work as for a plain image line). The link
+    /// target is not kept (as for `<a><img>`). Text beside it, or two linked
+    /// images (a badge row), stay a paragraph.
+    func testLineOfOneLinkedImageIsAnImageBlock() {
+        let md = """
+        # Title
+        [![Logo](img/logo.png)](https://example.com)
+          [![Badge][shield]][site]\u{0020}\u{0020}
+        ![Plain](img/plain.png)
+        text before [![a](a.png)](https://a.example)
+
+        [![a](a.png)](https://a.example) text after
+
+        [![a](a.png)](https://a.example) [![b](b.png)](https://b.example)
+
+        [![a](a.png)][undefined]
+
+        [shield]: https://img.shields.io/x.svg
+        [site]: https://example.com/site
+        """
+        let blocks = parse(md)
+        let images: [(url: String, alt: String, line: Int)] = blocks.compactMap {
+            guard case .image(let url, let alt, nil) = $0.content else { return nil }
+            return (url, alt, $0.sourceLine)
+        }
+        XCTAssertEqual(images.map(\.url), ["img/logo.png", "https://img.shields.io/x.svg", "img/plain.png"])
+        XCTAssertEqual(images.map(\.alt), ["Logo", "Badge", "Plain"])
+        XCTAssertEqual(images.map(\.line), [1, 2, 3], "each on its own source line")
+
+        let paragraphs = blocks.compactMap(plainText)
+        XCTAssertEqual(paragraphs.count, 4, "\(paragraphs)")
+        XCTAssertTrue(paragraphs[0].hasPrefix("text before [Image: a]"))
+        XCTAssertEqual(paragraphs[1], "[Image: a] text after")
+        XCTAssertEqual(paragraphs[2], "[Image: a] [Image: b]", "a badge row stays a paragraph (1.15)")
+        XCTAssertTrue(paragraphs[3].contains("[undefined]"), "no link → not a linked image")
+
+        // Exactly what a plain `![Logo](img/logo.png)` line parses to, id aside.
+        guard case .image(let url, let alt, let width) = parse("![Logo](img/logo.png)")[0].content,
+              case .image(let linkedURL, let linkedAlt, let linkedWidth) =
+                parse("[![Logo](img/logo.png)](https://example.com)")[0].content else { return XCTFail("images") }
+        XCTAssertEqual([url, alt], [linkedURL, linkedAlt])
+        XCTAssertNil(width); XCTAssertNil(linkedWidth)
+    }
+
+    /// After the vertical-rhythm merge (rows rendered at the end of the
+    /// parse, ordered hangs over the whole document), checked against GitHub
+    /// (`gh api markdown`): a linked image indented under a list stands in
+    /// like a plain image and keeps the list going (`10.` hangs the items
+    /// above it); a line of `&nbsp;` is a paragraph (`<p>&nbsp;</p>`), not a
+    /// blank line; `&#49;. x` is paragraph text "1. x", never a list item
+    /// (references are decoded after block parsing).
+    func testMergedRowRenderingWithLinkedImagesAndReferences() {
+        func hangs(_ md: String) -> [CGFloat] {
+            parse(md).compactMap { block -> CGFloat? in
+                guard case .text(let attributed) = block.content,
+                      let style = attributed.runs.first?[AttributeScopes.AppKitAttributes.ParagraphStyleAttribute.self]
+                else { return nil }
+                return style.headIndent
+            }
+        }
+        let linked = "1. one\n2. two\n\n   [![b](b.png)](https://x)\n\n10. ten"
+        let plain = "1. one\n2. two\n\n   ![b](b.png)\n\n10. ten"
+        let linkedHangs = hangs(linked)
+        XCTAssertEqual(linkedHangs.count, 2)
+        XCTAssertEqual(linkedHangs, hangs(plain), "a linked image stands in like a plain image")
+        XCTAssertEqual(linkedHangs[0], linkedHangs[1], accuracy: 0.01, "one list: 1. and 10. share the widest hang")
+        let split = hangs("1. one\n2. two\n\n[![b](b.png)](https://x)\n\n10. ten")
+        XCTAssertNotEqual(split[0], split[1], "control: an unindented picture ends the list")
+
+        let blocks = parse("a\n\n&nbsp;\n\n&#49;. x")
+        XCTAssertEqual(blocks.compactMap(plainText), ["a", "\u{00A0}", "1. x"])
+        guard case .text(let item) = blocks[2].content else { return XCTFail("text") }
+        XCTAssertNil(item.runs.first?[AttributeScopes.AppKitAttributes.ParagraphStyleAttribute.self]?.headIndent
+                        .nonZero, "no list hang")
+    }
+
+    /// An image line whose alt holds many inner `[a](` that never close: the
+    /// bracket scan must stay linear (a depth scan per `](` to the end of the
+    /// line made it quadratic, review round 7). Relative, not absolute: 8×
+    /// the input may take at most ~3× the linear share.
+    func testImageLineWithUnclosedInnerLinksParsesInLinearTime() {
+        let parser = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light))
+        func time(_ count: Int) -> TimeInterval {
+            let line = "![x" + String(repeating: "[a](", count: count) + "]"
+            _ = parser.parse(line)  // warm
+            var best = TimeInterval.infinity
+            for _ in 0..<3 {
+                let start = Date()
+                _ = parser.parse(line)
+                best = min(best, Date().timeIntervalSince(start))
+            }
+            return best
+        }
+        let small = time(5_000)
+        let large = time(40_000)
+        XCTAssertLessThan(large, max(small, 0.005) * 24, "5k: \(small) s, 40k: \(large) s (quadratic would be ~64×)")
+    }
+
+    // MARK: - Reference links in quotes, alerts and table cells
+
+    /// Quotes, alerts and table cells keep their markdown and are rendered
+    /// later by renderers without the document's definitions, so the parser
+    /// inlines resolvable references (`ReferenceLinks`) — they used to show
+    /// as `[text][id]`.
+    func testReferenceLinksResolveInQuotesAlertsAndTableCells() {
+        let md = """
+        > See [the docs][docs], ![logo][img] and [Docs].
+
+        > [!NOTE]
+        > Read [the guide][].
+
+        | A | B |
+        |---|---|
+        | [x][docs] | ![i][img] |
+        | [![build][img]](https://ci.example) | |
+
+        [docs]: https://example.com/docs_(v2)
+        [img]: img/logo.png
+        [the guide]: https://example.com/guide
+        """
+        let blocks = parse(md)
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))  // no definitions
+        func links(_ attributed: AttributedString) -> [String] {
+            attributed.runs.compactMap { $0.link?.absoluteString }
+        }
+
+        guard case .blockquote(let quote, 1) = blocks[0].content else { return XCTFail("quote") }
+        XCTAssertEqual(quote, "See [the docs](<https://example.com/docs_\\(v2\\)>), ![logo](<img/logo.png>) "
+                       + "and [Docs](<https://example.com/docs_\\(v2\\)>).")
+        let shown = renderer.renderQuotedBody(quote)
+        XCTAssertEqual(String(shown.characters), "See the docs, [Image: logo] and Docs.")
+        XCTAssertEqual(links(shown).first, "https://example.com/docs_(v2)")
+
+        guard case .alert(.note, let alert) = blocks[1].content else { return XCTFail("alert") }
+        XCTAssertEqual(links(renderer.renderQuotedBody(alert)), ["https://example.com/guide"])
+
+        guard case .table(_, let rows, _, .grid) = blocks[2].content else { return XCTFail("table") }
+        XCTAssertEqual(rows[0], ["[x](<https://example.com/docs_\\(v2\\)>)", "![i](<img/logo.png>)"])
+        XCTAssertEqual(links(renderer.renderInline(rows[0][0])), ["https://example.com/docs_(v2)"])
+        // Review R2: the README badge — an image reference inside an INLINE link.
+        let badge = renderer.renderInline(rows[1][0])
+        XCTAssertEqual(String(badge.characters), "[Image: build]")
+        XCTAssertEqual(links(badge), ["https://ci.example"])
+    }
+
+    /// Footnote references in quotes, alerts and table cells drew `[^note]`
+    /// literally; they now draw the paragraph's superscript number.
+    func testFootnoteReferencesResolveInQuotesAlertsAndTableCells() {
+        let md = """
+        Body[^b].
+
+        > Quoted[^a] and [^missing].
+
+        > [!TIP]
+        > Tip[^b].
+
+        | A |
+        |---|
+        | cell[^a] `[^a]` |
+
+        [^a]: First.
+        [^b]: Second.
+        """
+        let blocks = parse(md)
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))  // no definitions
+        guard case .text(let body) = blocks[0].content else { return XCTFail("paragraph") }
+        XCTAssertEqual(String(body.characters), "Body\u{00B2}.", "the paragraph's numbering (definition order)")
+        guard case .blockquote(let quote, _) = blocks[1].content,
+              case .alert(_, let alert) = blocks[2].content,
+              case .table(_, let rows, _, .grid) = blocks[3].content else { return XCTFail("blocks") }
+        XCTAssertEqual(String(renderer.renderQuotedBody(quote).characters), "Quoted\u{00B9} and [^missing].")
+        XCTAssertEqual(String(renderer.renderQuotedBody(alert).characters), "Tip\u{00B2}.")
+        XCTAssertEqual(String(renderer.renderInline(rows[0][0]).characters), "cell\u{00B9} [^a]", "code span kept")
+    }
+
+    /// Quote and alert bodies are rendered with soft breaks joined, so a code
+    /// span or a link can span source lines: the rewrite scans each joined
+    /// group (review R1). Code must never show rewritten Markdown, and the
+    /// whole link text must be linked.
+    func testQuoteBodyReferencesSpanningLinesMatchTheDefinitionAwareRenderer() {
+        let theme = MarkdownTheme.cached(for: .light)
+        let definitions = ["d": "https://e.x/a", "img": "img/logo.png"]
+        let footnotes = [(id: "n", content: "x")]
+        let aware = MarkdownRenderer(theme: theme, referenceDefinitions: definitions, footnoteDefinitions: footnotes)
+        let plain = MarkdownRenderer(theme: theme)
+        let bodies = [
+            "Use `git log [d]\n--oneline` to list.\nRead [the\nguide][d] first.",
+            "line one [d]  \nhard break [the\nguide][d]\n\nnew paragraph ![x][img][^n]",
+            "- item [d]\n  continued [d]\n- second\n## heading [d]\nafter\\\nback [d]",
+            "no references at all\njust text",
+        ]
+        for body in bodies {
+            let inlined = ReferenceLinks.inlined(body, definitions: definitions, footnoteIds: ["n"], quoteBody: true)
+            let expected = aware.renderQuotedBody(body)
+            let actual = plain.renderQuotedBody(inlined)
+            XCTAssertEqual(String(actual.characters), String(expected.characters), body)
+            XCTAssertEqual(actual.runs.map { $0.link?.absoluteString }, expected.runs.map { $0.link?.absoluteString }, body)
+        }
+        XCTAssertEqual(ReferenceLinks.inlined(bodies[3], definitions: definitions, quoteBody: true), bodies[3],
+                       "untouched groups keep their lines")
+
+        // The parser path (the reported repro).
+        let blocks = parse("> Use `git log [d]\n> --oneline` to list.\n> Read [the\n> guide][d] first.\n\n[d]: https://e.x/a")
+        guard case .blockquote(let quote, _) = blocks[0].content else { return XCTFail("quote") }
+        let shown = plain.renderQuotedBody(quote)
+        XCTAssertEqual(String(shown.characters), "Use git log [d] --oneline to list. Read the guide first.")
+        let linked = shown.runs.filter { $0.link != nil }.map { String(shown[$0.range].characters) }
+        XCTAssertEqual(linked, ["the guide"])
+    }
+
+    /// Merge check (vertical-rhythm × reference inlining): a quote's lazy
+    /// lines and collapsed blank runs are part of the stored body the
+    /// references are resolved in; a definition taken out of a quote
+    /// (`DefinitionPlacement`) has its destination's character references
+    /// decoded like any other; a quote's footnote keeps the document's number.
+    func testQuoteReferencesSurviveLazyLinesBlankRunsAndQuoteDefinitions() {
+        let md = "> [q]: https://e.x/a&amp;b\n>\n> See [q] and\nlazy [the\n> guide][d][^b].\n>\n>\n>\n> Then [q].\n\n"
+            + "Body[^a].\n\n[d]: https://e.x/d&#38;e\n[^a]: First.\n[^b]: Second.\n"
+        let blocks = parse(md)
+        guard case .blockquote(let quote, _) = blocks[0].content else { return XCTFail("quote") }
+        let plain = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
+        let shown = plain.renderQuotedBody(quote)
+        let links = shown.runs.compactMap { run -> String? in
+            run.link.map { "\(String(shown[run.range].characters))=\($0.absoluteString)" }
+        }
+        XCTAssertEqual(links, ["q=https://e.x/a&b", "the guide=https://e.x/d&e", "q=https://e.x/a&b"])
+        XCTAssertTrue(String(shown.characters).contains("guide\u{00B2}."), String(shown.characters))
+        XCTAssertFalse(quote.contains("\n\n\n"), "one paragraph break per blank run")
+    }
+
+    /// Merge check (H8/H9 × reference inlining): footnote and link
+    /// definitions taken out of a quote leave marker lines the body never
+    /// sees, and a quote-level footnote is numbered with the document's
+    /// (definition order) in the quote, an alert and a paragraph alike.
+    func testQuoteLevelDefinitionsNumberAndResolveInEveryBody() {
+        let md = """
+        > [^q]: Quoted note.
+        > [r]: https://e.x/r
+        > Text[^q] and [r] and[^a].
+
+        > [!TIP]
+        > Tip[^a] [r].
+
+        Body[^a][^q].
+
+        [^a]: Second.
+        """
+        let blocks = parse(md)
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
+        guard case .blockquote(let quote, _) = blocks[0].content,
+              case .alert(_, let alert) = blocks[1].content,
+              case .text(let body) = blocks[2].content else { return XCTFail("blocks: \(blocks.map(\.content))") }
+        let shownQuote = renderer.renderQuotedBody(quote)
+        XCTAssertEqual(String(shownQuote.characters), "Text\u{00B9} and r and\u{00B2}.")
+        XCTAssertEqual(shownQuote.runs.compactMap { $0.link?.absoluteString }, ["https://e.x/r"])
+        XCTAssertEqual(String(renderer.renderQuotedBody(alert).characters), "Tip\u{00B2} r.")
+        XCTAssertEqual(String(body.characters), "Body\u{00B2}\u{00B9}.")
+        guard case .text(let notes) = blocks.last?.content else { return XCTFail("footnotes block") }
+        XCTAssertTrue(String(notes.characters).contains("1. Quoted note.\n2. Second."), String(notes.characters))
+    }
+
+    /// R21a: footnote labels match like link labels (`ReferenceLabel`):
+    /// `[^Note]`, `[^NOTE]` and `[^note]` are all footnote 1, `[^ẞ]` finds
+    /// `[^ss]:`, and of `[^dup]:` / `[^DUP]:` the first wins — the second is
+    /// not listed either. GitHub (`gh api markdown`, 2026-11-04). They stayed
+    /// literal (an exact `==`), and both duplicates were listed.
+    func testFootnoteLabelsMatchLikeGitHub() {
+        let md = """
+        # H[^Note]
+
+        A[^Note] B[^NOTE] C[^note] D[^Dup] E[^ẞ]
+
+        > Q[^NOTE] [^DUP]
+
+        | c |
+        |---|
+        | T[^NoTe] |
+
+        [^note]: First.
+        [^dup]: Dup one.
+        [^DUP]: Dup two.
+        [^ss]: Fold.
+        """
+        let blocks = parse(md)
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
+        guard case .heading(let level, let title, _) = blocks[0].content,
+              case .text(let paragraph) = blocks[1].content,
+              case .blockquote(let quote, _) = blocks[2].content,
+              case .table(_, let rows, _, _) = blocks[3].content,
+              case .text(let notes) = blocks.last?.content else { return XCTFail("blocks: \(blocks.map(\.content))") }
+        XCTAssertEqual(String(renderer.renderHeader(title, level: level).characters), "H\u{00B9}")
+        XCTAssertEqual(String(paragraph.characters), "A\u{00B9} B\u{00B9} C\u{00B9} D\u{00B2} E\u{00B3}")
+        XCTAssertEqual(String(renderer.renderQuotedBody(quote).characters), "Q\u{00B9} \u{00B2}")
+        XCTAssertEqual(String(renderer.renderInline(rows[0][0]).characters), "T\u{00B9}")
+        let listed = String(notes.characters)
+        XCTAssertTrue(listed.hasSuffix("1. First.\n2. Dup one.\n3. Fold."), listed)
+        XCTAssertFalse(listed.contains("Dup two"), listed)
+    }
+
+    /// R21b: a label of whitespace only (`[ ]:`, `[\t]:`) defines nothing —
+    /// the line is paragraph text and `[ ]` / `[x][ ]` stay literal (GitHub,
+    /// `gh api markdown`, 2026-11-04). It was taken out as a definition of "".
+    func testWhitespaceOnlyLabelDefinesNothing() {
+        let blocks = parse("[ ] and [x][ ] and [y][\t]\n\n[ ]: https://empty\n\n[\t]: https://tab\n")
+        let texts = blocks.compactMap { block -> AttributedString? in
+            guard case .text(let text) = block.content else { return nil }
+            return text
+        }
+        XCTAssertEqual(texts.map { String($0.characters) },
+                       ["[ ] and [x][ ] and [y][\t]", "[ ]: https://empty", "[\t]: https://tab"])
+        // Only the bare URLs link (autolinks, as on GitHub).
+        XCTAssertEqual(texts.map { text in text.runs.compactMap { $0.link?.absoluteString } },
+                       [[], ["https://empty"], ["https://tab"]])
+    }
+
+    /// R21c: a label may hold backslash-escaped brackets, matched as
+    /// written: `[a\]b]: url` is a definition, found by `[a\]b]`,
+    /// `[y][a\]b]`, `[w][A\]B]`, `![a\]b]`, in a quote and a heading; an
+    /// UNESCAPED `[` makes no label (`[a[b]:` is text, `[v][a[b]` literal).
+    /// GitHub (`gh api markdown`, 2026-11-04). The definition pattern
+    /// stopped at the first `]` and the full form's label too.
+    func testEscapedBracketsInLabelsLikeGitHub() {
+        let md = #"""
+        # [w][A\]B]
+
+        [a\]b] and [y][a\]b] and [a\[c] and [z][a\\] and [w][A\]B]
+
+        > Quoted [q][a\]b].
+
+        ![a\]b]
+
+        [v][a[b]
+
+        [a\]b]: https://esc
+        [a\[c]: https://open
+        [a\\]: https://bs
+
+        [a[b]: https://ab
+        """#
+        let blocks = parse(md)
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
+        // One entry per link: an escape splits a link's text into runs.
+        func links(_ text: AttributedString) -> [String] {
+            text.runs[\.link].compactMap { link, range in
+                link.map { "\(String(text[range].characters))=\($0.absoluteString)" }
+            }
+        }
+        guard blocks.count == 6,
+              case .heading(let level, let title, _) = blocks[0].content,
+              case .text(let paragraph) = blocks[1].content,
+              case .blockquote(let quote, _) = blocks[2].content,
+              case .image(let url, _, _) = blocks[3].content,
+              case .text(let literal) = blocks[4].content,
+              case .text(let notDefinition) = blocks[5].content else {
+            return XCTFail("blocks: \(blocks.map(\.content))")
+        }
+        XCTAssertEqual(links(renderer.renderHeader(title, level: level)), ["w=https://esc"])
+        XCTAssertEqual(links(paragraph), ["a]b=https://esc", "y=https://esc", "a[c=https://open", "z=https://bs",
+                                          "w=https://esc"])
+        XCTAssertEqual(links(renderer.renderQuotedBody(quote)), ["q=https://esc"])
+        XCTAssertEqual(url, "https://esc")
+        XCTAssertEqual(String(literal.characters), "[v][a[b]")
+        XCTAssertEqual(links(literal), [])
+        XCTAssertEqual(String(notDefinition.characters), "[a[b]: https://ab")
+    }
+
+    /// R19: reference labels match as CommonMark's (`ReferenceLabel`) in
+    /// every lookup — whitespace runs (tab, line break) are one space, the
+    /// ends trimmed, Unicode case folding (`ẞ` = `SS`, `straße` = `STRASSE`,
+    /// `ΣΑΣ` = `σας`); a no-break space is no whitespace; the first
+    /// definition of a label wins. Expected links from `gh api markdown`
+    /// (2026-11-04). Lowercasing alone and exact whitespace left all of
+    /// these but `[dup]` literal, and `[dup]` took the LAST definition.
+    func testReferenceLabelsMatchLikeGitHub() {
+        let md = "Use [link\ntext] shortcut\n---\n\n"
+            + "[foo bar] [a\u{00A0}b] [dup] [x][ΣΑΣ] [y][a\n  B]\n\n"
+            + "> [straße] and [A\tB]\n\n"
+            + "| c |\n|---|\n| [a  b] |\n\n"
+            + "![ẞ]\n\n"
+            + "[  Foo   Bar ]: https://fb\n[a b]: https://ab\n[dup]: https://first\n[DUP]: https://second\n"
+            + "[SS]: https://ss.png\n[STRASSE]: https://strasse\n[σας]: https://sas\n[link text]: https://lt\n"
+        let blocks = parse(md)
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
+        func links(_ text: AttributedString) -> [String] {
+            text.runs.compactMap { run in
+                run.link.map { "\(String(text[run.range].characters))=\($0.absoluteString)" }
+            }
+        }
+        guard blocks.count == 5,
+              case .heading(let level, let title, _) = blocks[0].content,
+              case .text(let paragraph) = blocks[1].content,
+              case .blockquote(let quote, _) = blocks[2].content,
+              case .table(_, let rows, _, _) = blocks[3].content,
+              case .image(let url, let alt, _) = blocks[4].content else {
+            return XCTFail("blocks: \(blocks.map(\.content))")
+        }
+        XCTAssertEqual(links(renderer.renderHeader(title, level: level)), ["link text=https://lt"])
+        XCTAssertEqual(links(paragraph), ["foo bar=https://fb", "dup=https://first", "x=https://sas",
+                                          "y=https://ab"])
+        XCTAssertTrue(String(paragraph.characters).contains("[a\u{00A0}b]"), "a no-break space is no whitespace")
+        XCTAssertEqual(links(renderer.renderQuotedBody(quote)), ["straße=https://strasse", "A\tB=https://ab"])
+        XCTAssertEqual(links(renderer.renderInline(rows[0][0])), ["a  b=https://ab"])
+        XCTAssertEqual(url, "https://ss.png")
+        XCTAssertEqual(alt, "ẞ")
+
+        XCTAssertEqual(ReferenceLabel.normalized(" \tFoo \n\u{0C} BAR\r "), "foo bar")
+        XCTAssertEqual(ReferenceLabel.normalized("ﬀ İ Ǆ"), ReferenceLabel.normalized("FF i\u{0307} ǆ"))
+    }
+
+    /// The rewrite must draw exactly what the paragraph renderer (which HAS the
+    /// definitions) draws for the same line: characters and links.
+    func testReferenceInliningMatchesTheDefinitionAwareRenderer() {
+        let theme = MarkdownTheme.cached(for: .light)
+        let definitions = ["docs": "https://example.com/docs_(v2)", "img": "img/My Pic.png",
+                           "a b": "https://example.com/ab", "bad": "https://example.com/a<b>\\\\c", "paren": "https://e.x/a)b(c"]
+        let footnotes = [(id: "n1", content: "x"), (id: "docs", content: "y")]
+        let withDefinitions = MarkdownRenderer(theme: theme, referenceDefinitions: definitions,
+                                               footnoteDefinitions: footnotes)
+        let plain = MarkdownRenderer(theme: theme)
+        let lines = [
+            "[docs] and [Docs][] and [text][DOCS] and [A B]",
+            "`[docs]` in code, ``[docs]`` too, \\[docs] escaped, \\[x\\][docs]",
+            "***[docs]*** and ~~[docs]~~ stay plain, **[docs]** is a link",
+            "[![badge][img]][docs] and ![img] and ![alt][]",
+            "[inline](https://x.y/(a)) next to [docs]",
+            "[![build][img]](https://ci.example/b) and [![x](i.png)](https://ci.example/c) and [t ![i][img]](<a b>)",
+            "[unknown][nope] [unknown] [docs][nope]",
+            "[bad] and [paren] escape what the <…> form needs",
+            "a ` lone backtick [docs] then ``` three ``` [docs]",
+            "note[^n1] and [^docs] then [^none] `[^n1]` **b[^n1]** [![x][img]][docs][^n1]",
+        ]
+        for line in lines {
+            let inlined = ReferenceLinks.inlined(line, definitions: definitions, footnoteIds: footnotes.map(\.id))
+            let expected = withDefinitions.renderInline(line)
+            let actual = plain.renderInline(inlined)
+            XCTAssertEqual(String(actual.characters), String(expected.characters), line)
+            XCTAssertEqual(actual.runs.compactMap { $0.link?.absoluteString },
+                           expected.runs.compactMap { $0.link?.absoluteString }, line)
+        }
+        XCTAssertEqual(ReferenceLinks.inlined("[docs]\n[img]", definitions: [:]), "[docs]\n[img]")
     }
 
     // MARK: - Blockquotes
@@ -548,7 +1027,10 @@ final class ParserTests: XCTestCase {
         ![nope][]
         """)
         XCTAssertTrue(images(blocks).isEmpty)
-        XCTAssertEqual(blocks.count, 1, "all three lines stay paragraph text")
+        // Three paragraphs, so three text rows: since the vertical rhythm a row
+        // is one block (it used to be every text line up to the 30-line cap).
+        XCTAssertEqual(blocks.count, 3, "all three lines stay paragraph text")
+        XCTAssertTrue(blocks.allSatisfy { $0.id.hasPrefix("text-") }, "\(blocks.map(\.id))")
     }
 
     func testShortcutImageWithoutAnyDefinitionsStaysText() {
@@ -662,10 +1144,17 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(level, 2)
     }
 
+    /// An alert needs a body (GitHub): the marker alone is a plain quote; a
+    /// nested quote right after it is a body, even an empty one, and the
+    /// alert's own body is then empty.
     func testAlertWithEmptyBodyParses() {
-        let blocks = parse("> [!WARNING]")
+        guard case .blockquote(let marker, 1) = parse("> [!WARNING]").first?.content else {
+            return XCTFail("a marker alone is a plain quote")
+        }
+        XCTAssertEqual(marker, "[!WARNING]")
+        let blocks = parse("> [!WARNING]\n> >")
         guard case .alert(let kind, let content) = blocks.first?.content else {
-            return XCTFail("header-only alert should still parse")
+            return XCTFail("an alert whose body is a nested quote should still parse")
         }
         XCTAssertEqual(kind, .warning)
         XCTAssertTrue(content.isEmpty)
@@ -922,8 +1411,10 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
         XCTAssertEqual(textLines(blocks[0]), ["Apple", "fruit", "Orange", "citrus"])
         // …separated by a blank line, so the groups read apart on screen and in print.
+        // Five lines, not six: a text row no longer ends in a line break (the
+        // final "\n" laid out an empty line under every row).
         let raw = (plainText(blocks[0]) ?? "").components(separatedBy: "\n")
-        XCTAssertEqual(raw.count, 6, "\(raw)")
+        XCTAssertEqual(raw.count, 5, "\(raw)")
         XCTAssertTrue(raw[2].isEmpty, "expected a blank line between groups: \(raw)")
     }
 
@@ -1103,4 +1594,8 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(gapBlocks.count, 2, "\(gapBlocks.map(\.id))")
         XCTAssertEqual(gapBlocks[1].sourceLine, 81)
     }
+}
+
+private extension CGFloat {
+    var nonZero: CGFloat? { self == 0 ? nil : self }
 }

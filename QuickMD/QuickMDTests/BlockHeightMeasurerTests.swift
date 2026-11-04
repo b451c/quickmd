@@ -205,9 +205,11 @@ final class BlockHeightMeasurerTests: XCTestCase {
         }
     }
 
-    /// An alert with a marker but no body skips the body and its VStack spacing.
+    /// An alert with a marker but no body text skips the body and its VStack
+    /// spacing. (Its body is an empty nested quote: the marker alone is a
+    /// plain quote, as on GitHub.)
     func testAlertWithoutBodyHasNoBodyChrome() {
-        let blocks = parse("> [!NOTE]")
+        let blocks = parse("> [!NOTE]\n> >")
         let measured = measure(blocks, width: 600)
         guard let index = blocks.firstIndex(where: { if case .alert = $0.content { return true } else { return false } }) else {
             return XCTFail("fixture did not parse as an alert")
@@ -433,6 +435,13 @@ final class BlockHeightMeasurerTests: XCTestCase {
                 XCTAssertNotNil(measured.converted[block.id], "missing conversion for \(block.id)")
             case .alert(_, let content) where !content.isEmpty:
                 XCTAssertNotNil(measured.converted[block.id], "missing conversion for \(block.id)")
+            case .heading(let level, let title, _):
+                // `HeadingBlockView` hosts a `TextBlockView` too: the title as it
+                // converts it, kept for copy and search.
+                let shown = BlockTextConverter.makeNSAttributedString(
+                    from: MarkdownRenderer(theme: theme, fontScale: 1).renderHeader(title, level: level),
+                    hasInlineMath: false, theme: theme, fontScale: 1, math: .none)
+                XCTAssertEqual(measured.converted[block.id], shown, "heading \(block.id)")
             default:
                 XCTAssertNil(measured.converted[block.id], "unexpected conversion for \(block.id)")
             }
@@ -491,7 +500,16 @@ final class BlockHeightMeasurerTests: XCTestCase {
         guard let index = blocks.firstIndex(where: { if case .image = $0.content { return true } else { return false } }) else {
             return XCTFail("fixture did not parse as an image")
         }
+        // The loading view as drawn: the 100 pt placeholder AND the caption
+        // under it, each with the row's padding (`ImageBlock.rowHeight`).
         XCTAssertEqual(measured.table.heights[index],
+                       BlockLayout.ImageBlock.placeholderHeight
+                       + 4 * BlockLayout.Document.imageOuterVerticalPadding
+                       + BlockLayout.ImageBlock.captionSpacing
+                       + BlockLayout.ImageBlock.captionHeight(alt: "alt", fontScale: 1, contentWidth: 600),
+                       accuracy: tolerance)
+        let uncaptioned = parse("![](picture.png)")
+        XCTAssertEqual(measure(uncaptioned, width: 600).table.heights[0],
                        BlockLayout.ImageBlock.placeholderHeight
                        + 2 * BlockLayout.Document.imageOuterVerticalPadding,
                        accuracy: tolerance)
@@ -915,6 +933,84 @@ extension BlockHeightMeasurerTests {
             let blocks = engine.substitutingUntypesettableMath(in: parsed)
             XCTAssertEqual(blocks.filter { if case .mathBlock = $0.content { return true } else { return false } }.count, 2)
         }
+    }
+
+    /// A formula that PARSES but draws nothing — only spacing, empty groups,
+    /// an accent over nothing, `\color` (which this SwiftMath parses but its
+    /// typesetter declines) — took the formula path and drew an empty row. It
+    /// now falls back like an unparseable one: the same substitution, which
+    /// screen and print share. The production verdict
+    /// (`MathInk.typesetsToSomething`, in the app target: SwiftMath loads its
+    /// fonts from the main bundle, which the test runner is not) agreed with
+    /// SwiftMath's own rendering on 36 formulas in a headless check; its
+    /// verdicts for these drive the engine here. (`$$ $$` and `$$\n$$` never
+    /// become a block at all.)
+    func testAFormulaThatDrawsNothingBecomesALatexCodeBlock() {
+        let drawsNothing: Set<String> = [#"\,"#, #"\color{red}{x}"#, #"{}^{}_{}"#, #"\hat{}"#]
+        let engine = MathRendering(inlineImage: { _, _, _ in nil }, displayHeight: { _, _, _ in 40 },
+                                   typesets: { !drawsNothing.contains($0) })
+        let document = "$$\n\\,\n$$\n\n$$\\color{red}{x}$$\n\n$$\n{}^{}_{}\n$$\n\n$$\\hat{}$$\n\n$$x$$"
+        let parsed = parse(document)
+        let blocks = engine.substitutingUntypesettableMath(in: parsed)
+        XCTAssertEqual(blocks.map(\.id), parsed.map(\.id))
+        XCTAssertEqual(blocks.count, 5)
+        for (index, latex) in [#"\,"#, #"\color{red}{x}"#, #"{}^{}_{}"#, #"\hat{}"#].enumerated() {
+            guard case .codeBlock(let code, let language) = blocks[index].content else {
+                XCTFail("\(latex) is still \(blocks[index].content)")
+                continue
+            }
+            XCTAssertEqual(code, latex, "the source, verbatim")
+            XCTAssertEqual(language, "latex")
+        }
+        guard case .mathBlock(let working) = blocks[4].content else {
+            return XCTFail("a formula that draws stays display math")
+        }
+        XCTAssertEqual(working, "x")
+    }
+
+    /// A formula shown as its source copies as the formula it is when the
+    /// selection covers it whole — ⌘A, a drag across it — `$$…$$`, as 1.14.2
+    /// copied it; a selection inside its text copies that text, like any
+    /// selection. A user's own ```latex block still copies as code, and search
+    /// still counts in the same string the row shows.
+    func testASubstitutedFormulaCopiesAsTheFormulaWhenCoveredWhole() {
+        let blocks = refusingNot.substitutingUntypesettableMath(in: parse(Self.failingFormulaDocument)
+                                                                + parse("```latex\n\\not\\le\n```"))
+        guard case .codeBlock(let latex, _) = blocks[1].content, blocks[1].substitutesFormula else {
+            return XCTFail("fixture: row 1 was not substituted")
+        }
+        XCTAssertFalse(blocks[4].substitutesFormula, "a user's own latex fence")
+        func text(_ block: MarkdownBlock) -> NSAttributedString? {
+            switch block.content {
+            case .text(let attributed):
+                return BlockTextConverter.makeNSAttributedString(from: attributed, hasInlineMath: false,
+                                                                 theme: theme, fontScale: 1, math: .none)
+            case .codeBlock(let code, _):
+                return BlockTextConverter.plainCode(code, theme: theme, fontScale: 1)
+            default:
+                return nil
+            }
+        }
+        func copy(_ anchor: SelectionPoint, _ focus: SelectionPoint) -> String {
+            DocumentCopyBuilder.build(SelectionRows.pieces(of: DocumentSelection(anchor: anchor, focus: focus),
+                                                           blocks: blocks, text: text, table: { _ in nil })).plain
+        }
+        let length = (latex as NSString).length
+        let outro = text(blocks[3])!.length
+        // ⌘A: intro, the formula as $$…$$, the working formula, outro, the fence.
+        let all = DocumentSelection.selectAll(rowCount: blocks.count) { text(blocks[$0])?.length ?? 1 }!
+        XCTAssertEqual(copy(all.anchor, all.focus),
+                       "Intro paragraph.\n\n$$\n\(latex)\n$$\n\n$$\nx = \\frac{1}{2}\n$$\n\nOutro paragraph.\n\n\\not\\le")
+        // A drag from the intro into the outro covers the formula whole.
+        XCTAssertTrue(copy(SelectionPoint(row: 0, offset: 6), SelectionPoint(row: 3, offset: outro))
+            .contains("\n\n$$\n\(latex)\n$$\n\n"))
+        // The formula's own text, start to end, from inside: still whole.
+        XCTAssertEqual(copy(SelectionPoint(row: 1, offset: 0), SelectionPoint(row: 1, offset: length)),
+                       "$$\n\(latex)\n$$")
+        // Part of it: those characters.
+        XCTAssertEqual(copy(SelectionPoint(row: 1, offset: 0), SelectionPoint(row: 1, offset: 6)), "V(e_1)")
+        // Search counts in what the row shows.
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "not", theme: theme).matchBlockIds.count, 3)
     }
 
     func testDocumentWithoutDisplayMathNeverConsultsTheEngine() {

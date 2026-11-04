@@ -711,9 +711,9 @@ final class RendererTests: XCTestCase {
     }
 
     func testDefaultZoomStoredReadsItsOwnSuite() throws {
-        let suite = "QuickMDTests.DefaultZoom.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let suite = try TemporaryDefaults("DefaultZoom")
+        defer { suite.remove() }
+        let defaults = suite.defaults
 
         XCTAssertEqual(DefaultZoom.stored(in: defaults), 1.0, "missing key")
         defaults.set(1.25, forKey: DefaultZoom.defaultsKey)
@@ -730,4 +730,386 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(MarkdownZoom.bigger.applied(to: 1.25, defaultScale: 1.25), 1.5)
         XCTAssertEqual(MarkdownZoom.smaller.applied(to: 1.25, defaultScale: 1.25), 1.1)
     }
+
+    // MARK: - Character references (decoded like GitHub)
+
+    /// Expected strings from `gh api markdown` (2026-11-04): named references
+    /// from the full HTML5 table (`&ngE;` is two code points), numeric ones
+    /// per CommonMark (0, a surrogate or > U+10FFFF → U+FFFD), a reference
+    /// without its `;` or with an unknown name stays as written, and decoding
+    /// happens after inline parsing (`&#42;x&#42;` is "*x*", not emphasis).
+    func testCharacterReferencesDecodeLikeGitHub() {
+        XCTAssertEqual(HTMLEntities.decode("AT&amp;T &copy; a&nbsp;b &rarr; &#35; &#0; &#xD800; &#1234567; &bogus; &amp &ngE; &#X41;"),
+                       "AT&T © a\u{00A0}b → # \u{FFFD} \u{FFFD} \u{FFFD} &bogus; &amp \u{2267}\u{0338} A")
+        XCTAssertEqual(HTMLEntities.decode("&CounterClockwiseContourIntegral; &#12345678; &#x1234567; &#; &#x; & ;"),
+                       "\u{2233} &#12345678; &#x1234567; &#; &#x; & ;", "too many digits, no digits: literal")
+        XCTAssertEqual(HTMLEntities.decode("&NewLine;&Tab;"), "\n\t")
+        XCTAssertEqual(HTMLEntities.decode("no ampersand"), "no ampersand")
+
+        let line = "AT&amp;T `&amp;` **&lt;b&gt;** ~~&gt;~~ ***&gt;*** [&amp;](http://x) ![a&amp;b](i.png) &#42;x&#42;"
+        XCTAssertEqual(rendered(line), "AT&T &amp; <b> > > & [Image: a&b] *x*")
+        let attributed = renderer.renderInline("&#42;x&#42;")
+        XCTAssertEqual(attributed.runs.count, 1, "a decoded asterisk opens no emphasis")
+    }
+
+    /// Every kind that renders inline text decodes — paragraph, list, quote,
+    /// alert, table cell, heading, footnote — and never a code block; a
+    /// front-matter VALUE keeps its references, as GitHub shows front matter
+    /// as plain text.
+    func testCharacterReferencesDecodeInEveryTextKindButCodeAndFrontMatter() {
+        let theme = MarkdownTheme.cached(for: .light)
+        let md = """
+        ---
+        title: A&amp;B
+        ---
+        Para &copy; 2026[^n]
+
+        - item &rarr; next
+
+        > quote &amp; more
+
+        > [!NOTE]
+        > alert &hellip;
+
+        | h&amp;h |
+        |---|
+        | cell&nbsp;x |
+
+        ## Q&amp;A
+
+        ```
+        code &amp; stays
+        ```
+
+        ![a&amp;b](pic.png)
+
+        [^n]: Note &amp; text
+        """
+        let blocks = MarkdownBlockParser(theme: theme).parse(md)
+        let plain = MarkdownRenderer(theme: theme)
+        var shown: [String] = []
+        for block in blocks {
+            switch block.content {
+            case .text(let attributed): shown.append(String(attributed.characters))
+            case .blockquote(let content, _), .alert(_, let content):
+                shown.append(String(plain.renderQuotedBody(content).characters))
+            case .table(let headers, let rows, let alignments, let style):
+                shown.append(TableTextBuilder.plainString(headers: headers, rows: rows, alignments: alignments,
+                                                          style: style, theme: theme, fontScale: 1))
+            case .heading(let level, let title, _):
+                shown.append(String(plain.renderHeader(title, level: level).characters))
+            case .codeBlock(let code, _): shown.append(code)
+            case .image(_, let alt, _): shown.append("image:" + alt)
+            default: break
+            }
+        }
+        let all = shown.joined(separator: "|")
+        for expected in ["title\nA&amp;B\n", "Para © 2026", "item → next", "quote & more", "alert …",
+                         "h&h\ncell\u{00A0}x\n", "Q&A", "code &amp; stays", "image:a&b", "Note & text"] {
+            XCTAssertTrue(all.contains(expected), "\(expected.debugDescription) in \(all.debugDescription)")
+        }
+    }
+
+
+    /// Review R5: CommonMark lets a backslash escape ANY ASCII punctuation
+    /// (`\&amp;` is the text "&amp;"); expected from `gh api markdown`. `\$`
+    /// is the one exception (keeps its backslash: inline math is found in the
+    /// rendered text). The Contents sidebar shows exactly the heading's text.
+    func testEveryASCIIPunctuationEscapesAndTheToCShowsTheHeadingText() {
+        XCTAssertEqual(rendered("a \\&amp; \\< \\~x\\~ \\\" \\@ \\^ \\, b"), "a &amp; < ~x~ \" @ ^ , b")
+        XCTAssertEqual(rendered("\\$5"), "$5", "an escaped dollar (R9: tagged, never math)")
+        let heading = String(renderer.renderHeader("\\&amp; `&lt;x&gt;`", level: 1).characters)
+        XCTAssertEqual(heading, "&amp; &lt;x&gt;")
+
+        let entry = ToCEntry(id: "heading-0", level: 1, title: "\\&amp; `&lt;x&gt;` **Q&amp;A**", sourceLine: 0)
+        XCTAssertEqual(entry.shownTitle(renderer: renderer), "&amp; &lt;x&gt; Q&A", "the ToC row = the heading")
+        XCTAssertEqual(entry.shownTitle(renderer: renderer),
+                       String(renderer.renderHeader(entry.title, level: 1).characters))
+    }
+
+
+    // MARK: - LaTeX escapes inside inline math (review R11)
+
+    /// Inline math is found in the RENDERED text, after every `\<punct>`
+    /// escape ran; the formula must still reach the engine with its LaTeX
+    /// escapes (`$50\%$` typesets "50%": a bare `%` starts a TeX comment).
+    /// Text outside the formula keeps Markdown's escapes. The copy tag carries
+    /// the same LaTeX, and print uses the same `pieces(of:)`.
+    func testInlineMathKeepsItsLaTeXEscapes() throws {
+        for (source, latex) in [("$50\\%$", "50\\%"), ("$a\\,b$", "a\\,b"), ("$\\{x\\}$", "\\{x\\}"),
+                                ("$a\\_b$", "a\\_b"), ("$a\\$b$", "a\\$b"), ("$a\\;b\\:c$", "a\\;b\\:c")] {
+            XCTAssertEqual(shownParagraph("x " + source + " y").formulas, [latex], source)
+        }
+        let mixed = shownParagraph("Price \\$5, \\* and $a\\,b + \\{c\\}$ then \\_")
+        XCTAssertEqual(mixed.formulas, ["a\\,b + \\{c\\}"])
+        XCTAssertEqual(mixed.text, "Price $5, * and \u{FFFC} then _")
+
+        // The copy tag (DocumentCopyBuilder writes `$<tag>$`) is the LaTeX too.
+        let theme = MarkdownTheme.cached(for: .light)
+        guard case .text(let attributed)? = MarkdownBlockParser(theme: theme).parse("t $50\\%$").first?.content else {
+            return XCTFail("paragraph")
+        }
+        let ns = BlockTextConverter.makeNSAttributedString(
+            from: attributed, hasInlineMath: true, theme: theme, fontScale: 1,
+            math: MathRendering(inlineImage: { _, _, _ in NSImage(size: NSSize(width: 1, height: 1)) },
+                                displayHeight: { _, _, _ in 0 }))
+        var tags: [String] = []
+        ns.enumerateAttribute(.qmdInlineMathSource, in: NSRange(location: 0, length: ns.length)) { value, _, _ in
+            if let value = value as? String { tags.append(value) }
+        }
+        XCTAssertEqual(tags, ["50\\%"])
+        XCTAssertEqual(InlineMathSegmenter.pieces(of: attributed).map(\.length), [2, 5], "spans in the rendered text: $50%$")
+    }
+
+    // MARK: - Formatting inside link text (review R13)
+
+    /// A link's text is inline Markdown, as on GitHub (`gh api markdown`):
+    /// `<a><strong>Docs</strong></a>`, `<a><em>plain</em></a>`,
+    /// `<a><code>npm install</code></a>`, `<a><del>old</del></a>`,
+    /// `<a>a <strong>b</strong> c</a>`, `<a href=u>https://x.com</a>`,
+    /// `<a>a &amp; b</a>` — and the whole visible text carries the link.
+    func testLinkTextIsInlineMarkdown() {
+        let line = "[**Docs**](u) [*plain*](v) [`npm install`](u) [~~old~~](u) [a **b** c](u) [https://x.com](u) [a &amp; b](u)"
+        let attributed = renderer.renderInline(line)
+        XCTAssertEqual(String(attributed.characters), "Docs plain npm install old a b c https://x.com a & b")
+        func run(_ text: String) -> AttributedString.Runs.Run? {
+            attributed.runs.first { String(attributed[$0.range].characters) == text }
+        }
+        func font(_ text: String) -> NSFont? { run(text)?[AttributeScopes.AppKitAttributes.FontAttribute.self] }
+        XCTAssertTrue(font("Docs")?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
+        XCTAssertTrue(font("plain")?.fontDescriptor.symbolicTraits.contains(.italic) ?? false)
+        XCTAssertTrue(font("npm install")?.fontDescriptor.symbolicTraits.contains(.monoSpace) ?? false)
+        XCTAssertNotNil(run("old")?[AttributeScopes.AppKitAttributes.StrikethroughStyleAttribute.self])
+        XCTAssertTrue(font("b")?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
+        // Every visible character outside the spaces between links is linked;
+        // the autolink-looking text links to the OUTER destination.
+        for linked in ["Docs", "plain", "npm install", "old", "a ", "b", " c", "a & b"] {
+            XCTAssertNotNil(run(linked)?.link, linked)
+        }
+        XCTAssertEqual(run("https://x.com")?.link?.absoluteString, "u")
+    }
+
+    // MARK: - Escapes in link text (review R12)
+
+    /// A link's text with a backslash escape is parsed like the image case:
+    /// GitHub shows "cost $5 and $6" (no formula) and "a * b"; a link without
+    /// escapes or images keeps its exact plain text.
+    func testLinkTextEscapesAreParsed() {
+        let cost = shownParagraph("[cost \\$5 and \\$6](https://x.example)")
+        XCTAssertEqual(cost.text, "cost $5 and $6")
+        XCTAssertEqual(cost.formulas, [])
+        let star = renderer.renderInline("[a \\* b](u) and [*plain*](v)")
+        XCTAssertEqual(String(star.characters), "a * b and plain", "R13: link text is inline Markdown")
+        XCTAssertEqual(Set(star.runs.compactMap { $0.link?.absoluteString }), ["u", "v"])
+        XCTAssertTrue(star.runs.filter { String(star[$0.range].characters).contains("*") }.allSatisfy { $0.link != nil },
+                      "the whole link text stays linked")
+        // The same in a quote, through ReferenceLinks' rewrite.
+        let blocks = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light))
+            .parse("> [a \\* b][d] and [c \\$5][d]\n\n[d]: https://d.example")
+        guard case .blockquote(let quote, _) = blocks[0].content else { return XCTFail("quote") }
+        XCTAssertEqual(String(renderer.renderQuotedBody(quote).characters), "a * b and c $5")
+    }
+
+    // MARK: - Code spans outrank brackets (review R16)
+
+    /// A `]` or `[` inside a code span pairs with nothing (CommonMark); cases
+    /// and expected output from `gh api markdown`. (A ```` ``` ```` run stays
+    /// literal in QuickMD's inline code, so that GitHub case is not here.)
+    func testCodeSpansOutrankBrackets() {
+        func check(_ markdown: String, text: String, links: [String], code: [String],
+                   file: StaticString = #filePath, line: UInt = #line) {
+            let attributed = renderer.renderInline(markdown)
+            XCTAssertEqual(String(attributed.characters), text, markdown, file: file, line: line)
+            XCTAssertEqual(Set(attributed.runs.compactMap { $0.link?.absoluteString }), Set(links), markdown,
+                           file: file, line: line)
+            let monospaced = attributed.runs.filter {
+                $0[AttributeScopes.AppKitAttributes.FontAttribute.self]?.fontDescriptor.symbolicTraits
+                    .contains(.monoSpace) ?? false
+            }.map { String(attributed[$0.range].characters) }
+            XCTAssertEqual(monospaced, code, markdown, file: file, line: line)
+        }
+        check("[a `](` b](u)", text: "a ]( b", links: ["u"], code: ["]("])
+        check("[x `]` y]", text: "[x ] y]", links: [], code: ["]"])
+        check("[a ``]`` b](u)", text: "a ] b", links: ["u"], code: ["]"])
+        check("[a ` b](u)", text: "a ` b", links: ["u"], code: [])
+        check("[a \\` b](u) c`", text: "a ` b c`", links: ["u"], code: [])
+        check("`[a](u)`", text: "[a](u)", links: [], code: ["[a](u)"])
+
+        // A standalone image whose alt holds a code span with `]`.
+        let blocks = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light)).parse("![alt `]` x](i.png)")
+        guard case .image(let url, let alt, _)? = blocks.first?.content else { return XCTFail("image") }
+        XCTAssertEqual(url, "i.png")
+        XCTAssertEqual(alt, "alt `]` x")
+    }
+
+    /// The renderer's runs as "<link>text" / "`code`" pieces joined by "|".
+    private func runs(_ markdown: String) -> String {
+        let attributed = renderer.renderInline(markdown)
+        return attributed.runs.map { run in
+            let text = String(attributed[run.range].characters)
+            let mono = run[AttributeScopes.AppKitAttributes.FontAttribute.self]?.fontDescriptor.symbolicTraits
+                .contains(.monoSpace) ?? false
+            return (run.link.map { "<\($0.absoluteString)>" } ?? "") + (mono ? "`\(text)`" : text)
+        }.joined(separator: "|")
+    }
+
+    /// The renderer never starts a code span inside a link destination it
+    /// consumed, so the bracket scans must not either: a backtick in a URL
+    /// must not swallow a later link's `[` (4c0afbf did). The reviewer's
+    /// corpus; GitHub's result (`gh api markdown`) noted where QuickMD's own
+    /// inline rules differ (emphasis/strikethrough before code — 1.15, R17;
+    /// 3+ backtick code spans are literal in QuickMD).
+    func testLinkDestinationsHideBackticksFromTheBracketScan() {
+        // GitHub: two links "a" and "b `c".
+        XCTAssertEqual(runs("[a](u`x) and [b `c](v)"), "<u%60x>a| and |<v>b `c")
+        // GitHub: both links, a trailing backtick.
+        XCTAssertEqual(runs("[a](<u`>) [b](v) `"), "<u%60>a| |<v>b| `")
+        // GitHub-equal.
+        XCTAssertEqual(runs("[a `](` b](u)"), "<u>a |<u>`](`|<u> b")
+        XCTAssertEqual(runs("![a`b](i.png) [c](u) x`y"), "![a|`b](i.png) [c](u) x`|y")
+        XCTAssertEqual(runs("[x](u) `` [y]` `` [z](v)"), "<u>x| |`[y]``| |<v>z")
+        XCTAssertEqual(runs("[a ``b]`` c](u)"), "<u>a |<u>`b]`|<u> c")
+        XCTAssertEqual(runs("[a \\`b](u) c`"), "<u>a |<u>`|<u>b| c`")
+        XCTAssertEqual(runs("[^n`] [d](u) `"), "[^n|`] [d](u) `")
+        XCTAssertEqual(runs("`[` [a](u) `]`"), "`[`| |<u>a| |`]`")
+        // QuickMD's own rules (GitHub differs, not this fix): no link in
+        // either, as on GitHub, but emphasis / strikethrough win over code.
+        XCTAssertEqual(runs("***a `b*** [c` d](u)"), "a `b| [c` d](u)")
+        XCTAssertEqual(runs("~~x`~~ [y](u) z`"), "x`| [y](u) z`")
+        // GitHub: "[a " + code "b](u) c" (QuickMD keeps ``` runs literal).
+        XCTAssertEqual(runs("[a ```b](u) c```"), "<u>a ```b| c```")
+    }
+
+    // MARK: - Plain link text fast path (review R15)
+
+    /// Link text with no inline syntax skips the inline pass; the run it gets
+    /// must be exactly the parsed one (characters and every attribute), at any
+    /// zoom, and text with syntax must take the parsed path.
+    func testPlainLinkTextFastPathEqualsTheParsedPath() {
+        let plain = ["Install", "Read the guide", "Zażółć gęślą", "a & b", "AT&amp;T &copy;", "50% off $5",
+                     "x < y > z", "e-mail: a@b.c", "1. not a list", "# not a heading", "", "  spaced  ", "emoji 🚀"]
+        for scale in [1.0, 1.5] as [CGFloat] {
+            let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .dark), fontScale: scale)
+            for text in plain {
+                XCTAssertFalse(MarkdownRenderer.linkTextNeedsParsing(text), text)
+                XCTAssertEqual(renderer.renderLinkText(text, parse: false), renderer.renderLinkText(text, parse: true),
+                               "\(text) @\(scale)")
+                let link = renderer.renderInline("[\(text)](https://x.example)")
+                XCTAssertEqual(link, {
+                    var parsed = renderer.renderLinkText(text, parse: true)
+                    parsed.setDualForeground(renderer.theme.linkColor)
+                    parsed.setDualUnderline()
+                    parsed.link = URL(string: "https://x.example")
+                    return parsed
+                }(), text)
+            }
+        }
+        for text in ["**b**", "`c`", "a_b", "~~s~~", "![i](p)", "[^1]", "a \\* b", "see https://x.y", "http://a"] {
+            XCTAssertTrue(MarkdownRenderer.linkTextNeedsParsing(text), text)
+        }
+    }
+
+    // MARK: - Formula source in headings (review R14)
+
+    /// Headings show a formula's SOURCE (no inline math there yet), and it
+    /// keeps its LaTeX escapes: `# H \% $a\,b$` shows "H % $a\,b$". The
+    /// heading view, ids, the Contents sidebar and search all read this text.
+    func testHeadingFormulaSourceKeepsItsEscapes() {
+        let title = "H \\% $a\\,b$ and $50\\%$"
+        let shown = String(renderer.renderHeader(title, level: 1).characters)
+        XCTAssertEqual(shown, "H % $a\\,b$ and $50\\%$")
+        XCTAssertEqual(String(renderer.renderHeader("Price \\$5 and \\$6", level: 2).characters), "Price $5 and $6",
+                       "escaped dollars are no formula")
+        let entry = ToCEntry(id: "heading-0", level: 1, title: title, sourceLine: 0)
+        XCTAssertEqual(entry.shownTitle(renderer: renderer), shown)
+        let theme = MarkdownTheme.cached(for: .light)
+        let blocks = MarkdownBlockParser(theme: theme).parse("# " + title)
+        XCTAssertEqual(HeadingAnchors.headings(of: blocks, renderer: renderer).map(\.text), [shown])
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "a\\,b").matchBlockIds.count, 1,
+                       "search finds what the heading shows")
+    }
+
+    // MARK: - References in link destinations (review R10)
+
+    /// A destination's character references are decoded (hrefs from
+    /// `gh api markdown`: `a?b=1&amp;c=2` → `a?b=1&c=2`, `<a b&copy;>` →
+    /// `a%20b%C2%A9`), in inline links, images and reference definitions; a
+    /// definition inlined into a quote is decoded exactly once.
+    func testLinkDestinationsDecodeCharacterReferences() {
+        let theme = MarkdownTheme.cached(for: .light)
+        let md = """
+        [x](a?b=1&amp;c=2) [z](<a b&copy;>) [r] [twice] `[c](a&amp;b)`
+
+        ![i](p&amp;q.png)
+
+        > quoted [r] and [twice]
+
+        [r]: /u?x=1&amp;y=2
+        [twice]: /v?k=&amp;amp;
+        """
+        let blocks = MarkdownBlockParser(theme: theme).parse(md)
+        func links(_ attributed: AttributedString) -> [String] {
+            attributed.runs.compactMap { $0.link?.absoluteString }
+        }
+        guard case .text(let paragraph) = blocks[0].content else { return XCTFail("paragraph") }
+        XCTAssertEqual(links(paragraph), ["a?b=1&c=2", "a%20b%C2%A9", "/u?x=1&y=2", "/v?k=&amp;"])
+        XCTAssertTrue(String(paragraph.characters).hasSuffix("[c](a&amp;b)"), "code span untouched")
+        guard case .image(let url, _, _) = blocks[1].content else { return XCTFail("image") }
+        XCTAssertEqual(url, "p&q.png")
+        guard case .blockquote(let quote, _) = blocks[2].content else { return XCTFail("quote") }
+        XCTAssertEqual(links(renderer.renderQuotedBody(quote)), ["/u?x=1&y=2", "/v?k=&amp;"],
+                       "inlined definitions are not decoded a second time")
+    }
+
+    // MARK: - Escaped dollars (review R9)
+
+    /// The text a paragraph's row shows, with every formula as "⟨latex⟩" (a
+    /// stub engine records what it was asked to typeset).
+    private func shownParagraph(_ markdown: String) -> (text: String, formulas: [String]) {
+        let theme = MarkdownTheme.cached(for: .light)
+        var formulas: [String] = []
+        let engine = MathRendering(inlineImage: { latex, _, _ in
+            formulas.append(latex)
+            return NSImage(size: NSSize(width: 1, height: 1))
+        }, displayHeight: { _, _, _ in 0 })
+        let blocks = MarkdownBlockParser(theme: theme).parse(markdown)
+        guard case .text(let attributed)? = blocks.first?.content else { return ("", []) }
+        let plain = String(attributed.characters)
+        let ns = BlockTextConverter.makeNSAttributedString(
+            from: attributed, hasInlineMath: BlockTextConverter.containsInlineMath(plain),
+            theme: theme, fontScale: 1, math: engine)
+        return (ns.string, formulas)
+    }
+
+    /// `\$` is a dollar sign (GitHub: "Price $5 and $10"), never a delimiter;
+    /// inside a formula it stays `\$` in the LaTeX; a dollar made by `&#36;`
+    /// IS a delimiter (GitHub renders `&#36;x&#36;` as math); a code span keeps
+    /// `\$` as written. Print (`PrintableMath.text`) and search use the same
+    /// split (`literalDollars`).
+    func testEscapedDollarsAreNeverMathDelimiters() {
+        let price = shownParagraph("Price \\$5 and \\$10")
+        XCTAssertEqual(price.text, "Price $5 and $10")
+        XCTAssertEqual(price.formulas, [])
+
+        let inside = shownParagraph("Cost $a\\$b$ here")
+        XCTAssertEqual(inside.formulas, ["a\\$b"], "the escaped dollar goes back into the LaTeX")
+        XCTAssertEqual(inside.text, "Cost \u{FFFC} here")
+
+        let entity = shownParagraph("Then &#36;x^2&#36; is math")
+        XCTAssertEqual(entity.formulas, ["x^2"], "a reference-made dollar is a delimiter")
+
+        let code = shownParagraph("Use `\\$HOME` and \\$PATH")
+        XCTAssertEqual(code.text, "Use \\$HOME and $PATH")
+        XCTAssertEqual(code.formulas, [])
+
+        // Table cells, quotes and alerts have no inline math: the dollar shows.
+        let theme = MarkdownTheme.cached(for: .light)
+        let cell = TableTextBuilder.plainString(headers: ["a"], rows: [["\\$5 and \\$10"]], alignments: [.leading],
+                                                style: .grid, theme: theme, fontScale: 1)
+        XCTAssertTrue(cell.contains("$5 and $10\n"))
+        XCTAssertEqual(String(renderer.renderQuotedBody("Pay \\$5").characters), "Pay $5")
+        // The segmenter itself: offsets of escaped dollars never delimit.
+        XCTAssertEqual(InlineMathSegmenter.split("a $5 and $6", escaped: [2, 9]), [.text("a $5 and $6")])
+    }
+
 }

@@ -247,7 +247,10 @@ final class SourceEditSession: ObservableObject {
     /// A carry-over is for "select a typo, fix it": a selection over more
     /// rows than this is not looked for (and its text is never built — ⌘A on
     /// a large document must not produce megabytes that cannot match).
-    static let selectionHintMaxRows = 3
+    /// Rows are single blocks (one paragraph, one list, one loose-list item),
+    /// so a few short paragraphs are already several rows; the length cap
+    /// below is what bounds the text.
+    static let selectionHintMaxRows = 8
     /// Longer hint texts are ignored, for the same reason.
     static let selectionHintMaxLength = 1000
     /// Rendered characters of context on each side of the selection.

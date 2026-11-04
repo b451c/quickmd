@@ -239,6 +239,60 @@ final class HeadingLayoutTests: XCTestCase {
         }
     }
 
+    // MARK: - Reading Mode: no copy button, same strip
+
+    /// The `HeadingBlockView` composition in a given mode, from the same
+    /// `Metrics` decisions the view takes (the view is not compiled here).
+    private func modeHeadingHeight(_ ns: NSAttributedString, firstFont: NSFont?, width: CGFloat,
+                                   isReadingMode: Bool) -> CGFloat {
+        let geometry = Metrics.titleGeometry(titleFirstBaseline: Metrics.titleFirstBaseline(font: firstFont))
+        return hostedHeight(
+            TextKitHeightView(attributed: ns)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, Metrics.titleTrailingPadding(isReadingMode: isReadingMode))
+                .padding(.top, geometry.titleTopInset)
+                .frame(minHeight: geometry.minimumHeight, alignment: .top)
+                .overlay(alignment: .topTrailing) {
+                    if Metrics.showsCopyButton(isReadingMode: isReadingMode) {
+                        copyButton.padding(.top, geometry.buttonTopInset)
+                    }
+                }
+                .frame(width: width)
+                .fixedSize(horizontal: false, vertical: true)
+        )
+    }
+
+    /// Reading Mode hides the copy icon but keeps its reserved strip: the
+    /// title wraps at the same width, so the heading's height — the view's and
+    /// the measurer's — is identical in both modes, and toggling the mode
+    /// never re-wraps a heading.
+    func testReadingModeHidesTheCopyButtonButKeepsTheHeadingHeight() {
+        XCTAssertTrue(Metrics.showsCopyButton(isReadingMode: false))
+        XCTAssertFalse(Metrics.showsCopyButton(isReadingMode: true), "no copy icon in Reading Mode")
+        XCTAssertEqual(Metrics.titleTrailingPadding(isReadingMode: true), Metrics.copyButtonReservedWidth)
+        XCTAssertEqual(Metrics.titleTrailingPadding(isReadingMode: false), Metrics.copyButtonReservedWidth)
+
+        let theme = MarkdownTheme.cached(for: .light)
+        let markdown = "# Heading\n## \(Self.longTitle)\n###### \(Self.longTitle)"
+        let blocks = MarkdownBlockParser(theme: theme).parse(markdown)
+        for width: CGFloat in [260, 720] {
+            let measured = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,
+                                                       contentWidth: width, math: nil).table.heights
+            for (index, block) in blocks.enumerated() {
+                guard case .heading(let level, let title, _) = block.content else { return XCTFail("heading") }
+                let (_, ns) = headingString(title, level: level, theme: theme, fontScale: 1)
+                let font = MarkdownRenderer(theme: theme).headerAppKitFont(level: level)
+                let standard = modeHeadingHeight(ns, firstFont: font, width: width, isReadingMode: false)
+                let reading = modeHeadingHeight(ns, firstFont: font, width: width, isReadingMode: true)
+                XCTAssertEqual(reading, standard, "H\(level) w=\(width): the view's height")
+                // The measurer has no mode input: its height is the one row
+                // height for both, and it still matches the view.
+                XCTAssertEqual(measured[index], standard, accuracy: 1 + 2 * CGFloat(lineCount(ns, width: width)),
+                               "H\(level) w=\(width): measurer vs view")
+            }
+        }
+    }
+
     // MARK: - Copy button: right after the title (as in v1.10)
 
     func testCopyButtonLeadingFollowsTheTitleAndStopsAtTheEdge() {

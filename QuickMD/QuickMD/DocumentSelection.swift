@@ -329,14 +329,33 @@ enum DocumentCopyBuilder {
 
     /// Rows are joined with one blank line, like Markdown paragraphs.
     static let rowSeparator = "\n\n"
+    /// A row that only continues the row before it (`MarkdownBlock
+    /// .joinsPrevious`) is joined with the line break the cut replaced.
+    static let continuationSeparator = "\n"
 
+    /// One covered row's piece, and whether its row continues the row of the
+    /// piece before it (`SelectionRows.parts`).
+    struct Part {
+        let piece: SelectionPiece
+        let continuesPrevious: Bool
+    }
+
+    /// Pieces of separate blocks: every row joined with `rowSeparator`.
     static func build(_ pieces: [SelectionPiece]) -> DocumentCopyOutput {
+        build(parts: pieces.map { Part(piece: $0, continuesPrevious: false) })
+    }
+
+    static func build(parts: [Part]) -> DocumentCopyOutput {
         let result = NSMutableAttributedString()
-        for piece in pieces {
-            let part = attributed(for: piece)
-            guard part.length > 0 else { continue }
-            if result.length > 0 { result.append(NSAttributedString(string: rowSeparator)) }
-            result.append(part)
+        let rowBreak = NSAttributedString(string: rowSeparator)
+        let lineBreak = NSAttributedString(string: continuationSeparator)
+        for part in parts {
+            let text = attributed(for: part.piece)
+            guard text.length > 0 else { continue }
+            if result.length > 0 {
+                result.append(part.continuesPrevious ? lineBreak : rowBreak)
+            }
+            result.append(text)
         }
         let full = NSRange(location: 0, length: result.length)
         // Colours come from the theme the document is displayed in, not from
@@ -352,6 +371,7 @@ enum DocumentCopyBuilder {
         case .text(let text):
             let cleaned = replacingAttachments(in: text)
             trimBlankLines(cleaned)
+            emptyWhitespaceLines(cleaned)
             collapseBlankLineRuns(cleaned)
             return cleaned
         case .code(let code):
@@ -386,9 +406,13 @@ enum DocumentCopyBuilder {
     }
 
     /// One TSV field: a tab or line break inside a cell would split it, so
-    /// those become spaces.
+    /// those become spaces — except U+2028, which only a front-matter list
+    /// puts in a cell (one item per line because an item holds a comma,
+    /// `FrontMatter.joinedItems`): a space would run "Doe, Jane" and "Smith"
+    /// together again, so those items are joined with "; ".
     private static func tsvField(_ cell: String) -> String {
-        cell.components(separatedBy: CharacterSet(charactersIn: "\t\n\r\u{2028}\u{2029}"))
+        cell.replacingOccurrences(of: FrontMatter.itemLineSeparator, with: "; ")
+            .components(separatedBy: CharacterSet(charactersIn: "\t\n\r\u{2029}"))
             .joined(separator: " ")
     }
 
@@ -465,6 +489,22 @@ enum DocumentCopyBuilder {
             text.deleteCharacters(in: NSRange(location: 0, length: current.length))
         } else if lastBreak >= 0 {
             text.deleteCharacters(in: NSRange(location: 0, length: lastBreak + 1))
+        }
+    }
+
+    private static let whitespaceLine = try? NSRegularExpression(pattern: "^[ \t]+$",
+                                                                 options: .anchorsMatchLines)
+
+    /// A line of nothing but spaces and tabs becomes an empty line: a quote
+    /// or alert body draws a blank line as one space so it keeps its height
+    /// (`renderQuotedBody`), and a paragraph break must paste as an empty
+    /// line, not as a space. Only lines between others are left by
+    /// `trimBlankLines`; a line of no-break spaces is text and stays.
+    private static func emptyWhitespaceLines(_ text: NSMutableAttributedString) {
+        guard let whitespaceLine else { return }
+        let matches = whitespaceLine.matches(in: text.string, range: NSRange(location: 0, length: text.length))
+        for match in matches.reversed() {
+            text.replaceCharacters(in: match.range, with: "")
         }
     }
 

@@ -27,6 +27,56 @@ enum SVGImageDecoder {
         return image
     }
 
+    // MARK: - Fenced-block cache
+
+    /// Decoded ```svg blocks, by their markup (an `NSString` key: hashing does
+    /// not read the whole markup). NSCache is thread-safe and may evict;
+    /// the sizes below never are, so a row keeps its height either way.
+    private static let images = NSCache<NSString, NSImage>()
+    private static let lock = NSLock()
+    /// Decoded size per markup; `.zero` = the markup does not decode.
+    private static var sizes: [NSString: CGSize] = [:]
+    /// Entries are tiny; the cap only keeps a session-long store bounded.
+    static let sizeLimit = 2048
+
+    /// The decoded image if it is cached — what `SVGBlockView` shows at once
+    /// when its row is re-created, instead of the loading view.
+    nonisolated static func cachedImage(_ source: String) -> NSImage? {
+        images.object(forKey: source as NSString)
+    }
+
+    /// The decoded size, if the markup was ever decoded and decodes.
+    nonisolated static func cachedSize(_ source: String) -> CGSize? {
+        lock.lock()
+        defer { lock.unlock() }
+        return sizes[source as NSString].flatMap { $0 == .zero ? nil : $0 }
+    }
+
+    /// `decode`, through the cache: the view's decode and the measurer's size
+    /// share one decode per markup. Off-main safe.
+    nonisolated static func decodeCached(_ source: String) -> NSImage? {
+        let key = source as NSString
+        if let hit = images.object(forKey: key) { return hit }
+        lock.lock()
+        let known = sizes[key]
+        lock.unlock()
+        if known == .zero { return nil }
+        let image = decode(source)
+        if let image { images.setObject(image, forKey: key) }
+        lock.lock()
+        if sizes.count >= sizeLimit, sizes[key] == nil { sizes.removeAll() }
+        sizes[key] = image?.size ?? .zero
+        lock.unlock()
+        return image
+    }
+
+    /// The size `source` decodes to (decoding and caching it if need be), nil
+    /// for markup that does not decode — what the measurer sizes the row by.
+    nonisolated static func size(of source: String) -> CGSize? {
+        if let known = cachedSize(source) { return known }
+        return decodeCached(source)?.size
+    }
+
     /// The same decode for SVG that arrives as bytes — a `data:image/svg+xml`
     /// image or a remote `.svg` (shields.io badges are SVG) — once ImageIO has
     /// declined it (`ImageLoader.decodeImage`). Only bytes that START like SVG

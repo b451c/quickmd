@@ -9,8 +9,25 @@ import Foundation
 struct ToCEntry: Identifiable, Sendable {
     let id: String
     let level: Int
+    /// As shown (`MarkdownRenderer.shownHeadingTitle`): one line.
     let title: String
     let sourceLine: Int
+
+    /// What the Contents sidebar lists: exactly the text the heading shows
+    /// (`renderHeader`'s characters — markup gone, references decoded, a code
+    /// span's `&lt;` kept), the same text the heading's id is made from.
+    func shownTitle(renderer: MarkdownRenderer) -> String {
+        String(renderer.renderHeader(title, level: level).characters)
+    }
+
+    /// The headings of `blocks`, in document order.
+    static func entries(of blocks: [MarkdownBlock]) -> [ToCEntry] {
+        blocks.compactMap { block in
+            guard case .heading(let level, let title, let sourceLine) = block.content else { return nil }
+            return ToCEntry(id: block.id, level: level, title: MarkdownRenderer.shownHeadingTitle(title),
+                            sourceLine: sourceLine)
+        }
+    }
 }
 
 // MARK: - Contents Depth
@@ -26,6 +43,19 @@ enum ToCDepth {
     static let choices: [(maxLevel: Int, title: String)] = [
         (all, "All Headings"), (2, "Up to H2"), (3, "Up to H3"), (4, "Up to H4"),
     ]
+
+    /// The stored value as one of `choices`. Only `defaults write` can store
+    /// anything else, and a Picker whose selection matches no tag shows blank
+    /// (both of them did). Nearest allowed level; a tie (5) goes to the
+    /// deeper one, so nothing the stored value listed disappears.
+    static func normalized(_ stored: Int) -> Int {
+        let levels = choices.map(\.maxLevel)
+        let stored = min(max(stored, 0), 100)  // no overflow in the distances
+        return levels.min { a, b in
+            let da = abs(a - stored), db = abs(b - stored)
+            return da != db ? da < db : a > b
+        } ?? all
+    }
 
     static func visible(_ headings: [ToCEntry], maxLevel: Int) -> [ToCEntry] {
         maxLevel >= all ? headings : headings.filter { $0.level <= maxLevel }
@@ -86,12 +116,14 @@ enum HeadingAnchors {
     }
 
     /// The headings of `blocks` as links see them: block id and the text the
-    /// heading shows (`renderHeader`'s characters, as `HeadingBlockView`).
+    /// heading shows (`renderHeader`'s characters, as `HeadingBlockView`),
+    /// with a Setext title's line breaks kept for the slug to drop
+    /// (`MarkdownRenderer.headingAnchorText`).
     static func headings(of blocks: [MarkdownBlock],
                          renderer: MarkdownRenderer) -> [(id: String, text: String)] {
         blocks.compactMap { block in
-            guard case .heading(let level, let title, _) = block.content else { return nil }
-            return (block.id, String(renderer.renderHeader(title, level: level).characters))
+            guard case .heading(_, let title, _) = block.content else { return nil }
+            return (block.id, renderer.headingAnchorText(title))
         }
     }
 
@@ -124,10 +156,14 @@ enum HeadingAnchors {
     }
 
     /// The percent-decoded fragment of an in-document link (`#install`), nil
-    /// for any other link. Read from the link as written: a destination
-    /// `URL(string:)` rejects (non-ASCII or spaces on macOS 13) arrives
-    /// percent-encoded, its `#` as `%23`. The accepted cost: a file whose
-    /// name starts with `#`, linked as `%23notes.md`, reads as an anchor.
+    /// for any other link. Read from the link as written, decoded: link URLs
+    /// come from `MarkdownRenderer.linkURL(for:)`, which keeps the `#` and
+    /// encodes only the rest (`#Install Guide` → `#Install%20Guide`) on every
+    /// macOS. Until 1.14.4 the renderer's macOS 13 fallback encoded the `#`
+    /// itself as `%23`, and decoding before the `#` test is what still made
+    /// those links work; it is kept for any URL that arrives encoded that
+    /// way. Its cost: a file whose name starts with `#`, linked as
+    /// `%23notes.md`, reads as an anchor.
     static func inDocumentFragment(of url: URL) -> String? {
         guard url.scheme == nil else { return nil }
         let written = url.relativeString.removingPercentEncoding ?? url.relativeString
@@ -165,7 +201,7 @@ enum SectionExtractor {
         guard end > start else { return nil }
 
         var section = Array(lines[start..<end])
-        while let last = section.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+        while let last = section.last, MarkdownRenderer.isBlankLine(last) {
             section.removeLast()
         }
         return section.joined(separator: "\n")

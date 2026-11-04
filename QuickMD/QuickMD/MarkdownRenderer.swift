@@ -140,6 +140,26 @@ struct MarkdownRenderer: Sendable {
     /// (makeLink → renderInlineFormatting → tryParseLink → makeLink …) and
     /// overflowed the parse task's stack at a few hundred levels.
     private var linksDisabled = false
+    /// True for a front-matter VALUE (`renderInline(_:literalBackslashes:)`):
+    /// YAML has no Markdown escapes — a plain scalar's backslash is a
+    /// character (`C:\_tmp`) — so `\` starts no escape there and shows as
+    /// written; every other inline form still renders. Copied into the link
+    /// text renderer with the rest of `self`.
+    private var escapesDisabled = false
+    /// Character references (`AT&amp;T`, `&copy;`, `&#169;`) are decoded in
+    /// every piece of inline TEXT this renderer draws — plain runs, emphasis,
+    /// link text, image alt — as on GitHub (`HTMLEntities`, full HTML5 table),
+    /// so a heading's id slugs `Q&A`, not `Q&amp;A`. AFTER inline parsing:
+    /// `&#42;` is a literal `*`, never emphasis; code spans keep the reference
+    /// as written. True only for a front-matter value
+    /// (`renderInline(_:literalBackslashes:literalEntities:)`): GitHub shows
+    /// front matter as plain text, references included.
+    private var entitiesLiteral = false
+
+    /// `text` with its character references decoded, unless `entitiesLiteral`.
+    private func decodedText(_ text: String) -> String {
+        entitiesLiteral ? text : HTMLEntities.decode(text)
+    }
 
     // Static precompiled regex for parsing (avoid recompilation per line)
     private static let taskListRegex = try! NSRegularExpression(pattern: MarkdownTheme.taskListPattern)
@@ -167,19 +187,26 @@ struct MarkdownRenderer: Sendable {
     // MARK: - Main Render
 
     func render(_ markdown: String) -> AttributedString {
-        var result = AttributedString()
-
         let lines = Self.joinSoftBreaks(markdown.components(separatedBy: "\n"))
         // Ordered items of one list line up on the WIDEST marker of that list:
         // the body font is not monospaced, so "1. " and "10. " have different
         // widths and each item's text would otherwise start at a different x.
         // The run is known before any rendering, so the widest prefix is too.
-        let hangs = widestOrderedPrefixes(lines)
+        return render(joined: lines, hangs: widestOrderedPrefixes(lines))
+    }
+
+    /// Renders lines that are ALREADY soft-break joined (`joinSoftBreaks`),
+    /// each ordered item hanging under `hangs[i]` (`widestOrderedPrefixes`).
+    ///
+    /// The parser's entry point: it joins and computes the hangs over a whole
+    /// text run, then renders the run one block at a time — so the items of a
+    /// loose list, one row each, still share their list's widest marker.
+    func render(joined lines: [String], hangs: [String?]) -> AttributedString {
+        var result = AttributedString()
         for (index, line) in lines.enumerated() {
-            result.append(renderLine(line, hangingPrefix: hangs[index]))
+            result.append(renderLine(line, hangingPrefix: index < hangs.count ? hangs[index] : nil))
             result.append(AttributedString("\n"))
         }
-
         return result
     }
 
@@ -227,8 +254,8 @@ struct MarkdownRenderer: Sendable {
     /// `(prefix, level)` of an ordered list item, prefix exactly as
     /// `renderListItem` will emit it (indent spaces + normalised number).
     private static func orderedItem(_ line: String) -> (prefix: String, level: Int)? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.range(of: #"^(\d+)\.\s"#, options: .regularExpression) != nil else { return nil }
+        let trimmed = markerLine(line)
+        guard trimmed.range(of: Self.orderedMarkerPattern, options: .regularExpression) != nil else { return nil }
         let level = listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" }))
         let number = Int(trimmed.prefix(while: { $0.isNumber })) ?? 1
         return (indentSpaces(level) + "\(number). ", level)
@@ -253,14 +280,24 @@ struct MarkdownRenderer: Sendable {
     /// spaces, or a trailing backslash — still ends the visual line, and
     /// headers, rules, and blanks always keep their own line.
     static func joinSoftBreaks(_ lines: [String]) -> [String] {
-        var joined: [String] = []
-        var openParagraph = false  // last joined line can absorb a continuation
+        joinSoftBreaksIndexed(lines).map(\.line)
+    }
 
-        for line in lines {
+    /// `joinSoftBreaks`, with the index in `lines` of each joined line's FIRST
+    /// input line — how the parser maps a row back to its source line.
+    static func joinSoftBreaksIndexed(_ lines: [String]) -> [(line: String, first: Int)] {
+        var joined: [(line: String, first: Int)] = []
+        var openParagraph = false  // last joined line can absorb a continuation
+        // Inside a paragraph that is not a list item's, until a blank or
+        // structural line — across hard breaks too.
+        var inPlainParagraph = false
+
+        for (index, line) in lines.enumerated() {
             let kind = classify(line)
             guard kind != .structural else {
-                joined.append(line)
+                joined.append((line, index))
                 openParagraph = false
+                inPlainParagraph = false
                 continue
             }
 
@@ -269,10 +306,21 @@ struct MarkdownRenderer: Sendable {
             while text.last == " " || text.last == "\t" { text.removeLast() }
             if hardBreak && text.hasSuffix("\\") { text.removeLast() }
 
-            if kind == .paragraph && openParagraph {
-                joined[joined.count - 1] += " " + text.trimmingCharacters(in: .whitespaces)
+            if kind == .listItem && inPlainParagraph && !canInterruptParagraph(line) {
+                // CommonMark: only a bullet or an ordered item numbered 1 may
+                // interrupt a paragraph. `1984. A year` after paragraph text
+                // is more of that text — drawn, copied and searched as such.
+                if openParagraph {
+                    joined[joined.count - 1].line += " " + continuationText(text)
+                } else {
+                    // After a hard break: its own visual line, still text.
+                    joined.append((asParagraphText(text), index))
+                }
+            } else if kind == .paragraph && openParagraph {
+                joined[joined.count - 1].line += " " + continuationText(text)
             } else {
-                joined.append(text)
+                joined.append((text, index))
+                inPlainParagraph = kind == .paragraph
             }
             openParagraph = !hardBreak
         }
@@ -291,23 +339,89 @@ struct MarkdownRenderer: Sendable {
         case paragraph
     }
 
+    /// A bullet, ordered or task list item — `renderLine` renders it as one.
+    static func isListItem(_ line: String) -> Bool { classify(line) == .listItem }
+
+    /// CommonMark's blank line: nothing but spaces and tabs — the ONE blank
+    /// test of the parser and the renderers. Not "any white space":
+    /// `CharacterSet.whitespaces` is every Unicode space separator, so it
+    /// counted a line of no-break spaces (U+00A0) blank. Such a line is
+    /// paragraph text (how authors write an empty-looking paragraph): after
+    /// text it continues the paragraph, alone it is a paragraph of its own;
+    /// it never ends a block or separates two.
+    static func isBlankLine<S: StringProtocol>(_ line: S) -> Bool {
+        line.allSatisfy { $0 == " " || $0 == "\t" }
+    }
+
+    /// CommonMark's white space around block and list markers: spaces and
+    /// tabs only. A no-break, em or ideographic space before a marker (or
+    /// after `#`, a list marker or a rule) leaves the line paragraph text, as
+    /// on GitHub; the patterns in `MarkdownTheme` say `[ \t]` for the same
+    /// reason. `MarkdownBlockParser.markerLine` trims with it too.
+    static let markerWhitespace = CharacterSet(charactersIn: " \t")
+
+    /// `line` without the spaces and tabs around it — what every list,
+    /// rule and heading marker is looked for in.
+    private static func markerLine(_ line: String) -> String {
+        line.trimmingCharacters(in: markerWhitespace)
+    }
+
+    /// A continuation line's text: CommonMark strips its leading spaces and
+    /// tabs, and nothing else (a no-break space is text).
+    private static func continuationText(_ text: String) -> String {
+        String(text.drop(while: { $0 == " " || $0 == "\t" }))
+    }
+
+    /// An ordered item's marker (CommonMark): one to nine digits, then `.` or
+    /// `)`, then white space. Drawn as `n.` whichever delimiter it had, as
+    /// GitHub draws both (an HTML list).
+    static let orderedMarkerPattern = #"^(\d{1,9})[.)][ \t]"#
+
+    /// `line` (an ordered item line that may not interrupt a paragraph) as
+    /// paragraph text: its delimiter backslash-escaped, so `renderLine` draws
+    /// `1984. A year` as the words it is and never as an item.
+    static func asParagraphText(_ line: String) -> String {
+        line.replacingOccurrences(of: #"^([ \t]*\d{1,9})([.)])"#, with: "$1\\\\$2", options: .regularExpression)
+    }
+
+    /// Whether this item line may interrupt a paragraph (CommonMark): a
+    /// bullet or task item, or an ordered item numbered 1 (`1.` or `1)`) —
+    /// and not an empty one. Any other item line after paragraph text
+    /// (`1984. was a year`) continues the paragraph: `joinSoftBreaks` makes
+    /// it paragraph text, so it is no item and no block boundary.
+    static func canInterruptParagraph(_ line: String) -> Bool {
+        guard isListItem(line) else { return false }
+        let trimmed = markerLine(line)
+        if let marker = trimmed.range(of: #"^\d{1,9}[.)]"#, options: .regularExpression) {
+            guard Int(trimmed[marker].dropLast()) == 1 else { return false }
+            return !isBlankLine(trimmed[marker.upperBound...])
+        }
+        return !isBlankLine(trimmed.dropFirst(2))
+    }
+
+    /// A thematic break (`---`, `***`, `___`) — `renderLine` draws it as a rule.
+    static func isThematicBreak(_ line: String) -> Bool {
+        markerLine(line)
+            .range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil
+    }
+
     /// Must mirror the dispatch in `renderLine`, or a structural line could
     /// get glued into the paragraph before it.
     private static func classify(_ line: String) -> LineKind {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty { return .structural }
+        if isBlankLine(line) { return .structural }
+        let trimmed = markerLine(line)
         let nsRange = NSRange(line.startIndex..., in: line)
         if headerRegex.firstMatch(in: line, range: nsRange) != nil { return .structural }
         if trimmed.range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil { return .structural }
         if taskListRegex.firstMatch(in: line, range: nsRange) != nil { return .listItem }
         if ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) { return .listItem }
-        if trimmed.range(of: #"^(\d+)\.\s"#, options: .regularExpression) != nil { return .listItem }
+        if trimmed.range(of: orderedMarkerPattern, options: .regularExpression) != nil { return .listItem }
         return .paragraph
     }
 
     /// Two-plus trailing spaces, or an odd run of trailing backslashes (an
     /// even run is escaped literal backslashes, e.g. `foo\\`).
-    private static func endsWithHardBreak(_ line: String) -> Bool {
+    static func endsWithHardBreak(_ line: String) -> Bool {
         if line.hasSuffix("  ") { return true }
         return line.reversed().prefix(while: { $0 == "\\" }).count % 2 == 1
     }
@@ -315,7 +429,7 @@ struct MarkdownRenderer: Sendable {
     // MARK: - Line Rendering
 
     private func renderLine(_ line: String, hangingPrefix: String? = nil) -> AttributedString {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let trimmed = Self.markerLine(line)
 
         // Header - extract hash count from regex group, not space position
         let nsRange = NSRange(line.startIndex..., in: line)
@@ -345,7 +459,7 @@ struct MarkdownRenderer: Sendable {
         }
 
         // Ordered list
-        if let match = trimmed.range(of: #"^(\d+)\.\s"#, options: .regularExpression) {
+        if let match = trimmed.range(of: Self.orderedMarkerPattern, options: .regularExpression) {
             let level = Self.listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" }))
             let number = Int(trimmed.prefix(while: { $0.isNumber })) ?? 1
             let content = String(trimmed[match.upperBound...])
@@ -354,7 +468,7 @@ struct MarkdownRenderer: Sendable {
         }
 
         // Empty line
-        if trimmed.isEmpty {
+        if Self.isBlankLine(line) {
             return AttributedString("\n")
         }
 
@@ -364,11 +478,73 @@ struct MarkdownRenderer: Sendable {
 
     // MARK: - Block Renderers
 
+    /// A heading's title as shown: a Setext title keeps its paragraph's line
+    /// breaks (`MarkdownBlockParser.setextTitle`) and each reads as a space,
+    /// like a soft break in a paragraph — in the heading, the Contents
+    /// sidebar and search alike.
+    static func shownHeadingTitle(_ title: String) -> String {
+        title.replacingOccurrences(of: "\n", with: " ")
+    }
+
+    /// The text GitHub takes a heading's id from: the rendered title with a
+    /// Setext title's line breaks KEPT — the slug drops them (`Alpha⏎Beta`
+    /// is `alphabeta`), where the space shown would be a `-`.
+    /// A footnote reference counts as its number in ASCII digits: GitHub's
+    /// slug reads the heading's text, `Note<sup>1</sup>` is `note1`, and the
+    /// superscript digit drawn here is not a word character for the slug.
+    func headingAnchorText(_ title: String) -> String {
+        let attributed = Self.formulaSourceWithEscapes(renderInlineFormatting(title))
+        var text = ""
+        for run in attributed.runs {
+            if let number = run[FootnoteNumberAttribute.self] {
+                text += String(number)
+            } else {
+                text += String(attributed[run.range].characters)
+            }
+        }
+        return text
+    }
+
     func renderHeader(_ text: String, level: Int) -> AttributedString {
-        var attr = renderInlineFormatting(text)
+        var attr = Self.formulaSourceWithEscapes(renderInlineFormatting(Self.shownHeadingTitle(text)))
         attr.setDualFont(size: headerFontSize(level: level), bold: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         return attr
+    }
+
+    /// Headings typeset no inline math (the title view converts with
+    /// `hasInlineMath: false`), so a `$…$` shows its source — and that source
+    /// must keep its LaTeX escapes, which the Markdown escape pass removed:
+    /// `# H \% $a\,b$` shows "H % $a\,b$" (text outside the formula loses
+    /// its backslash as everywhere). The same split as math paragraphs
+    /// (`InlineMathSegmenter.pieces(of:)`); every heading consumer — view,
+    /// measurer, title cache, ids, Contents, search, copy, print — reads
+    /// `renderHeader`, so they all see this text.
+    private static func formulaSourceWithEscapes(_ attributed: AttributedString) -> AttributedString {
+        guard attributed.characters.contains("$") else { return attributed }
+        let pieces = InlineMathSegmenter.pieces(of: attributed)
+        guard pieces.contains(where: { if case .math = $0.segment { return true } else { return false } }) else {
+            return attributed
+        }
+        var result = AttributedString()
+        var index = attributed.startIndex
+        for piece in pieces {
+            guard let end = attributed.characters.index(index, offsetBy: piece.length,
+                                                        limitedBy: attributed.endIndex) else { break }
+            switch piece.segment {
+            case .text:
+                result.append(attributed[index..<end])
+            case .math(let latex):
+                // The formula's own attributes (its first run), its source with escapes.
+                var source = AttributedString("$" + latex + "$")
+                if let first = attributed[index..<end].runs.first {
+                    source.setAttributes(first.attributes)
+                }
+                result.append(source)
+            }
+            index = end
+        }
+        return result
     }
 
     /// Point size of a level-`level` heading at this renderer's scale.
@@ -400,7 +576,7 @@ struct MarkdownRenderer: Sendable {
         var result = AttributedString()
         let lines = Self.joinSoftBreaks(content.components(separatedBy: "\n"))
         for (index, line) in lines.enumerated() {
-            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+            if Self.isBlankLine(line) {
                 result.append(AttributedString(" "))
             } else {
                 result.append(renderInline(line))
@@ -648,6 +824,17 @@ struct MarkdownRenderer: Sendable {
         renderInlineFormatting(text)
     }
 
+    /// `renderInline` with backslash escapes off when `literalBackslashes`
+    /// (see `escapesDisabled`) and character references shown as written when
+    /// `literalEntities` (see `entitiesLiteral`).
+    func renderInline(_ text: String, literalBackslashes: Bool, literalEntities: Bool = false) -> AttributedString {
+        guard literalBackslashes || literalEntities else { return renderInlineFormatting(text) }
+        var literal = self
+        literal.escapesDisabled = literalBackslashes
+        literal.entitiesLiteral = literalEntities
+        return literal.renderInlineFormatting(text)
+    }
+
     private func renderInlineFormatting(_ text: String) -> AttributedString {
         var result = AttributedString()
         // Native contiguous UTF-8 storage up front (a no-op unless the line is
@@ -665,7 +852,7 @@ struct MarkdownRenderer: Sendable {
         // Helper to flush buffered plain text
         func flushPlainText() {
             guard !plainTextBuffer.isEmpty else { return }
-            var attr = AttributedString(plainTextBuffer)
+            var attr = AttributedString(decodedText(plainTextBuffer))
             attr.setDualFont(size: scaled(14), fonts: theme.fonts)
             attr.setDualForeground(theme.textColor)
             result.append(attr)
@@ -676,7 +863,7 @@ struct MarkdownRenderer: Sendable {
             // Try each inline format in order (escape first, then bold+italic to catch ***)
             var parsed: (AttributedString, Substring)?
 
-            if parsed == nil { parsed = tryParseEscape(&remaining) }
+            if parsed == nil, !escapesDisabled { parsed = tryParseEscape(&remaining) }
             if parsed == nil { parsed = tryParseInlineCode(&remaining) }
             if parsed == nil { parsed = tryParseFootnoteRef(&remaining) }
             if parsed == nil { parsed = tryParseBoldItalic(&remaining) }
@@ -731,7 +918,10 @@ struct MarkdownRenderer: Sendable {
             }
         }
 
-        var code = String(afterOpening[..<closeRange.lowerBound])
+        // A line break inside a code span is a space (CommonMark). Only a
+        // Setext title's anchor text still has one here
+        // (`headingAnchorText`): `code⏎span` is `code-span` on GitHub.
+        var code = String(afterOpening[..<closeRange.lowerBound]).replacingOccurrences(of: "\n", with: " ")
 
         // Strip one leading and one trailing space for double-backtick (CommonMark spec)
         if backtickCount == 2 && code.hasPrefix(" ") && code.hasSuffix(" ") && code.count > 1 {
@@ -753,7 +943,7 @@ struct MarkdownRenderer: Sendable {
         guard let endRange = afterMarker.range(of: marker) else { return nil }
 
         let text = String(afterMarker[..<endRange.lowerBound])
-        var attr = AttributedString(text)
+        var attr = AttributedString(decodedText(text))
         attr.setDualFont(size: scaled(14), bold: true, italic: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         return (attr, afterMarker[endRange.upperBound...])
@@ -821,7 +1011,7 @@ struct MarkdownRenderer: Sendable {
         guard let endRange = afterMarker.range(of: "~~") else { return nil }
 
         let strikeText = String(afterMarker[..<endRange.lowerBound])
-        var attr = AttributedString(strikeText)
+        var attr = AttributedString(decodedText(strikeText))
         attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         attr.setDualStrikethrough()
@@ -851,9 +1041,9 @@ struct MarkdownRenderer: Sendable {
         if remaining[afterBracket...].hasPrefix("[") {
             let afterSecondOpen = remaining.index(after: afterBracket)
             if afterSecondOpen < remaining.endIndex,
-               let closeSecondBracket = remaining[afterSecondOpen...].firstIndex(of: "]") {
+               let closeSecondBracket = ReferenceLabel.closingBracket(in: remaining, from: afterSecondOpen) {
                 let refId = String(remaining[afterSecondOpen..<closeSecondBracket])
-                let effectiveId = (refId.isEmpty ? linkText : refId).lowercased()
+                let effectiveId = ReferenceLabel.normalized(refId.isEmpty ? linkText : refId)
                 if let url = referenceDefinitions[effectiveId] {
                     return makeLink(text: linkText, url: url,
                                     remaining: remaining[remaining.index(after: closeSecondBracket)...])
@@ -862,7 +1052,7 @@ struct MarkdownRenderer: Sendable {
         }
 
         // 3. Shortcut reference: [text] where text matches a definition ID
-        if let url = referenceDefinitions[linkText.lowercased()] {
+        if let url = referenceDefinitions[ReferenceLabel.normalized(linkText)] {
             return makeLink(text: linkText, url: url, remaining: remaining[afterBracket...])
         }
 
@@ -870,31 +1060,118 @@ struct MarkdownRenderer: Sendable {
     }
 
     private func makeLink(text: String, url: String, remaining: Substring) -> (AttributedString, Substring) {
-        var attr: AttributedString
-        if text.contains("![") {
-            // Link-wrapped image (`[![b](img)](link)`): the text is rendered
-            // inline so the image becomes its "[Image: b]" placeholder, and the
-            // whole run carries the OUTER link (set below, over the image's
-            // own). Only for text holding an image, so every other link keeps
-            // its exact plain-text rendering. Rendered with links disabled:
-            // a link inside a link is literal text (bounds the recursion).
-            var linkText = self
-            linkText.linksDisabled = true
-            attr = linkText.renderInlineFormatting(text)
-        } else {
-            attr = AttributedString(text)
-            attr.setDualFont(size: scaled(14), fonts: theme.fonts)
-        }
+        // A link's text is inline Markdown, as on GitHub: `[**Docs**](u)` is
+        // bold, ``[`npm install`](u)`` code, `[~~old~~](u)` struck through, an
+        // escape loses its backslash (an escaped `$` is never math), an image
+        // becomes its "[Image: b]" placeholder (`[![b](img)](link)`). The
+        // whole run then carries the OUTER link (set below, over any inner
+        // one, an autolink's or an image's). Rendered with links disabled: a
+        // link inside a link is literal text (bounds the recursion).
+        // `ReferenceLinks` rewrites a link's text by the same rule.
+        var attr = renderLinkText(text)
         attr.setDualForeground(theme.linkColor)
         attr.setDualUnderline()
 
-        if let parsedUrl = URL(string: url) {
-            attr.link = parsedUrl
-        } else if let encoded = url.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-                  let parsedUrl = URL(string: encoded) {
+        if let parsedUrl = Self.linkURL(for: url) {
             attr.link = parsedUrl
         }
         return (attr, remaining)
+    }
+
+    /// A link's text before the link colour, underline and URL go on:
+    /// inline-parsed with links disabled — or, when `parse` is false, the one
+    /// plain run that parse produces for text with no syntax in it (the
+    /// renderer's font, the colour is replaced by the caller). `parse: nil`
+    /// picks the plain run exactly when `linkTextNeedsParsing` is false, which
+    /// keeps the common `[Install](…)` from a full inline pass (+25 % on a
+    /// link-heavy document, review R15). Tests compare both paths.
+    func renderLinkText(_ text: String, parse: Bool? = nil) -> AttributedString {
+        if parse ?? Self.linkTextNeedsParsing(text) {
+            var linkText = self
+            linkText.linksDisabled = true
+            return linkText.renderInlineFormatting(text)
+        }
+        var attr = AttributedString(decodedText(text))
+        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
+        attr.setDualForeground(theme.textColor)
+        return attr
+    }
+
+    /// Whether `renderInlineFormatting` could do anything but one plain run:
+    /// a character some inline parser starts on — `\` escape, `` ` `` code,
+    /// `*` / `_` emphasis, `~` strikethrough, `!` image, `[` footnote or
+    /// link, `h` an autolink (`http://`, `https://`). Character references
+    /// (`&`) are decoded on the plain run too; `$` is only looked at later
+    /// (inline math, on the rendered text), as on the parsed path.
+    static func linkTextNeedsParsing(_ text: String) -> Bool {
+        text.utf8.contains { byte in
+            switch byte {
+            case UInt8(ascii: "\\"), UInt8(ascii: "`"), UInt8(ascii: "*"), UInt8(ascii: "_"),
+                 UInt8(ascii: "~"), UInt8(ascii: "!"), UInt8(ascii: "["):
+                return true
+            default:
+                return false
+            }
+        } || text.contains("http://") || text.contains("https://")
+    }
+
+    /// The URL of a link destination as written.
+    ///
+    /// `URL(string:)` first, exactly as before 1.14.4: on macOS 14+ it encodes
+    /// what needs encoding itself (spaces, non-ASCII, IDN hosts to punycode),
+    /// and every destination it accepts keeps that behaviour. Only when it
+    /// returns nil — macOS 13 rejects spaces, non-ASCII, `[` `]` in a path, a
+    /// second `#` — do we encode, the part before the FIRST `#` and the
+    /// fragment separately, so the `#` stays the fragment delimiter (the old
+    /// `.urlPathAllowed` fallback encoded it too: `README.md#Install Guide`
+    /// became a file named "README.md#Install Guide" and the jump failed).
+    /// `parse` is `URL(string:)`; tests pass the strict (macOS 13) parser.
+    static func linkURL(for destination: String,
+                        parse: (String) -> URL? = { URL(string: $0) }) -> URL? {
+        if let url = parse(destination) { return url }
+        let scalars = destination.unicodeScalars[...]
+        guard let hash = scalars.firstIndex(of: "#") else {
+            return parse(percentEncoded(scalars))
+        }
+        return parse(percentEncoded(scalars[..<hash]) + "#"
+                     + percentEncoded(scalars[scalars.index(after: hash)...]))
+    }
+
+    /// RFC 3986 unreserved + reserved characters — what a URL may contain as
+    /// written (`%` only as the start of an escape, see `isEscape`).
+    private static let urlCharacters = CharacterSet(
+        charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~:/?#[]@!$&'()*+,;=")
+
+    private typealias Scalars = Substring.UnicodeScalarView
+
+    /// `%` followed by two hex digits.
+    private static func isEscape(_ scalars: Scalars, at index: Scalars.Index) -> Bool {
+        guard scalars[index] == "%" else { return false }
+        let first = scalars.index(after: index)
+        guard first < scalars.endIndex else { return false }
+        let second = scalars.index(after: first)
+        return second < scalars.endIndex
+            && scalars[first].properties.isASCIIHexDigit && scalars[second].properties.isASCIIHexDigit
+    }
+
+    /// One part of a destination (no `#` delimiter inside): legal characters
+    /// and valid escapes kept, everything else — `#`, `[`, `]` too, which a
+    /// URL allows only in specific places — as UTF-8 `%XX`.
+    private static func percentEncoded(_ scalars: Scalars) -> String {
+        var out = ""
+        var index = scalars.startIndex
+        while index < scalars.endIndex {
+            let scalar = scalars[index]
+            let keep = scalar == "%" ? isEscape(scalars, at: index)
+                : scalar != "#" && scalar != "[" && scalar != "]" && urlCharacters.contains(scalar)
+            if keep {
+                out.unicodeScalars.append(scalar)
+            } else {
+                for byte in String(scalar).utf8 { out += String(format: "%%%02X", byte) }
+            }
+            index = scalars.index(after: index)
+        }
+        return out
     }
 
     /// Inline images stay text — an italic "[Image: alt]" placeholder (real
@@ -908,12 +1185,12 @@ struct MarkdownRenderer: Sendable {
               let image = InlineSyntaxScanner.image(atStartOf: remaining, references: referenceDefinitions,
                                                     pairs: pairs) else { return nil }
 
-        var attr = AttributedString(image.alt.isEmpty ? "[Image]" : "[Image: \(image.alt)]")
+        var attr = AttributedString(image.alt.isEmpty ? "[Image]" : "[Image: \(decodedText(image.alt))]")
         attr.setDualFont(size: scaled(14), italic: true, fonts: theme.fonts)
         attr.setDualForeground(theme.secondaryTextColor)
         // No link for an embedded `data:` image: clicking it would hand a
         // multi-megabyte URL to the "Open link?" alert.
-        if !InlineSyntaxScanner.isDataURI(image.url), let url = URL(string: image.url) {
+        if !InlineSyntaxScanner.isDataURI(image.url), let url = Self.linkURL(for: image.url) {
             attr.link = url
         }
         return (attr, remaining[image.end...])
@@ -927,6 +1204,9 @@ struct MarkdownRenderer: Sendable {
         var attr = AttributedString(String(escaped))
         attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
+        // Inline math is found in the rendered text: tagged so `\$` is never
+        // a delimiter and a formula gets its LaTeX escapes back.
+        attr[EscapedCharacterAttribute.self] = true
         return (attr, remaining.dropFirst(2))
     }
 
@@ -956,6 +1236,12 @@ struct MarkdownRenderer: Sendable {
 
     // MARK: - Footnote References
 
+    /// Opens the id of a footnote reference whose NUMBER is already known
+    /// (`[^\u{E000}2]`, written by `ReferenceLinks` into quote, alert and
+    /// table-cell markdown). A private-use code point: no document's own
+    /// footnote id starts with it in practice.
+    static let numberedFootnoteMarker: Unicode.Scalar = "\u{E000}"
+
     private func tryParseFootnoteRef(_ remaining: inout Substring) -> (AttributedString, Substring)? {
         guard remaining.hasPrefix("[^") else { return nil }
 
@@ -965,10 +1251,16 @@ struct MarkdownRenderer: Sendable {
         let fnId = String(afterBracket[..<closeIndex])
         guard !fnId.isEmpty else { return nil }
 
-        // Find the footnote number (1-based index in definitions order)
+        // Find the footnote number (1-based index in definitions order), or
+        // the number a quote / alert / table cell already carries
+        // (`ReferenceLinks`: those are rendered without the definitions).
         let number: Int
-        if let idx = footnoteDefinitions.firstIndex(where: { $0.id == fnId }) {
+        let key = ReferenceLabel.normalized(fnId)  // ids are stored normalised
+        if let idx = footnoteDefinitions.firstIndex(where: { $0.id == key }) {
             number = idx + 1
+        } else if fnId.unicodeScalars.first == Self.numberedFootnoteMarker,
+                  let numbered = Int(String(fnId.unicodeScalars.dropFirst())), numbered > 0 {
+            number = numbered
         } else {
             return nil // Unknown footnote reference, don't parse
         }
@@ -982,9 +1274,19 @@ struct MarkdownRenderer: Sendable {
         let superscript = String(String(number).map { superscriptDigits[$0] ?? $0 })
 
         var attr = AttributedString(superscript)
+        attr[FootnoteNumberAttribute.self] = number
         attr.setDualFont(size: scaled(11), bold: true, fonts: theme.fonts)
         attr.setDualForeground(theme.linkColor)
         return (attr, afterBracket[afterBracket.index(after: closeIndex)...])
     }
 
+}
+
+/// The number a footnote reference draws as superscript digits, for
+/// `headingAnchorText` (GitHub's heading id reads it as plain digits). Not
+/// part of the AppKit scope, so an installed NSAttributedString never
+/// carries it.
+enum FootnoteNumberAttribute: AttributedStringKey {
+    typealias Value = Int
+    static let name = "qmdFootnoteNumber"
 }

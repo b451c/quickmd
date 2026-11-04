@@ -12,8 +12,10 @@ enum AlertKind: String, Sendable, CaseIterable {
     /// Parses a marker line (already stripped of `>` prefixes). The marker must
     /// be the only thing on the line — `[!NOTE] text` is a regular blockquote.
     /// Case-insensitive, matching GitHub's behavior.
+    /// Spaces and tabs around the marker only (`MarkdownRenderer.markerWhitespace`):
+    /// GitHub reads `[!NOTE]` + a no-break space as a plain quote.
     init?(markerLine: String) {
-        let trimmed = markerLine.trimmingCharacters(in: .whitespaces)
+        let trimmed = markerLine.trimmingCharacters(in: MarkdownRenderer.markerWhitespace)
         guard trimmed.hasPrefix("[!"), trimmed.hasSuffix("]") else { return nil }
         let name = trimmed.dropFirst(2).dropLast().lowercased()
         self.init(rawValue: name)
@@ -110,6 +112,79 @@ struct MarkdownBlock: Identifiable, Sendable {
     /// `.heading(level:title:sourceLine:)`, which section copy (`SectionExtractor`)
     /// reads — that associated value stays the authority there.
     let sourceLine: Int
+    /// This row continues the block of the row before it: there is no block
+    /// boundary between them, only a cut the parser made. Two cases:
+    /// - a text run longer than `MarkdownBlockParser.textChunkLineLimit` lines,
+    ///   cut to keep every row cheap to lay out;
+    /// - the second and later nesting groups of ONE `>` run (`> a` then
+    ///   `>> b`), which render as separate quote rows.
+    ///
+    /// Such a row gets no space above it (`BlockLayout.Spacing`), and a copy
+    /// across the cut joins the two rows with a line break, not a blank line
+    /// (`DocumentCopyBuilder`).
+    let joinsPrevious: Bool
+    /// The document's YAML front matter — as the properties table, or as the
+    /// `yaml` code block it falls back to when `FrontMatter` cannot read it.
+    /// Set by the parser alone (only it knows where the fence was): a user's
+    /// own ```` ```yaml ```` fence on the first line is an ordinary code block.
+    /// The rhythm gives it its own role (`BlockLayout.Spacing.Role.frontMatter`).
+    let isFrontMatter: Bool
+    /// A display formula the math engine cannot typeset, shown as its source
+    /// in a ```` ```latex ```` code block
+    /// (`MathRendering.substitutingUntypesettableMath`). Copied whole, it
+    /// reads `$$…$$` again, as the formula it is (`SelectionRows`).
+    let substitutesFormula: Bool
+
+    init(id: String, content: BlockContent, sourceLine: Int, joinsPrevious: Bool = false,
+         isFrontMatter: Bool = false, substitutesFormula: Bool = false) {
+        self.id = id
+        self.content = content
+        self.sourceLine = sourceLine
+        self.joinsPrevious = joinsPrevious
+        self.isFrontMatter = isFrontMatter
+        self.substitutesFormula = substitutesFormula
+    }
+
+    /// A cheap content fingerprint of the block, to find the scroll anchor
+    /// again after the document changed shape (`VirtualBlockList`). Neither
+    /// identity the block already has can do that job:
+    ///
+    ///  * `id` is POSITIONAL (`text-17`), so inserting one block above
+    ///    renumbers every block below it.
+    ///  * `sourceLine` moves with any edit above it.
+    ///
+    /// The characters are what the reader was actually looking at, so they
+    /// are the identity matched on. 80 characters distinguish paragraphs
+    /// without copying the document, and the kind tag in front keeps a
+    /// heading from matching a paragraph with the same words. A table is its
+    /// header AND first row: a header-less table (blank header cells) and the
+    /// front-matter properties table (no header) were only `b|<rows>|`, so
+    /// any two of them with as many rows matched each other.
+    var anchorSignature: String {
+        func head(_ text: String) -> String { String(text.prefix(80)) }
+        switch content {
+        case .text(let attributed):
+            return "t|" + head(String(attributed.characters))
+        case .table(let headers, let rows, _, _):
+            return "b|\(rows.count)|" + head((headers + (rows.first ?? [])).joined(separator: "\u{1F}"))
+        case .codeBlock(let code, let language):
+            return "c|\(language)|" + head(code)
+        case .image(let url, let alt, _):
+            return "i|\(head(url))|" + head(alt)
+        case .blockquote(let content, let level):
+            return "q|\(level)|" + head(content)
+        case .alert(let kind, let content):
+            return "a|\(kind.rawValue)|" + head(content)
+        case .heading(let level, let title, _):
+            return "h|\(level)|" + head(title)
+        case .mathBlock(let latex):
+            return "m|" + head(latex)
+        case .mermaidDiagram(let source):
+            return "d|" + head(source)
+        case .svgImage(let source):
+            return "s|" + head(source)
+        }
+    }
 
     enum BlockContent: Sendable {
         case text(AttributedString)
@@ -138,23 +213,37 @@ struct MarkdownBlock: Identifiable, Sendable {
     // Every factory takes `sourceLine` WITHOUT a default: the parser is the only
     // caller and it always knows the mapped original line. A default here would
     // silently produce 0-anchored blocks the moment a new parser branch forgets it.
-    static func text(index: Int, _ attributed: AttributedString, sourceLine: Int) -> MarkdownBlock {
-        MarkdownBlock(id: "text-\(index)", content: .text(attributed), sourceLine: sourceLine)
+    /// A text row never ends in a line break: the renderer ends every line
+    /// with "\n", and a final one would lay out an extra, empty line under the
+    /// row — in the system's default font, so it would not even scale with
+    /// zoom. The space under a row is `BlockLayout.Spacing`'s job.
+    static func text(index: Int, _ attributed: AttributedString, sourceLine: Int,
+                     joinsPrevious: Bool = false) -> MarkdownBlock {
+        var text = attributed
+        while let last = text.characters.last, last == "\n" {
+            text.removeSubrange(text.characters.index(before: text.endIndex)..<text.endIndex)
+        }
+        return MarkdownBlock(id: "text-\(index)", content: .text(text), sourceLine: sourceLine,
+                             joinsPrevious: joinsPrevious)
     }
     static func table(index: Int, headers: [String], rows: [[String]], alignments: [TextAlignment],
-                      style: TableStyle, sourceLine: Int) -> MarkdownBlock {
+                      style: TableStyle, sourceLine: Int, isFrontMatter: Bool = false) -> MarkdownBlock {
         MarkdownBlock(id: "table-\(index)",
                       content: .table(headers: headers, rows: rows, alignments: alignments, style: style),
-                      sourceLine: sourceLine)
+                      sourceLine: sourceLine, isFrontMatter: isFrontMatter)
     }
-    static func codeBlock(index: Int, code: String, language: String, sourceLine: Int) -> MarkdownBlock {
-        MarkdownBlock(id: "code-\(index)", content: .codeBlock(code: code, language: language), sourceLine: sourceLine)
+    static func codeBlock(index: Int, code: String, language: String, sourceLine: Int,
+                          isFrontMatter: Bool = false) -> MarkdownBlock {
+        MarkdownBlock(id: "code-\(index)", content: .codeBlock(code: code, language: language),
+                      sourceLine: sourceLine, isFrontMatter: isFrontMatter)
     }
     static func image(index: Int, url: String, alt: String, width: ImageWidth?, sourceLine: Int) -> MarkdownBlock {
         MarkdownBlock(id: "image-\(index)", content: .image(url: url, alt: alt, width: width), sourceLine: sourceLine)
     }
-    static func blockquote(index: Int, content: String, level: Int, sourceLine: Int) -> MarkdownBlock {
-        MarkdownBlock(id: "blockquote-\(index)", content: .blockquote(content: content, level: level), sourceLine: sourceLine)
+    static func blockquote(index: Int, content: String, level: Int, sourceLine: Int,
+                           joinsPrevious: Bool = false) -> MarkdownBlock {
+        MarkdownBlock(id: "blockquote-\(index)", content: .blockquote(content: content, level: level),
+                      sourceLine: sourceLine, joinsPrevious: joinsPrevious)
     }
     static func alert(index: Int, kind: AlertKind, content: String, sourceLine: Int) -> MarkdownBlock {
         MarkdownBlock(id: "alert-\(index)", content: .alert(kind: kind, content: content), sourceLine: sourceLine)

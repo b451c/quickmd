@@ -291,34 +291,46 @@ struct MarkdownTheme: Sendable, Identifiable {
 
     /// Matches table separator row: |---|---|---| or variants with alignment colons
     /// Examples: |:---|:---:|---:|, |---|---|
-    static let tableSeparatorPattern = #"^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$"#
+    static let tableSeparatorPattern = #"^\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$"#
 
     /// Matches ATX-style headers: # H1, ## H2, ... ###### H6
     /// Captures: (1) hash marks, (2) header text
-    static let headerPattern = #"^(#{1,6})\s+(.*)$"#
+    static let headerPattern = #"^(#{1,6})[ \t]+(.*)$"#
 
     /// Matches horizontal rules: ***, ---, ___ (3 or more)
-    static let horizontalRulePattern = #"^(\*{3,}|-{3,}|_{3,})\s*$"#
+    static let horizontalRulePattern = #"^(\*{3,}|-{3,}|_{3,})[ \t]*$"#
 
     /// Matches task list items: - [ ] or - [x] with optional indentation
     /// Captures: (1) indent whitespace, (2) check state (space or x), (3) content
-    static let taskListPattern = #"^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$"#
+    static let taskListPattern = #"^([ \t]*)[-*+][ \t]+\[([ xX])\][ \t]+(.*)$"#
 
     // MARK: - Escape Characters
 
     /// Characters that can be escaped with backslash in markdown
-    /// Example: \* renders as literal asterisk instead of italic marker
-    static let escapableChars: Set<Character> = ["\\", "`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", ".", "!", "|"]
+    /// Example: \* renders as literal asterisk instead of italic marker.
+    /// CommonMark's full list — every ASCII punctuation character (`\&amp;`
+    /// shows "&amp;", `\<` shows "<", `\$5` shows "$5", as on GitHub). An
+    /// escaped `$` is tagged `LiteralDollarAttribute`: inline math is found in
+    /// the RENDERED text, and a tagged dollar never opens or closes a formula.
+    static let escapableChars: Set<Character> = [
+        "!", "\"", "#", "$", "%", "&", "'", "(", ")", "*", "+", ",", "-", ".", "/", ":", ";", "<", "=", ">",
+        "?", "@", "[", "\\", "]", "^", "_", "`", "{", "|", "}", "~",
+    ]
 
     // MARK: - Reference Link Definitions
 
     /// Matches reference link definitions: [id]: url or [id]: <url> with optional title
     /// Captures: (1) reference ID, (2) URL
-    static let referenceLinkDefinitionPattern = #"^\s*\[([^\]]+)\]:\s+<?([^\s>]+)>?"#
+    /// The label: no unescaped bracket, backslash escapes kept as written
+    /// (`[a\]b]:` defines `a\]b`, `[a[b]:` is text — CommonMark, GitHub).
+    static let referenceLinkDefinitionPattern = #"^[ \t]*\[((?:[^\[\]\\]|\\.)+)\]:[ \t]+<?([^\s>]+)>?"#
 
     /// Matches footnote definitions: [^id]: text
     /// Captures: (1) footnote ID, (2) content
-    static let footnoteDefinitionPattern = #"^\s*\[\^([^\]]+)\]:\s+(.*)"#
+    /// The label is cmark-gfm's: one or more characters but `]`, spaces,
+    /// tabs and line breaks (`[^ m]: url` is a LINK definition on GitHub);
+    /// the text may follow the colon directly, or be empty.
+    static let footnoteDefinitionPattern = #"^[ \t]*\[\^([^\] \t\r\n]+)\]:[ \t]*(.*)"#
 
     // MARK: - URL Autolinking
 
@@ -330,12 +342,12 @@ struct MarkdownTheme: Sendable, Identifiable {
 
     /// Matches setext H1 underline: one or more = signs
     /// Example: Title\n=====
-    static let setextH1Pattern = #"^=+\s*$"#
+    static let setextH1Pattern = #"^=+[ \t]*$"#
 
     /// Matches setext H2 underline: three or more - signs
     /// Example: Subtitle\n-------
     /// Note: Must be 3+ to distinguish from horizontal rule in some contexts
-    static let setextH2Pattern = #"^-{3,}\s*$"#
+    static let setextH2Pattern = #"^-{3,}[ \t]*$"#
 }
 
 // MARK: - Color Hex Extension

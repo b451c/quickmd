@@ -3,16 +3,24 @@ import SwiftUI
 /// Settings window (⌘,): general behaviour + theme picker + document fonts +
 /// external editor selection.
 struct SettingsView: View {
+    /// Remembered by identifier (`SettingsTab`); absent → the index SwiftUI
+    /// remembered before, so an update does not move anyone's tab.
+    @AppStorage(SettingsTab.defaultsKey) private var selectedTab: SettingsTab = SettingsTab.initial(in: .standard)
+
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             GeneralSettingsView()
                 .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(SettingsTab.general)
             ThemePickerView()
                 .tabItem { Label("Themes", systemImage: "paintpalette") }
+                .tag(SettingsTab.themes)
             FontPickerView()
                 .tabItem { Label("Fonts", systemImage: "textformat") }
+                .tag(SettingsTab.fonts)
             ExternalEditorPickerView()
                 .tabItem { Label("Editor", systemImage: "pencil") }
+                .tag(SettingsTab.editor)
         }
     }
 }
@@ -43,7 +51,8 @@ struct GeneralSettingsView: View {
                 }
 
                 Section {
-                    Picker("Show", selection: $tocMaxLevel) {
+                    Picker("Show", selection: Binding(get: { ToCDepth.normalized(tocMaxLevel) },
+                                                      set: { tocMaxLevel = $0 })) {
                         ForEach(ToCDepth.choices, id: \.maxLevel) { choice in
                             Text(choice.title).tag(choice.maxLevel)
                         }

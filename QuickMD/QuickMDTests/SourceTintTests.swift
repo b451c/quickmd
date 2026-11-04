@@ -50,6 +50,14 @@ final class SourceTintTests: XCTestCase {
                      [("Title\n=====", .heading), ("Sub\n---", .heading)])
     }
 
+    /// The parser trims a Setext title of spaces and tabs only
+    /// (`MarkdownBlockParser.markerLine`); the tint compared it with the line
+    /// trimmed of every Unicode space, so a title starting with a no-break
+    /// space lost its underline from the tint.
+    func testASetextTitleStartingWithANoBreakSpaceTintsItsUnderline() {
+        assertTinted("\u{00A0}Title\n===\nBody\n", [("\u{00A0}Title\n===", .heading)])
+    }
+
     func testFencedCodeKeepsInnerBlankLinesAndDropsTrailingOnes() {
         assertTinted("```swift\nlet a = 1\n\nlet b = 2\n```\n\n   \nAfter\n",
                      [("```swift\nlet a = 1\n\nlet b = 2\n```", .verbatim)])

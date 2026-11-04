@@ -65,14 +65,14 @@ enum BlockLayout {
 
     // MARK: Document chrome (MarkdownView)
 
-    /// Padding and spacing `MarkdownView` puts around and between blocks.
+    /// Padding `MarkdownView` puts around the document and around blocks.
     /// The per-kind `…OuterVerticalPadding` values are the `.padding(.vertical:)`
     /// modifiers applied in `MarkdownView.blockView(for:)`; they are part of a
-    /// row's height because the virtualized list hosts that whole view.
+    /// row's height because the virtualized list hosts that whole view. The
+    /// space BETWEEN blocks is `BlockLayout.Spacing` (VerticalRhythm.swift).
     enum Document {
         static let contentHorizontalPadding: CGFloat = 32
         static let contentVerticalPadding: CGFloat = 24
-        static let blockSpacing: CGFloat = 8
 
         // MARK: Reading mode (v1.9)
         //
@@ -82,11 +82,44 @@ enum BlockLayout {
         // so `BlockHeightMeasurer` needs no reading-mode branch at all — it is
         // handed the clamped `contentWidth` like any other width.
 
-        /// Upper bound on the text column in reading mode; wider windows centre
-        /// the column instead of stretching the lines. 720 pt is ~90 characters
-        /// at the 16 pt default body size — past that the eye loses the line it
-        /// came from on the way back to the left margin.
+        /// Upper bound on the text column in reading mode at 100 %; wider
+        /// windows centre the column instead of stretching the lines. 720 pt is
+        /// ~90 characters at the 16 pt default body size — past that the eye
+        /// loses the line it came from on the way back to the left margin.
+        /// The cap at other zooms is `readingColumnCap(fontScale:)`.
         static let readingMaxContentWidth: CGFloat = 720
+
+        /// Reading mode's column cap at `fontScale`: `readingMaxContentWidth`
+        /// scaled with the body text (16 pt × the zoom; there is no other body
+        /// size setting — Settings' default zoom IS the starting zoom), in
+        /// whole points. The line keeps its ~90 characters at every zoom:
+        /// until 1.14.4 the cap stayed 720 pt, so 200 % left ~45 characters a
+        /// line and 50 % ~180. Still capped by the window (`columnWidth`).
+        static func readingColumnCap(fontScale: CGFloat) -> CGFloat {
+            (readingMaxContentWidth * max(fontScale, 0)).rounded()
+        }
+
+        /// The width a block view gets — the width the heights are measured
+        /// at: `inner` (the clip's whole points − 2 × `contentHorizontalPadding`),
+        /// no wider than `cap` in reading mode. THE one definition, used by
+        /// `VirtualBlockList` (cells and published width), by `MarkdownView`
+        /// (the width a zoom in reading mode measures its parse at) and by
+        /// `SourceEditorController.columnGeometry`.
+        static func columnWidth(inner: CGFloat, cap: CGFloat?) -> CGFloat {
+            guard let cap else { return max(0, inner) }
+            return max(0, floor(min(inner, cap)))
+        }
+
+        /// The width a new parse is measured at: the list's `contentWidth` —
+        /// except at a new zoom in reading mode (`readingFontScale` = the
+        /// parse's zoom), whose cap follows the zoom: the column the list will have once the
+        /// parse is installed (`inner` capped at that zoom), so a zoom in
+        /// reading mode measures the document once, not at the old column
+        /// and then again. 0 (no layout yet) stays 0.
+        static func parseWidth(contentWidth: CGFloat, inner: CGFloat, readingFontScale: CGFloat?) -> CGFloat {
+            guard contentWidth > 0, inner > 0, let readingFontScale else { return contentWidth }
+            return columnWidth(inner: inner, cap: readingColumnCap(fontScale: readingFontScale))
+        }
         /// `contentVerticalPadding`'s reading-mode counterpart: the top and
         /// bottom breathing room, doubled, because in reading mode nothing else
         /// occupies the top of the window.
@@ -233,6 +266,14 @@ enum BlockLayout {
         /// constraints.md, scroll-freeze rule 4); `headingEstimate` wraps the
         /// title at the same reduced width.
         static let copyButtonReservedWidth: CGFloat = copyButtonSpacing + copyButtonWidth
+
+        /// Reading Mode hides the copy button (no chrome while reading)…
+        static func showsCopyButton(isReadingMode: Bool) -> Bool { !isReadingMode }
+
+        /// …but NOT its strip: the title is padded by the same width in both
+        /// modes, so its wrap width, this measurer's heights and the row
+        /// heights do not change when the mode toggles.
+        static func titleTrailingPadding(isReadingMode: Bool) -> CGFloat { copyButtonReservedWidth }
 
         // MARK: Horizontal placement of the copy button
 
@@ -404,11 +445,90 @@ enum BlockLayout {
         /// the bitmap is decoded, so this is what a measured row starts at.
         static let placeholderHeight: CGFloat = 100
         static let maxDisplayWidth: CGFloat = 600
+        /// Between an image and its italic alt-text caption. `ImageBlockView`'s
+        /// body is a two-view tuple, flattened into the row's `VStack`, so this
+        /// is that stack's spacing (the 8 pt the 1.8.0 document stack had).
+        static let captionSpacing: CGFloat = 8
 
         /// Scale the fitted 100% width, then keep the result inside the column.
         static func displayWidth(fontScale: CGFloat, contentWidth: CGFloat) -> CGFloat {
             let available = max(1, contentWidth)
             return min(available, min(maxDisplayWidth, available) * fontScale)
+        }
+
+        /// The size a picture — a bitmap image (`ImageBlockView`) or an SVG
+        /// (`SVGBlockView`) — is drawn at, from its own size (`NSImage.size`:
+        /// the ORIGINAL pixel size for a bitmap, see `ImageLoader`, the declared
+        /// size for an SVG): `displayWidth`, never wider than its own width ×
+        /// zoom (D4, GitHub parity) or an HTML `<img width>` in its place, at
+        /// its aspect ratio. The height is rounded to whole points, so it is
+        /// pixel-exact at 1× and 2×. The views FRAME the picture with this and
+        /// the measurer sizes the row with it: once a picture's size is known,
+        /// its row is exact at every width and zoom.
+        static func pictureSize(imageSize: CGSize, htmlWidth: ImageWidth?, fontScale: CGFloat,
+                                contentWidth: CGFloat) -> CGSize {
+            let cap = displayWidth(fontScale: fontScale, contentWidth: contentWidth)
+            let width: CGFloat
+            if let htmlWidth {
+                width = htmlWidth.displayWidth(cap: cap, fontScale: fontScale)
+            } else if imageSize.width > 0 {
+                width = min(cap, imageSize.width * fontScale)
+            } else {
+                width = cap
+            }
+            guard imageSize.width > 0, imageSize.height > 0 else {
+                return CGSize(width: width, height: placeholderHeight)
+            }
+            return CGSize(width: width, height: (width * imageSize.height / imageSize.width).rounded())
+        }
+
+        /// The alt-text caption under an image (`ImageCaption`): 12 pt × zoom,
+        /// system italic.
+        static let captionFontSize: CGFloat = 12
+
+        static func captionFont(fontScale: CGFloat) -> NSFont {
+            let size = captionFontSize * fontScale
+            let base = NSFont.systemFont(ofSize: size)
+            return NSFont(descriptor: base.fontDescriptor.withSymbolicTraits(.italic), size: size) ?? base
+        }
+
+        /// The caption's height at `contentWidth`: its lines, broken by TextKit
+        /// as SwiftUI breaks them, × `singleLineHeight` — an upper bound of
+        /// SwiftUI's own line height, which no font metric reproduces.
+        /// `ImageCaption` is at least this tall, so the row is exactly this
+        /// whenever the two agree on the lines, and grows (and reports) if
+        /// they ever don't, rather than clipping. 0 without a caption.
+        static func captionHeight(alt: String, fontScale: CGFloat, contentWidth: CGFloat) -> CGFloat {
+            guard !alt.isEmpty else { return 0 }
+            let font = captionFont(fontScale: fontScale)
+            // A fresh stack per call: TextKit is not thread-safe and this runs
+            // off-main in the measurer.
+            let storage = NSTextStorage(string: alt, attributes: [.font: font])
+            let layoutManager = NSLayoutManager()
+            storage.addLayoutManager(layoutManager)
+            let container = NSTextContainer(size: NSSize(width: BlockLayout.clampedWidth(contentWidth),
+                                                         height: .greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            layoutManager.addTextContainer(container)
+            layoutManager.ensureLayout(for: container)
+            var lines = 0
+            layoutManager.enumerateLineFragments(forGlyphRange: layoutManager.glyphRange(for: container)) { _, _, _, _, _ in
+                lines += 1
+            }
+            return CGFloat(max(1, lines)) * BlockLayout.singleLineHeight(for: font)
+        }
+
+        /// An image row: the view's body is a two-view tuple (picture, then the
+        /// caption), so the row's vertical padding applies to EACH of them, and
+        /// the row's stack puts `captionSpacing` between them (measured in the
+        /// GUI: a 1024 px icon at 819 pt reports 8 + 600 + 8 + 8 + 8 + 15 + 8 =
+        /// 655). `picture` is `pictureSize(...).height`, or the 100 pt loading
+        /// view while the size is unknown.
+        static func rowHeight(picture: CGFloat, alt: String, fontScale: CGFloat, contentWidth: CGFloat) -> CGFloat {
+            let outer = BlockLayout.Document.imageOuterVerticalPadding
+            guard !alt.isEmpty else { return picture + 2 * outer }
+            return picture + 2 * outer + captionSpacing
+                + captionHeight(alt: alt, fontScale: fontScale, contentWidth: contentWidth) + 2 * outer
         }
     }
 
@@ -428,9 +548,56 @@ enum BlockLayout {
 
     enum Mermaid {
         static let verticalPadding: CGFloat = 8
+        /// Space between the diagram's box and its first ink, at 1.0: the
+        /// `diagramPadding` Mermaid puts around a flowchart, class or state
+        /// graph inside its SVG (8 px), drawn at the diagram's scale — the
+        /// zoom, for a diagram narrower than the column. The diagram has no
+        /// frame, so this is where the eye sees it start (measured: 8–9 pt).
+        static let inkInset: CGFloat = 8
         /// Height a diagram starts at when nothing has measured it yet.
         static let defaultHeight: CGFloat = 200
         static let cornerRadius: CGFloat = 6
+        /// The least height of a diagram that did NOT render (Mermaid's error
+        /// text, or nothing): a rendered one is as tall as it is.
+        static let failedRenderMinimumHeight: CGFloat = 50
+
+        /// What a rendered diagram's height follows from, as the inline web view
+        /// posts it (`mermaidGeometry` in mermaid-template.html): the SVG's
+        /// natural size (its viewBox) and what the page adds below it.
+        struct Geometry: Equatable {
+            var naturalWidth: CGFloat
+            var naturalHeight: CGFloat
+            var overhead: CGFloat
+        }
+
+        /// The diagram's height in a web view `contentWidth` wide at
+        /// `fontScale` — the template's `resizeDiagram`: the natural size ×
+        /// zoom, never wider than the view (`window.innerWidth`, whole CSS
+        /// px), plus the page's overhead. No floor: a flat diagram at a small
+        /// zoom is that flat (1.14.4 kept it at least 50 pt, blank below it).
+        static func diagramHeight(_ geometry: Geometry, fontScale: CGFloat, contentWidth: CGFloat) -> CGFloat {
+            let viewport = floor(contentWidth)
+            guard geometry.naturalWidth > 0, geometry.naturalHeight > 0, viewport > 0 else { return defaultHeight }
+            let fit = viewport / geometry.naturalWidth
+            let factor = min(fontScale * min(1, fit), fit)
+            return geometry.naturalHeight * factor + geometry.overhead
+        }
+
+        /// The height a diagram's web view reported, as its row takes it.
+        /// `rendered`: the diagram rendered (its geometry was posted) — the
+        /// height is exact, as `diagramHeight` computes it; a report of
+        /// nothing is ignored (nil). Otherwise the page shows Mermaid's error
+        /// text (or nothing): at least `failedRenderMinimumHeight`.
+        static func acceptedHeight(reported: Double, rendered: Bool) -> CGFloat? {
+            guard reported.isFinite else { return nil }
+            guard rendered else { return max(CGFloat(reported), failedRenderMinimumHeight) }
+            return reported > 0 ? CGFloat(reported) : nil
+        }
+
+        /// A diagram row: the diagram, the view's padding and the row's.
+        static func rowHeight(diagram: CGFloat) -> CGFloat {
+            diagram + 2 * verticalPadding + 2 * BlockLayout.Document.mermaidOuterVerticalPadding
+        }
     }
 
     // MARK: - Derived text widths
@@ -530,7 +697,7 @@ struct MathRendering {
             guard case .mathBlock(let latex) = block.content, !typesets(latex) else { return block }
             return MarkdownBlock(id: block.id,
                                  content: .codeBlock(code: latex, language: "latex"),
-                                 sourceLine: block.sourceLine)
+                                 sourceLine: block.sourceLine, substitutesFormula: true)
         }
     }
 }
@@ -570,15 +737,13 @@ enum BlockTextConverter {
                 ?? NSAttributedString(string: String(attributed.characters))
         }
 
-        let plain = String(attributed.characters)
-        let segments = InlineMathSegmenter.split(plain)
         let result = NSMutableAttributedString()
         var attrIndex = attributed.startIndex
 
-        for segment in segments {
-            switch segment {
+        for piece in InlineMathSegmenter.pieces(of: attributed) {
+            switch piece.segment {
             case .text(let str):
-                if let end = attributed.characters.index(attrIndex, offsetBy: str.count,
+                if let end = attributed.characters.index(attrIndex, offsetBy: piece.length,
                                                          limitedBy: attributed.endIndex) {
                     let slice = AttributedString(attributed[attrIndex..<end])
                     if let ns = try? NSAttributedString(slice, including: \.appKit) {
@@ -591,8 +756,7 @@ enum BlockTextConverter {
 
             case .math(let latex):
                 // Skip past the $latex$ in the source AttributedString
-                let skipCount = latex.count + 2
-                if let end = attributed.characters.index(attrIndex, offsetBy: skipCount,
+                if let end = attributed.characters.index(attrIndex, offsetBy: piece.length,
                                                          limitedBy: attributed.endIndex) {
                     attrIndex = end
                 }
@@ -675,6 +839,185 @@ extension NSTextView {
     }
 }
 
+// MARK: - Document cell text view
+
+/// The base of every text view the document list hosts (`SelfSizingTextView`,
+/// `TableTextView`): a text view that never scrolls the document because it
+/// was resized.
+///
+/// NSTextView keeps the part of itself that is visible visible while it
+/// resizes: `_setFrameSize:forceScroll:` → `scrollRectToVisible:` on the
+/// enclosing clip view. A text view lying in the list's top content inset is
+/// visible to it but not to `scrollRectToVisible:`, which measures against the
+/// inset-adjusted area — so any width change (Reading Mode, a sidebar, a window
+/// resize) with a text row under the top inset scrolled the DOCUMENT until that
+/// row's text sat at the content top (seen: -24.5 and -37.5 pt on leaving
+/// Reading Mode, which moved the reader). These views are cells of the list,
+/// and the list owns the scroll position. An explicit request (VoiceOver's
+/// scroll to element) still scrolls.
+///
+/// Here rather than next to `SelfSizingTextView` so the unit tests, which
+/// compile this file, run the very class.
+class DocumentCellTextView: NSTextView {
+    /// Nesting depth of `setFrameSize` — AppKit re-enters it from inside, so a
+    /// flag would be cleared by the inner call before the outer one scrolls.
+    private var frameSizeChanges = 0
+
+    override func setFrameSize(_ newSize: NSSize) {
+        frameSizeChanges += 1
+        defer { frameSizeChanges -= 1 }
+        super.setFrameSize(newSize)
+    }
+
+    override func scrollToVisible(_ rect: NSRect) -> Bool {
+        if frameSizeChanges > 0 { return false }
+        return super.scrollToVisible(rect)
+    }
+}
+
+// MARK: - Image caption
+
+/// The italic alt-text line under an image (`ImageBlockView`). Here rather
+/// than in the view's file so the unit tests host the very view the measurer
+/// sizes (`BlockLayout.ImageBlock.captionHeight`): at least that tall, so the
+/// row is exact whenever SwiftUI breaks the caption into the lines TextKit
+/// counted.
+struct ImageCaption: View {
+    let alt: String
+    let color: Color
+    let fontScale: CGFloat
+    let contentWidth: CGFloat
+
+    var body: some View {
+        Text(alt)
+            .font(.system(size: BlockLayout.ImageBlock.captionFontSize * fontScale))
+            .foregroundColor(color)
+            .italic()
+            .frame(minHeight: BlockLayout.ImageBlock.captionHeight(alt: alt, fontScale: fontScale,
+                                                                   contentWidth: contentWidth),
+                   alignment: .topLeading)
+    }
+}
+
+// MARK: - Block Height Cache
+
+/// Remembers the last measured height of each block, keyed by block id.
+/// LazyVStack destroys and recreates views during scroll; without this a
+/// recreated view starts at a placeholder height and "jumps" when its real
+/// height arrives, making upward scrolling stutter. Since 1.8.0 text and code
+/// blocks size synchronously (`SelfSizingTextView.size(fitting:)`) and no longer
+/// need it — Mermaid diagrams (height arrives from the WebView) still do.
+///
+/// Main-thread only BY CONVENTION (all reads/writes happen from SwiftUI view
+/// inits / height callbacks dispatched to main). Deliberately NOT @MainActor:
+/// view initializers are nonisolated on older SDKs where the SwiftUI View
+/// protocol annotates only `body`, and an isolated init call there is a hard
+/// compile error (caught by CI on the GitHub runner toolchain).
+final class BlockHeightCache {
+    private var heights: [String: CGFloat] = [:]
+    /// The size of every image this document has shown (`NSImage.size`, the
+    /// original pixel size), by its link as written. An `NSString` key, like
+    /// `ImageLoader`'s caches: a multi-megabyte `data:` link hashes in
+    /// constant time. Per document, because a relative link names another file
+    /// in another folder. A re-parse keeps them: they are keyed by the link.
+    private var imageSizes: [NSString: CGSize] = [:]
+
+    func height(for id: String) -> CGFloat? { heights[id] }
+    func set(_ height: CGFloat, for id: String) { heights[id] = height }
+    /// Forgets the block-id heights (a re-parse: ids are positional).
+    func removeAll() { heights.removeAll() }
+
+    func setImageSize(_ size: CGSize, for url: String) {
+        guard size.width > 0, size.height > 0 else { return }
+        imageSizes[url as NSString] = size
+    }
+    func imageSize(for url: String) -> CGSize? { imageSizes[url as NSString] }
+
+    /// A value copy for `BlockHeightMeasurer.measure(heightSeeds:)` — the
+    /// measurer runs off-main and must not read this reference type from there.
+    var snapshot: [String: CGFloat] { heights }
+    /// The same for `measure(imageSizes:)`.
+    var imageSizesSnapshot: [NSString: CGSize] { imageSizes }
+}
+
+// MARK: - Mermaid geometry
+
+/// The geometry (`BlockLayout.Mermaid.Geometry`) of every diagram a web view
+/// has rendered, by theme and source. With it a diagram that rendered once
+/// never starts at the 200 pt default again: the measurer and the view's
+/// first frame compute its height at any width and zoom. Process-wide, like
+/// `MermaidSnapshotStore`, because a diagram re-created from a snapshot never
+/// runs its web view — in this document or another. Locked: the measurer
+/// reads it off-main.
+enum MermaidGeometryStore {
+    private static let lock = NSLock()
+    private static var geometries: [NSString: BlockLayout.Mermaid.Geometry] = [:]
+    /// Entries are tiny; the cap only keeps a session-long store bounded.
+    static let limit = 1024
+
+    private static func key(source: String, isDark: Bool) -> NSString { "\(isDark)|\(source)" as NSString }
+
+    static func set(_ geometry: BlockLayout.Mermaid.Geometry, source: String, isDark: Bool) {
+        guard geometry.naturalWidth > 0, geometry.naturalHeight > 0 else { return }
+        let key = key(source: source, isDark: isDark)
+        lock.lock()
+        defer { lock.unlock() }
+        if geometries.count >= limit, geometries[key] == nil { geometries.removeAll() }
+        geometries[key] = geometry
+    }
+
+    static func geometry(source: String, isDark: Bool) -> BlockLayout.Mermaid.Geometry? {
+        let key = key(source: source, isDark: isDark)
+        lock.lock()
+        defer { lock.unlock() }
+        return geometries[key]
+    }
+
+    /// The diagram's height at `fontScale` and `contentWidth`, if it ever
+    /// rendered in this theme.
+    static func diagramHeight(source: String, isDark: Bool, fontScale: CGFloat,
+                              contentWidth: CGFloat) -> CGFloat? {
+        geometry(source: source, isDark: isDark).map {
+            BlockLayout.Mermaid.diagramHeight($0, fontScale: fontScale, contentWidth: contentWidth)
+        }
+    }
+}
+
+// MARK: - Mermaid snapshots
+
+/// Shared store of rendered-diagram snapshots, keyed by (isDark, source).
+/// Written by the inline MermaidBlockView after each successful render; read
+/// back by MermaidBlockView on re-creation AND by the PDF exporter
+/// (MermaidPDFRenderer) as a fast path before spinning up an offscreen
+/// WebView. NSCache evicts under memory pressure. Here rather than in the
+/// view's file so the unit tests compile it.
+enum MermaidSnapshotStore {
+    private static let cache = NSCache<NSString, NSImage>()
+
+    private static func key(source: String, isDark: Bool) -> NSString {
+        "\(isDark)|\(source)" as NSString
+    }
+
+    static func image(source: String, isDark: Bool) -> NSImage? {
+        cache.object(forKey: key(source: source, isDark: isDark))
+    }
+
+    static func set(_ image: NSImage, source: String, isDark: Bool) {
+        cache.setObject(image, forKey: key(source: source, isDark: isDark))
+    }
+
+    /// The latest snapshot of `diagram` in this theme at ANY zoom and width:
+    /// what a view without a snapshot of its own shows while its web view
+    /// renders, instead of an empty box.
+    static func latest(diagram: String, isDark: Bool) -> NSImage? {
+        cache.object(forKey: key(source: "latest|" + diagram, isDark: isDark))
+    }
+
+    static func setLatest(_ image: NSImage, diagram: String, isDark: Bool) {
+        cache.setObject(image, forKey: key(source: "latest|" + diagram, isDark: isDark))
+    }
+}
+
 // MARK: - Height table
 
 /// How a row's height was obtained, and therefore whether the placed view is
@@ -690,15 +1033,42 @@ enum RowKind: Equatable {
 
 /// One height per block, in block order, for a specific content width.
 struct BlockHeightTable: Equatable {
+    /// The BLOCK's height: what its view lays out at, what a `.reported` row
+    /// reports and what the parity tests pin. The list row is taller by
+    /// `spacingAbove` (see `rowHeight`).
     let heights: [CGFloat]
     let kinds: [RowKind]
     /// The width the heights were measured at. A row height is only valid for
     /// this width — the list re-measures when it changes.
     let contentWidth: CGFloat
+    /// The space above each block (`BlockLayout.Spacing`; row 0: 0). Part of
+    /// the block's list row, above its view.
+    let spacingAbove: [CGFloat]
 
     var count: Int { heights.count }
 
-    static let empty = BlockHeightTable(heights: [], kinds: [], contentWidth: 0)
+    /// The space above row `row`'s block; 0 outside the table.
+    func spacing(_ row: Int) -> CGFloat {
+        row >= 0 && row < spacingAbove.count ? spacingAbove[row] : 0
+    }
+
+    /// The list row's height: the space above the block, then the block.
+    func rowHeight(_ row: Int) -> CGFloat {
+        row >= 0 && row < heights.count ? spacing(row) + heights[row] : 0
+    }
+
+    /// This table with row `row`'s block height replaced — a `.reported` row
+    /// measured itself. Only the block changes: its space above, and every
+    /// other row, stay as measured.
+    func replacingHeight(_ height: CGFloat, at row: Int) -> BlockHeightTable {
+        guard row >= 0, row < heights.count else { return self }
+        var heights = heights
+        heights[row] = height
+        return BlockHeightTable(heights: heights, kinds: kinds, contentWidth: contentWidth,
+                                spacingAbove: spacingAbove)
+    }
+
+    static let empty = BlockHeightTable(heights: [], kinds: [], contentWidth: 0, spacingAbove: [])
 }
 
 /// `measure`'s output: the height table plus the NSAttributedStrings that had to
@@ -713,7 +1083,9 @@ struct BlockHeightTable: Equatable {
 struct MeasuredBlocks: @unchecked Sendable {
     let table: BlockHeightTable
     /// Keyed by `MarkdownBlock.id`, for the blocks whose text renders through
-    /// `TextBlockView` (paragraphs/footnotes, quote bodies, alert bodies).
+    /// `TextBlockView` (paragraphs/footnotes, quote bodies, alert bodies, and
+    /// heading titles — what `HeadingBlockView` converts, kept so a copy and a
+    /// search of a heading-heavy document never convert them again).
     let converted: [String: NSAttributedString]
     /// Keyed by `MarkdownBlock.id`, for every `.table` block: the string and
     /// cell layout the row was measured with, which `TableTextView` installs
@@ -727,8 +1099,20 @@ struct MeasuredBlocks: @unchecked Sendable {
     /// main actor before using the table for layout. Empty whenever `measure`
     /// got a real engine.
     let mathPendingRows: [Int]
+    /// Every row's input to `BlockLayout.Spacing` — what `table.spacingAbove`
+    /// was derived from, kept so `measureMathRows` can update the rows it
+    /// finishes and derive the column again without measuring anything else.
+    let rhythm: [BlockLayout.Spacing.Row]
 
-    static let empty = MeasuredBlocks(table: .empty, converted: [:], tables: [:], mathPendingRows: [])
+    /// This measurement with row `row`'s block height replaced (see
+    /// `BlockHeightTable.replacingHeight`).
+    func replacingHeight(_ height: CGFloat, at row: Int) -> MeasuredBlocks {
+        MeasuredBlocks(table: table.replacingHeight(height, at: row), converted: converted,
+                       tables: tables, mathPendingRows: mathPendingRows, rhythm: rhythm)
+    }
+
+    static let empty = MeasuredBlocks(table: .empty, converted: [:], tables: [:], mathPendingRows: [],
+                                      rhythm: [])
 }
 
 // MARK: - Measurer
@@ -749,6 +1133,53 @@ enum BlockHeightMeasurer {
     /// container height, `ensureLayout`, `ceil(usedRect.height)`. Anything else
     /// here breaks parity.
     static func exactHeight(text ns: NSAttributedString, width: CGFloat) -> CGFloat {
+        autoreleasepool {
+            let (layoutManager, container, storage) = laidOut(ns, width: width)
+            return withExtendedLifetime(storage) { ceil(layoutManager.usedRect(for: container).height) }
+        }
+    }
+
+    /// `exactHeight`, plus where the text's ink starts and ends — the edges
+    /// `BlockLayout.Spacing` measures optical gaps from. ONE layout pass: the
+    /// baselines are read from the layout `exactHeight` computes anyway.
+    ///
+    /// Both run in their own autorelease pool: TextKit autoreleases parts of
+    /// every stack it lays out, and one measure pass lays out every text row —
+    /// thousands in a prose document, whose peak memory grew with the row
+    /// count (5000 paragraphs: 37.7 MB → 26.1 MB, no time cost).
+    static func textInk(text ns: NSAttributedString, width: CGFloat) -> BlockLayout.Spacing.TextInk {
+        autoreleasepool { textInkInPool(text: ns, width: width) }
+    }
+
+    private static func textInkInPool(text ns: NSAttributedString, width: CGFloat) -> BlockLayout.Spacing.TextInk {
+        let (layoutManager, container, storage) = laidOut(ns, width: width)
+        return withExtendedLifetime(storage) {
+            let height = ceil(layoutManager.usedRect(for: container).height)
+            let glyphCount = layoutManager.numberOfGlyphs
+            guard glyphCount > 0 else {
+                return .init(height: height, firstBaseline: 0, firstCapHeight: 0, lastBaseline: height)
+            }
+            func baseline(ofGlyph glyph: Int) -> CGFloat {
+                layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY
+                    + layoutManager.location(forGlyphAt: glyph).y
+            }
+            var firstLine = NSRange()
+            _ = layoutManager.lineFragmentRect(forGlyphAt: 0, effectiveRange: &firstLine)
+            let firstCharacters = layoutManager.characterRange(forGlyphRange: firstLine, actualGlyphRange: nil)
+            var capHeight: CGFloat = 0
+            storage.enumerateAttribute(.font, in: firstCharacters, options: []) { value, _, _ in
+                if let font = value as? NSFont { capHeight = max(capHeight, font.capHeight) }
+            }
+            return .init(height: height, firstBaseline: baseline(ofGlyph: 0), firstCapHeight: capHeight,
+                         lastBaseline: baseline(ofGlyph: glyphCount - 1))
+        }
+    }
+
+    /// The TextKit 1 stack both functions above lay `ns` out on. The storage
+    /// is returned too, and the caller must keep it alive while it reads the
+    /// layout: the layout manager does not retain it.
+    private static func laidOut(_ ns: NSAttributedString, width: CGFloat)
+        -> (NSLayoutManager, NSTextContainer, NSTextStorage) {
         let storage = NSTextStorage(attributedString: ns)
         let layoutManager = NSLayoutManager()
         let container = NSTextContainer(size: NSSize(width: max(0, width),
@@ -759,7 +1190,7 @@ enum BlockHeightMeasurer {
         layoutManager.addTextContainer(container)
         storage.addLayoutManager(layoutManager)
         layoutManager.ensureLayout(for: container)
-        return ceil(layoutManager.usedRect(for: container).height)
+        return (layoutManager, container, storage)
     }
 
     /// Measures every block for one `(blocks, theme, fontScale, contentWidth)`
@@ -770,6 +1201,20 @@ enum BlockHeightMeasurer {
     ///     the list column width minus `2 * Document.contentHorizontalPadding`.
     ///   - heightSeeds: last-known heights (`BlockHeightCache`) used to seed
     ///     Mermaid rows so a re-created diagram doesn't start at the default.
+    ///   - imageSizes: the sizes of the images this document has shown
+    ///     (`BlockHeightCache.imageSizesSnapshot`): such an image's row is
+    ///     computed (`BlockLayout.ImageBlock`) instead of starting at the
+    ///     loading view. SVG sizes come from `SVGImageDecoder`, diagram
+    ///     geometry from `MermaidGeometryStore`.
+    ///   - reusing: strings a PREVIOUS measurement of the same parse built,
+    ///     keyed by block id — the caller's last `MeasuredBlocks.converted`.
+    ///     Quote and alert bodies found here are laid out again as they are:
+    ///     a paragraph's string is stored in its block, a quote's is rendered
+    ///     from its source (`renderQuotedBody`), and that render is the whole
+    ///     cost of a long quote (a 5,000-line one: ~370 ms of ~530). A width
+    ///     change does not change a character, so the render is done once per
+    ///     parse. Pass it ONLY for the same content, theme and zoom (the
+    ///     `measureMathRows` contract); a new parse passes nothing.
     ///   - math: the math engine, or `nil` when the call is NOT on the main
     ///     thread — see the thread rule in the file header. With `nil`, rows
     ///     that need the engine come back at a placeholder height, listed in
@@ -789,6 +1234,8 @@ enum BlockHeightMeasurer {
                         fontScale: CGFloat,
                         contentWidth: CGFloat,
                         heightSeeds: [String: CGFloat] = [:],
+                        imageSizes: [NSString: CGSize] = [:],
+                        reusing: [String: NSAttributedString] = [:],
                         math: MathRendering?) -> MeasuredBlocks {
         #if DEBUG
         let signpostID = heightSignpost.makeSignpostID()
@@ -823,44 +1270,57 @@ enum BlockHeightMeasurer {
 
         var heights: [CGFloat] = []
         var kinds: [RowKind] = []
+        var rhythm: [BlockLayout.Spacing.Row] = []
         var converted: [String: NSAttributedString] = [:]
         var tables: [String: TableText] = [:]
         var mathPendingRows: [Int] = []
         heights.reserveCapacity(blocks.count)
         kinds.reserveCapacity(blocks.count)
+        rhythm.reserveCapacity(blocks.count)
 
-        for block in blocks {
+        for (row, block) in blocks.enumerated() {
+            // Text and headings have their edges measured below; every other
+            // kind's are fixed by its view (`boxRhythm`) — a quote's from its
+            // text's ink.
+            var textEdges: BlockLayout.Spacing.Edges?
+            var quoteInk: BlockLayout.Spacing.TextInk?
             switch block.content {
 
             case .text(let attributed):
                 let hasMath = BlockTextConverter.containsInlineMath(String(attributed.characters))
                 if hasMath, math == nil {
                     // Building the string means rendering `$…$` segments through
-                    // the math engine, which this thread may not touch.
+                    // the math engine, which this thread may not touch. The
+                    // edges are a placeholder too, until `measureMathRows`.
                     mathPendingRows.append(heights.count)
                     heights.append(pendingParagraphHeight)
                     kinds.append(.exact)
+                    textEdges = .box(top: 0, bottom: 0)
                 } else {
                     let ns = BlockTextConverter.makeNSAttributedString(
                         from: attributed, hasInlineMath: hasMath,
                         theme: theme, fontScale: fontScale, math: engine)
                     converted[block.id] = ns
-                    heights.append(exactHeight(text: ns, width: textWidth))
+                    let ink = textInk(text: ns, width: textWidth)
+                    heights.append(ink.height)
                     kinds.append(.exact)
+                    textEdges = .text(ink)
                 }
 
             case .blockquote(let content, let level):
                 // The quote body is inline-rendered exactly as BlockquoteView
                 // does it, and passed to TextBlockView WITHOUT inline math (the
                 // view does not opt in), so we must not opt in either — which is
-                // also why a quote never needs the math engine.
-                let ns = BlockTextConverter.makeNSAttributedString(
+                // also why a quote never needs the math engine. A string the
+                // previous measurement built is only laid out again (`reusing`).
+                let ns = reusing[block.id] ?? BlockTextConverter.makeNSAttributedString(
                     from: renderer.renderQuotedBody(content), hasInlineMath: false,
                     theme: theme, fontScale: fontScale, math: engine)
                 converted[block.id] = ns
                 let width = BlockLayout.Quote.bodyWidth(contentWidth: contentWidth, level: level)
-                heights.append(exactHeight(text: ns, width: width)
-                               + 2 * BlockLayout.Quote.verticalPadding)
+                let ink = textInk(text: ns, width: width)
+                quoteInk = ink
+                heights.append(ink.height + 2 * BlockLayout.Quote.verticalPadding)
                 kinds.append(.exact)
 
             case .alert(_, let content):
@@ -868,7 +1328,7 @@ enum BlockHeightMeasurer {
                     + 2 * BlockLayout.Alert.verticalPadding
                     + 2 * BlockLayout.Document.alertOuterVerticalPadding
                 if !content.isEmpty {
-                    let ns = BlockTextConverter.makeNSAttributedString(
+                    let ns = reusing[block.id] ?? BlockTextConverter.makeNSAttributedString(
                         from: renderer.renderQuotedBody(content), hasInlineMath: false,
                         theme: theme, fontScale: fontScale, math: engine)
                     converted[block.id] = ns
@@ -886,9 +1346,12 @@ enum BlockHeightMeasurer {
                 kinds.append(.exact)
 
             case .heading(let level, let title, _):
-                heights.append(headingEstimate(title: title, level: level,
-                                               renderer: renderer, contentWidth: contentWidth))
+                let heading = headingRow(title: title, level: level,
+                                         renderer: renderer, contentWidth: contentWidth)
+                converted[block.id] = heading.string
+                heights.append(heading.height)
                 kinds.append(.reported)
+                textEdges = heading.edges
 
             case .table(let headers, let rows, let alignments, let style):
                 // The string `TableTextView` installs (it is handed this very
@@ -911,29 +1374,46 @@ enum BlockHeightMeasurer {
                 }
                 kinds.append(.reported)
 
-            case .image:
-                // Only the image itself: when `alt` is non-empty the view's body
-                // is a two-view tuple (image + italic caption `Text`), so the
-                // placed view reports a taller row than this. It is `.reported`
-                // precisely because the real size — decoded bitmap, caption or
-                // no caption — only exists once the view is placed.
-                heights.append(BlockLayout.ImageBlock.placeholderHeight
-                               + 2 * BlockLayout.Document.imageOuterVerticalPadding)
+            case .image(let url, let alt, let htmlWidth):
+                // An image this document has shown has a known size, and the
+                // row is what the view draws for it (`ImageBlock.rowHeight`) at
+                // any width and zoom. Until then: the loading view, 100 pt
+                // plus the caption — also exact, until the image arrives. Still
+                // `.reported`: a link whose file changed, or failed, reports.
+                let picture = imageSizes[url as NSString].map {
+                    BlockLayout.ImageBlock.pictureSize(imageSize: $0, htmlWidth: htmlWidth, fontScale: fontScale,
+                                                       contentWidth: contentWidth).height
+                } ?? BlockLayout.ImageBlock.placeholderHeight
+                heights.append(BlockLayout.ImageBlock.rowHeight(picture: picture, alt: alt, fontScale: fontScale,
+                                                                contentWidth: contentWidth))
                 kinds.append(.reported)
 
-            case .svgImage:
-                // Same shape as `.image`: the decoded size only exists once the
-                // view is placed (decode is off-main), so the row is reported.
-                heights.append(BlockLayout.ImageBlock.placeholderHeight
-                               + 2 * BlockLayout.Document.imageOuterVerticalPadding)
+            case .svgImage(let source):
+                // The markup is in the block, so its size is known here: decoded
+                // once (off-main safe) and cached by `SVGImageDecoder`, where the
+                // view finds it too. Markup that does not decode shows a notice
+                // and reports.
+                let picture = SVGImageDecoder.size(of: source).map {
+                    BlockLayout.ImageBlock.pictureSize(imageSize: $0, htmlWidth: nil, fontScale: fontScale,
+                                                       contentWidth: contentWidth).height
+                } ?? BlockLayout.ImageBlock.placeholderHeight
+                heights.append(picture + 2 * BlockLayout.Document.imageOuterVerticalPadding)
                 kinds.append(.reported)
 
-            case .mermaidDiagram:
-                heights.append((heightSeeds[block.id] ?? BlockLayout.Mermaid.defaultHeight)
-                               + 2 * BlockLayout.Mermaid.verticalPadding
-                               + 2 * BlockLayout.Document.mermaidOuterVerticalPadding)
+            case .mermaidDiagram(let source):
+                // A diagram that rendered once (in either document, from either
+                // its web view or the snapshot that came of it) has its height
+                // computed for this width and zoom; else this block's last
+                // height (a width-only re-measure), else the default.
+                let diagram = MermaidGeometryStore.diagramHeight(source: source, isDark: theme.isDark,
+                                                                 fontScale: fontScale, contentWidth: contentWidth)
+                    ?? heightSeeds[block.id]
+                    ?? BlockLayout.Mermaid.defaultHeight
+                heights.append(BlockLayout.Mermaid.rowHeight(diagram: diagram))
                 kinds.append(.reported)
             }
+            rhythm.append(textEdges.map { rhythmRow(block, edges: $0) }
+                          ?? boxRhythm(block, fontScale: fontScale, quoteInk: quoteInk))
         }
 
         #if DEBUG
@@ -943,10 +1423,60 @@ enum BlockHeightMeasurer {
         #endif
 
         return MeasuredBlocks(
-            table: BlockHeightTable(heights: heights, kinds: kinds, contentWidth: contentWidth),
+            table: BlockHeightTable(heights: heights, kinds: kinds, contentWidth: contentWidth,
+                                    spacingAbove: BlockLayout.Spacing.column(rhythm, fontScale: fontScale)),
             converted: converted,
             tables: tables,
-            mathPendingRows: mathPendingRows)
+            mathPendingRows: mathPendingRows,
+            rhythm: rhythm)
+    }
+
+    // MARK: - Rhythm inputs
+
+    /// A text or heading row's rhythm input, from its measured edges.
+    private static func rhythmRow(_ block: MarkdownBlock, edges: BlockLayout.Spacing.Edges)
+        -> BlockLayout.Spacing.Row {
+        let role: BlockLayout.Spacing.Role
+        if case .heading(let level, _, _) = block.content {
+            role = .heading(level: level)
+        } else {
+            role = .text
+        }
+        return BlockLayout.Spacing.Row(role: role, edges: edges, joinsPrevious: block.joinsPrevious)
+    }
+
+    /// The rhythm input of a row whose edges its view fixes: the vertical
+    /// padding between the row's edge and the visible box (or the picture) —
+    /// where the eye sees the block start. Two blocks have no visible box: a
+    /// quote is read by its text (`quoteInk`, its edges are a paragraph's,
+    /// `Edges.text(_:padding:)`), a diagram by its first ink
+    /// (`Mermaid.inkInset`). A display formula's picture IS its ink (measured:
+    /// within 1.5 pt). Front matter (either form) is the parser's call.
+    private static func boxRhythm(_ block: MarkdownBlock, fontScale: CGFloat,
+                                  quoteInk: BlockLayout.Spacing.TextInk? = nil) -> BlockLayout.Spacing.Row {
+        typealias Document = BlockLayout.Document
+        let role: BlockLayout.Spacing.Role = block.isFrontMatter ? .frontMatter : .box
+        let pad: CGFloat
+        switch block.content {
+        case .blockquote:
+            pad = BlockLayout.Quote.verticalPadding
+            if let quoteInk {
+                return BlockLayout.Spacing.Row(role: role, edges: .text(quoteInk, padding: pad),
+                                               joinsPrevious: block.joinsPrevious)
+            }
+        case .alert: pad = Document.alertOuterVerticalPadding
+        case .codeBlock: pad = Document.codeOuterVerticalPadding
+        case .table:
+            pad = Document.tableOuterVerticalPadding
+        case .mathBlock: pad = Document.mathOuterVerticalPadding + BlockLayout.Math.verticalPadding
+        case .mermaidDiagram:
+            pad = Document.mermaidOuterVerticalPadding + BlockLayout.Mermaid.verticalPadding
+                + BlockLayout.Mermaid.inkInset * fontScale
+        case .image, .svgImage: pad = Document.imageOuterVerticalPadding
+        case .text, .heading: pad = 0  // measured, never here
+        }
+        return BlockLayout.Spacing.Row(role: role, edges: .box(top: pad, bottom: pad),
+                                       joinsPrevious: block.joinsPrevious)
     }
 
     /// One `.codeBlock` row: the code laid out at `codeWidth` plus `chrome`
@@ -1007,7 +1537,7 @@ enum BlockHeightMeasurer {
                                 reusing: [String: NSAttributedString] = [:]) -> MeasuredBlocks {
         guard !pending.isEmpty else {
             return MeasuredBlocks(table: measured.table, converted: measured.converted,
-                                  tables: measured.tables, mathPendingRows: [])
+                                  tables: measured.tables, mathPendingRows: [], rhythm: measured.rhythm)
         }
 
         #if DEBUG
@@ -1020,6 +1550,11 @@ enum BlockHeightMeasurer {
         var heights = measured.table.heights
         var kinds = measured.table.kinds
         var converted = measured.converted
+        // Row for row with `blocks` whenever `measured` came from them; the
+        // guard only keeps a mismatched call from trapping.
+        var rhythm = measured.rhythm.count == blocks.count
+            ? measured.rhythm
+            : blocks.map { boxRhythm($0, fontScale: fontScale) }
         let textWidth = BlockLayout.clampedWidth(contentWidth)
 
         for index in pending {
@@ -1033,7 +1568,9 @@ enum BlockHeightMeasurer {
                     // this string are still the right images and only the wrap
                     // has to be recomputed.
                     converted[block.id] = existing
-                    heights[index] = exactHeight(text: existing, width: textWidth)
+                    let ink = textInk(text: existing, width: textWidth)
+                    heights[index] = ink.height
+                    rhythm[index] = rhythmRow(block, edges: .text(ink))
                     continue
                 }
                 // Re-derive the flag rather than assuming it: the row is pending
@@ -1044,7 +1581,9 @@ enum BlockHeightMeasurer {
                     from: attributed, hasInlineMath: hasMath,
                     theme: theme, fontScale: fontScale, math: math)
                 converted[block.id] = ns
-                heights[index] = exactHeight(text: ns, width: textWidth)
+                let ink = textInk(text: ns, width: textWidth)
+                heights[index] = ink.height
+                rhythm[index] = rhythmRow(block, edges: .text(ink))
 
             case .mathBlock(let latex):
                 heights[index] = math.displayHeight(latex, theme, fontScale)
@@ -1059,37 +1598,50 @@ enum BlockHeightMeasurer {
                     codeWidth: BlockLayout.clampedWidth(contentWidth - 2 * BlockLayout.Code.horizontalPadding),
                     chrome: BlockLayout.Code.verticalChrome(hasLanguage: !language.isEmpty, fontScale: fontScale))
                 kinds[index] = .exact
+                rhythm[index] = boxRhythm(block, fontScale: fontScale)
 
             default:
                 continue
             }
         }
 
+        // The finished rows' edges may have changed (a formula on the first
+        // line, a formula that became a code row), and with them the space
+        // around them: derive the column again — arithmetic only.
         return MeasuredBlocks(
             table: BlockHeightTable(heights: heights, kinds: kinds,
-                                    contentWidth: measured.table.contentWidth),
+                                    contentWidth: measured.table.contentWidth,
+                                    spacingAbove: BlockLayout.Spacing.column(rhythm, fontScale: fontScale)),
             converted: converted,
             tables: measured.tables,
-            mathPendingRows: [])
+            mathPendingRows: [],
+            rhythm: rhythm)
     }
 
-    // MARK: - Estimates for the reported kinds
+    // MARK: - Headings
 
-    /// `.heading` — TextKit's height for the title string at the title's width
-    /// (since v1.11 the title IS an NSTextView laid out with this string),
-    /// floored at the hover-to-copy button's own height. The view also
-    /// reproduces the old first-baseline alignment with the button
-    /// (`BlockLayout.Heading.titleGeometry`), which can add another point or
-    /// two for single-line H2–H6; the placed view corrects it (the row stays
-    /// `.reported`).
-    private static func headingEstimate(title: String, level: Int,
-                                        renderer: MarkdownRenderer,
-                                        contentWidth: CGFloat) -> CGFloat {
+    /// `.heading` — the height `HeadingBlockView` lays out at and the edges of
+    /// its title. Since v1.11 the title IS an NSTextView laid out with this
+    /// string at the title's width, pushed down by the title inset that lines
+    /// its first baseline up with the hover-to-copy button's
+    /// (`BlockLayout.Heading.titleGeometry`), and the row is at least as tall
+    /// as the button's bottom edge. The row stays `.reported`: the placed view
+    /// still has the last word.
+    /// `string` is the title exactly as the view shows and the selection
+    /// copies it: `BlockTextConverter.makeNSAttributedString` of the same
+    /// `renderHeader` output, which without inline math (a heading shows
+    /// `$…$` literally) is this one conversion.
+    private static func headingRow(title: String, level: Int, renderer: MarkdownRenderer,
+                                   contentWidth: CGFloat)
+        -> (height: CGFloat, edges: BlockLayout.Spacing.Edges, string: NSAttributedString) {
         let attributed = renderer.renderHeader(title, level: level)
         let ns = (try? NSAttributedString(attributed, including: \.appKit))
-            ?? NSAttributedString(string: title)
-        let textWidth = BlockLayout.Heading.titleWrapWidth(rowWidth: contentWidth)
-        return max(exactHeight(text: ns, width: textWidth), BlockLayout.Heading.copyButtonHeight)
+            ?? NSAttributedString(string: String(attributed.characters))
+        let geometry = BlockLayout.Heading.titleGeometry(
+            titleFirstBaseline: BlockLayout.Heading.titleFirstBaseline(font: renderer.headerAppKitFont(level: level)))
+        let ink = textInk(text: ns, width: BlockLayout.Heading.titleWrapWidth(rowWidth: contentWidth))
+        let height = max(geometry.titleTopInset + ink.height, geometry.minimumHeight)
+        return (height, .text(ink, top: geometry.titleTopInset, rowHeight: height), ns)
     }
 
 }

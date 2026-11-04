@@ -32,42 +32,64 @@ enum SelectionRows {
     static func pieces(of selection: DocumentSelection, blocks: [MarkdownBlock],
                        text: (MarkdownBlock) -> NSAttributedString?,
                        table: (MarkdownBlock) -> TableText?) -> [SelectionPiece] {
+        parts(of: selection, blocks: blocks, text: text, table: table).map(\.piece)
+    }
+
+    /// `pieces`, each marked with whether it CONTINUES the piece before it:
+    /// its row only continues the previous row (`MarkdownBlock.joinsPrevious`
+    /// — a long block cut into rows, a nested quote group) and that row gave
+    /// a piece too. `DocumentCopyBuilder.build(parts:)` joins those with a
+    /// line break instead of a blank line.
+    static func parts(of selection: DocumentSelection, blocks: [MarkdownBlock],
+                      text: (MarkdownBlock) -> NSAttributedString?,
+                      table: (MarkdownBlock) -> TableText?) -> [DocumentCopyBuilder.Part] {
         guard let span = selection.rowSpan else { return [] }
-        var pieces: [SelectionPiece] = []
-        pieces.reserveCapacity(span.count)
+        var parts: [DocumentCopyBuilder.Part] = []
+        parts.reserveCapacity(span.count)
+        var lastRowWithPiece: Int?
 
         for row in span where row < blocks.count {
             let block = blocks[row]
-            switch block.content {
-            case .table:
-                guard let built = table(block),
-                      let covered = selection.range(inRow: row, rowLength: built.string.length),
-                      let piece = tablePiece(built, covered: covered) else { continue }
-                pieces.append(piece)
-            case .image(_, let alt, _):
-                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                pieces.append(.image(alt: alt))
-            case .svgImage:
-                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                pieces.append(.image(alt: ""))
-            case .mathBlock(let latex):
-                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                pieces.append(.displayMath(latex: latex))
-            case .mermaidDiagram(let source):
-                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                pieces.append(.mermaid(source: source))
-            case .codeBlock, .text, .blockquote, .alert, .heading:
-                guard let string = text(block),
-                      let covered = selection.range(inRow: row, rowLength: string.length) else { continue }
-                let part = string.attributedSubstring(from: covered)
-                if case .codeBlock = block.content {
-                    pieces.append(.code(part))
-                } else {
-                    pieces.append(.text(part))
-                }
-            }
+            guard let piece = piece(of: selection, row: row, block: block, text: text, table: table) else { continue }
+            parts.append(DocumentCopyBuilder.Part(
+                piece: piece, continuesPrevious: block.joinsPrevious && lastRowWithPiece == row - 1))
+            lastRowWithPiece = row
         }
-        return pieces
+        return parts
+    }
+
+    /// The covered part of ONE row as a copy piece; nil when the selection
+    /// covers nothing of it.
+    private static func piece(of selection: DocumentSelection, row: Int, block: MarkdownBlock,
+                              text: (MarkdownBlock) -> NSAttributedString?,
+                              table: (MarkdownBlock) -> TableText?) -> SelectionPiece? {
+        switch block.content {
+        case .table:
+            guard let built = table(block),
+                  let covered = selection.range(inRow: row, rowLength: built.string.length) else { return nil }
+            return tablePiece(built, covered: covered)
+        case .image(_, let alt, _):
+            return selection.range(inRow: row, rowLength: 1) == nil ? nil : .image(alt: alt)
+        case .svgImage:
+            return selection.range(inRow: row, rowLength: 1) == nil ? nil : .image(alt: "")
+        case .mathBlock(let latex):
+            return selection.range(inRow: row, rowLength: 1) == nil ? nil : .displayMath(latex: latex)
+        case .mermaidDiagram(let source):
+            return selection.range(inRow: row, rowLength: 1) == nil ? nil : .mermaid(source: source)
+        case .codeBlock, .text, .blockquote, .alert, .heading:
+            guard let string = text(block),
+                  let covered = selection.range(inRow: row, rowLength: string.length) else { return nil }
+            if block.substitutesFormula, case .codeBlock(let latex, _) = block.content,
+               covered.location == 0, covered.length == string.length {
+                // A formula shown as its source, covered whole (a drag across
+                // it, ⌘A): the formula, `$$…$$`, as 1.14.2 copied it. Part of
+                // its text copies as that text, like any selection.
+                return .displayMath(latex: latex)
+            }
+            let part = string.attributedSubstring(from: covered)
+            if case .codeBlock = block.content { return .code(part) }
+            return .text(part)
+        }
     }
 
     /// The piece for the `covered` part of a table's string (TS-D8):
@@ -139,9 +161,14 @@ enum SelectionRows {
 
     /// `text` with what belongs to the TABLE removed from its paragraph
     /// styles: the text blocks (the cell) and the alignment (the column's,
-    /// from the separator row — back to natural). The rest is kept.
+    /// from the separator row — back to natural). The rest is kept. A
+    /// front-matter list's U+2028 (one item per line) becomes a plain line
+    /// break: the copy reads as the cell shows, without a separator most
+    /// apps treat as invisible.
     private static func withoutCellLayout(_ text: NSAttributedString) -> NSAttributedString {
         let result = NSMutableAttributedString(attributedString: text)
+        result.mutableString.replaceOccurrences(of: FrontMatter.itemLineSeparator, with: "\n", options: [],
+                                                range: NSRange(location: 0, length: result.length))
         result.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: result.length)) { value, range, _ in
             guard let style = value as? NSParagraphStyle,
                   !style.textBlocks.isEmpty || style.alignment != .natural,
@@ -271,6 +298,26 @@ extension SelectionRows {
         let clamped = NSPoint(x: min(max(local.x, 0), viewSize.width),
                               y: min(max(local.y, 0), viewSize.height))
         return min(max(0, characterIndex(clamped)), length)
+    }
+}
+
+extension SelectionRows {
+    /// The character a double- or triple-click in the space between two
+    /// blocks is about. Such a click lands where a single click there does —
+    /// the start of the row below (`offset` 0) or the end of the row above —
+    /// and is about the word at that end: the first character, or the last
+    /// one that is not a line break (a table's string ends in one). Nil for
+    /// an empty string.
+    static func multiClickIndex(atRowBoundary offset: Int, in string: NSString) -> Int? {
+        guard string.length > 0 else { return nil }
+        guard offset > 0 else { return 0 }
+        var index = min(offset, string.length) - 1
+        func isLineBreak(_ index: Int) -> Bool {
+            let unit = string.character(at: index)
+            return unit == 0x0A || unit == 0x0D || unit == 0x2028 || unit == 0x2029
+        }
+        while index > 0, isLineBreak(index) { index -= 1 }
+        return index
     }
 }
 

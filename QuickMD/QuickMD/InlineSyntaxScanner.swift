@@ -54,18 +54,34 @@ enum InlineSyntaxScanner {
         fileprivate func closingBracket(atAbsolute offset: Int) -> Int? { pairs.brackets[offset] }
         fileprivate func closingParen(atAbsolute offset: Int) -> Int? { pairs.parens[offset] }
 
+        /// Two linear passes. Parens first, everywhere (a destination is not
+        /// code). Then brackets, skipping code spans (code spans outrank
+        /// brackets) and the destination after a `](` — the renderer consumes
+        /// it as the link's, so a backtick in a URL (`[a](u`x) [b](v)`) must
+        /// not open a "span" that swallows a later link's `[`.
         private static func build(_ text: String) -> (brackets: [Int: Int], parens: [Int: Int]) {
             InlineSyntaxScanner.withBytes(text[...]) { bytes in
-                var brackets: [Int: Int] = [:], parens: [Int: Int] = [:]
-                var openBrackets: [Int] = [], openParens: [Int] = []
+                var brackets: [Int: Int] = [:]
+                let parens = pairParens(bytes)
+                var openBrackets: [Int] = []
+                var codeSpans = CodeSpanScanner()
                 var i = 0
                 while i < bytes.count {
                     if isEscape(bytes, at: i, before: bytes.count) { i += 2; continue }
+                    if bytes[i] == backtick, let end = codeSpans.end(bytes, at: i) {
+                        i = end
+                        continue
+                    }
                     switch bytes[i] {
                     case UInt8(ascii: "["): openBrackets.append(i)
-                    case UInt8(ascii: "]"): if let open = openBrackets.popLast() { brackets[open] = i }
-                    case UInt8(ascii: "("): openParens.append(i)
-                    case UInt8(ascii: ")"): if let open = openParens.popLast() { parens[open] = i }
+                    case UInt8(ascii: "]"):
+                        if let open = openBrackets.popLast() {
+                            brackets[open] = i
+                            if i + 1 < bytes.count, bytes[i + 1] == UInt8(ascii: "("), let close = parens[i + 1] {
+                                i = close + 1
+                                continue
+                            }
+                        }
                     default: break
                     }
                     i += 1
@@ -73,6 +89,24 @@ enum InlineSyntaxScanner {
                 return (brackets, parens)
             }
         }
+    }
+
+    /// Every `(` → its `)`, one stack pass, escapes respected — exactly the
+    /// closer a depth scan from that `(` finds (`scanParenDestination`).
+    fileprivate static func pairParens(_ bytes: Bytes) -> [Int: Int] {
+        var parens: [Int: Int] = [:]
+        var open: [Int] = []
+        var i = 0
+        while i < bytes.count {
+            if isEscape(bytes, at: i, before: bytes.count) { i += 2; continue }
+            switch bytes[i] {
+            case UInt8(ascii: "("): open.append(i)
+            case UInt8(ascii: ")"): if let start = open.popLast() { parens[start] = i }
+            default: break
+            }
+            i += 1
+        }
+        return parens
     }
 
     /// A pair table seen from a slice: offsets in the slice's byte buffer are
@@ -171,6 +205,46 @@ enum InlineSyntaxScanner {
         }
     }
 
+    /// A line that is nothing but ONE linked image — `[![alt](img)](url)`,
+    /// `[![alt][logo]][site]` or any link form `MarkdownRenderer.tryParseLink`
+    /// accepts around one image, whitespace around it allowed — as the image
+    /// it shows. The link target is NOT returned: the parser makes the line an
+    /// ordinary image block (click = preview), as `<a href><img></a>` is;
+    /// links on images are a later feature. Text beside the link, a second
+    /// image or an outer link that does not resolve → nil (a paragraph, as
+    /// before).
+    static func linkedImage(in line: Substring, references: [String: String]) -> ImageSyntax? {
+        let scalars = line.unicodeScalars
+        guard let first = scalars.firstIndex(where: { !$0.properties.isWhitespace }),
+              let last = scalars.lastIndex(where: { !$0.properties.isWhitespace }) else { return nil }
+        // Cheap reject before any copy: most lines are not this.
+        guard Substring(scalars[first...last]).utf8.starts(with: "[![".utf8) else { return nil }
+        let text = String(Substring(scalars[first...last]))
+        let pairs = PairTable(text)
+        guard let close = closingBracket(in: text[...], pairs: pairs) else { return nil }
+        let linkText = text[text.index(after: text.startIndex)..<close]
+
+        // The link text: exactly one image, spaces around it allowed.
+        let innerStart = linkText.firstIndex { !$0.isWhitespace } ?? linkText.endIndex
+        guard let image = self.image(atStartOf: linkText[innerStart...], references: references, pairs: pairs),
+              linkText[image.end...].allSatisfy(\.isWhitespace) else { return nil }
+
+        // The link itself, by `tryParseLink`'s rules, ending the line.
+        let after = text[text.index(after: close)...]
+        if after.hasPrefix("(") {
+            guard let destination = parenthesizedDestination(after, pairs: pairs),
+                  destination.end == text.endIndex else { return nil }
+        } else if after.hasPrefix("[") {
+            guard let labelClose = ReferenceLabel.closingBracket(in: after, from: after.index(after: after.startIndex)),
+                  text.index(after: labelClose) == text.endIndex else { return nil }
+            let label = String(after[after.index(after: after.startIndex)..<labelClose])
+            guard references[ReferenceLabel.normalized(label.isEmpty ? String(linkText) : label)] != nil else { return nil }
+        } else {
+            guard after.isEmpty, references[ReferenceLabel.normalized(linkText)] != nil else { return nil }
+        }
+        return ImageSyntax(alt: image.alt, url: image.url, end: line.endIndex)
+    }
+
     /// `data:` scheme (case-insensitive) — the destination of an embedded
     /// image. Looks at five bytes, never at the payload.
     static func isDataURI(_ url: String) -> Bool {
@@ -198,6 +272,39 @@ enum InlineSyntaxScanner {
     }
 
     private static let backslash = UInt8(ascii: "\\")
+    private static let backtick = UInt8(ascii: "`")
+
+    /// Where `MarkdownRenderer.tryParseInlineCode` would end a code span
+    /// starting at a backtick — so bracket matching skips what the renderer
+    /// will draw as code (CommonMark: code spans outrank brackets;
+    /// `[a `](` b](u)` is a link whose text holds the code "](").
+    /// Its rules exactly: a run of 1 or 2 backticks closes at the FIRST later
+    /// occurrence of that many backticks (a 2-run whose closer is followed by
+    /// a third backtick opens nothing); a run of 3+ is literal and skipped
+    /// whole. No span → nil (the caller moves on one byte, as the renderer
+    /// moves on one character). A search that found no closer is remembered
+    /// per run length, so many unclosed backticks stay linear.
+    fileprivate struct CodeSpanScanner {
+        private var noCloserAfter: [Int: Int] = [:]  // run length → offset searched from
+
+        mutating func end(_ bytes: Bytes, at start: Int) -> Int? {
+            var run = 0
+            while start + run < bytes.count, bytes[start + run] == backtick { run += 1 }
+            if run > 2 { return start + run }
+            if let from = noCloserAfter[run], from <= start + run { return nil }
+            var i = start + run
+            while i + run <= bytes.count {
+                if bytes[i] == backtick, run == 1 || bytes[i + 1] == backtick {
+                    if run == 2, i + 2 < bytes.count, bytes[i + 2] == backtick { return nil }
+                    return i + run
+                }
+                i += 1
+            }
+            noCloserAfter[run] = start + run
+            return nil
+        }
+    }
+    private static let ampersand = UInt8(ascii: "&")
 
     /// CommonMark whitespace for these purposes: space, tab, LF, VT, FF, CR.
     private static func isWhitespace(_ byte: UInt8) -> Bool {
@@ -233,13 +340,28 @@ enum InlineSyntaxScanner {
         if let lookup { return lookup.closingBracket(open).flatMap { $0 < bytes.count ? $0 : nil } }
         var depth = 0
         var i = open
+        var codeSpans = CodeSpanScanner()
+        /// Built on the first inner `](` only: a depth scan per `](` that
+        /// never closes went to the end of the line each time (quadratic on
+        /// `![x` + `[a](` × N, review round 7).
+        var parens: [Int: Int]?
         while i < bytes.count {
             if isEscape(bytes, at: i, before: bytes.count) { i += 2; continue }
+            if bytes[i] == backtick, let end = codeSpans.end(bytes, at: i) { i = end; continue }
             switch bytes[i] {
             case UInt8(ascii: "["): depth += 1
             case UInt8(ascii: "]"):
                 depth -= 1
                 if depth == 0 { return i }
+                // An inner link's destination is not scanned for code spans
+                // (see `PairTable.build`).
+                if i + 1 < bytes.count, bytes[i + 1] == UInt8(ascii: "(") {
+                    if parens == nil { parens = pairParens(bytes) }
+                    if let close = parens?[i + 1] {
+                        i = close + 1
+                        continue
+                    }
+                }
             default: break
             }
             i += 1
@@ -346,22 +468,35 @@ enum InlineSyntaxScanner {
     /// The bytes as a String with `\<punctuation>` → `<punctuation>`. Other
     /// backslashes stay literal (`C:\dir\x.png`). One copy when there is
     /// nothing to unescape — the common case, and the multi-MB `data:` case.
+    /// A destination's text: backslash escapes of ASCII punctuation removed
+    /// and character references decoded (`a?b=1&amp;c=2` → `a?b=1&c=2`, as
+    /// CommonMark and GitHub read a link's href) — but not the `&` of an
+    /// escaped `\&`. One pass over the bytes when there is neither.
     private static func unescaped(_ bytes: Bytes, _ range: Range<Int>) -> String {
         let slice = Bytes(rebasing: bytes[range])
-        guard slice.contains(backslash) else { return String(decoding: slice, as: UTF8.self) }
-        var out: [UInt8] = []
-        out.reserveCapacity(slice.count)
+        guard slice.contains(where: { $0 == backslash || $0 == ampersand }) else {
+            return String(decoding: slice, as: UTF8.self)
+        }
+        var out = ""
+        var run: [UInt8] = []
+        func flushRun() {
+            guard !run.isEmpty else { return }
+            out += HTMLEntities.decode(String(decoding: run, as: UTF8.self))
+            run.removeAll(keepingCapacity: true)
+        }
         var i = 0
         while i < slice.count {
             if isEscape(slice, at: i, before: slice.count) {
-                out.append(slice[i + 1])
+                flushRun()
+                out += String(decoding: [slice[i + 1]], as: UTF8.self)
                 i += 2
             } else {
-                out.append(slice[i])
+                run.append(slice[i])
                 i += 1
             }
         }
-        return String(decoding: out, as: UTF8.self)
+        flushRun()
+        return out
     }
 
     /// An image starting at `start` (`![`), see `image(atStartOf:references:)`.
@@ -385,13 +520,13 @@ enum InlineSyntaxScanner {
         if next < bytes.count, bytes[next] == UInt8(ascii: "["),
            let labelClose = matchLabel(bytes, open: next) {
             let labelRange = labelClose == next + 1 ? altRange : (next + 1)..<labelClose
-            guard let url = references[string(bytes, labelRange).lowercased()] else { return nil }
+            guard let url = references[ReferenceLabel.normalized(string(bytes, labelRange))] else { return nil }
             return (string(bytes, altRange), url, labelClose + 1)
         }
 
         // Shortcut reference: ![alt]
         let alt = string(bytes, altRange)
-        guard let url = references[alt.lowercased()] else { return nil }
+        guard let url = references[ReferenceLabel.normalized(alt)] else { return nil }
         return (alt, url, next)
     }
 }
