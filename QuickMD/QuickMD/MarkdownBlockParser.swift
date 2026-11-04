@@ -395,7 +395,7 @@ struct MarkdownBlockParser: Sendable {
                                                        references: referenceDefinitions)
                             else { break }
                             groupLines.append(lines[i])
-                            tip.take(lines[i])
+                            tip.takeLazy()
                             i += 1
                             continue
                         }
@@ -421,7 +421,7 @@ struct MarkdownBlockParser: Sendable {
                                                        references: referenceDefinitions)
                             else { break }
                             groupLines.append(content)
-                            tip.take(content)
+                            tip.takeLazy()
                             i += 1
                             continue
                         }
@@ -1004,6 +1004,16 @@ struct MarkdownBlockParser: Sendable {
         private var inTable = false
         private var previousHadPipe = false
 
+        /// A lazily continued line (no marker, or fewer markers than the
+        /// group): paragraph text whatever it looks like — CommonMark never
+        /// reads a lazy line as a table separator, a Setext underline or any
+        /// other structure, so the paragraph stays open for the next one.
+        mutating func takeLazy() {
+            endsInParagraph = true
+            previousHadPipe = false
+        }
+
+        /// A line of the group itself (marked at the group's level).
         mutating func take(_ content: String) {
             let marker = MarkdownBlockParser.markerLine(content)
             if let open = fence {

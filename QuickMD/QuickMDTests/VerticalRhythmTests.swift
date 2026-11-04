@@ -714,6 +714,23 @@ final class VerticalRhythmTests: XCTestCase {
                        ["q1:| x | y |\n|---|---|\n| 1 | 2 |", "t:lazy"])
     }
 
+    /// A lazy line is paragraph text, never structure: a lazy `|---|` or
+    /// `===` read as a table separator or a Setext underline closed the
+    /// quote's paragraph, and the NEXT lazy line fell out of the quote.
+    /// GitHub keeps every one of them in the paragraph (gfm/g5_*.html).
+    func testALazyLineIsNeverReadAsStructure() throws {
+        XCTAssertEqual(try quoteShape("> a\n| x | y |\n|---|---|\n| 1 | 2 |\n"),
+                       ["q1:a\n| x | y |\n|---|---|\n| 1 | 2 |"])
+        XCTAssertEqual(try quoteShape("> a\nb\n===\nc\n"), ["q1:a\nb\n===\nc"])
+        XCTAssertEqual(try quoteShape("> > a\n> ===\n> c\n"), ["q2:a\n===\nc"])
+        XCTAssertEqual(try quoteShape("> > a\n> | x |\n> |---|\n> c\n"), ["q2:a\n| x |\n|---|\nc"])
+        // Marked lines still are structure: a marked table, then an
+        // unmarked row, ends the quote (GitHub too).
+        XCTAssertEqual(try quoteShape("> | x | y |\n> |---|---|\n> | 1 | 2 |\nlazy\n"),
+                       ["q1:| x | y |\n|---|---|\n| 1 | 2 |", "t:lazy"])
+        XCTAssertEqual(try quoteShape("> a\n> ===\nb\n"), ["q1:a\n===", "t:b"])
+    }
+
     /// The lines a quote absorbed are the quote's: its source line is its
     /// first, the next block starts after them, the tint spans them, search
     /// finds and copy reads them in the quote — and a long hard-wrapped quote
