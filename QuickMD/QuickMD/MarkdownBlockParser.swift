@@ -319,6 +319,11 @@ struct MarkdownBlockParser: Sendable {
                     headers = normalizeArray(headers, to: columnCount, default: "")
                     alignments = normalizeArray(alignments, to: columnCount, default: .leading)
                     rows = rows.map { normalizeArray($0, to: columnCount, default: "") }
+                    // Cells are rendered later without the definitions (`ReferenceLinks`).
+                    if !referenceDefinitions.isEmpty {
+                        headers = headers.map { ReferenceLinks.inlined($0, definitions: referenceDefinitions) }
+                        rows = rows.map { $0.map { ReferenceLinks.inlined($0, definitions: referenceDefinitions) } }
+                    }
 
                     // Header row line — `i` has already walked past the body rows.
                     blocks.append(.table(index: blockIndex, headers: headers, rows: rows, alignments: alignments,
@@ -379,15 +384,17 @@ struct MarkdownBlockParser: Sendable {
                         i += 1
                     }
 
-                    let content = groupLines.joined(separator: "\n")
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    // Quote and alert bodies are rendered later without the
+                    // definitions, so references are resolved here (`ReferenceLinks`).
+                    let content = ReferenceLinks.inlined(groupLines.joined(separator: "\n")
+                        .trimmingCharacters(in: .whitespacesAndNewlines), definitions: referenceDefinitions)
                     if !content.isEmpty {
                         // GFM alert: level-1 quote whose first line is exactly
                         // `[!NOTE]` / `[!TIP]` / `[!IMPORTANT]` / `[!WARNING]` /
                         // `[!CAUTION]` (marker alone on the line, per GitHub spec).
                         if groupLevel == 1, let kind = AlertKind(markerLine: groupLines[0]) {
-                            let body = groupLines.dropFirst().joined(separator: "\n")
-                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            let body = ReferenceLinks.inlined(groupLines.dropFirst().joined(separator: "\n")
+                                .trimmingCharacters(in: .whitespacesAndNewlines), definitions: referenceDefinitions)
                             blocks.append(.alert(index: blockIndex, kind: kind, content: body, sourceLine: groupSourceLine))
                             previousGroupWasQuote = false
                         } else {

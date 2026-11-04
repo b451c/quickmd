@@ -414,6 +414,77 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(rows[4], ["`p\\|q`", "c"])
     }
 
+    // MARK: - Reference links in quotes, alerts and table cells
+
+    /// Quotes, alerts and table cells keep their markdown and are rendered
+    /// later by renderers without the document's definitions, so the parser
+    /// inlines resolvable references (`ReferenceLinks`) — they used to show
+    /// as `[text][id]`.
+    func testReferenceLinksResolveInQuotesAlertsAndTableCells() {
+        let md = """
+        > See [the docs][docs], ![logo][img] and [Docs].
+
+        > [!NOTE]
+        > Read [the guide][].
+
+        | A | B |
+        |---|---|
+        | [x][docs] | ![i][img] |
+
+        [docs]: https://example.com/docs_(v2)
+        [img]: img/logo.png
+        [the guide]: https://example.com/guide
+        """
+        let blocks = parse(md)
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))  // no definitions
+        func links(_ attributed: AttributedString) -> [String] {
+            attributed.runs.compactMap { $0.link?.absoluteString }
+        }
+
+        guard case .blockquote(let quote, 1) = blocks[0].content else { return XCTFail("quote") }
+        XCTAssertEqual(quote, "See [the docs](<https://example.com/docs_\\(v2\\)>), ![logo](<img/logo.png>) "
+                       + "and [Docs](<https://example.com/docs_\\(v2\\)>).")
+        let shown = renderer.renderQuotedBody(quote)
+        XCTAssertEqual(String(shown.characters), "See the docs, [Image: logo] and Docs.")
+        XCTAssertEqual(links(shown).first, "https://example.com/docs_(v2)")
+
+        guard case .alert(.note, let alert) = blocks[1].content else { return XCTFail("alert") }
+        XCTAssertEqual(links(renderer.renderQuotedBody(alert)), ["https://example.com/guide"])
+
+        guard case .table(_, let rows, _, .grid) = blocks[2].content else { return XCTFail("table") }
+        XCTAssertEqual(rows[0], ["[x](<https://example.com/docs_\\(v2\\)>)", "![i](<img/logo.png>)"])
+        XCTAssertEqual(links(renderer.renderInline(rows[0][0])), ["https://example.com/docs_(v2)"])
+    }
+
+    /// The rewrite must draw exactly what the paragraph renderer (which HAS the
+    /// definitions) draws for the same line: characters and links.
+    func testReferenceInliningMatchesTheDefinitionAwareRenderer() {
+        let theme = MarkdownTheme.cached(for: .light)
+        let definitions = ["docs": "https://example.com/docs_(v2)", "img": "img/My Pic.png",
+                           "a b": "https://example.com/ab", "bad": "https://example.com/a<b>\\\\c", "paren": "https://e.x/a)b(c"]
+        let withDefinitions = MarkdownRenderer(theme: theme, referenceDefinitions: definitions)
+        let plain = MarkdownRenderer(theme: theme)
+        let lines = [
+            "[docs] and [Docs][] and [text][DOCS] and [A B]",
+            "`[docs]` in code, ``[docs]`` too, \\[docs] escaped, \\[x\\][docs]",
+            "***[docs]*** and ~~[docs]~~ stay plain, **[docs]** is a link",
+            "[![badge][img]][docs] and ![img] and ![alt][]",
+            "[inline](https://x.y/(a)) next to [docs]",
+            "[unknown][nope] [unknown] [docs][nope]",
+            "[bad] and [paren] escape what the <…> form needs",
+            "a ` lone backtick [docs] then ``` three ``` [docs]",
+        ]
+        for line in lines {
+            let inlined = ReferenceLinks.inlined(line, definitions: definitions)
+            let expected = withDefinitions.renderInline(line)
+            let actual = plain.renderInline(inlined)
+            XCTAssertEqual(String(actual.characters), String(expected.characters), line)
+            XCTAssertEqual(actual.runs.compactMap { $0.link?.absoluteString },
+                           expected.runs.compactMap { $0.link?.absoluteString }, line)
+        }
+        XCTAssertEqual(ReferenceLinks.inlined("[docs]\n[img]", definitions: [:]), "[docs]\n[img]")
+    }
+
     // MARK: - Blockquotes
 
     func testBlockquoteNestingLevels() {
