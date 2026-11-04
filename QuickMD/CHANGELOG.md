@@ -5,6 +5,17 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.3] - 2026-11-04
+
+Two rendering fixes.
+
+### Fixed
+- A blank line under a heading, or after a paragraph or list before the next heading, no longer shows as an extra empty line. A document looks the same with or without it, as on GitHub.
+- A display formula that cannot be typeset (for example one with `\not\le`) shows its LaTeX source as a code block instead of an empty space. Formulas that typeset look as before.
+
+### Changed
+- Mac App Store version: QuickMD may ask for a rating with the standard macOS prompt, at most once per version and no more than every four months. It asks only after documents were opened on at least three different days over a week or more, after a minute of reading, and never while you edit or right after the Mac sat idle. The count stays on your Mac.
+
 ## [1.14.2] - 2026-11-04
 
 Front matter you can read at a glance.
