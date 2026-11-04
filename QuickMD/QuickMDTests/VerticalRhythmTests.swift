@@ -817,6 +817,25 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(blocks.map(\.sourceLine), [1, 3])
     }
 
+    /// A deeper `>` opens a nested quote, whose first line starts a new
+    /// paragraph: a link definition there is a definition, also right under
+    /// the quote's text (GitHub, gfm/h7_*.html). The pre-pass read every
+    /// level as one quote, so `> a` then `>> [x]: url` was the nested
+    /// quote's text and `[x]` stayed literal. Fewer markers still continue
+    /// the paragraph lazily, and so does a nested quote a lazy line kept
+    /// open; inside the quote's fence a deeper `>` is code.
+    func testADefinitionOpeningADeeperQuoteIsADefinition() throws {
+        XCTAssertEqual(try quoteShape("> a\n>> [x]: http://e.com\n\n[x]\n"), ["q1:a", "t:x"])
+        XCTAssertEqual(try quoteShape("> a\n> > [x]: http://e.com\n\n[x]\n"), ["q1:a", "t:x"])
+        XCTAssertEqual(try quoteShape("> a\n> > b\n> > > [x]: http://e.com\n\n[x]\n"), ["q1:a", "q2:b", "t:x"])
+        XCTAssertEqual(try quoteShape("> | a |\n> |---|\n> | 1 |\n>> [x]: http://e.com\n\n[x]\n").last, "t:x")
+        XCTAssertEqual(try quoteShape("> > ```\n> > c\n> > ```\n> [x]: http://e.com\n\n[x]\n").last, "t:x")
+        // Text where GitHub has text.
+        XCTAssertEqual(try quoteShape(">> a\n> [x]: http://e.com\n\n[x]\n"), ["q2:a\n[x]: http://e.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("> > a\n> b\n> > [x]: http://e.com\n\n[x]\n").last, "t:[x]")
+        XCTAssertEqual(try quoteShape("> ```\n>> [x]: http://e.com\n> ```\n\n[x]\n").last, "t:[x]")
+    }
+
     func testALinkDefinitionCannotInterruptAParagraph() throws {
         XCTAssertEqual(try quoteShape("> a\n[x]: http://e.com\n\n[x]\n"), ["q1:a\n[x]: http://e.com", "t:[x]"])
         XCTAssertEqual(try quoteShape("Para\n[x]: http://e.com\n\n[x]\n"), ["t:Para [x]: http://e.com", "t:[x]"])

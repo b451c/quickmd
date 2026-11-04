@@ -1187,6 +1187,9 @@ struct MarkdownBlockParser: Sendable {
         /// definition may stand (`DefinitionPlacement`).
         var admitsDefinition: Bool { fence == nil && !inTable && !endsInParagraph }
 
+        /// Inside the quote's fence.
+        var inFence: Bool { fence != nil }
+
         /// A lazily continued line (no marker, or fewer markers than the
         /// group): paragraph text whatever it looks like — CommonMark never
         /// reads a lazy line as a table separator, a Setext underline or any
@@ -1293,8 +1296,12 @@ struct MarkdownBlockParser: Sendable {
     /// outside fenced code.)
     struct DefinitionPlacement {
         private(set) var paragraphOpen = false
-        /// The quote being read: what its lines end in (`QuoteTip`).
+        /// The quote group being read, grouped as the block loop groups it:
+        /// what its lines end in (`QuoteTip`) and its `>` count. A line with
+        /// more markers opens a nested quote, a new group; one with fewer
+        /// goes on lazily or starts a new group.
         private var quote: QuoteTip?
+        private var quoteLevel = 0
 
         /// A line of a fenced code or `$$` block (`VerbatimRegions`).
         mutating func verbatim() {
@@ -1312,25 +1319,50 @@ struct MarkdownBlockParser: Sendable {
         /// be read from, or nil where none may stand: the line itself where
         /// no paragraph is open; what follows a quote line's markers where
         /// the line starts a paragraph of its quote (GitHub: `> [x]: url`
-        /// defines `x` and leaves the quote empty) — not after the quote's
-        /// text, nor in its fence or table. One case GitHub reads as a
-        /// definition stays text: a deeper quote opened right under the
-        /// quote's text (`> a`, then `> > [x]: url`).
+        /// defines `x` and leaves the quote empty) — a new quote, a deeper
+        /// one opened under the quote's text (`> a`, then `>> [x]: url`), or
+        /// a line of the group after no open paragraph. Not lazy text, nor
+        /// in the quote's fence or table.
         func linkDefinitionText(_ marker: String) -> String? {
             guard marker.hasPrefix(">") else { return paragraphOpen ? nil : marker }
-            guard quote?.admitsDefinition ?? true else { return nil }
-            return MarkdownBlockParser.markerLine(String(Self.quoteContent(of: marker)))
+            let (level, content) = Self.quoteMarkers(of: marker)
+            let text = MarkdownBlockParser.markerLine(String(content))
+            switch step(level: level, content: String(content)) {
+            case .same:
+                return quote?.admitsDefinition == true ? text : nil
+            case .lazy:
+                return nil
+            case .newGroup:
+                // A deeper `>` inside the quote's fence is that fence's code.
+                if level > quoteLevel, quote?.inFence == true { return nil }
+                return text
+            }
         }
 
-        /// What follows a quote line's markers (each `>` with one optional
-        /// space after it).
-        static func quoteContent(of marker: String) -> Substring {
+        /// How a quote line goes on from the group being read — the block
+        /// loop's grouping (lazy: fewer markers, continuing its paragraph).
+        private enum QuoteStep { case same, lazy, newGroup }
+
+        private func step(level: Int, content: String) -> QuoteStep {
+            guard let tip = quote else { return .newGroup }
+            if level == quoteLevel { return .same }
+            if level < quoteLevel, tip.endsInParagraph, MarkdownBlockParser.startsNoBlock(content) {
+                return .lazy
+            }
+            return .newGroup
+        }
+
+        /// A quote line's `>` count and what follows its markers (each `>`
+        /// with one optional space after it).
+        static func quoteMarkers(of marker: String) -> (level: Int, content: Substring) {
             var content = marker[...]
+            var level = 0
             while content.hasPrefix(">") {
                 content = content.dropFirst()
+                level += 1
                 if content.hasPrefix(" ") { content = content.dropFirst() }
             }
-            return content
+            return (level, content)
         }
 
         /// Any other line, kept for the block loop.
@@ -1342,8 +1374,18 @@ struct MarkdownBlockParser: Sendable {
             }
             let marker = MarkdownBlockParser.markerLine(line)
             if marker.hasPrefix(">") {
+                let (level, content) = Self.quoteMarkers(of: marker)
                 var tip = quote ?? QuoteTip()
-                tip.take(String(Self.quoteContent(of: marker)))
+                switch step(level: level, content: String(content)) {
+                case .same:
+                    tip.take(String(content))
+                case .lazy:
+                    tip.takeLazy()
+                case .newGroup:
+                    tip = QuoteTip()
+                    tip.take(String(content))
+                    quoteLevel = level
+                }
                 quote = tip
                 paragraphOpen = tip.endsInParagraph
                 return
