@@ -103,8 +103,12 @@ final class PrintableTableTests: XCTestCase {
         // monospacing survived the raise.
         XCTAssertEqual(try drawnFonts(Text(cell("*Abc*", header: true))),
                        try drawnFonts(reference(.system(size: size, weight: .semibold).italic())))
+        // Inline code's size has no named constant (the renderer stamps it
+        // per run), so the reference takes it from the rendered run itself.
+        let codeSize = try XCTUnwrap(renderer.renderInline("`Abc`").runs.first?[
+            AttributeScopes.AppKitAttributes.FontAttribute.self]).pointSize
         XCTAssertEqual(try drawnFonts(Text(cell("`Abc`", header: true))),
-                       try drawnFonts(reference(.system(size: 13, weight: .semibold, design: .monospaced))))
+                       try drawnFonts(reference(.system(size: codeSize, weight: .semibold, design: .monospaced))))
     }
 
     /// "Abc" in `font`, as a run attribute — the way every cell reaches `Text`.

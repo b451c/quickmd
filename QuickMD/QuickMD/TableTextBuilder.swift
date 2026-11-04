@@ -344,13 +344,20 @@ enum TableTextBuilder {
                               renderer: MarkdownRenderer) -> AttributedString {
         let cell = renderer.renderInline(markdown)
         guard isHeader else { return cell }
-        var raisedCell = cell
+        // Rebuilt run by run from the UNCHANGED `cell`, so every range is used
+        // only on the string it came from (AttributedString indices are not
+        // documented to survive a mutation); each run is set on its own copy.
+        var raisedCell = AttributedString()
         for run in cell.runs {
-            guard let font = run[AttributeScopes.AppKitAttributes.FontAttribute.self] else { continue }
-            let raised = headerWeightFont(font)
-            guard raised !== font else { continue }
-            raisedCell[run.range][AttributeScopes.AppKitAttributes.FontAttribute.self] = raised
-            raisedCell[run.range].font = Font(raised as CTFont)
+            var piece = AttributedString(cell[run.range])
+            if let font = piece[AttributeScopes.AppKitAttributes.FontAttribute.self] {
+                let raised = headerWeightFont(font)
+                if raised !== font {
+                    piece[AttributeScopes.AppKitAttributes.FontAttribute.self] = raised
+                    piece.font = Font(raised as CTFont)
+                }
+            }
+            raisedCell.append(piece)
         }
         return raisedCell
     }
