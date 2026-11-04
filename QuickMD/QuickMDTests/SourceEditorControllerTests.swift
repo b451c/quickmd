@@ -611,6 +611,30 @@ final class SourceEditorControllerTests: XCTestCase {
         XCTAssertEqual(narrow, .init(horizontalInset: 320, columnWidth: 360, verticalInset: 48))
     }
 
+    /// ⌘+ in Reading Mode with the editor open: the list keeps showing the
+    /// blocks of the old zoom, with that zoom's column cap, until the zoom's
+    /// parse lands. The editor took the REQUESTED zoom (`fontScale`), so for
+    /// that while its column was 1440 pt over a 720 pt list column, and
+    /// leaving Source Edit then moved the text sideways. It follows the
+    /// zoom the document is shown at now.
+    func testTheEditorColumnFollowsTheZoomTheDocumentIsShownAt() {
+        let requested = 2.0, shown = 1.0
+        let (controller, scrollView, _) = makeEditor(
+            "text", width: 1800,
+            style: .overDocument(theme: light, shownFontScale: shown, isReadingMode: true))
+        let inner = floor(scrollView.contentView.bounds.width) - 64
+        func listColumn(_ scale: Double) -> CGFloat {
+            BlockLayout.Document.columnWidth(inner: inner,
+                                             cap: BlockLayout.Document.readingColumnCap(fontScale: CGFloat(scale)))
+        }
+        XCTAssertEqual(listColumn(shown), 720)
+        XCTAssertEqual(listColumn(requested), 1440)   // the column the editor used to take
+        XCTAssertEqual(controller.textView.textContainer!.size.width, listColumn(shown))
+        // The zoom's parse lands: the list and the editor move together.
+        controller.apply(style: .overDocument(theme: light, shownFontScale: requested, isReadingMode: true))
+        XCTAssertEqual(controller.textView.textContainer!.size.width, listColumn(requested))
+    }
+
     func testTextContainerFollowsTheViewWidthAndTheLayoutStyle() {
         let (controller, scrollView, window) = makeEditor("text", width: 1000)
         let view = controller.textView

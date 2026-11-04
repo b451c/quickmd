@@ -324,8 +324,8 @@ struct MarkdownView: View {
                 Group {
                     if editSession.isActive {
                         SourceEditorView(controller: editSession.editor,
-                                         style: .init(theme: theme, fontScale: fontScale,
-                                                      isReadingLayout: isReadingMode))
+                                         style: .overDocument(theme: theme, shownFontScale: renderedFontScale,
+                                                              isReadingMode: isReadingMode))
                     }
                 }
                 // An animated transaction from elsewhere (a toast, a sidebar)

@@ -120,6 +120,18 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
                 && lhs.hasSameTintColors(as: rhs)
         }
 
+        /// The editor's style over a rendered document: at the zoom the
+        /// document is SHOWN at (`MarkdownView.renderedFontScale` — the scale
+        /// its blocks were parsed at and its Reading Mode column is capped
+        /// at), not the zoom just asked for. Between ⌘+ and the parse that
+        /// follows it the two differ; the editor's column (`columnGeometry`)
+        /// has to be the list's then too, or leaving Source Edit before the
+        /// parse lands moves the text sideways. The editor's font follows the
+        /// zoom when the parse lands, with the document's.
+        static func overDocument(theme: MarkdownTheme, shownFontScale: Double, isReadingMode: Bool) -> Style {
+            Style(theme: theme, fontScale: shownFontScale, isReadingLayout: isReadingMode)
+        }
+
         /// The colours of the block tint (`paintTint`).
         func hasSameTintColors(as other: Style) -> Bool {
             theme.keywordColor == other.theme.keywordColor
