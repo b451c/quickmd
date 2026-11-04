@@ -193,6 +193,26 @@ final class TableSelectionTests: XCTestCase {
         XCTAssertEqual(output?.plain, "a b\tc")
     }
 
+    /// A front-matter list shown one item per line (an item holds a comma):
+    /// no U+2028 reaches the pasteboard. One cell copies as lines, as shown;
+    /// the TSV of the table (and across cells) keeps one row per property and
+    /// joins those items with "; " — a space would merge "Doe, Jane" and
+    /// "Smith" into one comma list again.
+    func testFrontMatterListCopiesWithoutLineSeparators() {
+        let fixture = tableBlock("---\nauthors: [\"Doe, Jane\", Smith]\ntags: [a, b]\n---\n")
+        let layout = fixture.text.layout
+        let value = layout.cellRanges[0][1]
+        XCTAssertEqual(copy(value, of: fixture)?.plain, "Doe, Jane\nSmith", "one cell: as shown")
+        let whole = copy(NSRange(location: 0, length: fixture.text.string.length), of: fixture)
+        XCTAssertEqual(whole?.plain, "authors\tDoe, Jane; Smith\ntags\ta, b")
+        XCTAssertEqual(copy(span(layout, from: (0, 0, 0), to: (0, 1, value.length)), of: fixture)?.plain,
+                       "authors\tDoe, Jane; Smith")
+        for output in [copy(value, of: fixture), whole] {
+            XCTAssertFalse(output?.plain.contains("\u{2028}") ?? true)
+            XCTAssertFalse(output?.rtf.string.contains("\u{2028}") ?? true)
+        }
+    }
+
     func testWholeTableIsExactlyThe112TSV() {
         let fixture = tableBlock()
         let length = fixture.text.string.length

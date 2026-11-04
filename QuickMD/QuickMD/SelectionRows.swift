@@ -154,9 +154,14 @@ enum SelectionRows {
 
     /// `text` with what belongs to the TABLE removed from its paragraph
     /// styles: the text blocks (the cell) and the alignment (the column's,
-    /// from the separator row — back to natural). The rest is kept.
+    /// from the separator row — back to natural). The rest is kept. A
+    /// front-matter list's U+2028 (one item per line) becomes a plain line
+    /// break: the copy reads as the cell shows, without a separator most
+    /// apps treat as invisible.
     private static func withoutCellLayout(_ text: NSAttributedString) -> NSAttributedString {
         let result = NSMutableAttributedString(attributedString: text)
+        result.mutableString.replaceOccurrences(of: FrontMatter.itemLineSeparator, with: "\n", options: [],
+                                                range: NSRange(location: 0, length: result.length))
         result.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: result.length)) { value, range, _ in
             guard let style = value as? NSParagraphStyle,
                   !style.textBlocks.isEmpty || style.alignment != .natural,

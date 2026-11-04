@@ -405,9 +405,13 @@ enum DocumentCopyBuilder {
     }
 
     /// One TSV field: a tab or line break inside a cell would split it, so
-    /// those become spaces.
+    /// those become spaces — except U+2028, which only a front-matter list
+    /// puts in a cell (one item per line because an item holds a comma,
+    /// `FrontMatter.joinedItems`): a space would run "Doe, Jane" and "Smith"
+    /// together again, so those items are joined with "; ".
     private static func tsvField(_ cell: String) -> String {
-        cell.components(separatedBy: CharacterSet(charactersIn: "\t\n\r\u{2028}\u{2029}"))
+        cell.replacingOccurrences(of: FrontMatter.itemLineSeparator, with: "; ")
+            .components(separatedBy: CharacterSet(charactersIn: "\t\n\r\u{2029}"))
             .joined(separator: " ")
     }
 
