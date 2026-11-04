@@ -384,8 +384,10 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
 
         let theme = newStyle.theme
         let appearance = NSAppearance(named: theme.isDark ? .darkAqua : .aqua)
-        // Nothing else in the app sets an appearance: a dark theme on a light
-        // system would get light scrollers, selection and find bar otherwise.
+        // The window takes a light or dark theme's scheme too (MarkdownView's
+        // `preferredColorScheme`), so this is belt and braces there; it still
+        // matters for the scrollers, selection and find bar of the editor
+        // whatever the window resolves to.
         scrollView?.appearance = appearance
         textView.appearance = appearance
         let background = NSColor(theme.backgroundColor)
