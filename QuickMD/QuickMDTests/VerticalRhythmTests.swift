@@ -927,6 +927,32 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(try quoteShape("> [!NOTE]\n>> [x]: http://e.com\n\n[x]\n"), ["alert:note:", "t:x"])
     }
 
+    /// A footnote label is cmark-gfm's: one or more characters but `]`,
+    /// spaces, tabs and line breaks (a no-break space, `^`, `[`, `\` and
+    /// punctuation are fine); the text may follow the colon directly, or be
+    /// empty (GitHub, gfm/h11_*.html). The pattern took any label, so
+    /// `[^ m]: url` was a footnote where GitHub reads a LINK definition, and
+    /// it needed a space after the colon, so `[^m]:note` was neither. At
+    /// every level, footnote before link (constraint 6).
+    func testAFootnoteLabelIsGitHubs() throws {
+        let note = "t:────────────────────────────────\n1. note"
+        // Whitespace in the label: a link definition.
+        XCTAssertEqual(try quoteShape("x [^ m]\n\n[^ m]: http://e.com\n"), ["t:x ^ m"])
+        XCTAssertEqual(try quoteShape("x [^a b]\n\n[^a b]: http://e.com\n"), ["t:x ^a b"])
+        XCTAssertEqual(try quoteShape("x [^a\tb]\n\n[^a\tb]: http://e.com\n"), ["t:x ^a\tb"])
+        XCTAssertEqual(try quoteShape("x [^ m]\n\n> [^ m]: http://e.com\n"), ["t:x ^ m"])
+        XCTAssertEqual(try quoteShape("x [^]\n\n[^]: http://e.com\n"), ["t:x ^"])
+        // Footnotes.
+        XCTAssertEqual(try quoteShape("x [^m]\n\n[^m]:note\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^m]\n\n> [^m]:note\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^m]\n\n[^m]:\n").first, "t:x ¹")
+        XCTAssertEqual(try quoteShape("x [^a\u{00A0}b]\n\n[^a\u{00A0}b]: note\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^a.b-c_d]\n\n[^a.b-c_d]: note\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^a^b]\n\n[^a^b]: note\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^a\\b]\n\n[^a\\b]: note\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^ä€]\n\n[^ä€]: note\n"), ["t:x ¹", note])
+    }
+
     func testALinkDefinitionCannotInterruptAParagraph() throws {
         XCTAssertEqual(try quoteShape("> a\n[x]: http://e.com\n\n[x]\n"), ["q1:a\n[x]: http://e.com", "t:[x]"])
         XCTAssertEqual(try quoteShape("Para\n[x]: http://e.com\n\n[x]\n"), ["t:Para [x]: http://e.com", "t:[x]"])
