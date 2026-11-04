@@ -43,7 +43,8 @@ struct GeneralSettingsView: View {
                 }
 
                 Section {
-                    Picker("Show", selection: $tocMaxLevel) {
+                    Picker("Show", selection: Binding(get: { ToCDepth.normalized(tocMaxLevel) },
+                                                      set: { tocMaxLevel = $0 })) {
                         ForEach(ToCDepth.choices, id: \.maxLevel) { choice in
                             Text(choice.title).tag(choice.maxLevel)
                         }

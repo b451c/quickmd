@@ -27,6 +27,19 @@ enum ToCDepth {
         (all, "All Headings"), (2, "Up to H2"), (3, "Up to H3"), (4, "Up to H4"),
     ]
 
+    /// The stored value as one of `choices`. Only `defaults write` can store
+    /// anything else, and a Picker whose selection matches no tag shows blank
+    /// (both of them did). Nearest allowed level; a tie (5) goes to the
+    /// deeper one, so nothing the stored value listed disappears.
+    static func normalized(_ stored: Int) -> Int {
+        let levels = choices.map(\.maxLevel)
+        let stored = min(max(stored, 0), 100)  // no overflow in the distances
+        return levels.min { a, b in
+            let da = abs(a - stored), db = abs(b - stored)
+            return da != db ? da < db : a > b
+        } ?? all
+    }
+
     static func visible(_ headings: [ToCEntry], maxLevel: Int) -> [ToCEntry] {
         maxLevel >= all ? headings : headings.filter { $0.level <= maxLevel }
     }

@@ -115,6 +115,16 @@ final class SectionExtractorTests: XCTestCase {
         XCTAssertEqual(ToCDepth.choices.first?.maxLevel, ToCDepth.all, "All Headings is the default and first")
     }
 
+    /// A value only `defaults write` can store (outside 2, 3, 4, 6) left both
+    /// Pickers without a selected item; it reads as the nearest choice.
+    func testContentsDepthOutsideTheChoicesReadsAsTheNearest() {
+        let tags = Set(ToCDepth.choices.map(\.maxLevel))
+        for stored in [-3, 0, 1, 2, 3, 4, 5, 6, 7, 99, Int.max, Int.min] {
+            XCTAssertTrue(tags.contains(ToCDepth.normalized(stored)), "\(stored) must be a Picker tag")
+        }
+        XCTAssertEqual([0, 1, 2, 3, 4, 5, 6, 7, 42].map(ToCDepth.normalized), [2, 2, 2, 3, 4, 6, 6, 6, 6])
+    }
+
     // MARK: - Heading anchors (#43)
 
     private func anchorHeadings(of markdown: String) -> [(id: String, text: String)] {
