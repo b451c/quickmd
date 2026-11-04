@@ -20,29 +20,21 @@ final class ReviewPromptTests: XCTestCase {
     private let base = Date(timeIntervalSince1970: 1_767_261_600)
     private let version = "1.15.0"
 
-    /// Per-test directory that holds the suite's plist.
-    private var suiteDirectory: URL!
+    /// The per-test suite, stored in a temporary directory, never in
+    /// `~/Library/Preferences` (see `TemporaryDefaults`).
+    private var suite: TemporaryDefaults!
 
-    /// The suite name is an ABSOLUTE PATH (CFPreferences then stores the
-    /// domain at `<path>.plist`), inside a per-test temporary directory.
-    /// A plain suite name leaks `~/Library/Preferences/<suite>.plist`:
-    /// `removePersistentDomain` makes cfprefsd write an EMPTY plist there
-    /// seconds later (measured: ~20 s after the test process ended), so
-    /// neither deleting the file in tearDown nor `synchronize()` first wins
-    /// the race. A late write here lands in the temporary directory.
     override func setUpWithError() throws {
         try super.setUpWithError()
-        suiteDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("QuickMD-ReviewPromptTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: suiteDirectory, withIntermediateDirectories: true)
-        suiteName = suiteDirectory.appendingPathComponent("defaults").path
-        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        suite = try TemporaryDefaults("ReviewPromptTests")
+        suiteName = suite.suiteName
+        defaults = suite.defaults
         policy = ReviewPrompt(defaults: defaults, calendar: calendar)
     }
 
     override func tearDownWithError() throws {
-        defaults.removePersistentDomain(forName: suiteName)
-        try? FileManager.default.removeItem(at: suiteDirectory)
+        suite.remove()
+        suite = nil
         defaults = nil
         policy = nil
         try super.tearDownWithError()

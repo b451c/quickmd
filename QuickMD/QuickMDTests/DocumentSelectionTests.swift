@@ -534,10 +534,10 @@ final class DocumentSelectionTests: XCTestCase {
         XCTAssertFalse(SelectionAutoCopy.shouldCopy(after: .click, selection: selection(0, 5), enabled: true))
     }
 
-    func testAutoCopySettingDefaultsToOff() {
-        let suite = "pl.falami.studio.QuickMD.tests.\(UUID().uuidString)"
-        guard let defaults = UserDefaults(suiteName: suite) else { return XCTFail("no defaults suite") }
-        defer { defaults.removePersistentDomain(forName: suite) }
+    func testAutoCopySettingDefaultsToOff() throws {
+        let suite = try TemporaryDefaults("AutoCopy")
+        defer { suite.remove() }
+        let defaults = suite.defaults
         XCTAssertFalse(SelectionAutoCopy.isEnabled(in: defaults))
         defaults.set(true, forKey: SelectionAutoCopy.defaultsKey)
         XCTAssertTrue(SelectionAutoCopy.isEnabled(in: defaults))

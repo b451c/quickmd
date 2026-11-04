@@ -711,9 +711,9 @@ final class RendererTests: XCTestCase {
     }
 
     func testDefaultZoomStoredReadsItsOwnSuite() throws {
-        let suite = "QuickMDTests.DefaultZoom.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let suite = try TemporaryDefaults("DefaultZoom")
+        defer { suite.remove() }
+        let defaults = suite.defaults
 
         XCTAssertEqual(DefaultZoom.stored(in: defaults), 1.0, "missing key")
         defaults.set(1.25, forKey: DefaultZoom.defaultsKey)

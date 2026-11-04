@@ -36,6 +36,7 @@
 		A1B2C3D401000231 /* ReviewPrompt.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000230 /* ReviewPrompt.swift */; };
 		A1B2C3D401000232 /* ReviewPromptTrigger.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000231 /* ReviewPromptTrigger.swift */; };
 		A1B2C3D401000233 /* ReviewPromptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000232 /* ReviewPromptTests.swift */; };
+		A1B2C3D401000300 /* TemporaryDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000300 /* TemporaryDefaults.swift */; };
 		A1B2C3D401000201 /* PrintableTableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000200 /* PrintableTableTests.swift */; };
 		A1B2C3D4010001C0 /* SelectionRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000001C0 /* SelectionRows.swift */; };
 		A1B2C3D4010001C1 /* SelectionRows.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000001C0 /* SelectionRows.swift */; };
@@ -230,6 +231,7 @@
 		A1B2C3D400000230 /* ReviewPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewPrompt.swift; sourceTree = "<group>"; };
 		A1B2C3D400000231 /* ReviewPromptTrigger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewPromptTrigger.swift; sourceTree = "<group>"; };
 		A1B2C3D400000232 /* ReviewPromptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewPromptTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000300 /* TemporaryDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TemporaryDefaults.swift; sourceTree = "<group>"; };
 		A1B2C3D400000200 /* PrintableTableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrintableTableTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4000001C0 /* SelectionRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRows.swift; sourceTree = "<group>"; };
 		A1B2C3D4000002A0 /* VerticalRhythm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalRhythm.swift; sourceTree = "<group>"; };
@@ -346,6 +348,7 @@
 				A1B2C3D4000001B2 /* TableTextTests.swift */,
 				A1B2C3D400000221 /* FrontMatterTests.swift */,
 				A1B2C3D400000232 /* ReviewPromptTests.swift */,
+				A1B2C3D400000300 /* TemporaryDefaults.swift */,
 				A1B2C3D400000200 /* PrintableTableTests.swift */,
 				A1B2C3D4000001C1 /* TableSelectionTests.swift */,
 				A1B2C3D4000000C1 /* DocumentSelectionTests.swift */,
@@ -761,6 +764,7 @@
 				A1B2C3D4010001B3 /* TableTextTests.swift in Sources */,
 				A1B2C3D401000222 /* FrontMatterTests.swift in Sources */,
 				A1B2C3D401000233 /* ReviewPromptTests.swift in Sources */,
+				A1B2C3D401000300 /* TemporaryDefaults.swift in Sources */,
 				A1B2C3D401000201 /* PrintableTableTests.swift in Sources */,
 				A1B2C3D4010001C2 /* TableSelectionTests.swift in Sources */,
 			);
