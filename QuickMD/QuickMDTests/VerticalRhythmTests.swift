@@ -472,6 +472,27 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertNotEqual(separate[1], separate[2])
     }
 
+    /// ⌘G into a block taller than the window whose view is not on display:
+    /// the jump goes to the block and aims at the match when it lands. The
+    /// reader scrolling inside the block during the glide used to leave the
+    /// aim in place (only "is the anchor row still there" was checked, and
+    /// the glide ends on it), so the view was yanked to the match. Their
+    /// scroll takes the aim away now; nothing else does until it is taken.
+    func testASearchJumpsAimAtItsMatchIsDroppedWhenTheReaderScrolls() {
+        var aim = PendingMatchAim()
+        aim.jumped(to: "code-3", needsMatch: true)
+        XCTAssertEqual(aim.blockId, "code-3")   // lands untouched: aims
+        aim.readerScrolled()
+        XCTAssertNil(aim.blockId)               // a wheel during the glide: stays where they are
+        aim.jumped(to: "code-3", needsMatch: false)
+        XCTAssertNil(aim.blockId)               // the match was known: centred at once
+        aim.jumped(to: "table-1", needsMatch: true)
+        aim.jumped(to: "code-9", needsMatch: true)
+        XCTAssertEqual(aim.blockId, "code-9")   // the latest jump's
+        aim.drop()
+        XCTAssertNil(aim.blockId)               // a new table
+    }
+
     // MARK: - Block markers: spaces and tabs only
 
     /// Parses on a worker thread: a parser that never returns fails the test
