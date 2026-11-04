@@ -5,7 +5,8 @@ import Foundation
 /// Rewrites reference-style links and images (`[text][id]`, `[text][]`,
 /// `[text]`, `![alt][id]`, `![alt][]`, `![alt]`) whose definition exists into
 /// their inline form (`[text](<url>)`), for the block kinds whose RAW markdown
-/// is stored and rendered later: blockquotes, alerts and table cells.
+/// is stored and rendered later: blockquotes, alerts, table cells and
+/// headings.
 ///
 /// Why rewrite instead of handing those renderers the definitions: paragraphs
 /// are rendered inside the parser with the document's definitions, but a
@@ -71,6 +72,20 @@ enum ReferenceLinks {
             }
         }
         return out.joined(separator: "\n")
+    }
+
+    /// A heading's title with every resolvable reference inlined. Headings
+    /// are stored as raw Markdown and rendered by definition-less renderers
+    /// (the view, measurer, anchors, search, Contents, print), like a quote.
+    /// The title is scanned as ONE run, line breaks included, because that
+    /// is how `renderHeader` / `headingAnchorText` read a Setext title — a
+    /// link across its break (`[Link⏎text][r]`) is one link — and the breaks
+    /// stay, since the anchor drops them where the shown title has a space.
+    static func inlinedHeading(_ title: String, definitions: [String: String],
+                               footnoteIds: [String] = []) -> String {
+        guard !definitions.isEmpty || !footnoteIds.isEmpty, title.contains("[") else { return title }
+        return inlinedLine(title, sources: Sources(definitions: definitions, footnoteIds: footnoteIds),
+                           linksDisabled: false)
     }
 
     private static func inlinedLine(_ line: String, sources: Sources, linksDisabled: Bool) -> String {

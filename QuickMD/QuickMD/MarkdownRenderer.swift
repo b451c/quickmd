@@ -489,8 +489,20 @@ struct MarkdownRenderer: Sendable {
     /// The text GitHub takes a heading's id from: the rendered title with a
     /// Setext title's line breaks KEPT — the slug drops them (`Alpha⏎Beta`
     /// is `alphabeta`), where the space shown would be a `-`.
+    /// A footnote reference counts as its number in ASCII digits: GitHub's
+    /// slug reads the heading's text, `Note<sup>1</sup>` is `note1`, and the
+    /// superscript digit drawn here is not a word character for the slug.
     func headingAnchorText(_ title: String) -> String {
-        String(Self.formulaSourceWithEscapes(renderInlineFormatting(title)).characters)
+        let attributed = Self.formulaSourceWithEscapes(renderInlineFormatting(title))
+        var text = ""
+        for run in attributed.runs {
+            if let number = run[FootnoteNumberAttribute.self] {
+                text += String(number)
+            } else {
+                text += String(attributed[run.range].characters)
+            }
+        }
+        return text
     }
 
     func renderHeader(_ text: String, level: Int) -> AttributedString {
@@ -1261,9 +1273,19 @@ struct MarkdownRenderer: Sendable {
         let superscript = String(String(number).map { superscriptDigits[$0] ?? $0 })
 
         var attr = AttributedString(superscript)
+        attr[FootnoteNumberAttribute.self] = number
         attr.setDualFont(size: scaled(11), bold: true, fonts: theme.fonts)
         attr.setDualForeground(theme.linkColor)
         return (attr, afterBracket[afterBracket.index(after: closeIndex)...])
     }
 
+}
+
+/// The number a footnote reference draws as superscript digits, for
+/// `headingAnchorText` (GitHub's heading id reads it as plain digits). Not
+/// part of the AppKit scope, so an installed NSAttributedString never
+/// carries it.
+enum FootnoteNumberAttribute: AttributedStringKey {
+    typealias Value = Int
+    static let name = "qmdFootnoteNumber"
 }

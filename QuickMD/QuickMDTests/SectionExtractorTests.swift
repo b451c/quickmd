@@ -268,6 +268,61 @@ final class SectionExtractorTests: XCTestCase {
         XCTAssertEqual(headings(of: md).map { $0.shownTitle(renderer: renderer) }, shown)
     }
 
+    /// R18: a FULL reference link in a heading (`# [Link text][r]`) showed
+    /// its source and its id kept the label (`link-textr`). Headings are
+    /// stored raw and drawn by definition-less renderers, so references are
+    /// inlined at parse time (`ReferenceLinks.inlinedHeading`) — the view,
+    /// a click, the id, search, Contents and print all read the same title.
+    /// GitHub (`gh api markdown`, 2026-11-04) links every form below, keeps
+    /// the code span, and its id reads the footnote's `<sup>1</sup>` as `1`.
+    func testReferenceLinksInHeadingsResolveLikeGitHub() {
+        let md = """
+        # [Link text][r]
+
+        # [Coll][]
+
+        # [Short]
+
+        [Link
+        text][r]
+        ===
+
+        # Note[^1] here
+
+        # **[Bold][r]** and `[c][r]`
+
+        # [A &amp; B][r]
+
+        [r]: https://e.x/r
+        [coll]: https://e.x/c
+        [short]: https://e.x/s
+        [^1]: Foot.
+        """
+        let theme = MarkdownTheme.cached(for: .light)
+        let renderer = MarkdownRenderer(theme: theme)
+        let blocks = MarkdownBlockParser(theme: theme).parse(md)
+        let rendered = blocks.compactMap { block -> AttributedString? in
+            guard case .heading(let level, let title, _) = block.content else { return nil }
+            return renderer.renderHeader(title, level: level)
+        }
+        let shown = rendered.map { String($0.characters) }
+        XCTAssertEqual(shown, ["Link text", "Coll", "Short", "Link text", "Note\u{00B9} here",
+                               "Bold and [c][r]", "A & B"])
+        XCTAssertEqual(rendered.map { heading in heading.runs.compactMap { $0.link?.absoluteString } }, [
+            ["https://e.x/r"], ["https://e.x/c"], ["https://e.x/s"], ["https://e.x/r"], [],
+            ["https://e.x/r"], ["https://e.x/r"],
+        ])
+
+        let anchors = anchorHeadings(of: md)
+        XCTAssertEqual(HeadingAnchors.ids(for: anchors.map(\.text)), [
+            "link-text", "coll", "short", "linktext", "note1-here", "bold-and-cr", "a--b",
+        ])
+        XCTAssertEqual(headings(of: md).map { $0.shownTitle(renderer: renderer) }, shown)
+        XCTAssertEqual(SectionExtractor.extractSection(from: md, entry: headings(of: md)[0],
+                                                       headings: headings(of: md)), "# [Link text][r]",
+                       "copy is the source")
+    }
+
     func testFragmentFindsItsHeading() {
         let headings = anchorHeadings(of: """
         # Guide

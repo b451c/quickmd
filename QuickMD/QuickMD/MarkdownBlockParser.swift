@@ -245,7 +245,11 @@ struct MarkdownBlockParser: Sendable {
                 let level = min(max(line[hashRange].count, 1), 6)
                 let title = Self.withoutClosingSequence(
                     String(line[contentRange]).trimmingCharacters(in: .whitespaces))
-                blocks.append(.heading(index: blockIndex, level: level, title: title, sourceLine: sourceLine))
+                // Headings are rendered later without the definitions (`ReferenceLinks`).
+                blocks.append(.heading(index: blockIndex, level: level,
+                                       title: ReferenceLinks.inlinedHeading(title, definitions: referenceDefinitions,
+                                                                            footnoteIds: footnoteDefinitions.map(\.id)),
+                                       sourceLine: sourceLine))
                 blockIndex += 1
                 i += 1
                 continue
@@ -342,7 +346,10 @@ struct MarkdownBlockParser: Sendable {
                     var preceding = Array(textBuffer[..<start])
                     textBuffer.removeAll()
                     flushTextBuffer(&preceding, to: &blocks, index: &blockIndex, pending: &pendingRows)
-                    blocks.append(.heading(index: blockIndex, level: level, title: title, sourceLine: headingLine))
+                    blocks.append(.heading(index: blockIndex, level: level,
+                                           title: ReferenceLinks.inlinedHeading(title, definitions: referenceDefinitions,
+                                                                                footnoteIds: footnoteDefinitions.map(\.id)),
+                                           sourceLine: headingLine))
                     blockIndex += 1
                     i += 2
                     continue
