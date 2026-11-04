@@ -264,8 +264,9 @@ enum DocumentSearch {
             if let shown = converted[block.id] { return shown.string }
             return String(renderer.renderQuotedBody(content).characters)
         case .heading(let level, let title, _):
-            // Never measured into `converted` (a `.reported` row): rendered
+            // The measurer keeps the title it measured; without it, rendered
             // here exactly as `HeadingBlockView` renders it.
+            if let shown = converted[block.id] { return shown.string }
             return String(renderer.renderHeader(title, level: level).characters)
         case .table, .codeBlock, .image, .svgImage, .mathBlock, .mermaidDiagram:
             return nil

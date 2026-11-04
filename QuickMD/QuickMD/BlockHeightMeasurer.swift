@@ -1032,7 +1032,9 @@ struct BlockHeightTable: Equatable {
 struct MeasuredBlocks: @unchecked Sendable {
     let table: BlockHeightTable
     /// Keyed by `MarkdownBlock.id`, for the blocks whose text renders through
-    /// `TextBlockView` (paragraphs/footnotes, quote bodies, alert bodies).
+    /// `TextBlockView` (paragraphs/footnotes, quote bodies, alert bodies, and
+    /// heading titles — what `HeadingBlockView` converts, kept so a copy and a
+    /// search of a heading-heavy document never convert them again).
     let converted: [String: NSAttributedString]
     /// Keyed by `MarkdownBlock.id`, for every `.table` block: the string and
     /// cell layout the row was measured with, which `TableTextView` installs
@@ -1284,6 +1286,7 @@ enum BlockHeightMeasurer {
             case .heading(let level, let title, _):
                 let heading = headingRow(title: title, level: level,
                                          renderer: renderer, contentWidth: contentWidth)
+                converted[block.id] = heading.string
                 heights.append(heading.height)
                 kinds.append(.reported)
                 textEdges = heading.edges
@@ -1562,17 +1565,21 @@ enum BlockHeightMeasurer {
     /// (`BlockLayout.Heading.titleGeometry`), and the row is at least as tall
     /// as the button's bottom edge. The row stays `.reported`: the placed view
     /// still has the last word.
+    /// `string` is the title exactly as the view shows and the selection
+    /// copies it: `BlockTextConverter.makeNSAttributedString` of the same
+    /// `renderHeader` output, which without inline math (a heading shows
+    /// `$…$` literally) is this one conversion.
     private static func headingRow(title: String, level: Int, renderer: MarkdownRenderer,
                                    contentWidth: CGFloat)
-        -> (height: CGFloat, edges: BlockLayout.Spacing.Edges) {
+        -> (height: CGFloat, edges: BlockLayout.Spacing.Edges, string: NSAttributedString) {
         let attributed = renderer.renderHeader(title, level: level)
         let ns = (try? NSAttributedString(attributed, including: \.appKit))
-            ?? NSAttributedString(string: title)
+            ?? NSAttributedString(string: String(attributed.characters))
         let geometry = BlockLayout.Heading.titleGeometry(
             titleFirstBaseline: BlockLayout.Heading.titleFirstBaseline(font: renderer.headerAppKitFont(level: level)))
         let ink = textInk(text: ns, width: BlockLayout.Heading.titleWrapWidth(rowWidth: contentWidth))
         let height = max(geometry.titleTopInset + ink.height, geometry.minimumHeight)
-        return (height, .text(ink, top: geometry.titleTopInset, rowHeight: height))
+        return (height, .text(ink, top: geometry.titleTopInset, rowHeight: height), ns)
     }
 
 }

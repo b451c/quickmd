@@ -1292,7 +1292,10 @@ struct MarkdownView: View {
         case .heading(let level, let title, _):
             // Exactly what `HeadingBlockView` hands its `TextBlockView`: the
             // same `renderHeader` output through the same converter (no
-            // inline math — a heading shows `$…$` literally, as before).
+            // inline math — a heading shows `$…$` literally, as before). The
+            // measurer kept it (`MeasuredBlocks.converted`): a ⌘C of a
+            // heading-heavy document no longer converts every heading again.
+            if let cached { return cached }
             return TextBlockView.makeNSAttributedString(
                 from: MarkdownRenderer(theme: theme, fontScale: scale).renderHeader(title, level: level),
                 hasInlineMath: false, theme: theme, fontScale: scale)

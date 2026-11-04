@@ -433,6 +433,13 @@ final class BlockHeightMeasurerTests: XCTestCase {
                 XCTAssertNotNil(measured.converted[block.id], "missing conversion for \(block.id)")
             case .alert(_, let content) where !content.isEmpty:
                 XCTAssertNotNil(measured.converted[block.id], "missing conversion for \(block.id)")
+            case .heading(let level, let title, _):
+                // `HeadingBlockView` hosts a `TextBlockView` too: the title as it
+                // converts it, kept for copy and search.
+                let shown = BlockTextConverter.makeNSAttributedString(
+                    from: MarkdownRenderer(theme: theme, fontScale: 1).renderHeader(title, level: level),
+                    hasInlineMath: false, theme: theme, fontScale: 1, math: .none)
+                XCTAssertEqual(measured.converted[block.id], shown, "heading \(block.id)")
             default:
                 XCTAssertNil(measured.converted[block.id], "unexpected conversion for \(block.id)")
             }
