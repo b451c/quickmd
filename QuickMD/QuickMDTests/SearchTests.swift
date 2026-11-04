@@ -127,6 +127,41 @@ final class SearchTests: XCTestCase {
         return textView
     }
 
+    /// A front-matter key is secondary-colour text; the FOCUSED match on a key
+    /// is drawn in the theme's text colour (on the orange focus the secondary
+    /// colour read poorly), exactly what a focused value shows. Unfocused key
+    /// matches and value matches keep their colours; the next call clears it.
+    func testFocusedMatchOnAPropertiesKeyUsesTheTextColour() throws {
+        let table = onlyTable("---\nauthor: Ann\nnote: by author\n---\n")
+        XCTAssertEqual(table.style, .properties)
+        let built = build(table)
+        let textView = tableTextView(built)
+        let layoutManager = try XCTUnwrap(textView.layoutManager)
+        let keys = built.layout.firstColumnRanges
+        XCTAssertEqual(keys.map { (built.string.string as NSString).substring(with: $0) }, ["author", "note"])
+        let textColor = NSColor(theme.textColor)
+        func temporaryForeground(at index: Int) -> NSColor? {
+            layoutManager.temporaryAttribute(.foregroundColor, atCharacterIndex: index, effectiveRange: nil) as? NSColor
+        }
+        let valueMatch = (built.string.string as NSString).range(of: "author", options: .backwards)
+
+        applyNSSearchHighlight(in: textView, term: "author", focusedOccurrence: 0,
+                               focusedText: (textColor, keys))
+        XCTAssertEqual(temporaryForeground(at: keys[0].location), textColor, "focused key match")
+        XCTAssertEqual(temporaryForeground(at: NSMaxRange(keys[0]) - 1), textColor)
+        XCTAssertNil(temporaryForeground(at: valueMatch.location), "unfocused value match untouched")
+
+        applyNSSearchHighlight(in: textView, term: "author", focusedOccurrence: 1,
+                               focusedText: (textColor, keys))
+        XCTAssertNil(temporaryForeground(at: keys[0].location), "an unfocused key keeps its secondary colour")
+        XCTAssertNil(temporaryForeground(at: valueMatch.location), "a value already has the text colour")
+
+        applyNSSearchHighlight(in: textView, term: "author", focusedOccurrence: 0,
+                               focusedText: (textColor, keys))
+        applyNSSearchHighlight(in: textView, term: "author", focusedOccurrence: 0)
+        XCTAssertNil(temporaryForeground(at: keys[0].location), "cleared for a view reused by a grid table")
+    }
+
     /// The temporary background runs `applyNSSearchHighlight` left, in order.
     private func highlights(in textView: NSTextView) -> [(range: NSRange, focused: Bool)] {
         guard let layoutManager = textView.layoutManager, let length = textView.textStorage?.length else { return [] }

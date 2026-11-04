@@ -119,7 +119,11 @@ private struct TableTextRepresentable: NSViewRepresentable {
             // counted this block on the same characters with the same matcher
             // (TS-D9), so the focused occurrence is the n-th highlight in
             // reading order.
-            applyNSSearchHighlight(in: textView, term: searchTerm, focusedOccurrence: focusedOccurrence)
+            // A focused match on a properties KEY (secondary colour) is drawn in
+            // the text colour, as on a value.
+            let keys = style == .properties ? textView.tableLayout?.firstColumnRanges : nil
+            applyNSSearchHighlight(in: textView, term: searchTerm, focusedOccurrence: focusedOccurrence,
+                                   focusedText: keys.map { (NSColor(theme.textColor), $0) })
             textView.lastSearchTerm = searchTerm
             textView.lastFocusedOccurrence = focusedOccurrence
         }

@@ -59,11 +59,20 @@ func searchMatchRanges(in string: String, term: String) -> [NSRange] {
 /// (called from updateNSView); not @MainActor for older-SDK compatibility (see
 /// the BlockHeightCache note in TextBlockView.swift). Lives here, not with the
 /// views, so the tests (which do not compile the views) can run it.
-func applyNSSearchHighlight(in textView: NSTextView, term: String, focusedOccurrence: Int?) {
+///
+/// `focusedText`: the part of the FOCUSED match inside `ranges` is drawn in
+/// `color` (a temporary foreground, removed on the next call). A front-matter
+/// key is secondary-colour text, which on the orange focus read poorly; the
+/// properties table passes its key cells and the theme's text colour, so a
+/// focused key reads like a focused value.
+func applyNSSearchHighlight(in textView: NSTextView, term: String, focusedOccurrence: Int?,
+                            focusedText: (color: NSColor, ranges: [NSRange])? = nil) {
     guard let layoutManager = textView.layoutManager,
           let storage = textView.textStorage else { return }
     let fullRange = NSRange(location: 0, length: storage.length)
     layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
+    // Unconditionally: a reused view may have shown a properties table before.
+    layoutManager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: fullRange)
 
     let yellow = NSColor.systemYellow.withAlphaComponent(0.55)
     let orange = NSColor.systemOrange
@@ -71,8 +80,17 @@ func applyNSSearchHighlight(in textView: NSTextView, term: String, focusedOccurr
     for (occurrenceIndex, found) in searchMatchRanges(in: storage.string, term: term).enumerated() {
         let safeRange = NSIntersectionRange(found, fullRange)
         if safeRange.length > 0 {
-            let color = (focusedOccurrence == occurrenceIndex) ? orange : yellow
-            layoutManager.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: safeRange)
+            let focused = focusedOccurrence == occurrenceIndex
+            layoutManager.addTemporaryAttribute(.backgroundColor, value: focused ? orange : yellow,
+                                                forCharacterRange: safeRange)
+            if focused, let focusedText {
+                for range in focusedText.ranges {
+                    let part = NSIntersectionRange(safeRange, range)
+                    guard part.length > 0 else { continue }
+                    layoutManager.addTemporaryAttribute(.foregroundColor, value: focusedText.color,
+                                                        forCharacterRange: part)
+                }
+            }
         }
     }
 }

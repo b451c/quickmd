@@ -44,6 +44,9 @@ struct TableTextLayout: Equatable {
 
     var bandCount: Int { cellRanges.count }
 
+    /// Column 0 of every band — a `.properties` table's key cells.
+    var firstColumnRanges: [NSRange] { cellRanges.compactMap(\.first) }
+
     /// UTF-16 length of the whole string (0 for a table with no bands).
     var length: Int {
         guard let last = cellRanges.last?.last else { return 0 }
