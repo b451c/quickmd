@@ -728,6 +728,7 @@ struct MarkdownView: View {
             if let target = landing.blocksInstalled(blocks) {
                 requestScroll(to: target, anchor: .top, animated: false)
             }
+            followCrossDocumentAnchor()
             // The find bar's matches index the PREVIOUS parse's blocks: count
             // again over these (and the measured strings just installed).
             rerunSearchAfterReparse()
@@ -776,7 +777,15 @@ struct MarkdownView: View {
                                                           fontScale: scale, contentWidth: width,
                                                           math: .swiftMath,
                                                           reusing: reusableStrings)
-            if firstTableForParse { rerunSearchAfterReparse() }
+            if firstTableForParse {
+                rerunSearchAfterReparse()
+                followCrossDocumentAnchor()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: CrossDocumentAnchors.requested)) { note in
+            // `other.md#section` clicked in another window while this one shows other.md.
+            guard let documentURL, note.object as? String == CrossDocumentAnchors.key(for: documentURL) else { return }
+            followCrossDocumentAnchor()
         }
         .onChange(of: searchText) { newValue in
             searchDebounce?.cancel()
@@ -1069,14 +1078,26 @@ struct MarkdownView: View {
     /// A ToC click. While editing, the EDITOR scrolls to the heading's source
     /// line (S-D13) — best effort until the next save, since the headings come
     /// from the last saved parse; the hidden list stays where the reader was.
-    private func selectHeading(_ targetId: String) {
+    private func selectHeading(_ targetId: String, animated: Bool = true) {
         if editSession.isActive {
             if let entry = headings.first(where: { $0.id == targetId }) {
                 editSession.editor.scroll(toLine: entry.sourceLine)
             }
             return
         }
-        requestScroll(to: targetId, anchor: .top, animated: true)
+        requestScroll(to: targetId, anchor: .top, animated: animated)
+    }
+
+    /// The fragment of an `other.md#section` link that opened (or brought
+    /// forward) this document, followed like an in-document link — once the
+    /// list has a height table for these blocks: a scroll request before that
+    /// finds no row and is dropped, so a new window waits for its first
+    /// layout (parse transaction or the first heights task). A freshly opened
+    /// window jumps without animation.
+    private func followCrossDocumentAnchor() {
+        guard !cachedBlocks.isEmpty, measured.table.count == cachedBlocks.count,
+              let fragment = CrossDocumentAnchors.shared.take(for: documentURL) else { return }
+        followAnchor(fragment, animated: false)
     }
 
     // MARK: - Block Rendering
@@ -1558,6 +1579,10 @@ struct MarkdownView: View {
         // Open the resolved file URL
         let ext = finalURL.pathExtension.lowercased()
         if ext == "md" || ext == "markdown" || ext == "mdown" || ext == "mkd" {
+            // `other.md#section`: the window that shows other.md scrolls there.
+            if let fragment = CrossDocumentAnchors.fragment(of: url) {
+                CrossDocumentAnchors.shared.request(fragment, for: finalURL)
+            }
             // Force open with our own app
             let config = NSWorkspace.OpenConfiguration()
             config.activates = true
@@ -1571,14 +1596,14 @@ struct MarkdownView: View {
     /// Scrolls to the heading an in-document link names, as a ToC click does
     /// (`HeadingAnchors.target`: `#` and an unclaimed `#top` are the top); an
     /// id no heading has beeps.
-    private func followAnchor(_ fragment: String) {
+    private func followAnchor(_ fragment: String, animated: Bool = true) {
         let renderer = MarkdownRenderer(theme: theme, fontScale: CGFloat(renderedFontScale))
         let headings = HeadingAnchors.headings(of: cachedBlocks, renderer: renderer)
         switch HeadingAnchors.target(forFragment: fragment, in: headings) {
         case .heading(let id):
-            selectHeading(id)
+            selectHeading(id, animated: animated)
         case .top where !cachedBlocks.isEmpty:
-            requestScroll(to: cachedBlocks[0].id, anchor: .top, animated: true)
+            requestScroll(to: cachedBlocks[0].id, anchor: .top, animated: animated)
         case .top, .none:
             NSSound.beep()
         }

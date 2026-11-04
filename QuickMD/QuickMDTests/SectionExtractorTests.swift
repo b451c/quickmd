@@ -249,6 +249,36 @@ final class SectionExtractorTests: XCTestCase {
         XCTAssertNil(fragment("docs/install"))
     }
 
+    /// `other.md#section`: the fragment is parked for the other document's
+    /// window (which takes it once laid out, or at once when already open).
+    func testCrossDocumentAnchorIsHandedToTheOtherDocument() throws {
+        let anchors = CrossDocumentAnchors()
+        let link = try XCTUnwrap(MarkdownRenderer.linkURL(for: "other.md#Install Guide"))
+        let fragment = try XCTUnwrap(CrossDocumentAnchors.fragment(of: link))
+        XCTAssertEqual(fragment, "Install Guide")
+        XCTAssertNil(CrossDocumentAnchors.fragment(of: try XCTUnwrap(MarkdownRenderer.linkURL(for: "other.md"))))
+        XCTAssertEqual(CrossDocumentAnchors.fragment(of: try XCTUnwrap(MarkdownRenderer.linkURL(for: "other.md#"))), "",
+                       "an empty fragment is the top, as in-document")
+
+        let target = URL(fileURLWithPath: "/docs/guide/other.md")
+        let posted = expectation(forNotification: CrossDocumentAnchors.requested, object: nil) { note in
+            note.object as? String == "/docs/guide/other.md"
+        }
+        let now = Date()
+        anchors.request(fragment, for: URL(fileURLWithPath: "/docs/guide/./sub/../other.md"), now: now)
+        wait(for: [posted], timeout: 1)
+
+        XCTAssertNil(anchors.take(for: URL(fileURLWithPath: "/docs/guide/another.md"), now: now))
+        XCTAssertNil(anchors.take(for: nil, now: now))
+        XCTAssertEqual(anchors.take(for: target, now: now.addingTimeInterval(2)), "Install Guide")
+        XCTAssertNil(anchors.take(for: target, now: now), "taken once")
+
+        anchors.request("intro", for: target, now: now)
+        XCTAssertNil(anchors.take(for: target, now: now.addingTimeInterval(CrossDocumentAnchors.lifetime + 1)),
+                     "a stale request never moves a window opened much later")
+        XCTAssertNil(anchors.take(for: target, now: now), "and it is gone")
+    }
+
     /// A link destination becomes the same URL on every macOS: macOS 13's
     /// `URL(string:)` rejects spaces / non-ASCII (14+ encodes them), and the
     /// old 13 fallback encoded the `#` too, so `README.md#Install Guide` was a
