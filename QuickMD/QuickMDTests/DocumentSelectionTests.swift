@@ -492,6 +492,36 @@ final class DocumentSelectionTests: XCTestCase {
         XCTAssertEqual(DocumentClipboard.summary(for: "", locale: english), "Copied 0 characters")
     }
 
+    // MARK: - Double- and triple-click in the space between two blocks
+
+    /// A double-click in the gap between two blocks acts where a single click
+    /// there lands: the upper half on the end of the row above, the lower
+    /// half on the start of the row below. It selects the word there (the
+    /// paragraph with a triple-click), as a text view selects the word next to
+    /// its insertion point — it never just collapses the selection.
+    func testAMultiClickInAGapSelectsTheWordAtTheRowsEnd() {
+        func unit(_ string: String, atBoundary offset: Int, _ granularity: NSSelectionGranularity) -> String? {
+            let textView = NSTextView()
+            textView.configureForSelfSizing()
+            textView.string = string
+            guard let index = SelectionRows.multiClickIndex(atRowBoundary: offset,
+                                                            in: textView.string as NSString) else { return nil }
+            let range = textView.selectionRange(forProposedRange: NSRange(location: index, length: 0),
+                                                granularity: granularity)
+            return (textView.string as NSString).substring(with: range)
+        }
+        let row = "Paragraph above the gap ends here."
+        let end = (row as NSString).length
+        XCTAssertEqual(unit(row, atBoundary: end, .selectByWord), ".")
+        XCTAssertEqual(unit("A row ending in a word", atBoundary: 22, .selectByWord), "word")
+        XCTAssertEqual(unit("First word of the row below", atBoundary: 0, .selectByWord), "First")
+        XCTAssertEqual(unit("Line one\nline two", atBoundary: 17, .selectByParagraph), "line two")
+        // A table's string ends in a cell's line break: the cell's last word.
+        XCTAssertEqual(unit("a\tb\nc\tlast\n", atBoundary: 11, .selectByWord), "last")
+        XCTAssertNil(SelectionRows.multiClickIndex(atRowBoundary: 0, in: ""))
+        XCTAssertEqual(SelectionRows.multiClickIndex(atRowBoundary: 3, in: "x\n\n"), 0)
+    }
+
     // MARK: - Auto-copy decision (S-D10)
 
     private func selection(_ from: Int, _ to: Int) -> DocumentSelection {

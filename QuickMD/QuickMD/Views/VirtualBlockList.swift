@@ -2183,6 +2183,9 @@ final class SelectionController: NSObject {
         /// The row's text view, when the point maps through one.
         let textView: SelfSizingTextView?
         let pointInTextView: NSPoint?
+        /// In the space between two blocks: `point` is the end of the row above
+        /// (upper half) or the start of the row below (lower half).
+        var inGap = false
     }
 
     /// Maps a window point to a document position THROUGH THE TABLE: row under
@@ -2221,8 +2224,9 @@ final class SelectionController: NSObject {
         let spacing = spacingAbove(row)
         if row > 0, RowGeometry.belongsToPreviousRow(y: point.y, rowRect: rowRect, spacingAbove: spacing) {
             return Hit(point: SelectionPoint(row: row - 1, offset: rowLength(row - 1)), isAtomic: false,
-                       textView: nil, pointInTextView: nil)
+                       textView: nil, pointInTextView: nil, inGap: true)
         }
+        let inGap = row > 0 && point.y < RowGeometry.topTarget(rowRect: rowRect, spacingAbove: spacing)
         let block = blocks[row]
         let upperHalf = RowGeometry.isInUpperHalf(y: point.y, rowRect: rowRect, spacingAbove: spacing)
         if SelectionRows.isAtomic(block) {
@@ -2231,7 +2235,7 @@ final class SelectionController: NSObject {
             // middle, and so does dragging UP — symmetrical, like a very tall
             // character.
             return Hit(point: SelectionPoint(row: row, offset: upperHalf ? 0 : 1),
-                       isAtomic: true, textView: nil, pointInTextView: nil)
+                       isAtomic: true, textView: nil, pointInTextView: nil, inGap: inGap)
         }
 
         if let textView = registeredTextView(for: block.id, in: tableView) {
@@ -2241,13 +2245,50 @@ final class SelectionController: NSObject {
                                                  isTable: textView is TableTextView,
                                                  characterIndex: textView.selectionCharacterIndex(at:))
             return Hit(point: SelectionPoint(row: row, offset: offset), isAtomic: false,
-                       textView: textView, pointInTextView: local)
+                       textView: textView, pointInTextView: local, inGap: inGap)
         }
 
         // A text-kind row with no registered text view to ask (not yet
         // registered): its whole string, by half.
         return Hit(point: SelectionPoint(row: row, offset: upperHalf ? 0 : rowLength(row)),
-                   isAtomic: false, textView: nil, pointInTextView: nil)
+                   isAtomic: false, textView: nil, pointInTextView: nil, inGap: inGap)
+    }
+
+    /// What a double- (word) or triple-click (paragraph; in a table, the
+    /// cell) selects, from where it was pressed. In the space between two
+    /// blocks it acts where a single click there lands (`hit`): the end of
+    /// the row above (upper half) or the start of the row below (lower half)
+    /// — the last or the first word, as a text view selects the word next to
+    /// its insertion point — and a neighbouring image, diagram or formula
+    /// whole. Nil when there is nothing to select (no text view to ask).
+    private func multiClickUnit(for start: Hit, clickCount: Int,
+                                in tableView: NSTableView) -> (start: SelectionPoint, end: SelectionPoint)? {
+        let granularity: NSSelectionGranularity = clickCount == 2 ? .selectByWord : .selectByParagraph
+        let row = start.point.row
+        guard row >= 0, row < blocks.count else { return nil }
+        if start.inGap {
+            if SelectionRows.isAtomic(blocks[row]) {
+                return (SelectionPoint(row: row, offset: 0), SelectionPoint(row: row, offset: 1))
+            }
+            guard let textView = registeredTextView(for: blocks[row].id, in: tableView),
+                  let storage = textView.textStorage,
+                  let index = SelectionRows.multiClickIndex(atRowBoundary: start.point.offset,
+                                                            in: storage.string as NSString) else { return nil }
+            let range = textView.selectionRange(forProposedRange: NSRange(location: index, length: 0),
+                                                granularity: granularity)
+            return (SelectionPoint(row: row, offset: range.location),
+                    SelectionPoint(row: row, offset: NSMaxRange(range)))
+        }
+        // Double-click = word, triple-click = paragraph, in that row — in a
+        // table the cell (one paragraph per cell, TS-D7). The character is
+        // checked against the hook's answer (`start`), so a click in a cell's
+        // padding is about that cell, not TextKit's nearest glyph.
+        guard let textView = start.textView, let local = start.pointInTextView,
+              let index = textView.multiClickCharacterIndex(at: local, insertion: start.point.offset,
+                                                            inTableCell: textView is TableTextView) else { return nil }
+        let range = textView.selectionRange(forProposedRange: NSRange(location: index, length: 0),
+                                            granularity: granularity)
+        return (SelectionPoint(row: row, offset: range.location), SelectionPoint(row: row, offset: NSMaxRange(range)))
     }
 
     /// The registered view for `blockId` — if it is really on display in THIS
@@ -2297,19 +2338,7 @@ final class SelectionController: NSObject {
             anchor = existing.anchor
             anchorIsAtomic = false
             setSelection(DocumentSelection(anchor: anchor, focus: start.point))
-        } else if clickCount >= 2, let textView = start.textView, let local = start.pointInTextView,
-                  let index = textView.multiClickCharacterIndex(at: local, insertion: start.point.offset,
-                                                                inTableCell: textView is TableTextView) {
-            // Double-click = word, triple-click = paragraph, in that row — in
-            // a table the cell (one paragraph per cell, TS-D7). The character
-            // is checked against the hook's answer (`start`), so a click in a
-            // cell's padding is about that cell, not TextKit's nearest glyph.
-            let granularity: NSSelectionGranularity = clickCount == 2 ? .selectByWord : .selectByParagraph
-            let range = textView.selectionRange(forProposedRange: NSRange(location: index, length: 0),
-                                                granularity: granularity)
-            let row = start.point.row
-            let selected = (start: SelectionPoint(row: row, offset: range.location),
-                            end: SelectionPoint(row: row, offset: NSMaxRange(range)))
+        } else if clickCount >= 2, let selected = multiClickUnit(for: start, clickCount: clickCount, in: tableView) {
             unit = selected
             setSelection(DocumentSelection(anchor: selected.start, focus: selected.end))
         } else {
