@@ -238,6 +238,7 @@ enum InlineSyntaxScanner {
     }
 
     private static let backslash = UInt8(ascii: "\\")
+    private static let ampersand = UInt8(ascii: "&")
 
     /// CommonMark whitespace for these purposes: space, tab, LF, VT, FF, CR.
     private static func isWhitespace(_ byte: UInt8) -> Bool {
@@ -386,22 +387,35 @@ enum InlineSyntaxScanner {
     /// The bytes as a String with `\<punctuation>` → `<punctuation>`. Other
     /// backslashes stay literal (`C:\dir\x.png`). One copy when there is
     /// nothing to unescape — the common case, and the multi-MB `data:` case.
+    /// A destination's text: backslash escapes of ASCII punctuation removed
+    /// and character references decoded (`a?b=1&amp;c=2` → `a?b=1&c=2`, as
+    /// CommonMark and GitHub read a link's href) — but not the `&` of an
+    /// escaped `\&`. One pass over the bytes when there is neither.
     private static func unescaped(_ bytes: Bytes, _ range: Range<Int>) -> String {
         let slice = Bytes(rebasing: bytes[range])
-        guard slice.contains(backslash) else { return String(decoding: slice, as: UTF8.self) }
-        var out: [UInt8] = []
-        out.reserveCapacity(slice.count)
+        guard slice.contains(where: { $0 == backslash || $0 == ampersand }) else {
+            return String(decoding: slice, as: UTF8.self)
+        }
+        var out = ""
+        var run: [UInt8] = []
+        func flushRun() {
+            guard !run.isEmpty else { return }
+            out += HTMLEntities.decode(String(decoding: run, as: UTF8.self))
+            run.removeAll(keepingCapacity: true)
+        }
         var i = 0
         while i < slice.count {
             if isEscape(slice, at: i, before: slice.count) {
-                out.append(slice[i + 1])
+                flushRun()
+                out += String(decoding: [slice[i + 1]], as: UTF8.self)
                 i += 2
             } else {
-                out.append(slice[i])
+                run.append(slice[i])
                 i += 1
             }
         }
-        return String(decoding: out, as: UTF8.self)
+        flushRun()
+        return out
     }
 
     /// An image starting at `start` (`![`), see `image(atStartOf:references:)`.

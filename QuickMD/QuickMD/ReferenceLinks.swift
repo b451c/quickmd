@@ -228,11 +228,14 @@ enum ReferenceLinks {
     /// `<url>`, which `InlineSyntaxScanner.linkDestination` reads back as
     /// exactly `url`: the characters that would end the pointy form or pair
     /// up with the link's own parentheses are backslash-escaped (the scanner
-    /// unescapes ASCII punctuation). A definition is one line, so no line break.
+    /// unescapes ASCII punctuation), and so is `&` — the definition's
+    /// references were decoded when it was read, a second decode must not
+    /// turn a literal `&amp;` into `&`. A definition is one line, so no line
+    /// break.
     private static func inlineDestination(_ url: String) -> String {
         var escaped = "<"
         for character in url {
-            if "\\<>()".contains(character) { escaped.append("\\") }
+            if "\\<>()&".contains(character) { escaped.append("\\") }
             escaped.append(character)
         }
         return escaped + ">"

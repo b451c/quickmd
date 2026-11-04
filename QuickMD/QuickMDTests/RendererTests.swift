@@ -828,6 +828,38 @@ final class RendererTests: XCTestCase {
     }
 
 
+    // MARK: - References in link destinations (review R10)
+
+    /// A destination's character references are decoded (hrefs from
+    /// `gh api markdown`: `a?b=1&amp;c=2` → `a?b=1&c=2`, `<a b&copy;>` →
+    /// `a%20b%C2%A9`), in inline links, images and reference definitions; a
+    /// definition inlined into a quote is decoded exactly once.
+    func testLinkDestinationsDecodeCharacterReferences() {
+        let theme = MarkdownTheme.cached(for: .light)
+        let md = """
+        [x](a?b=1&amp;c=2) [z](<a b&copy;>) [r] [twice] `[c](a&amp;b)`
+
+        ![i](p&amp;q.png)
+
+        > quoted [r] and [twice]
+
+        [r]: /u?x=1&amp;y=2
+        [twice]: /v?k=&amp;amp;
+        """
+        let blocks = MarkdownBlockParser(theme: theme).parse(md)
+        func links(_ attributed: AttributedString) -> [String] {
+            attributed.runs.compactMap { $0.link?.absoluteString }
+        }
+        guard case .text(let paragraph) = blocks[0].content else { return XCTFail("paragraph") }
+        XCTAssertEqual(links(paragraph), ["a?b=1&c=2", "a%20b%C2%A9", "/u?x=1&y=2", "/v?k=&amp;"])
+        XCTAssertTrue(String(paragraph.characters).hasSuffix("[c](a&amp;b)"), "code span untouched")
+        guard case .image(let url, _, _) = blocks[1].content else { return XCTFail("image") }
+        XCTAssertEqual(url, "p&q.png")
+        guard case .blockquote(let quote, _) = blocks[2].content else { return XCTFail("quote") }
+        XCTAssertEqual(links(renderer.renderQuotedBody(quote)), ["/u?x=1&y=2", "/v?k=&amp;"],
+                       "inlined definitions are not decoded a second time")
+    }
+
     // MARK: - Escaped dollars (review R9)
 
     /// The text a paragraph's row shows, with every formula as "⟨latex⟩" (a

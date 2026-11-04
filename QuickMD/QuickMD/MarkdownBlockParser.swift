@@ -100,7 +100,9 @@ struct MarkdownBlockParser: Sendable {
             } else if let match = Self.refLinkDefRegex.firstMatch(in: trimmed, range: nsRange),
                       let idRange = Range(match.range(at: 1), in: trimmed),
                       let urlRange = Range(match.range(at: 2), in: trimmed) {
-                referenceDefinitions[String(trimmed[idRange]).lowercased()] = String(trimmed[urlRange])
+                // Character references in the destination are decoded, as in
+                // an inline link's (`InlineSyntaxScanner.unescaped`).
+                referenceDefinitions[String(trimmed[idRange]).lowercased()] = HTMLEntities.decode(String(trimmed[urlRange]))
             } else {
                 lines.append(line)
                 lineMap.append(originalIndex)
