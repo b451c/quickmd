@@ -302,24 +302,57 @@ enum TableTextBuilder {
     /// without a semibold face (a Settings font) falls back to its bold.
     /// Attributes only — the characters (search, copy) are unchanged.
     static func raiseToHeaderWeight(_ cell: NSMutableAttributedString) {
+        cell.enumerateAttribute(.font, in: NSRange(location: 0, length: cell.length)) { value, range, _ in
+            guard let font = value as? NSFont else { return }
+            let raised = headerWeightFont(font)
+            if raised !== font { cell.addAttribute(.font, value: raised, range: range) }
+        }
+    }
+
+    /// `font` at header weight (see `raiseToHeaderWeight`), or `font` itself
+    /// when it is already semibold or heavier.
+    static func headerWeightFont(_ font: NSFont) -> NSFont {
         let semibold = NSFont.Weight.semibold.rawValue
         func weight(of font: NSFont) -> CGFloat {
             let traits = font.fontDescriptor.object(forKey: .traits) as? [NSFontDescriptor.TraitKey: Any]
             return (traits?[.weight] as? CGFloat) ?? NSFont.Weight.regular.rawValue
         }
-        cell.enumerateAttribute(.font, in: NSRange(location: 0, length: cell.length)) { value, range, _ in
-            guard let font = value as? NSFont, weight(of: font) < semibold else { return }
-            var traits = font.fontDescriptor.object(forKey: .traits) as? [NSFontDescriptor.TraitKey: Any] ?? [:]
-            traits[.weight] = semibold
-            let descriptor = font.fontDescriptor.addingAttributes([.traits: traits])
-            var raised = NSFont(descriptor: descriptor, size: font.pointSize) ?? font
-            if weight(of: raised) < semibold {
-                // Descriptor, not NSFontManager: build runs off-main (measurer).
-                let bold = font.fontDescriptor.withSymbolicTraits(font.fontDescriptor.symbolicTraits.union(.bold))
-                raised = NSFont(descriptor: bold, size: font.pointSize) ?? font
-            }
-            cell.addAttribute(.font, value: raised, range: range)
+        guard weight(of: font) < semibold else { return font }
+        var traits = font.fontDescriptor.object(forKey: .traits) as? [NSFontDescriptor.TraitKey: Any] ?? [:]
+        traits[.weight] = semibold
+        let descriptor = font.fontDescriptor.addingAttributes([.traits: traits])
+        var raised = NSFont(descriptor: descriptor, size: font.pointSize) ?? font
+        if weight(of: raised) < semibold {
+            // Descriptor, not NSFontManager: build runs off-main (measurer).
+            let bold = font.fontDescriptor.withSymbolicTraits(font.fontDescriptor.symbolicTraits.union(.bold))
+            raised = NSFont(descriptor: bold, size: font.pointSize) ?? font
         }
+        return raised
+    }
+
+    /// One cell of the PRINT/PDF table (`PrintableTableView`, SwiftUI `Text`):
+    /// the same `renderInline` runs as the screen cell, and in the header band
+    /// every run raised exactly as `raiseToHeaderWeight` raises the screen's.
+    ///
+    /// The weight has to go onto the runs, in BOTH scopes: `renderInline`
+    /// stamps an explicit font on every run, so a view-level `.font` modifier
+    /// never shows (until 1.14.1 the printable header asked for 12 pt semibold
+    /// that way and printed regular 14 pt), and SwiftUI `Text` reads only the
+    /// SwiftUI-scope font. That one wraps the raised NSFont, so the PDF draws
+    /// the very face the screen draws.
+    static func printableCell(_ markdown: String, isHeader: Bool,
+                              renderer: MarkdownRenderer) -> AttributedString {
+        let cell = renderer.renderInline(markdown)
+        guard isHeader else { return cell }
+        var raisedCell = cell
+        for run in cell.runs {
+            guard let font = run[AttributeScopes.AppKitAttributes.FontAttribute.self] else { continue }
+            let raised = headerWeightFont(font)
+            guard raised !== font else { continue }
+            raisedCell[run.range][AttributeScopes.AppKitAttributes.FontAttribute.self] = raised
+            raisedCell[run.range].font = Font(raised as CTFont)
+        }
+        return raisedCell
     }
 
     /// The table's height in a laid-out container — the view's

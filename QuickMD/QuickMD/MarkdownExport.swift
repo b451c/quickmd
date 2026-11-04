@@ -275,6 +275,10 @@ extension TableAlignmentProvider {
 
 /// Table view optimized for PDF export and printing
 /// Uses simple HStack layout (no GeometryReader) for ImageRenderer compatibility
+///
+/// Cell text comes from `TableTextBuilder.printableCell`: the screen table's
+/// fonts (14 pt runs, semibold header) are on the runs themselves. No `.font`
+/// modifier here — it would lose to the runs' own font and only mislead.
 struct PrintableTableView: View, TableAlignmentProvider {
     let headers: [String]
     let rows: [[String]]
@@ -307,8 +311,8 @@ struct PrintableTableView: View, TableAlignmentProvider {
                 // Header row
                 HStack(spacing: 0) {
                     ForEach(0..<columnCount, id: \.self) { index in
-                        Text(renderer.renderInline(index < headers.count ? headers[index] : ""))
-                            .font(theme.fonts.swiftUI(size: 12, weight: .semibold))
+                        Text(TableTextBuilder.printableCell(index < headers.count ? headers[index] : "",
+                                                            isHeader: true, renderer: renderer))
                             .foregroundColor(.black)
                             .multilineTextAlignment(textAlignmentFor(index))
                             .frame(maxWidth: .infinity, alignment: alignmentFor(index))
@@ -331,8 +335,7 @@ struct PrintableTableView: View, TableAlignmentProvider {
                 HStack(spacing: 0) {
                     ForEach(0..<columnCount, id: \.self) { colIndex in
                         let cell = colIndex < row.count ? row[colIndex] : ""
-                        Text(renderer.renderInline(cell))
-                            .font(theme.fonts.swiftUI(size: 11))
+                        Text(TableTextBuilder.printableCell(cell, isHeader: false, renderer: renderer))
                             .foregroundColor(.black)
                             .multilineTextAlignment(textAlignmentFor(colIndex))
                             .frame(maxWidth: .infinity, alignment: alignmentFor(colIndex))
