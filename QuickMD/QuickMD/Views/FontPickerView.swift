@@ -7,10 +7,13 @@ import AppKit
 /// body text, one for code. "System" (stored as "") keeps San Francisco /
 /// SF Mono — the pre-1.8 look. Applies to every open document, print and PDF
 /// export; a custom theme's `bodyFontFamily` / `codeFontFamily` overrides it.
-/// Sizes and ⌘+/⌘− zoom are unaffected — only the family changes.
+/// The family pickers change only the family, never the size. Size is the
+/// separate "Default zoom" picker (#48): the level every document window opens
+/// at and ⌘0 returns to; ⌘+/⌘− still zoom one window, print and PDF stay 100%.
 struct FontPickerView: View {
     @AppStorage(DocumentFonts.bodyDefaultsKey) private var bodyFontFamily: String = ""
     @AppStorage(DocumentFonts.codeDefaultsKey) private var codeFontFamily: String = ""
+    @AppStorage(DefaultZoom.defaultsKey) private var defaultZoom: Double = 1.0
     @State private var families: [String] = []
 
     private var fonts: DocumentFonts {
@@ -35,7 +38,22 @@ struct FontPickerView: View {
                 } header: {
                     header("Code")
                 } footer: {
-                    Text("Applies to the document, print and PDF export — the app's own controls keep the system font. Font size and zoom are unaffected. A custom theme can override these with bodyFontFamily / codeFontFamily in its JSON.")
+                    Text("Applies to the document, print and PDF export — the app's own controls keep the system font. A custom theme can override these with bodyFontFamily / codeFontFamily in its JSON.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+
+                Section {
+                    Picker("Default zoom", selection: defaultZoomSelection) {
+                        ForEach(DefaultZoom.choices, id: \.self) { scale in
+                            Text(DefaultZoom.title(for: scale)).tag(scale)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                } header: {
+                    header("Size")
+                } footer: {
+                    Text("Documents open at this size. ⌘+ and ⌘− zoom one window; ⌘0 returns to this size. Print and PDF export always use 100%.")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -49,6 +67,14 @@ struct FontPickerView: View {
     }
 
     // MARK: - Pieces
+
+    /// Reads and writes the NORMALIZED value: a stored value that is not one
+    /// of the choices (`defaults write`, a future build's extra rung) would
+    /// otherwise leave the Picker with an empty selection.
+    private var defaultZoomSelection: Binding<Double> {
+        Binding(get: { DefaultZoom.normalized(defaultZoom) },
+                set: { defaultZoom = DefaultZoom.normalized($0) })
+    }
 
     @ViewBuilder
     private func familyPicker(_ label: String, selection: Binding<String>, systemLabel: String) -> some View {

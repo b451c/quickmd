@@ -669,4 +669,65 @@ final class RendererTests: XCTestCase {
         // An off-ladder value snaps to the nearest rung instead of getting stuck
         XCTAssertEqual(MarkdownZoom.bigger.applied(to: 1.04), 1.1)
     }
+
+    // MARK: Default zoom (#48)
+
+    func testDefaultZoomChoicesAreRungsOfTheZoomLadder() {
+        for choice in DefaultZoom.choices {
+            XCTAssertTrue(MarkdownZoom.steps.contains(choice), "\(choice) is not a zoom step")
+        }
+    }
+
+    func testDefaultZoomNormalizedKeepsExactChoices() {
+        for choice in DefaultZoom.choices {
+            XCTAssertEqual(DefaultZoom.normalized(choice), choice)
+        }
+    }
+
+    func testDefaultZoomNormalizedSnapsToNearestChoice() {
+        XCTAssertEqual(DefaultZoom.normalized(1.2), 1.25)
+        XCTAssertEqual(DefaultZoom.normalized(1.6), 1.5)
+        // Tie rule: exactly between two choices → the smaller one
+        XCTAssertEqual(DefaultZoom.normalized(1.05), 1.0)
+        XCTAssertEqual(DefaultZoom.normalized(1.875), 1.75)
+        // Out of range clamps to the nearest end
+        XCTAssertEqual(DefaultZoom.normalized(5.0), 2.0)
+        XCTAssertEqual(DefaultZoom.normalized(0.1), 0.9)
+    }
+
+    func testDefaultZoomNormalizedRejectsGarbage() {
+        XCTAssertEqual(DefaultZoom.normalized(0), 1.0)
+        XCTAssertEqual(DefaultZoom.normalized(-1.25), 1.0)
+        XCTAssertEqual(DefaultZoom.normalized(.nan), 1.0)
+        XCTAssertEqual(DefaultZoom.normalized(.infinity), 1.0)
+        XCTAssertEqual(DefaultZoom.normalized(-.infinity), 1.0)
+    }
+
+    func testDefaultZoomTitles() {
+        XCTAssertEqual(DefaultZoom.title(for: 1.0), "100%")
+        XCTAssertEqual(DefaultZoom.title(for: 1.25), "125%")
+        XCTAssertEqual(DefaultZoom.title(for: 1.1), "110%")
+        XCTAssertEqual(DefaultZoom.title(for: 0.9), "90%")
+    }
+
+    func testDefaultZoomStoredReadsItsOwnSuite() throws {
+        let suite = "QuickMDTests.DefaultZoom.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        XCTAssertEqual(DefaultZoom.stored(in: defaults), 1.0, "missing key")
+        defaults.set(1.25, forKey: DefaultZoom.defaultsKey)
+        XCTAssertEqual(DefaultZoom.stored(in: defaults), 1.25)
+        defaults.set(1.2, forKey: DefaultZoom.defaultsKey)
+        XCTAssertEqual(DefaultZoom.stored(in: defaults), 1.25)
+        defaults.set("abc", forKey: DefaultZoom.defaultsKey)
+        XCTAssertEqual(DefaultZoom.stored(in: defaults), 1.0, "non-numeric garbage")
+    }
+
+    func testActualSizeReturnsToTheDefaultAndStepsMoveFromThere() {
+        XCTAssertEqual(MarkdownZoom.actualSize.applied(to: 2.5, defaultScale: 1.25), 1.25)
+        XCTAssertEqual(MarkdownZoom.actualSize.applied(to: 1.25, defaultScale: 1.25), 1.25)
+        XCTAssertEqual(MarkdownZoom.bigger.applied(to: 1.25, defaultScale: 1.25), 1.5)
+        XCTAssertEqual(MarkdownZoom.smaller.applied(to: 1.25, defaultScale: 1.25), 1.1)
+    }
 }
