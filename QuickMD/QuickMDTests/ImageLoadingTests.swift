@@ -12,6 +12,21 @@ final class ImageLoadingTests: XCTestCase {
     private var pngData: Data { Data(base64Encoded: pngBase64)! }
     private var pngURI: String { "data:image/png;base64,\(pngBase64)" }
 
+    /// Every test runs against caches that never evict (Debug-only seam,
+    /// `ImageCache.retainEntriesForTesting`), so "the second lookup is a cache
+    /// hit" cannot fail because the system reclaimed memory mid-test (observed
+    /// 2026-10-22 on a loaded machine), and every test starts with empty
+    /// caches. The loader code under test is the code that ships.
+    override func setUp() {
+        super.setUp()
+        ImageLoader.retainCachedEntriesForTesting(true)
+    }
+
+    override func tearDown() {
+        ImageLoader.retainCachedEntriesForTesting(false)
+        super.tearDown()
+    }
+
     // MARK: - DataImageURI parsing / decoding
 
     func testBase64PNGRoundTrip() throws {
@@ -217,7 +232,7 @@ final class ImageLoadingTests: XCTestCase {
     // MARK: - Loader
 
     func testLoadSyncDataURIAndCache() throws {
-        // A raw string no other test uses, so the cache state is this test's own.
+        // Empty, non-evicting caches per test (setUp): the cache state is this test's own.
         let raw = "data:image/png;base64,\(pngBase64)\n"
         let source = try XCTUnwrap(ImageSource.resolve(raw, documentURL: nil))
         let image = try XCTUnwrap(ImageLoader.loadSync(raw: raw, source: source, maxPixel: ImageLoader.printMaxPixel))
