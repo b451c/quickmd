@@ -30,9 +30,11 @@ final class CrossDocumentAnchors: @unchecked Sendable {
     private let lock = NSLock()
     private var pending: [String: (fragment: String, date: Date)] = [:]
 
-    /// The identity of a document file: the path as `handleLinkActivation`
-    /// compares documents (`standardizedFileURL`).
-    static func key(for fileURL: URL) -> String { fileURL.standardizedFileURL.path }
+    /// The identity of a document file: its path with `.`/`..` and symlinks
+    /// resolved, so a link through a symlinked folder (or `/tmp` vs
+    /// `/private/tmp`) reaches the window that opened the real path. The same
+    /// function on both sides (park and take).
+    static func key(for fileURL: URL) -> String { fileURL.standardizedFileURL.resolvingSymlinksInPath().path }
 
     /// The fragment of a link to another document, percent-decoded (`#Install
     /// Guide` arrives as `Install%20Guide`); nil when the link has none.

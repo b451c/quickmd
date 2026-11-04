@@ -330,6 +330,26 @@ final class SectionExtractorTests: XCTestCase {
         XCTAssertNil(anchors.take(for: target, now: now), "and it is gone")
     }
 
+    /// Review R4: the link may name the file through a symlinked folder while
+    /// the window shows the real path (or the other way round).
+    func testCrossDocumentAnchorKeyResolvesSymlinks() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("quickmd-anchors-\(UUID().uuidString)")
+        let real = root.appendingPathComponent("real")
+        try fm.createDirectory(at: real, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let file = real.appendingPathComponent("other.md")
+        try "# Intro".write(to: file, atomically: false, encoding: .utf8)
+        let alias = root.appendingPathComponent("alias")
+        try fm.createSymbolicLink(at: alias, withDestinationURL: real)
+
+        let anchors = CrossDocumentAnchors()
+        anchors.request("intro", for: alias.appendingPathComponent("other.md"))
+        XCTAssertEqual(anchors.take(for: file), "intro", "parked via the symlink, taken by the real path")
+        anchors.request("intro", for: file)
+        XCTAssertEqual(anchors.take(for: alias.appendingPathComponent("./other.md")), "intro")
+    }
+
     /// A link destination becomes the same URL on every macOS: macOS 13's
     /// `URL(string:)` rejects spaces / non-ASCII (14+ encodes them), and the
     /// old 13 fallback encoded the `#` too, so `README.md#Install Guide` was a
