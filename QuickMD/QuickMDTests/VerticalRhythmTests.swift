@@ -734,16 +734,67 @@ final class VerticalRhythmTests: XCTestCase {
         }
     }
 
-    func testPaginationDropsTheSpaceAtAPageTop() {
-        let placements = PrintRhythm.paginate([(100, 0), (50, 30), (600, 30), (40, 30), (700, 30), (10, 0)],
-                                              pageHeight: 700)
-        XCTAssertEqual(placements, [
-            .init(page: 0, y: 0),
-            .init(page: 0, y: 130),
-            .init(page: 1, y: 0),      // 180 + 30 + 600 > 700: new page, no space above
-            .init(page: 1, y: 630),    // 600 + 30 + 40 = 670 fits
-            .init(page: 2, y: 0),      // a full page (a slice of a taller block)
-            .init(page: 3, y: 0),      // the next slice: nothing fits below a full page
-        ])
+    private func printBlocks(_ blocks: [(CGFloat, CGFloat, Bool)]) -> [PrintRhythm.Block] {
+        blocks.map { PrintRhythm.Block(height: $0.0, spacingAbove: $0.1, keepsWithNext: $0.2) }
     }
+    private func placed(_ slices: [PrintRhythm.Slice]) -> [String] {
+        slices.map { "\($0.block)@\($0.page):\(Int($0.y))" + ($0.offset > 0 || $0.height < 0 ? "+\(Int($0.offset))" : "") }
+    }
+
+    func testPaginationDropsTheSpaceAtAPageTop() {
+        let slices = PrintRhythm.paginate(printBlocks([(100, 0, false), (50, 30, false), (600, 30, false),
+                                                       (40, 30, false), (710, 30, false)]),
+                                          pageHeight: 700)
+        XCTAssertEqual(placed(slices), [
+            "0@0:0",
+            "1@0:130",
+            "2@1:0",          // 180 + 30 + 600 > 700: new page, no space above
+            "3@1:630",        // 600 + 30 + 40 = 670 fits
+            "4@2:0",          // taller than a page: a page per slice
+            "4@3:0+700",
+        ])
+        XCTAssertEqual(slices.map(\.height), [100, 50, 600, 40, 700, 10])
+    }
+
+    /// Orbit.md on Letter: `## Configuration` ended page 1 and its table
+    /// started page 2.
+    func testAHeadingMovesWithTheBlockThatStartsTheNextPage() {
+        let slices = PrintRhythm.paginate(printBlocks([(600, 0, false), (30, 50, true), (79, 20, false)]),
+                                          pageHeight: 700)
+        XCTAssertEqual(placed(slices), ["0@0:0", "1@1:0", "2@1:50"])
+    }
+
+    func testAHeadingChainMovesTogether() {
+        let slices = PrintRhythm.paginate(printBlocks([(560, 0, false), (30, 50, true), (25, 15, true),
+                                                       (100, 20, false), (17, 25, false)]),
+                                          pageHeight: 700)
+        XCTAssertEqual(placed(slices), ["0@0:0", "1@1:0", "2@1:45", "3@1:90", "4@1:215"])
+    }
+
+    func testAHeadingStaysWhenItCannotShareAPageWithTheNextBlock() {
+        // 30 + 20 + 690 > 700: moving the heading would only orphan it on
+        // the next page.
+        let slices = PrintRhythm.paginate(printBlocks([(600, 0, false), (30, 50, true), (690, 20, false)]),
+                                          pageHeight: 700)
+        XCTAssertEqual(placed(slices), ["0@0:0", "1@0:650", "2@1:0"])
+        // A heading that already starts its page is never moved (no loop).
+        let top = PrintRhythm.paginate(printBlocks([(30, 0, true), (690, 20, false), (17, 25, false)]),
+                                       pageHeight: 700)
+        XCTAssertEqual(placed(top), ["0@0:0", "1@1:0", "2@2:0"])
+    }
+
+    func testAHeadingKeepsWithTheFirstSliceOfABlockTallerThanAPage() {
+        // Room below the heading: the first slice fills the rest of its page.
+        let roomy = PrintRhythm.paginate(printBlocks([(300, 0, false), (30, 50, true), (1500, 20, false)]),
+                                         pageHeight: 700)
+        XCTAssertEqual(placed(roomy), ["0@0:0", "1@0:350", "2@0:400", "2@1:0+300", "2@2:0+1000"])
+        XCTAssertEqual(roomy.map(\.height), [300, 30, 300, 700, 500])
+        // No room: the heading moves, the first slice fills the rest of the
+        // new page, and every slice is placed exactly once.
+        let full = PrintRhythm.paginate(printBlocks([(600, 0, false), (30, 50, true), (1500, 20, false)]),
+                                        pageHeight: 700)
+        XCTAssertEqual(placed(full), ["0@0:0", "1@1:0", "2@1:50", "2@2:0+650", "2@3:0+1350"])
+        XCTAssertEqual(full.filter { $0.block == 2 }.map(\.height).reduce(0, +), 1500)
+    }
+
 }

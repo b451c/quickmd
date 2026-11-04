@@ -347,36 +347,126 @@ enum PrintRhythm {
         return ns
     }
 
-    /// Where a segment lands: its page and its y from the top of the page's
-    /// content area.
-    struct Placement: Equatable {
+    /// A block to print: its height, the space above it, and whether it must
+    /// not end a page (a heading keeps with the block after it).
+    struct Block: Equatable {
+        let height: CGFloat
+        let spacingAbove: CGFloat
+        let keepsWithNext: Bool
+    }
+
+    /// One printed piece of a block — the whole block, or one slice of a
+    /// block taller than the room it gets: its part of the block (`offset`,
+    /// `height`), its page and its y from the top of the page's content area.
+    struct Slice: Equatable {
+        let block: Int
+        let offset: CGFloat
+        let height: CGFloat
         let page: Int
         let y: CGFloat
     }
 
-    /// Lays `segments` (a block, or one slice of a block taller than a page)
-    /// out top to bottom on pages `pageHeight` tall.
+    /// The least of a sliced block that has to fit below a heading kept with
+    /// it: two lines of body text.
+    static let minimumFirstSlice: CGFloat = 40
+
+    /// Lays `blocks` out top to bottom on pages `pageHeight` tall.
     ///
-    /// A segment gets its `spacingAbove` unless it is first on its page — the
-    /// page's margin already separates it from the page above. A segment that
-    /// does not fit below the last one starts a new page.
-    static func paginate(_ segments: [(height: CGFloat, spacingAbove: CGFloat)],
-                         pageHeight: CGFloat) -> [Placement] {
-        var placements: [Placement] = []
-        placements.reserveCapacity(segments.count)
+    /// - A block gets its `spacingAbove` unless it is first on its page — the
+    ///   page's margin already separates it from the page above.
+    /// - A block that does not fit below the last one starts a new page; a
+    ///   block taller than a page starts one and is sliced, a page per slice.
+    /// - Keep with next: a run of headings (`keepsWithNext`, an H2 and the H3
+    ///   under it) never ends a page. When the block after the run starts a
+    ///   new page, the run moves to that page with it — if the run and the
+    ///   block fit on one page; otherwise nothing would be gained and the run
+    ///   stays. A block taller than a page is not moved: its first slice
+    ///   fills the rest of the run's page (moving the run first when not even
+    ///   `minimumFirstSlice` fits there), so a heading is kept with that first
+    ///   slice and nothing loops.
+    static func paginate(_ blocks: [Block], pageHeight: CGFloat) -> [Slice] {
+        var slices: [Slice] = []
+        slices.reserveCapacity(blocks.count)
         var page = 0
-        var bottom: CGFloat = 0
+        var bottom: CGFloat = 0        // of the last slice on `page`
         var pageIsEmpty = true
-        for segment in segments {
-            var y = pageIsEmpty ? 0 : bottom + segment.spacingAbove
-            if !pageIsEmpty, y + segment.height > pageHeight {
-                page += 1
-                y = 0
-            }
-            placements.append(Placement(page: page, y: y))
-            bottom = y + segment.height
+
+        func put(_ block: Int, offset: CGFloat = 0, height: CGFloat, at y: CGFloat) {
+            slices.append(Slice(block: block, offset: offset, height: height, page: page, y: y))
+            bottom = y + height
             pageIsEmpty = false
         }
-        return placements
+        func newPage() {
+            page += 1
+            bottom = 0
+            pageIsEmpty = true
+        }
+        /// The headings that end the current page right before `block`, as
+        /// indices into `slices` (empty: none).
+        func headingRun(before block: Int) -> Range<Int> {
+            var first = slices.count
+            var expected = block - 1
+            while first > 0 {
+                let last = slices[first - 1]
+                guard last.page == page, last.block == expected, last.offset == 0,
+                      blocks[last.block].keepsWithNext else { break }
+                first -= 1
+                expected -= 1
+            }
+            return first..<slices.count
+        }
+        /// Moving a run helps only when something precedes it on its page.
+        func canMove(_ run: Range<Int>) -> Bool { !run.isEmpty && slices[run.lowerBound].y > 0 }
+        /// Moves `run` to the top of a new page.
+        func moveToNewPage(_ run: Range<Int>) {
+            let moved = Array(slices[run])
+            slices.removeSubrange(run)
+            newPage()
+            for slice in moved {
+                put(slice.block, height: slice.height,
+                    at: pageIsEmpty ? 0 : bottom + blocks[slice.block].spacingAbove)
+            }
+        }
+        func runHeight(_ run: Range<Int>) -> CGFloat {
+            guard let first = run.first else { return 0 }
+            return slices[run.last ?? first].y + slices[run.last ?? first].height - slices[first].y
+        }
+
+        for (index, block) in blocks.enumerated() {
+            let y = pageIsEmpty ? 0 : bottom + block.spacingAbove
+            let run = headingRun(before: index)
+            if block.height <= pageHeight {
+                if pageIsEmpty || y + block.height <= pageHeight {
+                    put(index, height: block.height, at: y)
+                } else if canMove(run), runHeight(run) + block.spacingAbove + block.height <= pageHeight {
+                    moveToNewPage(run)
+                    put(index, height: block.height, at: bottom + block.spacingAbove)
+                } else {
+                    newPage()
+                    put(index, height: block.height, at: 0)
+                }
+                continue
+            }
+
+            // Taller than a page: sliced, a page per slice — except the first
+            // slice after a heading run, which fills the rest of the run's page.
+            var offset: CGFloat = 0
+            if !run.isEmpty, pageHeight - y < minimumFirstSlice, canMove(run) {
+                moveToNewPage(run)
+            }
+            let top = pageIsEmpty ? 0 : bottom + block.spacingAbove
+            if !run.isEmpty, pageHeight - top >= minimumFirstSlice {
+                let first = pageHeight - top
+                put(index, height: first, at: top)
+                offset = first
+            }
+            while offset < block.height {
+                if !pageIsEmpty { newPage() }
+                let height = min(pageHeight, block.height - offset)
+                put(index, offset: offset, height: height, at: 0)
+                offset += height
+            }
+        }
+        return slices
     }
 }

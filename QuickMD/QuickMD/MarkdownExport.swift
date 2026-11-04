@@ -751,23 +751,24 @@ class PDFExportManager {
         let spacing = BlockLayout.Spacing.column(rhythm, fontScale: 1)
 
         // Paginate: a block taller than a page is sliced; only its first slice
-        // has the block's space above it.
-        var segments: [BlockSegment] = []
-        var segmentSpacing: [CGFloat] = []
-        for (index, measured) in measuredBlocks.enumerated() {
-            let slices = sliceBlockIfOversized(block: measured.block, size: measured.size, maxHeight: contentHeight)
-            for (slice, segment) in slices.enumerated() {
-                segments.append(segment)
-                segmentSpacing.append(slice == 0 ? spacing[index] : 0)
-            }
-        }
-        let placements = PrintRhythm.paginate(
-            zip(segments, segmentSpacing).map { (height: $0.sliceHeight, spacingAbove: $1) },
+        // has the block's space above it, and a heading never ends a page
+        // without the start of the block after it (`PrintRhythm.paginate`).
+        let slices = PrintRhythm.paginate(
+            measuredBlocks.enumerated().map { index, measured in
+                let isHeading: Bool
+                if case .heading = measured.block.content { isHeading = true } else { isHeading = false }
+                return PrintRhythm.Block(height: measured.size.height, spacingAbove: spacing[index],
+                                         keepsWithNext: isHeading)
+            },
             pageHeight: contentHeight)
         var pages: [[PlacedSegment]] = [[]]
-        for (segment, placement) in zip(segments, placements) {
-            while pages.count <= placement.page { pages.append([]) }
-            pages[placement.page].append(PlacedSegment(segment: segment, yOffset: placement.y))
+        for slice in slices {
+            while pages.count <= slice.page { pages.append([]) }
+            let measured = measuredBlocks[slice.block]
+            pages[slice.page].append(PlacedSegment(
+                segment: BlockSegment(block: measured.block, size: measured.size,
+                                      sliceOffset: slice.offset, sliceHeight: slice.height),
+                yOffset: slice.y))
         }
 
         let pdfData = NSMutableData()
@@ -820,26 +821,6 @@ class PDFExportManager {
 
         pdfContext.closePDF()
         return pdfData as Data
-    }
-
-    private static func sliceBlockIfOversized(block: MarkdownBlock, size: CGSize, maxHeight: CGFloat) -> [BlockSegment] {
-        guard size.height > maxHeight, size.height > 0 else {
-            return [BlockSegment(block: block, size: size, sliceOffset: 0, sliceHeight: size.height)]
-        }
-
-        var segments: [BlockSegment] = []
-        var offset: CGFloat = 0
-        while offset < size.height {
-            let sliceHeight = min(maxHeight, size.height - offset)
-            segments.append(BlockSegment(
-                block: block,
-                size: size,
-                sliceOffset: offset,
-                sliceHeight: sliceHeight
-            ))
-            offset += sliceHeight
-        }
-        return segments
     }
 
     private static func showError(_ message: String) {
