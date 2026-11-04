@@ -961,12 +961,15 @@ final class VerticalRhythmTests: XCTestCase {
 
     /// A diagram's height at any width and zoom from the geometry its web view
     /// posted — the template's own formula: × zoom while it fits, never wider
-    /// than the view, plus the page's overhead, at least 50 pt.
+    /// than the view, plus the page's overhead. No floor (1.14.4 had 50 pt).
     func testADiagramsHeightFollowsTheTemplatesFormula() {
         typealias Mermaid = BlockLayout.Mermaid
         let small = Mermaid.Geometry(naturalWidth: 240, naturalHeight: 70, overhead: 0)
         XCTAssertEqual(Mermaid.diagramHeight(small, fontScale: 1.25, contentWidth: 819), 87.5)
-        XCTAssertEqual(Mermaid.diagramHeight(small, fontScale: 0.5, contentWidth: 819), 50)   // the minimum
+        XCTAssertEqual(Mermaid.diagramHeight(small, fontScale: 0.5, contentWidth: 819), 35)
+        // A flat diagram in a narrow column: fitted to 120 of 480 px.
+        let flat = Mermaid.Geometry(naturalWidth: 480, naturalHeight: 100, overhead: 0)
+        XCTAssertEqual(Mermaid.diagramHeight(flat, fontScale: 1, contentWidth: 120), 25)
         let wide = Mermaid.Geometry(naturalWidth: 1600, naturalHeight: 400, overhead: 4)
         XCTAssertEqual(Mermaid.diagramHeight(wide, fontScale: 1, contentWidth: 800), 204)     // fitted: 0.5
         XCTAssertEqual(Mermaid.diagramHeight(wide, fontScale: 1.5, contentWidth: 800), 204)   // still fitted
@@ -974,6 +977,26 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(Mermaid.diagramHeight(wide, fontScale: 1, contentWidth: 800.7), 204)   // innerWidth: whole px
         // Never rendered: the measurer's default, and nothing in the store.
         XCTAssertNil(MermaidGeometryStore.geometry(source: "graph TD; Never-->Rendered", isDark: false))
+    }
+
+    /// What the row takes from the height the web view reports: a diagram
+    /// that rendered is as tall as it is — the 25 pt flat one stayed 50 pt
+    /// tall in 1.14.4, 25 pt of it blank, and the measurer (exact since the
+    /// placeholder fix) and the view disagreed. A failed render (Mermaid's
+    /// error text) keeps a minimum; a report of nothing is not taken.
+    func testARenderedDiagramTakesItsReportedHeightExactly() {
+        typealias Mermaid = BlockLayout.Mermaid
+        XCTAssertEqual(Mermaid.acceptedHeight(reported: 25, rendered: true), 25)
+        XCTAssertEqual(Mermaid.acceptedHeight(reported: 87.5, rendered: true), 87.5)
+        XCTAssertNil(Mermaid.acceptedHeight(reported: 0, rendered: true))
+        XCTAssertNil(Mermaid.acceptedHeight(reported: .nan, rendered: true))
+        XCTAssertEqual(Mermaid.acceptedHeight(reported: 31, rendered: false), Mermaid.failedRenderMinimumHeight)
+        XCTAssertEqual(Mermaid.acceptedHeight(reported: 0, rendered: false), Mermaid.failedRenderMinimumHeight)
+        XCTAssertEqual(Mermaid.acceptedHeight(reported: 120, rendered: false), 120)
+        // The view and the measurer agree on a flat diagram.
+        let flat = Mermaid.Geometry(naturalWidth: 480, naturalHeight: 100, overhead: 0)
+        XCTAssertEqual(Mermaid.acceptedHeight(reported: 25, rendered: true),
+                       Mermaid.diagramHeight(flat, fontScale: 1, contentWidth: 120))
     }
 
     /// A diagram view without a snapshot at its zoom and width finds the

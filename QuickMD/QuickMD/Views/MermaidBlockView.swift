@@ -362,8 +362,13 @@ private struct MermaidWebView: NSViewRepresentable {
                                          source: source, isDark: isDark)
                 return
             }
-            guard let height = message.body as? Double else { return }
-            let newHeight = max(CGFloat(height), 50)
+            // A diagram that rendered posted its geometry just before this
+            // (`reportGeometry`); a failed render posts none.
+            guard let height = message.body as? Double, let source = lastSource, let isDark = lastIsDark,
+                  let newHeight = BlockLayout.Mermaid.acceptedHeight(
+                    reported: height,
+                    rendered: MermaidGeometryStore.geometry(source: source, isDark: isDark) != nil)
+            else { return }
             if abs(newHeight - parent.diagramHeight) > 1 {
                 DispatchQueue.main.async {
                     self.parent.diagramHeight = newHeight

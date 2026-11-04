@@ -516,8 +516,9 @@ enum BlockLayout {
         /// Height a diagram starts at when nothing has measured it yet.
         static let defaultHeight: CGFloat = 200
         static let cornerRadius: CGFloat = 6
-        /// The least height the web view reports (`MermaidWebView`).
-        static let minimumHeight: CGFloat = 50
+        /// The least height of a diagram that did NOT render (Mermaid's error
+        /// text, or nothing): a rendered one is as tall as it is.
+        static let failedRenderMinimumHeight: CGFloat = 50
 
         /// What a rendered diagram's height follows from, as the inline web view
         /// posts it (`mermaidGeometry` in mermaid-template.html): the SVG's
@@ -531,13 +532,25 @@ enum BlockLayout {
         /// The diagram's height in a web view `contentWidth` wide at
         /// `fontScale` — the template's `resizeDiagram`: the natural size ×
         /// zoom, never wider than the view (`window.innerWidth`, whole CSS
-        /// px), plus the page's overhead, and at least `minimumHeight`.
+        /// px), plus the page's overhead. No floor: a flat diagram at a small
+        /// zoom is that flat (1.14.4 kept it at least 50 pt, blank below it).
         static func diagramHeight(_ geometry: Geometry, fontScale: CGFloat, contentWidth: CGFloat) -> CGFloat {
             let viewport = floor(contentWidth)
             guard geometry.naturalWidth > 0, geometry.naturalHeight > 0, viewport > 0 else { return defaultHeight }
             let fit = viewport / geometry.naturalWidth
             let factor = min(fontScale * min(1, fit), fit)
-            return max(minimumHeight, geometry.naturalHeight * factor + geometry.overhead)
+            return geometry.naturalHeight * factor + geometry.overhead
+        }
+
+        /// The height a diagram's web view reported, as its row takes it.
+        /// `rendered`: the diagram rendered (its geometry was posted) — the
+        /// height is exact, as `diagramHeight` computes it; a report of
+        /// nothing is ignored (nil). Otherwise the page shows Mermaid's error
+        /// text (or nothing): at least `failedRenderMinimumHeight`.
+        static func acceptedHeight(reported: Double, rendered: Bool) -> CGFloat? {
+            guard reported.isFinite else { return nil }
+            guard rendered else { return max(CGFloat(reported), failedRenderMinimumHeight) }
+            return reported > 0 ? CGFloat(reported) : nil
         }
 
         /// A diagram row: the diagram, the view's padding and the row's.
