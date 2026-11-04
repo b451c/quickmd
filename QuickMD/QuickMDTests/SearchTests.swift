@@ -586,3 +586,21 @@ final class SearchTests: XCTestCase {
         XCTAssertEqual(count("key", in: markdown), 1, "a term only in a key is counted")
     }
 }
+
+// MARK: - Untypesettable display math (1.14.3)
+
+extension SearchTests {
+    /// A formula shown as its ```latex source is searched as that code block:
+    /// each occurrence counted once (not once as math and again as code).
+    func testUntypesettableFormulaIsCountedOnceAsItsCodeBlock() {
+        let engine = MathRendering(inlineImage: { _, _, _ in nil }, displayHeight: { _, _, _ in 40 },
+                                   typesets: { !$0.contains("\\not") })
+        let markdown = "$$\nV(e_1) \\not\\le V(e_2) \\quad \\land \\quad V(e_2) \\not\\le V(e_1)\n$$\n\nAfter."
+        let blocks = engine.substitutingUntypesettableMath(in: parse(markdown))
+        guard case .codeBlock = blocks[0].content else { return XCTFail("formula was not substituted") }
+
+        let results = DocumentSearch.computeMatches(in: blocks, term: "\\not\\le")
+        XCTAssertEqual(results.matchBlockIds, [blocks[0].id, blocks[0].id])
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "land").matchBlockIds, [blocks[0].id])
+    }
+}

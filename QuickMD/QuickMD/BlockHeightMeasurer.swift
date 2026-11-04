@@ -496,11 +496,43 @@ struct MathRendering {
     let inlineImage: (_ latex: String, _ theme: MarkdownTheme, _ fontScale: CGFloat) -> NSImage?
     /// Height `MTMathUILabel` will take for a display-math block.
     let displayHeight: (_ latex: String, _ theme: MarkdownTheme, _ fontScale: CGFloat) -> CGFloat
+    /// False when the engine cannot typeset this display formula at all (an
+    /// unsupported command such as `\not\le`). `MTMathUILabel` would draw an
+    /// empty row for it, so `substitutingUntypesettableMath` shows the source
+    /// instead. Defaults to "always typesets" so stubs keep their old behaviour.
+    var typesets: (_ latex: String) -> Bool = { _ in true }
 
     /// No math engine: inline math degrades to the italic-literal fallback and
     /// display math to zero intrinsic height. Only for tests and previews.
     static let none = MathRendering(inlineImage: { _, _, _ in nil },
                                     displayHeight: { _, _, _ in 0 })
+
+    /// `blocks` with every `.mathBlock` this engine cannot typeset turned into a
+    /// ```` ```latex ```` code block of the same LaTeX — same `id` (ids are
+    /// positional) and same `sourceLine`.
+    ///
+    /// Why a block substitution and not a fallback inside `MathBlockView`: the
+    /// row would then have to be a code block for the view, the measurer
+    /// (`.exact` height), search, selection/copy, Source Edit landing and
+    /// print/PDF alike — six places that would each need their own "failed
+    /// math" branch. Swapping the block once per parse, before anything is laid
+    /// out, gives all of them the existing code-block path.
+    ///
+    /// Same thread rule as `measure(math:)`: the engine behind `.swiftMath` is
+    /// main-thread only, so call this on the main thread with it (the parse
+    /// task's main-actor step, `PDFExportManager.generateMultiPagePDF` for
+    /// print and PDF). Documents without display math return without consulting
+    /// the engine.
+    func substitutingUntypesettableMath(in blocks: [MarkdownBlock]) -> [MarkdownBlock] {
+        guard blocks.contains(where: { if case .mathBlock = $0.content { return true } else { return false } })
+        else { return blocks }
+        return blocks.map { block in
+            guard case .mathBlock(let latex) = block.content, !typesets(latex) else { return block }
+            return MarkdownBlock(id: block.id,
+                                 content: .codeBlock(code: latex, language: "latex"),
+                                 sourceLine: block.sourceLine)
+        }
+    }
 }
 
 // MARK: - AttributedString → NSAttributedString
@@ -847,14 +879,10 @@ enum BlockHeightMeasurer {
                 kinds.append(.exact)
 
             case .codeBlock(let code, let language):
-                let ns = BlockTextConverter.plainCode(code, theme: theme, fontScale: fontScale)
-                let inner = exactHeight(text: ns, width: codeWidth)
-                let stack = inner
-                    + (language.isEmpty ? codeChromeWithoutLanguage : codeChromeWithLanguage)
-                // The always-present copy button is the ZStack's other child, so
-                // it is a floor under the row — see `Code.copyButtonFloorHeight`.
-                heights.append(max(stack, BlockLayout.Code.copyButtonFloorHeight)
-                               + 2 * BlockLayout.Document.codeOuterVerticalPadding)
+                heights.append(codeRowHeight(code: code, theme: theme, fontScale: fontScale,
+                                             codeWidth: codeWidth,
+                                             chrome: language.isEmpty ? codeChromeWithoutLanguage
+                                                                      : codeChromeWithLanguage))
                 kinds.append(.exact)
 
             case .heading(let level, let title, _):
@@ -921,6 +949,21 @@ enum BlockHeightMeasurer {
             mathPendingRows: mathPendingRows)
     }
 
+    /// One `.codeBlock` row: the code laid out at `codeWidth` plus `chrome`
+    /// (`BlockLayout.Code.verticalChrome` for the block's language state —
+    /// passed in so `measure` computes it once per document, not per block).
+    /// Shared by `measure` and `measureMathRows` (a display formula the engine
+    /// cannot typeset becomes a code row there).
+    private static func codeRowHeight(code: String, theme: MarkdownTheme, fontScale: CGFloat,
+                                      codeWidth: CGFloat, chrome: CGFloat) -> CGFloat {
+        let ns = BlockTextConverter.plainCode(code, theme: theme, fontScale: fontScale)
+        let stack = exactHeight(text: ns, width: codeWidth) + chrome
+        // The always-present copy button is the ZStack's other child, so it is
+        // a floor under the row — see `Code.copyButtonFloorHeight`.
+        return max(stack, BlockLayout.Code.copyButtonFloorHeight)
+            + 2 * BlockLayout.Document.codeOuterVerticalPadding
+    }
+
     /// Finishes the rows an off-main `measure(math: nil)` deferred.
     ///
     /// `@MainActor` because this is the only place in the measurement path
@@ -928,8 +971,9 @@ enum BlockHeightMeasurer {
     /// caller runs it after the background pass lands, before the table is used
     /// for layout.
     ///
-    /// Nothing else about the table changes — same `kinds`, same `contentWidth`,
-    /// every other height and converted string carried over — so
+    /// Nothing else about the table changes — same `kinds` (bar a substituted
+    /// formula, see `blocks`), same `contentWidth`, every other height and
+    /// converted string carried over — so
     /// `measureMathRows(m.mathPendingRows, in: m, …, math: engine)` equals a
     /// straight `measure(…, math: engine)`, row for row.
     ///
@@ -937,7 +981,10 @@ enum BlockHeightMeasurer {
     ///   - pending: normally `measured.mathPendingRows`. Indices outside the
     ///     table, and rows that don't need the engine, are ignored.
     ///   - blocks: the same array `measured` was produced from (row *i* is
-    ///     `blocks[i]`).
+    ///     `blocks[i]`), or that array after
+    ///     `MathRendering.substitutingUntypesettableMath`: a deferred
+    ///     `.mathBlock` row that became a `.codeBlock` is measured as a code row
+    ///     here and its kind turns `.exact`, exactly what `measure` gives it.
     ///   - contentWidth: MUST be the width `measured` was produced at.
     ///   - reusing: strings a PREVIOUS measurement of the same content already
     ///     built, keyed by block id — normally the caller's last
@@ -971,6 +1018,7 @@ enum BlockHeightMeasurer {
         #endif
 
         var heights = measured.table.heights
+        var kinds = measured.table.kinds
         var converted = measured.converted
         let textWidth = BlockLayout.clampedWidth(contentWidth)
 
@@ -1003,13 +1051,22 @@ enum BlockHeightMeasurer {
                     + 2 * BlockLayout.Math.verticalPadding
                     + 2 * BlockLayout.Document.mathOuterVerticalPadding
 
+            case .codeBlock(let code, let language):
+                // Only a substituted formula gets here (a parsed code block is
+                // never pending). Rare, so the chrome is computed per row.
+                heights[index] = codeRowHeight(
+                    code: code, theme: theme, fontScale: fontScale,
+                    codeWidth: BlockLayout.clampedWidth(contentWidth - 2 * BlockLayout.Code.horizontalPadding),
+                    chrome: BlockLayout.Code.verticalChrome(hasLanguage: !language.isEmpty, fontScale: fontScale))
+                kinds[index] = .exact
+
             default:
                 continue
             }
         }
 
         return MeasuredBlocks(
-            table: BlockHeightTable(heights: heights, kinds: measured.table.kinds,
+            table: BlockHeightTable(heights: heights, kinds: kinds,
                                     contentWidth: measured.table.contentWidth),
             converted: converted,
             tables: measured.tables,

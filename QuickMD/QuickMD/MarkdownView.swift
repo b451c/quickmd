@@ -689,8 +689,16 @@ struct MarkdownView: View {
             // is what made repeated ⌘+/⌘- jump to arbitrary sizes.
             guard !Task.isCancelled else { return }
             let parsed = out.parsed
+            // A display formula SwiftMath cannot typeset would draw an empty
+            // row: show its source as a ```latex code block instead. Decided
+            // here, once per parse and before anything is laid out (the engine
+            // is main-thread only), so every consumer of `cachedBlocks` — view,
+            // measurer, search, selection, landing — sees the same block. Its
+            // row is still in `mathPendingRows`; `measureMathRows` measures it
+            // as code below.
+            let blocks = MathRendering.swiftMath.substitutingUntypesettableMath(in: parsed.blocks)
             heightCache.removeAll()  // new content/theme — stale heights would mis-seed diagrams
-            cachedBlocks = parsed.blocks
+            cachedBlocks = blocks
             renderedFontScale = Double(scale)
             contentVersion += 1
             textBlockMeta = parsed.textMeta
@@ -700,11 +708,11 @@ struct MarkdownView: View {
             // table is used for layout.
             measured = width > 0
                 ? BlockHeightMeasurer.measureMathRows(out.measured.mathPendingRows,
-                                                      in: out.measured, blocks: parsed.blocks,
+                                                      in: out.measured, blocks: blocks,
                                                       theme: currentTheme, fontScale: scale,
                                                       contentWidth: width, math: .swiftMath)
                 : .empty
-            headings = parsed.blocks.compactMap { block in
+            headings = blocks.compactMap { block in
                 if case .heading(let level, let title, let sourceLine) = block.content {
                     return ToCEntry(id: block.id, level: level, title: title, sourceLine: sourceLine)
                 }
@@ -714,7 +722,7 @@ struct MarkdownView: View {
             // left before the re-parse arrived): requested in the transaction
             // that installs the blocks, so it wins over the list's own anchor
             // restore and resolves against the new ids.
-            if let target = landing.blocksInstalled(parsed.blocks) {
+            if let target = landing.blocksInstalled(blocks) {
                 requestScroll(to: target, anchor: .top, animated: false)
             }
             // The find bar's matches index the PREVIOUS parse's blocks: count

@@ -54,6 +54,14 @@ extension MathRendering {
             let (error, image, _) = mathImage.asImage()
             guard error == nil, let image = image else { return 0 }
             return image.size.height
+        },
+        // Exactly the test `MTMathUILabel.latex` applies: a parse error is what
+        // leaves the label (and `MathImage`) with nothing to draw. Parsing only —
+        // no font, no typesetting, no bitmap — so the per-parse check costs a
+        // fraction of the `displayHeight` call that follows for the same row.
+        typesets: { latex in
+            var error: NSError?
+            return MTMathListBuilder.build(fromString: latex, error: &error) != nil && error == nil
         }
     )
 }
