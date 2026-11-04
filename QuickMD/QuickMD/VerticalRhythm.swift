@@ -206,6 +206,52 @@ enum RowGeometry {
         contentRect(rowRect: rowRect, spacingAbove: spacingAbove).midY - visibleHeight / 2
     }
 
+    /// The scroll anchor: how far below the row's BLOCK top the content top
+    /// is. Negative when the content top is in the space above the block.
+    /// Relative to the block, not to the row's edge, because that space
+    /// changes with zoom and with the block's neighbours; the reader's place
+    /// in the block does not.
+    static func anchorOffset(contentTop: CGFloat, rowRect: NSRect, spacingAbove: CGFloat) -> CGFloat {
+        contentTop - topTarget(rowRect: rowRect, spacingAbove: spacingAbove)
+    }
+
+    /// The content top that puts the reader back at `anchorOffset` below the
+    /// row's block top — in whatever layout the row has now.
+    static func contentTop(anchorOffset: CGFloat, rowRect: NSRect, spacingAbove: CGFloat) -> CGFloat {
+        topTarget(rowRect: rowRect, spacingAbove: spacingAbove) + anchorOffset
+    }
+
+    /// Whether the content top is still exactly where `anchorOffset` below the
+    /// row's block top puts it (to half a point) — i.e. nothing has scrolled
+    /// since the anchor was set, other than compensations that moved the block
+    /// and the content top together.
+    static func isAt(anchorOffset: CGFloat, contentTop: CGFloat, rowRect: NSRect, spacingAbove: CGFloat) -> Bool {
+        abs(contentTop - self.contentTop(anchorOffset: anchorOffset, rowRect: rowRect,
+                                         spacingAbove: spacingAbove)) < 0.5
+    }
+
+    /// Where the content top goes after a `.reported` row's block changed
+    /// height by `delta`; nil leaves the scroll offset alone.
+    ///
+    /// A block changes height at its BOTTOM (rows are top-aligned), so the
+    /// change moves everything below that bottom. A block whose top is above
+    /// the content top — the one straddling it included — is compensated by
+    /// the same amount, so what the reader sees below it stays put. A block
+    /// whose top is in view needs nothing.
+    ///
+    /// Except the block the reader is anchored on: `anchoredOffset` is the
+    /// list's last scroll anchor when it is in this very block, and if the
+    /// content top is still where that anchor put it, the offset was measured
+    /// at the block's previous real height while the block sat at an estimate
+    /// (a restore after a zoom or a re-measure) — compensating would move the
+    /// reader by the estimate's error, a whole image. `contentTop` must be
+    /// read BEFORE the table applies the change.
+    static func contentTopAfterReport(contentTop: CGFloat, blockTop: CGFloat, delta: CGFloat,
+                                      anchoredOffset: CGFloat?) -> CGFloat? {
+        if let anchoredOffset, abs(contentTop - (blockTop + anchoredOffset)) < 0.5 { return nil }  // see `isAt`
+        return blockTop < contentTop ? contentTop + delta : nil
+    }
+
     /// Whether a point at `y` in a row belongs to the row BEFORE it: the upper
     /// half of the space above a block is nearer the previous block, so a drag
     /// that stops there ends after that block, not before this one.

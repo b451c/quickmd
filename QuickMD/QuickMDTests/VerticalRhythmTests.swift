@@ -336,6 +336,155 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertFalse(RowGeometry.isInUpperHalf(y: 140, rowRect: row, spacingAbove: 20))
     }
 
+    // MARK: - Scroll anchor across layouts (Reading Mode, width, zoom)
+
+    /// A column of rows as `NSTableView` lays it out with no intercell
+    /// spacing: each row is its space above plus its block.
+    private struct Column {
+        let rows: [(spacing: CGFloat, height: CGFloat)]
+        var rects: [NSRect] {
+            var y: CGFloat = 0
+            return rows.map { row in
+                defer { y += row.spacing + row.height }
+                return NSRect(x: 0, y: y, width: 500, height: row.spacing + row.height)
+            }
+        }
+        func blockTop(_ row: Int) -> CGFloat {
+            RowGeometry.topTarget(rowRect: rects[row], spacingAbove: rows[row].spacing)
+        }
+    }
+
+    /// `VirtualBlockList.Coordinator`'s anchor bookkeeping over a `Column`:
+    /// `captureAnchor` (the last anchor while the content top is still on it,
+    /// else the row under the content top), `restore`, the reading-mode toggle
+    /// and the install of a table measured at another width.
+    private struct Scroller {
+        var column: Column
+        var contentTop: CGFloat
+        /// Off = re-anchor on the row under the content top every time (the
+        /// first version of the branch).
+        let sticky: Bool
+        var last: (row: Int, offset: CGFloat)?
+
+        mutating func capture() -> (row: Int, offset: CGFloat) {
+            let rects = column.rects
+            if sticky, let last, RowGeometry.isAt(anchorOffset: last.offset, contentTop: contentTop,
+                                                  rowRect: rects[last.row],
+                                                  spacingAbove: column.rows[last.row].spacing) {
+                return last
+            }
+            let row = rects.firstIndex { contentTop >= $0.minY && contentTop < $0.maxY } ?? rects.count - 1
+            return (row, RowGeometry.anchorOffset(contentTop: contentTop, rowRect: rects[row],
+                                                  spacingAbove: column.rows[row].spacing))
+        }
+        mutating func restore(_ anchor: (row: Int, offset: CGFloat)) {
+            contentTop = RowGeometry.contentTop(anchorOffset: anchor.offset, rowRect: column.rects[anchor.row],
+                                                spacingAbove: column.rows[anchor.row].spacing)
+            last = anchor
+        }
+        /// `applyLayoutStyle`: the anchor minus the inset delta.
+        mutating func toggleStyle(insetDelta: CGFloat) {
+            let anchor = capture()
+            restore((anchor.row, anchor.offset - insetDelta))
+        }
+        /// `install` of the table measured at the new width.
+        mutating func install(_ new: Column) {
+            let anchor = capture()
+            column = new
+            restore(anchor)
+        }
+    }
+
+    /// Reading Mode on and off, step by step as the coordinator runs it: the
+    /// style toggle restores the anchor minus the inset delta (a 24 pt move of
+    /// the content top, across a row boundary here), then the table measured
+    /// at the new width is installed and the anchor restored again. The
+    /// narrow layout has taller rows above the reader AND less space between
+    /// the two blocks the content top moves between (a block's edges can
+    /// change with the wrap); the content top starts inside the gap.
+    func testReadingModeRoundTripReturnsToTheSameBlockOffset() {
+        let wide = Column(rows: [(0, 39), (19, 17), (25, 17), (25, 17), (21, 66), (21, 17), (50, 33), (12, 186), (5, 79)])
+        let narrow = Column(rows: [(0, 39), (19, 34), (25, 34), (25, 34), (21, 66), (13, 17), (50, 33), (12, 186), (5, 79)])
+        let standardInset: CGFloat = 24, readingInset: CGFloat = 48
+        var drifted = false
+
+        for start in stride(from: CGFloat(150), through: 330, by: 7.5) {
+            for sticky in [true, false] {
+                var list = Scroller(column: wide, contentTop: start, sticky: sticky)
+                list.toggleStyle(insetDelta: readingInset - standardInset)
+                // The block the reader was anchored on, and where they saw it.
+                let block = list.last?.row ?? 0
+                let before = wide.blockTop(block) - start + standardInset
+
+                list.install(narrow)
+                if sticky {
+                    XCTAssertEqual(narrow.blockTop(block) - list.contentTop + readingInset, before + 48,
+                                   accuracy: 0.001, "entering at \(start)")
+                }
+
+                list.toggleStyle(insetDelta: standardInset - readingInset)
+                list.install(wide)
+                if sticky {
+                    XCTAssertEqual(list.contentTop, start, accuracy: 0.001, "round trip from \(start)")
+                } else if abs(list.contentTop - start) > 0.5 {
+                    drifted = true
+                }
+            }
+        }
+        // Why the anchor is sticky: re-anchoring on the row under the content
+        // top lands on block 4 after the toggle and comes back by block 5 — so
+        // the round trip moves by the change in the space between them.
+        XCTAssertTrue(drifted)
+    }
+
+    /// A zoom (or any re-measure) while the reader is inside an image: the
+    /// image comes back at its placeholder height and the restore puts the
+    /// content top past it; a second re-measure before the image reported
+    /// must not anchor on whatever row is now under the content top.
+    func testAnchorInsideAPlaceholderSurvivesAnotherReinstall() {
+        let loaded = Column(rows: [(0, 39), (16, 640), (17, 17), (50, 33), (19, 17), (25, 17), (25, 17)])
+        let placeholder = Column(rows: [(0, 39), (16, 116), (17, 17), (50, 33), (19, 17), (25, 17), (25, 17)])
+        let start = loaded.blockTop(1) + 550
+        var list = Scroller(column: loaded, contentTop: start, sticky: true)
+        list.install(placeholder)   // re-parse: the image is a placeholder again
+        list.install(placeholder)   // width change before it reported
+        list.install(loaded)        // the image reported (no compensation: see the report tests)
+        XCTAssertEqual(list.contentTop, start, accuracy: 0.001)
+    }
+
+    func testAnchorIsRelativeToTheBlockNotTheRowEdge() {
+        let rect = NSRect(x: 0, y: 1000, width: 500, height: 80)
+        // In the gap above the block: negative, and it stays the same distance
+        // above the block when the gap itself changes (zoom, new neighbours).
+        let offset = RowGeometry.anchorOffset(contentTop: 1010, rowRect: rect, spacingAbove: 30)
+        XCTAssertEqual(offset, -20)
+        let regapped = NSRect(x: 0, y: 2000, width: 500, height: 95)
+        XCTAssertEqual(RowGeometry.contentTop(anchorOffset: offset, rowRect: regapped, spacingAbove: 45), 2025)
+    }
+
+    // MARK: - Height reports
+
+    func testReportAboveTheViewportIsCompensated() {
+        // A block wholly above, and one straddling the content top.
+        XCTAssertEqual(RowGeometry.contentTopAfterReport(contentTop: 500, blockTop: 100, delta: 24, anchoredOffset: nil), 524)
+        XCTAssertEqual(RowGeometry.contentTopAfterReport(contentTop: 500, blockTop: 480, delta: -37.5, anchoredOffset: nil), 462.5)
+        // A block in view grows below the reader: nothing to do.
+        XCTAssertNil(RowGeometry.contentTopAfterReport(contentTop: 500, blockTop: 500, delta: 24, anchoredOffset: nil))
+        XCTAssertNil(RowGeometry.contentTopAfterReport(contentTop: 500, blockTop: 620, delta: 24, anchoredOffset: nil))
+    }
+
+    func testReportOfTheAnchoredBlockKeepsTheReaderInIt() {
+        // After a zoom the reader was 550 pt into an image that came back at a
+        // 116 pt placeholder: the restore put the content top 550 below its
+        // block top. The image then reports its real height — the reader must
+        // stay 550 pt into it, not move on by the placeholder's error.
+        XCTAssertNil(RowGeometry.contentTopAfterReport(contentTop: 1550, blockTop: 1000, delta: 524, anchoredOffset: 550))
+        // A diagram that came back TALLER than it is (the 200 pt default).
+        XCTAssertNil(RowGeometry.contentTopAfterReport(contentTop: 1150, blockTop: 1000, delta: -37.5, anchoredOffset: 150))
+        // The reader scrolled since the restore: an ordinary straddling block.
+        XCTAssertEqual(RowGeometry.contentTopAfterReport(contentTop: 1300, blockTop: 1000, delta: 524, anchoredOffset: 550), 1824)
+    }
+
     func testTableRowHeightIsSpacingPlusBlock() {
         let measured = measure(parse("# Title\n\nText.\n\n```\ncode\n```"))
         let table = measured.table
