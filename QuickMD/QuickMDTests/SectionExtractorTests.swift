@@ -176,6 +176,35 @@ final class SectionExtractorTests: XCTestCase {
         ])
     }
 
+    /// Character references in a heading show as their characters (GitHub
+    /// decodes them before its slug) — ids from GitHub's renderer
+    /// (`gh api markdown`, 2026-11-04). A code span keeps the reference, and a
+    /// decoded `&#42;` is a literal `*`, not emphasis.
+    func testHeadingEntitiesAreDecodedLikeGitHub() {
+        let headings = anchorHeadings(of: """
+        # Q&amp;A &lt;tag&gt; &#169;
+        ## Tom &amp; Jerry
+        ## `a &amp; b`
+        ## R&amp;D &nbsp;x
+        ## a &#42;b&#42;
+        ## [Q&amp;A](#x) here
+        ## **Tom &amp; Jerry**
+        ## 5 &lt; 6
+        """)
+        XCTAssertEqual(headings.map(\.text), [
+            "Q&A <tag> ©", "Tom & Jerry", "a &amp; b", "R&D \u{00A0}x", "a *b*",
+            "Q&A here", "Tom & Jerry", "5 < 6",
+        ])
+        XCTAssertEqual(HeadingAnchors.ids(for: headings.map(\.text)), [
+            "qa-tag-", "tom--jerry", "a-amp-b", "rd-x", "a-b", "qa-here", "tom--jerry-1", "5--6",
+        ])
+
+        // The heading view, search, print and the measurer all draw `renderHeader`.
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
+        let italic = renderer.renderHeader("a &#42;b&#42;", level: 2)
+        XCTAssertEqual(italic.runs.count, 1, "no emphasis run from a decoded asterisk")
+    }
+
     func testFragmentFindsItsHeading() {
         let headings = anchorHeadings(of: """
         # Guide

@@ -146,6 +146,13 @@ struct MarkdownRenderer: Sendable {
     /// written; every other inline form still renders. Copied into the link
     /// text renderer with the rest of `self`.
     private var escapesDisabled = false
+    /// True while rendering a HEADING (`renderHeader`): character references
+    /// in its plain text and link text (`&amp;`, `&lt;`, `&#169;` — the set
+    /// `HTMLImageSyntax.decodeEntities` knows) show as the character, as on
+    /// GitHub, and so the heading's id slugs `Q&A`, not `Q&amp;A`. Decoded
+    /// AFTER inline parsing, so `&#42;` is a literal `*`, never emphasis;
+    /// code spans keep the reference as written.
+    private var decodesEntities = false
 
     // Static precompiled regex for parsing (avoid recompilation per line)
     private static let taskListRegex = try! NSRegularExpression(pattern: MarkdownTheme.taskListPattern)
@@ -408,7 +415,9 @@ struct MarkdownRenderer: Sendable {
     // MARK: - Block Renderers
 
     func renderHeader(_ text: String, level: Int) -> AttributedString {
-        var attr = renderInlineFormatting(text)
+        var heading = self
+        heading.decodesEntities = true
+        var attr = heading.renderInlineFormatting(text)
         attr.setDualFont(size: headerFontSize(level: level), bold: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         return attr
@@ -717,7 +726,8 @@ struct MarkdownRenderer: Sendable {
         // Helper to flush buffered plain text
         func flushPlainText() {
             guard !plainTextBuffer.isEmpty else { return }
-            var attr = AttributedString(plainTextBuffer)
+            var attr = AttributedString(decodesEntities ? HTMLImageSyntax.decodeEntities(plainTextBuffer)
+                                                        : plainTextBuffer)
             attr.setDualFont(size: scaled(14), fonts: theme.fonts)
             attr.setDualForeground(theme.textColor)
             result.append(attr)
@@ -934,7 +944,7 @@ struct MarkdownRenderer: Sendable {
             linkText.linksDisabled = true
             attr = linkText.renderInlineFormatting(text)
         } else {
-            attr = AttributedString(text)
+            attr = AttributedString(decodesEntities ? HTMLImageSyntax.decodeEntities(text) : text)
             attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         }
         attr.setDualForeground(theme.linkColor)
