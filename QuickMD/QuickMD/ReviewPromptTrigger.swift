@@ -27,10 +27,10 @@ enum ReviewPromptSession {
 /// unoccluded, key, no sheet or app-modal panel. A tick that fails it, losing
 /// key, or a gap of more than 3 s between ticks (sleep, App Nap, a stalled
 /// main thread — measured on the monotonic `systemUptime`) restarts the 60 s.
-/// At 60 s it also needs user input within the last 60 s; if the reader is
-/// idle the run is reset, so someone returning after a long break is never
-/// asked on their first touch — it takes a fresh 60 s of display that ends
-/// with recent input. Source Edit stops it (the task id changes and the task returns
+/// Every tick also needs user input within the last 60 s: an idle tick
+/// restarts the 60 s too, so someone returning after a break is asked only
+/// after a full minute of display in which they kept using the Mac, never
+/// right after their first touch. Source Edit stops it (the task id changes and the task returns
 /// while editing; leaving starts a fresh 60 s), closing the window cancels it
 /// with the view's task.
 ///
@@ -91,20 +91,12 @@ struct ReviewPromptTrigger: ViewModifier {
                 guard await Self.waitUntilKey(window) else { return }
                 continue
             }
-            let displayedLongEnough = countdown.advance(isDisplayed: Self.isDisplayed(window),
-                                                        now: ProcessInfo.processInfo.systemUptime)
-            if displayedLongEnough {
+            let readLongEnough = countdown.advance(isDisplayed: Self.isDisplayed(window),
+                                                   secondsSinceLastInput: Self.secondsSinceLastInput,
+                                                   now: ProcessInfo.processInfo.systemUptime)
+            if readLongEnough {
                 // Another window may have asked meanwhile, or the policy changed.
                 guard Self.canRequest(policy) else { return }
-                // An unattended screen is not reading. Start over rather than
-                // keep the run complete: a reader coming back after a long
-                // idle must never get the prompt on their first touch — it
-                // takes another 60 s of display that ends with recent input.
-                guard Self.userIsActive else {
-                    countdown.reset()
-                    try? await Task.sleep(nanoseconds: Self.tick)
-                    continue
-                }
                 ReviewPromptSession.hasRequested = true
                 #if DEBUG
                 reviewLog.debug("requestReview for \(Self.appVersion, privacy: .public)")
@@ -136,12 +128,12 @@ struct ReviewPromptTrigger: ViewModifier {
         !ReviewPromptSession.hasRequested && policy.shouldRequest(now: Date(), appVersion: appVersion)
     }
 
-    /// Any keyboard / mouse / trackpad event within `maximumIdleAtRequest`.
-    /// `~0` is `kCGAnyInputEventType`; an unconvertible type reads as idle.
-    private static var userIsActive: Bool {
-        guard let anyInput = CGEventType(rawValue: ~0) else { return false }
-        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
-        return ReviewPrompt.isUserActive(secondsSinceLastInput: idle)
+    /// Seconds since the last keyboard / mouse / trackpad event in this login
+    /// session. `~0` is `kCGAnyInputEventType`; an unconvertible type reads as
+    /// "never" (infinite), which `ReviewPrompt.isUserActive` treats as idle.
+    private static var secondsSinceLastInput: TimeInterval {
+        guard let anyInput = CGEventType(rawValue: ~0) else { return .infinity }
+        return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
     }
 
     @MainActor
