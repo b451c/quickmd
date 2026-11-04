@@ -84,6 +84,10 @@ struct MarkdownBlockParser: Sendable {
         // Headings carry the original line number so section copy can slice the
         // raw text without re-detecting headings itself.
         var lineMap: [Int] = []
+        // Indices in `lines` of quote lines a link or footnote definition was
+        // taken out of: kept as markers without text, so the block loop knows
+        // the quote's paragraph they open (`DefinitionPlacement.definitionTaken`).
+        var definitionLines = Set<Int>()
         // Fenced code and `$$` blocks, read as the block loop reads them: a
         // definition inside one is that block's text (GitHub).
         var verbatim = VerbatimRegions()
@@ -109,6 +113,18 @@ struct MarkdownBlockParser: Sendable {
                 footnoteDefinitions.append((id: fnId, content: fnContent))
                 if !footnoteIds.contains(fnId) { footnoteIds.append(fnId) }
                 placement.definition()
+            } else if let text = placement.footnoteDefinitionText(trimmed),
+                      let match = Self.footnoteDefRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                      let idRange = Range(match.range(at: 1), in: text),
+                      let contentRange = Range(match.range(at: 2), in: text) {
+                // A quote's footnote: before the link pattern here too.
+                let fnId = String(text[idRange])
+                footnoteDefinitions.append((id: fnId, content: String(text[contentRange])))
+                if !footnoteIds.contains(fnId) { footnoteIds.append(fnId) }
+                _ = placement.definitionTaken(trimmed)
+                lines.append(line)
+                lineMap.append(originalIndex)
+                definitionLines.insert(lines.count - 1)
             } else if let text = placement.linkDefinitionText(trimmed),
                       let match = Self.refLinkDefRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
                       let idRange = Range(match.range(at: 1), in: text),
@@ -120,7 +136,11 @@ struct MarkdownBlockParser: Sendable {
                 if referenceDefinitions[label] == nil {
                     referenceDefinitions[label] = HTMLEntities.decode(String(text[urlRange]))
                 }
-                placement.definition()
+                if placement.definitionTaken(trimmed) {
+                    lines.append(line)
+                    lineMap.append(originalIndex)
+                    definitionLines.insert(lines.count - 1)
+                }
             } else {
                 lines.append(line)
                 lineMap.append(originalIndex)
@@ -428,11 +448,20 @@ struct MarkdownBlockParser: Sendable {
                     // A single `>` run can yield SEVERAL blocks (one per nesting
                     // level), so each group needs its OWN first line — the outer
                     // `sourceLine` only describes the first group.
-                    let groupSourceLine = lineMap[i]
+                    // A definition marker (`definitionLines`) opens the
+                    // quote's paragraph for a lazy line and draws nothing:
+                    // the group starts at its first line of text.
+                    var groupSourceLine: Int?
                     let groupLevel = level
-                    var groupLines = [String(scanner)]
+                    var groupLines: [String] = []
                     var tip = QuoteTip()
-                    tip.take(groupLines[0])
+                    if definitionLines.contains(i) {
+                        tip.takeDefinition()
+                    } else {
+                        groupLines.append(String(scanner))
+                        groupSourceLine = lineMap[i]
+                        tip.take(groupLines[0])
+                    }
                     i += 1
 
                     while i < lines.count {
@@ -445,6 +474,7 @@ struct MarkdownBlockParser: Sendable {
                                                        references: referenceDefinitions)
                             else { break }
                             groupLines.append(lines[i])
+                            groupSourceLine = groupSourceLine ?? lineMap[i]
                             tip.takeLazy()
                             i += 1
                             continue
@@ -470,13 +500,23 @@ struct MarkdownBlockParser: Sendable {
                                                        htmlImageLine: HTMLImageSyntax.scan(content[...]) != nil,
                                                        references: referenceDefinitions)
                             else { break }
-                            groupLines.append(content)
-                            tip.takeLazy()
+                            if definitionLines.contains(i) {
+                                tip.takeDefinition()
+                            } else {
+                                groupLines.append(content)
+                                groupSourceLine = groupSourceLine ?? lineMap[i]
+                                tip.takeLazy()
+                            }
                             i += 1
                             continue
                         }
-                        groupLines.append(String(nextScanner))
-                        tip.take(groupLines[groupLines.count - 1])
+                        if definitionLines.contains(i) {
+                            tip.takeDefinition()
+                        } else {
+                            groupLines.append(String(nextScanner))
+                            groupSourceLine = groupSourceLine ?? lineMap[i]
+                            tip.take(groupLines[groupLines.count - 1])
+                        }
                         i += 1
                     }
 
@@ -488,14 +528,21 @@ struct MarkdownBlockParser: Sendable {
                     let content = groupLines.joined(separator: "\n")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     let footnoteIds = footnoteDefinitions.map(\.id)
-                    if !content.isEmpty {
+                    if !content.isEmpty, let groupSourceLine {
                         // GFM alert: level-1 quote whose first line is exactly
                         // `[!NOTE]` / `[!TIP]` / `[!IMPORTANT]` / `[!WARNING]` /
-                        // `[!CAUTION]` (marker alone on the line, per GitHub spec).
-                        if groupLevel == 1, let kind = AlertKind(markerLine: groupLines[0]) {
-                            let body = ReferenceLinks.inlined(groupLines.dropFirst().joined(separator: "\n")
-                                .trimmingCharacters(in: .whitespacesAndNewlines), definitions: referenceDefinitions,
-                                footnoteIds: footnoteIds, quoteBody: true)
+                        // `[!CAUTION]` (marker alone on the line, per GitHub spec)
+                        // — and that has a body (GitHub): text after the marker,
+                        // or a nested quote right after it, even an empty one.
+                        // The marker alone (blank lines, definitions taken out)
+                        // is a plain quote "[!NOTE]".
+                        let alertKind = groupLevel == 1 ? AlertKind(markerLine: groupLines[0]) : nil
+                        let rawBody = groupLines.dropFirst().joined(separator: "\n")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        let nestedQuoteFollows = i < lines.count && Self.markerLine(lines[i]).hasPrefix(">")
+                        if let kind = alertKind, !rawBody.isEmpty || nestedQuoteFollows {
+                            let body = ReferenceLinks.inlined(rawBody, definitions: referenceDefinitions,
+                                                              footnoteIds: footnoteIds, quoteBody: true)
                             blocks.append(.alert(index: blockIndex, kind: kind, content: body, sourceLine: groupSourceLine))
                             previousGroupWasQuote = false
                         } else {
@@ -1233,11 +1280,24 @@ struct MarkdownBlockParser: Sendable {
         private var fence: Fence?
         private var inTable = false
         private var previousHadPipe = false
+        /// The open paragraph holds link definitions only, so far: another
+        /// may follow, and it draws nothing (`takeDefinition`).
+        private(set) var onlyDefinitions = false
 
-        /// Whether the group's next line would start a paragraph: none is
-        /// open, and it is not in the quote's fence or table — where a link
-        /// definition may stand (`DefinitionPlacement`).
-        var admitsDefinition: Bool { fence == nil && !inTable && !endsInParagraph }
+        /// Whether a link definition may stand on the group's next line: it
+        /// would start a paragraph, or go on with one of definitions only —
+        /// not in the quote's fence or table (`DefinitionPlacement`).
+        var admitsDefinition: Bool { fence == nil && !inTable && (!endsInParagraph || onlyDefinitions) }
+
+        /// A link definition the pre-pass took out: it opens (or goes on
+        /// with) a paragraph of definitions only, which a lazy line continues
+        /// in this quote (CommonMark, GitHub).
+        mutating func takeDefinition() {
+            endsInParagraph = true
+            onlyDefinitions = true
+            previousHadPipe = false
+            inTable = false
+        }
 
         /// Inside the quote's fence.
         var inFence: Bool { fence != nil }
@@ -1248,12 +1308,16 @@ struct MarkdownBlockParser: Sendable {
         /// other structure, so the paragraph stays open for the next one.
         mutating func takeLazy() {
             endsInParagraph = true
+            onlyDefinitions = false
             previousHadPipe = false
         }
 
         /// A line of the group itself (marked at the group's level).
         mutating func take(_ content: String) {
             let marker = MarkdownBlockParser.markerLine(content)
+            // Under definitions only, `===` is text (CommonMark).
+            let afterDefinitions = onlyDefinitions
+            onlyDefinitions = false
             if let open = fence {
                 // Inside the quote's fence: only its closing line matters.
                 if MarkdownBlockParser.closesFence(marker, open) { fence = nil }
@@ -1290,7 +1354,7 @@ struct MarkdownBlockParser: Sendable {
                 endsInParagraph = false
                 return
             }
-            if endsInParagraph,
+            if endsInParagraph, !afterDefinitions,
                marker.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil
                 || marker.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
                 endsInParagraph = false
@@ -1336,6 +1400,11 @@ struct MarkdownBlockParser: Sendable {
         if MarkdownRenderer.isThematicBreak(line) || MarkdownRenderer.isListItem(line) { return false }
         if ["-", "*", "+"].contains(marker) { return false }   // an empty item
         if startsHTMLBlock(marker) { return false }
+        // A footnote definition starts a block (GFM): `> > a` then
+        // `> [^m]: note` is the outer quote's footnote, not lazy text.
+        if footnoteDefRegex.firstMatch(in: marker, range: NSRange(marker.startIndex..., in: marker)) != nil {
+            return false
+        }
         return true
     }
 
@@ -1376,19 +1445,62 @@ struct MarkdownBlockParser: Sendable {
         /// a line of the group after no open paragraph. Not lazy text, nor
         /// in the quote's fence or table.
         func linkDefinitionText(_ marker: String) -> String? {
-            guard marker.hasPrefix(">") else { return paragraphOpen ? nil : marker }
+            guard marker.hasPrefix(">") else {
+                // A lazy line of a quote paragraph of definitions only: another.
+                if let tip = quote, tip.endsInParagraph {
+                    return tip.onlyDefinitions && MarkdownBlockParser.startsNoBlock(marker) ? marker : nil
+                }
+                return paragraphOpen ? nil : marker
+            }
             let (level, content) = Self.quoteMarkers(of: marker)
             let text = MarkdownBlockParser.markerLine(String(content))
             switch step(level: level, content: String(content)) {
             case .same:
                 return quote?.admitsDefinition == true ? text : nil
             case .lazy:
-                return nil
+                return quote?.onlyDefinitions == true ? text : nil
             case .newGroup:
                 // A deeper `>` inside the quote's fence is that fence's code.
                 if level > quoteLevel, quote?.inFence == true { return nil }
                 return text
             }
+        }
+
+        /// What a FOOTNOTE definition on a quote line (its `markerLine`)
+        /// would be read from: what follows its markers. A footnote
+        /// definition may interrupt a paragraph (GitHub), so anywhere in the
+        /// quote but in its fence. Nil for any other line: the pre-pass
+        /// reads a line without markers whole.
+        func footnoteDefinitionText(_ marker: String) -> String? {
+            guard marker.hasPrefix(">") else { return nil }
+            let (level, content) = Self.quoteMarkers(of: marker)
+            if let tip = quote, tip.inFence, level >= quoteLevel { return nil }
+            return MarkdownBlockParser.markerLine(String(content))
+        }
+
+        /// A link or footnote definition taken out of `marker` (a
+        /// `markerLine`). Out of a quote line, it opens a paragraph of that
+        /// quote — of definitions only, which draws nothing and which a lazy
+        /// line continues in the quote (GitHub) — and the line stays for the
+        /// block loop as a marker: true. A lazy link definition after such a
+        /// paragraph goes on with it; any other definition ends what came
+        /// before.
+        mutating func definitionTaken(_ marker: String) -> Bool {
+            if marker.hasPrefix(">") {
+                let (level, content) = Self.quoteMarkers(of: marker)
+                var tip = quote ?? QuoteTip()
+                if step(level: level, content: String(content)) == .newGroup {
+                    tip = QuoteTip()
+                    quoteLevel = level
+                }
+                tip.takeDefinition()
+                quote = tip
+                paragraphOpen = true
+                return true
+            }
+            if let tip = quote, tip.endsInParagraph, tip.onlyDefinitions { return false }
+            definition()
+            return false
         }
 
         /// How a quote line goes on from the group being read — the block

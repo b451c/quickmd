@@ -325,7 +325,10 @@ struct MarkdownTheme: Sendable, Identifiable {
 
     /// Matches footnote definitions: [^id]: text
     /// Captures: (1) footnote ID, (2) content
-    static let footnoteDefinitionPattern = #"^[ \t]*\[\^([^\]]+)\]:[ \t]+(.*)"#
+    /// The label is cmark-gfm's: one or more characters but `]`, spaces,
+    /// tabs and line breaks (`[^ m]: url` is a LINK definition on GitHub);
+    /// the text may follow the colon directly, or be empty.
+    static let footnoteDefinitionPattern = #"^[ \t]*\[\^([^\] \t\r\n]+)\]:[ \t]*(.*)"#
 
     // MARK: - URL Autolinking
 

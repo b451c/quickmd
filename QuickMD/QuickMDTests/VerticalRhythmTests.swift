@@ -836,6 +836,123 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(try quoteShape("> ```\n>> [x]: http://e.com\n> ```\n\n[x]\n").last, "t:[x]")
     }
 
+    /// A link definition taken out of a quote opens a paragraph of that
+    /// quote — of definitions only, which draws nothing — and a lazy line
+    /// right after it goes on in that quote (GitHub, gfm/h8_*.html). The
+    /// pre-pass dropped the line, so the lazy line landed outside the quote
+    /// or in the outer one. More definitions may follow (marked, lazy or at
+    /// fewer markers); after them `===` is text. Nothing follows: nothing is
+    /// drawn, as before.
+    func testALazyLineAfterAQuoteDefinitionStaysInTheQuote() throws {
+        XCTAssertEqual(try quoteShape("> [y]: http://e.com\nlazy\n\n[y]\n"), ["q1:lazy", "t:y"])
+        XCTAssertEqual(try quoteShape("> a\n>\n> [y]: http://e.com\nlazy\n\n[y]\n"), ["q1:a\n\nlazy", "t:y"])
+        XCTAssertEqual(try quoteShape("> a\n>> [z]: http://e.com\ncode\n\n[z]\n"), ["q1:a", "q2:code", "t:z"])
+        XCTAssertEqual(try quoteShape("> a\n>> [z]: http://e.com\n> b\n\n[z]\n"), ["q1:a", "q2:b", "t:z"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n> text\nlazy\n\n[x]\n"), ["q1:text\nlazy", "t:x"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n[y]: http://f.com\nlazy\n\n[x] [y]\n"),
+                       ["q1:lazy", "t:x y"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n> [y]: http://f.com\nlazy\n\n[x] [y]\n"),
+                       ["q1:lazy", "t:x y"])
+        XCTAssertEqual(try quoteShape("> > [x]: http://e.com\n> [y]: http://f.com\n\n[x] [y]\n"), ["t:x y"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n> ===\nlazy\n\n[x]\n"), ["q1:===\nlazy", "t:x"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n> [!NOTE]\n> body\n\n[x]\n"), ["alert:note:body", "t:x"])
+        // Nothing follows, or a block does: no quote drawn.
+        XCTAssertEqual(try quoteShape("> [y]: http://e.com\n\n[y]\n"), ["t:y"])
+        XCTAssertEqual(try quoteShape("> [y]: http://e.com\n# H\n\n[y]\n"), ["h:H", "t:y"])
+
+        // The quote starts at its first drawn line; every later block keeps
+        // its source line; no definition is drawn.
+        let markdown = "> a\n>> [z]: http://e.com\ncode\n\n> [y]: http://f.com\nlazy\n\n[z] [y]\n"
+        let blocks = try XCTUnwrap(parseReturning(markdown))
+        XCTAssertEqual(blocks.map(\.sourceLine), [0, 2, 5, 7])
+        let theme = MarkdownTheme.cached(for: .light)
+        let measured = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,
+                                                   contentWidth: 600, math: nil)
+        let shown = blocks.compactMap { measured.converted[$0.id]?.string }
+        XCTAssertEqual(shown, ["a", "code", "lazy", "z y"])
+        XCTAssertEqual(blocks.map(\.joinsPrevious), [false, true, false, false])
+    }
+
+    /// A FOOTNOTE definition on a quote line is a footnote (GitHub,
+    /// gfm/h9_*.html): in a quote, a nested or deeper one, after an alert's
+    /// body, after the quote's text (it may interrupt a paragraph, as at the
+    /// top level). The pre-pass tried only the LINK pattern on what follows
+    /// the markers, so `> [^m]: two` became a reference `^m` to `two` and
+    /// `[^m]` a link. Like a link definition (H8) it leaves a marker that
+    /// draws nothing and keeps a lazy line in the quote; at fewer markers it
+    /// is never lazy (it starts a block); in the quote's fence it is code.
+    func testAFootnoteDefinitionInAQuoteIsAFootnote() throws {
+        let note = "t:────────────────────────────────\n1. two in quote"
+        XCTAssertEqual(try quoteShape("x [^m]\n\n> [^m]: two in quote\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^m]\n\n> > [^m]: two in quote\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^m]\n\n> a\n>> [^m]: two in quote\n"), ["t:x ¹", "q1:a", note])
+        XCTAssertEqual(try quoteShape("x [^m]\n\n> [!NOTE]\n> body\n>\n> [^m]: two in quote\n"),
+                       ["t:x ¹", "alert:note:body", note])
+        XCTAssertEqual(try quoteShape("x [^m]\n\n> text\n> [^m]: two in quote\n"), ["t:x ¹", "q1:text", note])
+        XCTAssertEqual(try quoteShape("x [^m]\n\n> [^m]: two in quote\nlazy\n"), ["t:x ¹", "q1:lazy", note])
+        XCTAssertEqual(try quoteShape("x [^m]\n\n> [^m]: two in quote\n>\n> after\n"), ["t:x ¹", "q1:after", note])
+        XCTAssertEqual(try quoteShape("x [^m]\n\n> > a\n> [^m]: two in quote\nlazy\n"),
+                       ["t:x ¹", "q2:a", "q1:lazy", note])
+        // In the quote's fence it is code.
+        XCTAssertEqual(try quoteShape("x [^m]\n\n> ```\n> [^m]: two in quote\n> ```\n"),
+                       ["t:x [^m]", "q1:```\n[^m]: two in quote\n```"])
+        // `[^]` is no footnote label: a link, as on GitHub (h9_caret_empty).
+        XCTAssertEqual(try quoteShape("[^]: http://e.com\n\n[^]\n"), ["t:^"])
+        // The quote's first drawn line is its source line; the marker is the footnote's.
+        let blocks = try XCTUnwrap(parseReturning("x [^m]\n\n> [^m]: two in quote\nlazy\n"))
+        XCTAssertEqual(blocks.map(\.sourceLine).prefix(2), [0, 3])
+    }
+
+    /// An alert needs a body (GitHub, gfm/h10_*.html): `> [!NOTE]` alone,
+    /// or followed only by blank `>` lines or definitions the pre-pass took
+    /// out, is a plain quote "[!NOTE]" — it was an alert with an empty box.
+    /// Any block after the marker is a body: text, a lazy line, a list, a
+    /// heading, a nested quote (even an empty one).
+    func testAnAlertNeedsABody() throws {
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n"), ["q1:[!NOTE]"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n>\n"), ["q1:[!NOTE]"])
+        XCTAssertEqual(try quoteShape("> [!TIP]\n\ntext\n"), ["q1:[!TIP]", "t:text"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n>\n> [x]: http://e.com\n\n[x]\n"), ["q1:[!NOTE]", "t:x"])
+        XCTAssertEqual(try quoteShape("x [^m]\n\n> [!NOTE]\n> [^m]: note\n").prefix(2), ["t:x ¹", "q1:[!NOTE]"])
+        // A body: an alert.
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> text\n"), ["alert:note:text"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n>\n> text\n"), ["alert:note:text"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\nlazy\n"), ["alert:note:lazy"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> - item\n"), ["alert:note:- item"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> # H\n"), ["alert:note:# H"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> [x]: http://e.com\n\n[x]\n"),
+                       ["alert:note:[x]: http://e.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> > nested\n"), ["alert:note:", "q2:nested"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> >\n"), ["alert:note:"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n>> [x]: http://e.com\n\n[x]\n"), ["alert:note:", "t:x"])
+    }
+
+    /// A footnote label is cmark-gfm's: one or more characters but `]`,
+    /// spaces, tabs and line breaks (a no-break space, `^`, `[`, `\` and
+    /// punctuation are fine); the text may follow the colon directly, or be
+    /// empty (GitHub, gfm/h11_*.html). The pattern took any label, so
+    /// `[^ m]: url` was a footnote where GitHub reads a LINK definition, and
+    /// it needed a space after the colon, so `[^m]:note` was neither. At
+    /// every level, footnote before link (constraint 6).
+    func testAFootnoteLabelIsGitHubs() throws {
+        let note = "t:────────────────────────────────\n1. note"
+        // Whitespace in the label: a link definition.
+        XCTAssertEqual(try quoteShape("x [^ m]\n\n[^ m]: http://e.com\n"), ["t:x ^ m"])
+        XCTAssertEqual(try quoteShape("x [^a b]\n\n[^a b]: http://e.com\n"), ["t:x ^a b"])
+        XCTAssertEqual(try quoteShape("x [^a\tb]\n\n[^a\tb]: http://e.com\n"), ["t:x ^a\tb"])
+        XCTAssertEqual(try quoteShape("x [^ m]\n\n> [^ m]: http://e.com\n"), ["t:x ^ m"])
+        XCTAssertEqual(try quoteShape("x [^]\n\n[^]: http://e.com\n"), ["t:x ^"])
+        // Footnotes.
+        XCTAssertEqual(try quoteShape("x [^m]\n\n[^m]:note\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^m]\n\n> [^m]:note\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^m]\n\n[^m]:\n").first, "t:x ¹")
+        XCTAssertEqual(try quoteShape("x [^a\u{00A0}b]\n\n[^a\u{00A0}b]: note\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^a.b-c_d]\n\n[^a.b-c_d]: note\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^a^b]\n\n[^a^b]: note\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^a\\b]\n\n[^a\\b]: note\n"), ["t:x ¹", note])
+        XCTAssertEqual(try quoteShape("x [^ä€]\n\n[^ä€]: note\n"), ["t:x ¹", note])
+    }
+
     func testALinkDefinitionCannotInterruptAParagraph() throws {
         XCTAssertEqual(try quoteShape("> a\n[x]: http://e.com\n\n[x]\n"), ["q1:a\n[x]: http://e.com", "t:[x]"])
         XCTAssertEqual(try quoteShape("Para\n[x]: http://e.com\n\n[x]\n"), ["t:Para [x]: http://e.com", "t:[x]"])
@@ -961,7 +1078,7 @@ final class VerticalRhythmTests: XCTestCase {
     func testAWidthChangeLaysAQuoteOutAgainWithoutRenderingIt() throws {
         let long = "words that wrap at a narrow column but not at a wide one, and a few more of them"
         let markdown = "Para\n\n> \(long)\nand a lazy line\n\n> > nested \(long)\n\n"
-            + "> [!NOTE]\n> \(long)\n\n> [!TIP]\n\nEnd\n"
+            + "> [!NOTE]\n> \(long)\n\n> [!TIP]\n> >\n\nEnd\n"
         let blocks = try XCTUnwrap(parseReturning(markdown))
         let theme = MarkdownTheme.cached(for: .light)
         let first = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,

@@ -648,6 +648,37 @@ final class ParserTests: XCTestCase {
         XCTAssertFalse(quote.contains("\n\n\n"), "one paragraph break per blank run")
     }
 
+    /// Merge check (H8/H9 × reference inlining): footnote and link
+    /// definitions taken out of a quote leave marker lines the body never
+    /// sees, and a quote-level footnote is numbered with the document's
+    /// (definition order) in the quote, an alert and a paragraph alike.
+    func testQuoteLevelDefinitionsNumberAndResolveInEveryBody() {
+        let md = """
+        > [^q]: Quoted note.
+        > [r]: https://e.x/r
+        > Text[^q] and [r] and[^a].
+
+        > [!TIP]
+        > Tip[^a] [r].
+
+        Body[^a][^q].
+
+        [^a]: Second.
+        """
+        let blocks = parse(md)
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
+        guard case .blockquote(let quote, _) = blocks[0].content,
+              case .alert(_, let alert) = blocks[1].content,
+              case .text(let body) = blocks[2].content else { return XCTFail("blocks: \(blocks.map(\.content))") }
+        let shownQuote = renderer.renderQuotedBody(quote)
+        XCTAssertEqual(String(shownQuote.characters), "Text\u{00B9} and r and\u{00B2}.")
+        XCTAssertEqual(shownQuote.runs.compactMap { $0.link?.absoluteString }, ["https://e.x/r"])
+        XCTAssertEqual(String(renderer.renderQuotedBody(alert).characters), "Tip\u{00B2} r.")
+        XCTAssertEqual(String(body.characters), "Body\u{00B2}\u{00B9}.")
+        guard case .text(let notes) = blocks.last?.content else { return XCTFail("footnotes block") }
+        XCTAssertTrue(String(notes.characters).contains("1. Quoted note.\n2. Second."), String(notes.characters))
+    }
+
     /// R19: reference labels match as CommonMark's (`ReferenceLabel`) in
     /// every lookup — whitespace runs (tab, line break) are one space, the
     /// ends trimmed, Unicode case folding (`ẞ` = `SS`, `straße` = `STRASSE`,
@@ -1008,10 +1039,17 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(level, 2)
     }
 
+    /// An alert needs a body (GitHub): the marker alone is a plain quote; a
+    /// nested quote right after it is a body, even an empty one, and the
+    /// alert's own body is then empty.
     func testAlertWithEmptyBodyParses() {
-        let blocks = parse("> [!WARNING]")
+        guard case .blockquote(let marker, 1) = parse("> [!WARNING]").first?.content else {
+            return XCTFail("a marker alone is a plain quote")
+        }
+        XCTAssertEqual(marker, "[!WARNING]")
+        let blocks = parse("> [!WARNING]\n> >")
         guard case .alert(let kind, let content) = blocks.first?.content else {
-            return XCTFail("header-only alert should still parse")
+            return XCTFail("an alert whose body is a nested quote should still parse")
         }
         XCTAssertEqual(kind, .warning)
         XCTAssertTrue(content.isEmpty)
