@@ -237,7 +237,8 @@ enum ReferenceLinks {
         let afterBracket = remaining.dropFirst(2)
         guard let close = afterBracket.firstIndex(of: "]") else { return nil }
         let id = String(afterBracket[..<close])
-        guard !id.isEmpty, let index = sources.footnoteIds.firstIndex(of: id) else { return nil }
+        guard !id.isEmpty,
+              let index = sources.footnoteIds.firstIndex(of: ReferenceLabel.normalized(id)) else { return nil }
         return ("[^\(MarkdownRenderer.numberedFootnoteMarker)\(index + 1)]", afterBracket[afterBracket.index(after: close)...])
     }
 

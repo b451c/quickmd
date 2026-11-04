@@ -1255,7 +1255,8 @@ struct MarkdownRenderer: Sendable {
         // the number a quote / alert / table cell already carries
         // (`ReferenceLinks`: those are rendered without the definitions).
         let number: Int
-        if let idx = footnoteDefinitions.firstIndex(where: { $0.id == fnId }) {
+        let key = ReferenceLabel.normalized(fnId)  // ids are stored normalised
+        if let idx = footnoteDefinitions.firstIndex(where: { $0.id == key }) {
             number = idx + 1
         } else if fnId.unicodeScalars.first == Self.numberedFootnoteMarker,
                   let numbered = Int(String(fnId.unicodeScalars.dropFirst())), numbered > 0 {

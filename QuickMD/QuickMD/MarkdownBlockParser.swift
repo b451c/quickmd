@@ -108,19 +108,25 @@ struct MarkdownBlockParser: Sendable {
             if let match = Self.footnoteDefRegex.firstMatch(in: trimmed, range: nsRange),
                       let idRange = Range(match.range(at: 1), in: trimmed),
                       let contentRange = Range(match.range(at: 2), in: trimmed) {
-                let fnId = String(trimmed[idRange])
-                let fnContent = String(trimmed[contentRange])
-                footnoteDefinitions.append((id: fnId, content: fnContent))
-                if !footnoteIds.contains(fnId) { footnoteIds.append(fnId) }
+                // Ids are normalised labels (`ReferenceLabel`): `[^Note]` finds
+                // `[^note]:`. The FIRST definition of an id wins (GitHub
+                // drops a later one from the list too).
+                let fnId = ReferenceLabel.normalized(trimmed[idRange])
+                if !footnoteIds.contains(fnId) {
+                    footnoteDefinitions.append((id: fnId, content: String(trimmed[contentRange])))
+                    footnoteIds.append(fnId)
+                }
                 placement.definition()
             } else if let text = placement.footnoteDefinitionText(trimmed),
                       let match = Self.footnoteDefRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
                       let idRange = Range(match.range(at: 1), in: text),
                       let contentRange = Range(match.range(at: 2), in: text) {
                 // A quote's footnote: before the link pattern here too.
-                let fnId = String(text[idRange])
-                footnoteDefinitions.append((id: fnId, content: String(text[contentRange])))
-                if !footnoteIds.contains(fnId) { footnoteIds.append(fnId) }
+                let fnId = ReferenceLabel.normalized(text[idRange])
+                if !footnoteIds.contains(fnId) {
+                    footnoteDefinitions.append((id: fnId, content: String(text[contentRange])))
+                    footnoteIds.append(fnId)
+                }
                 _ = placement.definitionTaken(trimmed)
                 lines.append(line)
                 lineMap.append(originalIndex)

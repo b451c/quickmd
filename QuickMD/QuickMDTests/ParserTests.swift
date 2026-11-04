@@ -679,6 +679,44 @@ final class ParserTests: XCTestCase {
         XCTAssertTrue(String(notes.characters).contains("1. Quoted note.\n2. Second."), String(notes.characters))
     }
 
+    /// R21a: footnote labels match like link labels (`ReferenceLabel`):
+    /// `[^Note]`, `[^NOTE]` and `[^note]` are all footnote 1, `[^ẞ]` finds
+    /// `[^ss]:`, and of `[^dup]:` / `[^DUP]:` the first wins — the second is
+    /// not listed either. GitHub (`gh api markdown`, 2026-11-04). They stayed
+    /// literal (an exact `==`), and both duplicates were listed.
+    func testFootnoteLabelsMatchLikeGitHub() {
+        let md = """
+        # H[^Note]
+
+        A[^Note] B[^NOTE] C[^note] D[^Dup] E[^ẞ]
+
+        > Q[^NOTE] [^DUP]
+
+        | c |
+        |---|
+        | T[^NoTe] |
+
+        [^note]: First.
+        [^dup]: Dup one.
+        [^DUP]: Dup two.
+        [^ss]: Fold.
+        """
+        let blocks = parse(md)
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
+        guard case .heading(let level, let title, _) = blocks[0].content,
+              case .text(let paragraph) = blocks[1].content,
+              case .blockquote(let quote, _) = blocks[2].content,
+              case .table(_, let rows, _, _) = blocks[3].content,
+              case .text(let notes) = blocks.last?.content else { return XCTFail("blocks: \(blocks.map(\.content))") }
+        XCTAssertEqual(String(renderer.renderHeader(title, level: level).characters), "H\u{00B9}")
+        XCTAssertEqual(String(paragraph.characters), "A\u{00B9} B\u{00B9} C\u{00B9} D\u{00B2} E\u{00B3}")
+        XCTAssertEqual(String(renderer.renderQuotedBody(quote).characters), "Q\u{00B9} \u{00B2}")
+        XCTAssertEqual(String(renderer.renderInline(rows[0][0]).characters), "T\u{00B9}")
+        let listed = String(notes.characters)
+        XCTAssertTrue(listed.hasSuffix("1. First.\n2. Dup one.\n3. Fold."), listed)
+        XCTAssertFalse(listed.contains("Dup two"), listed)
+    }
+
     /// R19: reference labels match as CommonMark's (`ReferenceLabel`) in
     /// every lookup — whitespace runs (tab, line break) are one space, the
     /// ends trimmed, Unicode case folding (`ẞ` = `SS`, `straße` = `STRASSE`,
