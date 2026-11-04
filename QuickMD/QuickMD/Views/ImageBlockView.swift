@@ -21,6 +21,9 @@ struct ImageBlockView: View {
     let documentURL: URL?
     let fontScale: CGFloat
     let contentWidth: CGFloat
+    /// Where the image's size goes once it is known, so every later measure
+    /// computes this row instead of starting it at the loading view.
+    let heightCache: BlockHeightCache?
     var onEnlarge: (GraphicPreview) -> Void = { _ in }
 
     /// Display width cap and the pre-load placeholder height — see
@@ -38,7 +41,7 @@ struct ImageBlockView: View {
     @State private var accessDeniedURL: URL?
 
     init(url: String, alt: String, width: ImageWidth? = nil, theme: MarkdownTheme, documentURL: URL?,
-         fontScale: CGFloat, contentWidth: CGFloat,
+         fontScale: CGFloat, contentWidth: CGFloat, heightCache: BlockHeightCache? = nil,
          onEnlarge: @escaping (GraphicPreview) -> Void = { _ in }) {
         self.url = url
         self.alt = alt
@@ -47,6 +50,7 @@ struct ImageBlockView: View {
         self.documentURL = documentURL
         self.fontScale = fontScale
         self.contentWidth = contentWidth
+        self.heightCache = heightCache
         self.onEnlarge = onEnlarge
         let source = ImageSource.resolve(url, documentURL: documentURL)
         self.source = source
@@ -58,6 +62,7 @@ struct ImageBlockView: View {
             ImageLoader.cachedImage(for: url, source: $0, maxPixel: ImageLoader.displayMaxPixel)
         }
         _image = State(initialValue: cached)
+        if let cached { heightCache?.setImageSize(cached.size, for: url) }
         // Same reasoning for failures known without I/O (a non-image or
         // oversized `data:` URL, a recorded data:/remote failure): the row
         // starts at the error view instead of the 100 pt spinner, so it reports
@@ -75,6 +80,13 @@ struct ImageBlockView: View {
                 accessDeniedView(for: accessDeniedURL)
             } else if source == nil || failure != nil {
                 imageErrorView
+            } else if let known = heightCache?.imageSize(for: url) {
+                // Loading an image whose size this document already knows
+                // (the bitmap was evicted from `ImageLoader`'s cache): hold
+                // the picture's place, which is the row the measurer computed.
+                let size = pictureSize(for: known)
+                ProgressView()
+                    .frame(width: size.width, height: size.height)
             } else {
                 ProgressView()
                     .frame(height: Metrics.placeholderHeight)
@@ -85,10 +97,8 @@ struct ImageBlockView: View {
         }
 
         if !alt.isEmpty {
-            Text(alt)
-                .font(.system(size: 12 * fontScale))
-                .foregroundColor(theme.secondaryTextColor)
-                .italic()
+            ImageCaption(alt: alt, color: theme.secondaryTextColor, fontScale: fontScale,
+                         contentWidth: contentWidth)
         }
     }
 
@@ -96,9 +106,10 @@ struct ImageBlockView: View {
         Button {
             onEnlarge(preview(for: image))
         } label: {
+            let size = pictureSize(for: image.size)
             Image(nsImage: image).resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: displayWidth(for: image))
+                .frame(width: size.width, height: size.height)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
@@ -110,12 +121,11 @@ struct ImageBlockView: View {
     /// never wider than the image's own width × zoom — the rule `SVGBlockView`
     /// already used. A 90 px icon stays icon-sized instead of being blown up
     /// (blurry) to 600 pt; large images are unchanged (the cap wins). An HTML
-    /// `<img width>` takes the place of the image's own width (T-C).
-    private func displayWidth(for image: NSImage) -> CGFloat {
-        let cap = Metrics.displayWidth(fontScale: fontScale, contentWidth: contentWidth)
-        if let width { return width.displayWidth(cap: cap, fontScale: fontScale) }
-        guard image.size.width > 0 else { return cap }
-        return min(cap, image.size.width * fontScale)
+    /// `<img width>` takes the place of the image's own width (T-C). The one
+    /// rule the measurer sizes the row with (`ImageBlock.pictureSize`).
+    private func pictureSize(for imageSize: CGSize) -> CGSize {
+        Metrics.pictureSize(imageSize: imageSize, htmlWidth: width, fontScale: fontScale,
+                            contentWidth: contentWidth)
     }
 
     /// The window-filling preview re-decodes at 4096 px. Local files keep the
@@ -185,6 +195,7 @@ struct ImageBlockView: View {
         // of a live view changes, and the old bitmap must not linger.
         let seeded = ImageLoader.cachedImage(for: url, source: source, maxPixel: ImageLoader.displayMaxPixel)
         if image !== seeded { image = seeded }
+        if let seeded { heightCache?.setImageSize(seeded.size, for: url) }
 
         let first = await ImageLoader.load(raw: url, source: source, maxPixel: ImageLoader.displayMaxPixel)
         if case .failure(.unreadable(let fileURL)) = first {
@@ -208,6 +219,7 @@ struct ImageBlockView: View {
     private func apply(_ result: Result<NSImage, ImageLoadFailure>) {
         switch result {
         case .success(let loaded):
+            heightCache?.setImageSize(loaded.size, for: url)
             if loaded !== image { image = loaded }
         case .failure(let loadFailure):
             // Terminal: shows the error placeholder. (Before, a retry that still

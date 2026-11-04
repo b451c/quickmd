@@ -79,6 +79,13 @@ enum SelectionRows {
         case .codeBlock, .text, .blockquote, .alert, .heading:
             guard let string = text(block),
                   let covered = selection.range(inRow: row, rowLength: string.length) else { return nil }
+            if block.substitutesFormula, case .codeBlock(let latex, _) = block.content,
+               covered.location == 0, covered.length == string.length {
+                // A formula shown as its source, covered whole (a drag across
+                // it, ⌘A): the formula, `$$…$$`, as 1.14.2 copied it. Part of
+                // its text copies as that text, like any selection.
+                return .displayMath(latex: latex)
+            }
             let part = string.attributedSubstring(from: covered)
             if case .codeBlock = block.content { return .code(part) }
             return .text(part)
@@ -291,6 +298,26 @@ extension SelectionRows {
         let clamped = NSPoint(x: min(max(local.x, 0), viewSize.width),
                               y: min(max(local.y, 0), viewSize.height))
         return min(max(0, characterIndex(clamped)), length)
+    }
+}
+
+extension SelectionRows {
+    /// The character a double- or triple-click in the space between two
+    /// blocks is about. Such a click lands where a single click there does —
+    /// the start of the row below (`offset` 0) or the end of the row above —
+    /// and is about the word at that end: the first character, or the last
+    /// one that is not a line break (a table's string ends in one). Nil for
+    /// an empty string.
+    static func multiClickIndex(atRowBoundary offset: Int, in string: NSString) -> Int? {
+        guard string.length > 0 else { return nil }
+        guard offset > 0 else { return 0 }
+        var index = min(offset, string.length) - 1
+        func isLineBreak(_ index: Int) -> Bool {
+            let unit = string.character(at: index)
+            return unit == 0x0A || unit == 0x0D || unit == 0x2028 || unit == 0x2029
+        }
+        while index > 0, isLineBreak(index) { index -= 1 }
+        return index
     }
 }
 

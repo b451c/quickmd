@@ -127,14 +127,61 @@ struct MarkdownBlock: Identifiable, Sendable {
     /// own ```` ```yaml ```` fence on the first line is an ordinary code block.
     /// The rhythm gives it its own role (`BlockLayout.Spacing.Role.frontMatter`).
     let isFrontMatter: Bool
+    /// A display formula the math engine cannot typeset, shown as its source
+    /// in a ```` ```latex ```` code block
+    /// (`MathRendering.substitutingUntypesettableMath`). Copied whole, it
+    /// reads `$$…$$` again, as the formula it is (`SelectionRows`).
+    let substitutesFormula: Bool
 
     init(id: String, content: BlockContent, sourceLine: Int, joinsPrevious: Bool = false,
-         isFrontMatter: Bool = false) {
+         isFrontMatter: Bool = false, substitutesFormula: Bool = false) {
         self.id = id
         self.content = content
         self.sourceLine = sourceLine
         self.joinsPrevious = joinsPrevious
         self.isFrontMatter = isFrontMatter
+        self.substitutesFormula = substitutesFormula
+    }
+
+    /// A cheap content fingerprint of the block, to find the scroll anchor
+    /// again after the document changed shape (`VirtualBlockList`). Neither
+    /// identity the block already has can do that job:
+    ///
+    ///  * `id` is POSITIONAL (`text-17`), so inserting one block above
+    ///    renumbers every block below it.
+    ///  * `sourceLine` moves with any edit above it.
+    ///
+    /// The characters are what the reader was actually looking at, so they
+    /// are the identity matched on. 80 characters distinguish paragraphs
+    /// without copying the document, and the kind tag in front keeps a
+    /// heading from matching a paragraph with the same words. A table is its
+    /// header AND first row: a header-less table (blank header cells) and the
+    /// front-matter properties table (no header) were only `b|<rows>|`, so
+    /// any two of them with as many rows matched each other.
+    var anchorSignature: String {
+        func head(_ text: String) -> String { String(text.prefix(80)) }
+        switch content {
+        case .text(let attributed):
+            return "t|" + head(String(attributed.characters))
+        case .table(let headers, let rows, _, _):
+            return "b|\(rows.count)|" + head((headers + (rows.first ?? [])).joined(separator: "\u{1F}"))
+        case .codeBlock(let code, let language):
+            return "c|\(language)|" + head(code)
+        case .image(let url, let alt, _):
+            return "i|\(head(url))|" + head(alt)
+        case .blockquote(let content, let level):
+            return "q|\(level)|" + head(content)
+        case .alert(let kind, let content):
+            return "a|\(kind.rawValue)|" + head(content)
+        case .heading(let level, let title, _):
+            return "h|\(level)|" + head(title)
+        case .mathBlock(let latex):
+            return "m|" + head(latex)
+        case .mermaidDiagram(let source):
+            return "d|" + head(source)
+        case .svgImage(let source):
+            return "s|" + head(source)
+        }
     }
 
     enum BlockContent: Sendable {

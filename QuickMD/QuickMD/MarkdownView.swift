@@ -117,7 +117,8 @@ struct MarkdownView: View {
     @State private var appliedDefaultZoom: Double
     /// ⌘⇧R — distraction-free reading: both sidebars, the top-right chrome pills
     /// and the Support/Tip Jar button step out of the way, and the text column
-    /// stops at `Metrics.readingMaxContentWidth` and centres itself.
+    /// stops at `Metrics.readingColumnCap(fontScale:)` (720 pt at 100 %, scaled
+    /// with the zoom) and centres itself.
     ///
     /// @State, not @AppStorage, for the same reason as `fontScale`: it belongs to
     /// this window and this reading session. A viewer that reopens with its
@@ -141,6 +142,8 @@ struct MarkdownView: View {
     /// on demand. A reference in @State on purpose: the coordinator fills it,
     /// nothing observes it, so scrolling never re-evaluates this body (E-D1).
     @State private var readingPosition = DocumentReadingPosition()
+    /// The list's column room, for a parse at a new zoom in reading mode.
+    @State private var documentColumn = DocumentColumn()
     /// Source Edit (v1.12): the raw-Markdown editor over the rendered list, its
     /// buffer, saving and the close guard's answers. One per window, lives with
     /// the tab. Publishes only rare events (enter / leave, dirty, banner) — the
@@ -288,7 +291,7 @@ struct MarkdownView: View {
                     focusedBlockId: focusedBlockId,
                     focusedOccInBlock: focusedOccInBlock,
                     scrollRequest: scrollRequest,
-                    layoutStyle: isReadingMode ? .reading : .standard,
+                    layoutStyle: isReadingMode ? .reading(fontScale: CGFloat(renderedFontScale)) : .standard,
                     contentWidth: $contentWidth,
                     onHeightReport: { blockId, row, height in
                         applyHeightReport(blockId: blockId, row: row, height: height)
@@ -307,7 +310,8 @@ struct MarkdownView: View {
                     // the focus back while covered, and leaves the
                     // accessibility tree meanwhile (set on the AppKit view).
                     isCovered: graphicPreview != nil || editSession.isActive,
-                    readingPosition: readingPosition
+                    readingPosition: readingPosition,
+                    column: documentColumn
                 )
                 .onChange(of: scrollTrigger) { _ in
                     scrollFocusedMatchIntoView()
@@ -651,10 +655,17 @@ struct MarkdownView: View {
             let scale = CGFloat(fontScale)
             // The width the list will lay the blocks out at. 0 before the host's
             // first layout — then the heights task below picks it up as soon as
-            // the coordinator reports one.
-            let width = contentWidth
-            // Content-keyed (`ReportedHeights`): valid across this re-parse.
-            let reported = heightCache.reportedSnapshot
+            // the coordinator reports one. A new zoom in reading mode changes
+            // the column's cap with these blocks (the style is derived from
+            // `renderedFontScale`): measure at THAT column. Only a zoom: any
+            // other parse keeps the list's width, which the list keeps in step
+            // with the window itself.
+            let listWidth = contentWidth
+            let width = BlockLayout.Document.parseWidth(
+                contentWidth: listWidth, inner: documentColumn.innerWidth?() ?? 0,
+                readingFontScale: isReadingMode && Double(scale) != renderedFontScale ? scale : nil)
+            // Keyed by the link, so valid across this re-parse.
+            let imageSizes = heightCache.imageSizesSnapshot
             let out: ParsedAndMeasured = await Task.detached(priority: .userInitiated) {
                 let blocks = MarkdownBlockParser(theme: currentTheme, fontScale: scale).parse(text)
                 // Pre-compute per-text-block metadata on the background thread so the
@@ -678,12 +689,13 @@ struct MarkdownView: View {
                 // the rows it defers are finished on main just below.
                 // No `heightSeeds`: `heightCache` is cleared for this parse, and
                 // block ids are positional, so the previous document's diagram
-                // heights would seed the wrong diagrams. `reportedHeights` are
-                // keyed by content, width and zoom instead.
+                // heights would seed the wrong diagrams. Pictures and diagrams
+                // that were shown before are computed (`imageSizes`, the SVG
+                // decoder, `MermaidGeometryStore`).
                 let measured = width > 0
                     ? BlockHeightMeasurer.measure(blocks: blocks, theme: currentTheme,
                                                   fontScale: scale, contentWidth: width,
-                                                  reportedHeights: reported, math: nil)
+                                                  imageSizes: imageSizes, math: nil)
                     : MeasuredBlocks.empty
                 return ParsedAndMeasured(parsed: ParsedDocument(blocks: blocks, textMeta: meta),
                                          measured: measured)
@@ -706,6 +718,10 @@ struct MarkdownView: View {
             cachedBlocks = blocks
             renderedFontScale = Double(scale)
             contentVersion += 1
+            // The column this parse was measured at, in the same transaction
+            // as the cap that gives it — unless the list published another
+            // width meanwhile (then the heights task re-measures at that one).
+            if width != listWidth, contentWidth == listWidth { contentWidth = width }
             textBlockMeta = parsed.textMeta
             installedText = text
             // Inline `$…$` paragraphs and display-math rows were deferred by the
@@ -756,9 +772,8 @@ struct MarkdownView: View {
             // Mermaid rows: seed from the heights the WebViews actually reported,
             // so a re-measure doesn't send every diagram back to the 200 pt default.
             let seeds = heightCache.snapshot
-            // Pictures and diagrams placed at this width before (Reading Mode
-            // off again, a window back to its size): their reported heights.
-            let reported = heightCache.reportedSnapshot
+            // Images shown before: their rows are computed at the new width.
+            let imageSizes = heightCache.imageSizesSnapshot
             // Inline-math paragraphs: hand the previous pass's strings back so the
             // main-actor step re-wraps them instead of re-rendering every `$…$`
             // segment through SwiftMath. Safe only because this task never runs
@@ -769,7 +784,7 @@ struct MarkdownView: View {
             let raw: MeasuredBlocks = await Task.detached(priority: .userInitiated) {
                 BlockHeightMeasurer.measure(blocks: blocks, theme: currentTheme, fontScale: scale,
                                             contentWidth: width, heightSeeds: seeds,
-                                            reportedHeights: reported, math: nil)
+                                            imageSizes: imageSizes, math: nil)
             }.value
             // A parse that landed while we were measuring owns the state now —
             // its own transaction published a matching table.
@@ -1185,7 +1200,7 @@ struct MarkdownView: View {
 
             case .image(let url, let alt, let width):
                 ImageBlockView(url: url, alt: alt, width: width, theme: theme, documentURL: documentURL,
-                               fontScale: scale, contentWidth: contentWidth,
+                               fontScale: scale, contentWidth: contentWidth, heightCache: heightCache,
                                onEnlarge: presentGraphicPreview)
                     .padding(.vertical, Metrics.imageOuterVerticalPadding)
 
@@ -1321,7 +1336,10 @@ struct MarkdownView: View {
         case .heading(let level, let title, _):
             // Exactly what `HeadingBlockView` hands its `TextBlockView`: the
             // same `renderHeader` output through the same converter (no
-            // inline math — a heading shows `$…$` literally, as before).
+            // inline math — a heading shows `$…$` literally, as before). The
+            // measurer kept it (`MeasuredBlocks.converted`): a ⌘C of a
+            // heading-heavy document no longer converts every heading again.
+            if let cached { return cached }
             return TextBlockView.makeNSAttributedString(
                 from: MarkdownRenderer(theme: theme, fontScale: scale).renderHeader(title, level: level),
                 hasInlineMath: false, theme: theme, fontScale: scale)
@@ -1437,11 +1455,6 @@ struct MarkdownView: View {
         // ignores such reports too — this is the same rule on the parent's side,
         // so a stale report can never overwrite an exact height).
         guard row < table.kinds.count, table.kinds[row] == .reported else { return }
-        // Remembered by content, width and zoom for the next measure there.
-        if let key = ReportedHeights.key(for: cachedBlocks[row], contentWidth: table.contentWidth,
-                                         fontScale: CGFloat(renderedFontScale), theme: theme) {
-            heightCache.setReported(height, forKey: key)
-        }
         guard row < table.heights.count, abs(table.heights[row] - height) >= 0.5 else { return }
         // The block's height only: its space above stays as measured.
         measured = measured.replacingHeight(height, at: row)
@@ -1463,9 +1476,16 @@ struct MarkdownView: View {
             currentMatchIndex = (currentMatchIndex - 1 + matchBlockIds.count) % matchBlockIds.count
         }
         updateFocusState()
-        // Only scroll when moving to a different block
-        if focusedBlockId != oldBlockId {
+        switch DocumentSearch.stepScroll(from: oldBlockId, to: focusedBlockId) {
+        case .toBlock:
             scrollTrigger += 1
+        case .withinBlock:
+            // Another match of the same block: the list brings it to the eye
+            // when the block is taller than the window (a big table, a long
+            // code block); a block that fits stays where it is.
+            if let blockId = focusedBlockId { requestScroll(to: blockId, anchor: .match, animated: true) }
+        case nil:
+            break
         }
     }
 

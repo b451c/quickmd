@@ -639,4 +639,42 @@ extension SearchTests {
         XCTAssertEqual(results.matchBlockIds, [blocks[0].id, blocks[0].id])
         XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "land").matchBlockIds, [blocks[0].id])
     }
+
+    // MARK: - ⌘G within a block
+
+    /// A step to another match of the SAME block used to scroll nothing — in
+    /// a block taller than the window the next match could be off screen.
+    func testAStepToAnotherMatchOfTheSameBlockScrollsWithinIt() {
+        XCTAssertEqual(DocumentSearch.stepScroll(from: "a", to: "a"), .withinBlock)
+        XCTAssertEqual(DocumentSearch.stepScroll(from: "a", to: "b"), .toBlock)
+        XCTAssertEqual(DocumentSearch.stepScroll(from: nil, to: "b"), .toBlock)
+        XCTAssertNil(DocumentSearch.stepScroll(from: "a", to: nil))
+    }
+
+    /// Where the list centres a match: the rect of the occurrence the
+    /// highlight paints orange, in the text view's coordinates (its container
+    /// inset included).
+    func testTheMatchRectIsWhereTheFocusedHighlightIs() throws {
+        let lines = (0..<120).map { $0 == 3 || $0 == 100 ? "row \($0) needle here" : "row \($0) filler text" }
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 10))
+        textView.textContainerInset = NSSize(width: 7, height: 11)
+        textView.isVerticallyResizable = true
+        textView.string = lines.joined(separator: "\n")
+        textView.sizeToFit()
+
+        let first = try XCTUnwrap(textView.searchMatchRect(term: "NEEDLE", occurrence: 0))
+        let second = try XCTUnwrap(textView.searchMatchRect(term: "NEEDLE", occurrence: 1))
+        XCTAssertNil(textView.searchMatchRect(term: "needle", occurrence: 2))
+        XCTAssertNil(textView.searchMatchRect(term: "absent", occurrence: 0))
+
+        let ranges = searchMatchRanges(in: textView.string, term: "needle")
+        for (rect, range) in zip([first, second], ranges) {
+            XCTAssertGreaterThan(rect.width, 0)
+            let index = textView.characterIndexForInsertion(at: NSPoint(x: rect.midX, y: rect.midY))
+            XCTAssertTrue(NSLocationInRange(index, NSRange(location: range.location, length: range.length + 1)),
+                          "\(index) not in \(range)")
+        }
+        XCTAssertGreaterThan(second.midY - first.midY, 90 * 12)
+        XCTAssertGreaterThanOrEqual(first.minY, 11)
+    }
 }

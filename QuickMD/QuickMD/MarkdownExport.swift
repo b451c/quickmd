@@ -567,7 +567,7 @@ struct PrintableBlockquoteView: View {
             // quote written one sentence per line prints as one paragraph.
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(MarkdownRenderer.joinSoftBreaks(content.components(separatedBy: "\n")).enumerated()), id: \.offset) { _, line in
-                    if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    if MarkdownRenderer.isBlankLine(line) {
                         Text(" ").font(renderer.theme.fonts.swiftUI(size: 12))
                     } else {
                         Text(renderer.renderInline(line))
@@ -606,7 +606,7 @@ struct PrintableAlertView: View {
 
             // Soft breaks joined first — mirrors AlertBlockView on screen.
             ForEach(Array(MarkdownRenderer.joinSoftBreaks(content.components(separatedBy: "\n")).enumerated()), id: \.offset) { _, line in
-                if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                if MarkdownRenderer.isBlankLine(line) {
                     Text(" ").font(renderer.theme.fonts.swiftUI(size: 12))
                 } else {
                     Text(renderer.renderInline(line))
@@ -920,7 +920,8 @@ enum PrintableMath {
         var mathImage = MathImage(latex: latex, fontSize: 14, textColor: .black,
                                   labelMode: .text, textAlignment: .left)
         let (error, image, info) = mathImage.asImage()
-        guard error == nil, let image else { return nil }
+        // Nothing drawn: the italic literal, as on screen (`MathInk`).
+        guard error == nil, let image, MathInk.drawsSomething(latex, image: image) else { return nil }
         return (image, info?.descent ?? 0)
     }
 

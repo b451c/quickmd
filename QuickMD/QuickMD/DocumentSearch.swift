@@ -95,6 +95,23 @@ func applyNSSearchHighlight(in textView: NSTextView, term: String, focusedOccurr
     }
 }
 
+extension NSTextView {
+    /// Where the `occurrence`-th match of `term` is in this view's text (view
+    /// coordinates) — the matcher its highlight draws with, so the index is
+    /// the block's focused occurrence. Nil past the last match.
+    func searchMatchRect(term: String, occurrence: Int) -> NSRect? {
+        guard let layoutManager, let textContainer, let storage = textStorage else { return nil }
+        let ranges = searchMatchRanges(in: storage.string, term: term)
+        guard occurrence >= 0, occurrence < ranges.count else { return nil }
+        let range = NSIntersectionRange(ranges[occurrence], NSRange(location: 0, length: storage.length))
+        guard range.length > 0 else { return nil }
+        let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        layoutManager.ensureLayout(forGlyphRange: glyphs)
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+        return rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+    }
+}
+
 // MARK: - Document Search
 
 /// Pure search-match computation over parsed blocks. Free of any UI state so
@@ -136,6 +153,20 @@ enum DocumentSearch {
     /// Whether landing results scroll the document to the focused match.
     static func scrollsToFocus(after trigger: Trigger, matchCount: Int) -> Bool {
         trigger == .termChanged && matchCount > 0
+    }
+
+    /// What a ⌘G / ⇧⌘G step that moved the focus from `oldBlockId` to
+    /// `newBlockId` scrolls: the new block into view, or — the same block —
+    /// the new match within it (which moves only a block taller than the
+    /// window). Nil without a focus.
+    enum StepScroll: Equatable {
+        case toBlock
+        case withinBlock
+    }
+
+    static func stepScroll(from oldBlockId: String?, to newBlockId: String?) -> StepScroll? {
+        guard let newBlockId else { return nil }
+        return newBlockId == oldBlockId ? .withinBlock : .toBlock
     }
 
     /// The focused block and the occurrence within it that the block's
@@ -282,8 +313,9 @@ enum DocumentSearch {
             if let shown = converted[block.id] { return shown.string }
             return String(renderer.renderQuotedBody(content).characters)
         case .heading(let level, let title, _):
-            // Never measured into `converted` (a `.reported` row): rendered
+            // The measurer keeps the title it measured; without it, rendered
             // here exactly as `HeadingBlockView` renders it.
+            if let shown = converted[block.id] { return shown.string }
             return String(renderer.renderHeader(title, level: level).characters)
         case .table, .codeBlock, .image, .svgImage, .mathBlock, .mermaidDiagram:
             return nil

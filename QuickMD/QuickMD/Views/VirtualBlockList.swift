@@ -47,45 +47,16 @@ private let listLog = Logger(subsystem: "pl.falami.studio.QuickMD", category: "V
 private let listSignpost = OSSignposter(subsystem: "pl.falami.studio.QuickMD", category: "VirtualBlockList")
 #endif
 
-// MARK: - Block identity for anchor restoration
-
-/// A cheap content fingerprint of one block.
-///
-/// Used only to find the scroll anchor again after the document changed shape.
-/// Neither of the two identities a block already has can do that job:
-///
-///  * `MarkdownBlock.id` is POSITIONAL (`text-17`), so inserting one block above
-///    renumbers every block below it.
-///  * `sourceLine` moves with any edit above it.
-///
-/// The characters are what the reader was actually looking at, so they are the
-/// identity we match on. 80 characters distinguishes paragraphs without copying
-/// the document, and the kind tag in front keeps a heading from matching a
-/// paragraph with the same words.
-private func blockSignature(_ block: MarkdownBlock) -> String {
-    func head(_ text: String) -> String { String(text.prefix(80)) }
-    switch block.content {
-    case .text(let attributed):
-        return "t|" + head(String(attributed.characters))
-    case .table(let headers, let rows, _, _):
-        return "b|\(rows.count)|" + head(headers.joined(separator: "\u{1F}"))
-    case .codeBlock(let code, let language):
-        return "c|\(language)|" + head(code)
-    case .image(let url, let alt, _):
-        return "i|\(head(url))|" + head(alt)
-    case .blockquote(let content, let level):
-        return "q|\(level)|" + head(content)
-    case .alert(let kind, let content):
-        return "a|\(kind.rawValue)|" + head(content)
-    case .heading(let level, let title, _):
-        return "h|\(level)|" + head(title)
-    case .mathBlock(let latex):
-        return "m|" + head(latex)
-    case .mermaidDiagram(let source):
-        return "d|" + head(source)
-    case .svgImage(let source):
-        return "s|" + head(source)
-    }
+/// The room the document column has, asked for on demand — the same bridge
+/// as `DocumentReadingPosition`: `MarkdownView` owns one per tab (`@State`,
+/// reference identity, so nothing re-renders), the list's coordinator installs
+/// `innerWidth` on every update. A parse at a new zoom in reading mode reads
+/// it to measure at the column the zoom's cap will give
+/// (`BlockLayout.Document.parseWidth`). Main-thread by convention.
+final class DocumentColumn {
+    /// The clip's whole points − 2 × the horizontal padding; 0 before the
+    /// list's first layout or while it is not wired.
+    var innerWidth: (() -> CGFloat)?
 }
 
 struct VirtualBlockList: NSViewRepresentable {
@@ -94,8 +65,12 @@ struct VirtualBlockList: NSViewRepresentable {
     enum Anchor: Equatable {
         /// Row top at the top of the content area (ToC).
         case top
-        /// Row centre at the centre of the content area (search).
+        /// Row centre at the centre of the content area (search) — the focused
+        /// match's, in a block taller than that area.
         case center
+        /// ⌘G to another match of the SAME block: a block taller than the
+        /// content area brings that match to the centre; one that fits stays.
+        case match
     }
 
     /// One programmatic scroll. `token` is the trigger: the coordinator acts when
@@ -123,8 +98,14 @@ struct VirtualBlockList: NSViewRepresentable {
 
         static let standard = LayoutStyle(maxContentWidth: nil,
                                           verticalPadding: Metrics.contentVerticalPadding)
-        static let reading = LayoutStyle(maxContentWidth: Metrics.readingMaxContentWidth,
-                                         verticalPadding: Metrics.readingContentVerticalPadding)
+        /// Reading mode at `fontScale`: the column cap follows the zoom
+        /// (`BlockLayout.Document.readingColumnCap`), so a zoom in reading mode
+        /// is a style change too — together with the parse that installs the
+        /// zoomed blocks (`MarkdownView` derives it from `renderedFontScale`).
+        static func reading(fontScale: CGFloat) -> LayoutStyle {
+            LayoutStyle(maxContentWidth: BlockLayout.Document.readingColumnCap(fontScale: fontScale),
+                        verticalPadding: Metrics.readingContentVerticalPadding)
+        }
 
         /// The scroll view's top/bottom content inset for this style: exactly
         /// `verticalPadding`. The table has no intercell spacing (the space
@@ -189,6 +170,8 @@ struct VirtualBlockList: NSViewRepresentable {
     /// ⌘E's reading-position handle (v1.11 E-D1). The coordinator installs a
     /// provider that is evaluated only when asked — no per-scroll publishing.
     var readingPosition: DocumentReadingPosition?
+    /// Answers "how wide is the column's room" on demand (`DocumentColumn`).
+    var column: DocumentColumn?
 
     typealias Metrics = BlockLayout.Document
 
@@ -298,6 +281,7 @@ struct VirtualBlockList: NSViewRepresentable {
         // has the property set at all.
         if nsView.isAccessibilityHidden() != isCovered { nsView.setAccessibilityHidden(isCovered) }
         readingPosition?.provider = { [weak coordinator] in coordinator?.readingEditorLine() }
+        column?.innerWidth = { [weak coordinator] in coordinator?.columnInnerWidth() ?? 0 }
         readingPosition?.selectionProvider = { [weak coordinator] in
             guard let coordinator,
                   let hint = coordinator.selection.sourceEditHint(
@@ -400,6 +384,9 @@ struct VirtualBlockList: NSViewRepresentable {
         /// clip; the install puts the reader back on it.
         private var isSwitchingLayout = false
         private var layoutSwitchGeneration = 0
+        /// A search jump into a block taller than the content area whose match
+        /// could not be located yet (`aimAtPendingMatch`): that block's id.
+        private var pendingMatchRow: String?
         #if DEBUG
         /// Where the last `setContentTop` left the content top, to tell a clip
         /// move this list made from one something else made (logged with the
@@ -452,6 +439,9 @@ struct VirtualBlockList: NSViewRepresentable {
         /// Last width handed to the parent. 0 = never reported, which is the one
         /// case that skips the debounce (the height table is blocked on it).
         private var reportedContentWidth: CGFloat = 0
+        /// Published widths the parent's binding has not received yet
+        /// (`publish` hands each over one run-loop turn later).
+        private var pendingPublishes = 0
         private var widthWork: DispatchWorkItem?
         private var frameObserver: NSObjectProtocol?
         /// `updateNSView` has run at least once, so `setContentWidth` is the
@@ -576,6 +566,7 @@ struct VirtualBlockList: NSViewRepresentable {
             self.anchor = nil
             isJumping = false
             isSwitchingLayout = false
+            pendingMatchRow = nil
             reportedBlocks = []
 
             blocks = newBlocks
@@ -681,7 +672,7 @@ struct VirtualBlockList: NSViewRepresentable {
             if preferringLastAnchor, let anchor, let row = anchoredRow(contentTop: top) {
                 return CapturedAnchor(row: row, offsetFromBlockTop: anchor.offset,
                                       sourceLine: blocks[row].sourceLine,
-                                      signature: blockSignature(blocks[row]))
+                                      signature: blocks[row].anchorSignature)
             }
             var row = tableView.row(at: NSPoint(x: 0, y: max(0, top)))
             if row < 0 {
@@ -707,7 +698,7 @@ struct VirtualBlockList: NSViewRepresentable {
                                       contentTop: top, rowRect: tableView.rect(ofRow: row),
                                       spacingAbove: table.spacing(row)),
                                   sourceLine: blocks[row].sourceLine,
-                                  signature: blockSignature(blocks[row]))
+                                  signature: blocks[row].anchorSignature)
         }
 
         /// ⌘E's target line (E-D1): the selection's first row, else the row the
@@ -778,6 +769,7 @@ struct VirtualBlockList: NSViewRepresentable {
                 completion = { [weak self] in
                     guard let self, self.jumpGeneration == jump else { return }
                     self.isJumping = false
+                    self.aimAtPendingMatch()
                 }
             } else {
                 isJumping = false
@@ -815,7 +807,7 @@ struct VirtualBlockList: NSViewRepresentable {
             for (index, block) in blocks.enumerated() {
                 // Past the anchor, distance only grows: nothing left can win.
                 if index > row, index - row >= bestDistance { break }
-                guard blockSignature(block) == signature else { continue }
+                guard block.anchorSignature == signature else { continue }
                 let distance = abs(index - row)
                 if distance < bestDistance {
                     best = index
@@ -932,26 +924,83 @@ struct VirtualBlockList: NSViewRepresentable {
             // it that reports its real height while the scroll is in flight, or
             // after it landed, moves the content top with it (`reportHeight`).
             let target: CGFloat
+            var needsMatch = false
             switch request.anchor {
             case .top:
                 // The block's top, below the space above it: the content inset
                 // is then the gap above it, as above the document's first block.
                 target = blockTopY(row)
-            case .center:
+            case .center, .match:
                 // The BLOCK's middle (not its row's, which includes the space
                 // above it) at the centre of the CONTENT area (between the
                 // insets), not of the clip view — with equal top/bottom insets
-                // these coincide.
+                // these coincide. A block taller than that area: its focused
+                // match (`RowGeometry.searchTarget`).
                 let insets = scrollView.contentInsets
                 let contentHeight = scrollView.contentView.bounds.height - insets.top - insets.bottom
-                target = RowGeometry.centerTarget(rowRect: tableView.rect(ofRow: row),
-                                                  spacingAbove: table.spacing(row),
-                                                  visibleHeight: contentHeight)
+                guard let search = RowGeometry.searchTarget(rowRect: tableView.rect(ofRow: row),
+                                                            spacingAbove: table.spacing(row),
+                                                            visibleHeight: contentHeight,
+                                                            matchMidY: focusedMatchMidY(row: row),
+                                                            withinBlock: request.anchor == .match)
+                else { return }
+                target = search.target
+                needsMatch = search.needsMatch
             }
             #if DEBUG
-            listLog.debug("scrollRequest: \(request.blockId, privacy: .public) row \(row) anchor=\(request.anchor == .top ? "top" : "center", privacy: .public) target=\(target, format: .fixed(precision: 1))")
+            listLog.debug("scrollRequest: \(request.blockId, privacy: .public) row \(row) anchor=\(String(describing: request.anchor), privacy: .public) target=\(target, format: .fixed(precision: 1))")
             #endif
             place(row: row, offset: target - blockTopY(row), animated: request.animated)
+            pendingMatchRow = needsMatch ? request.blockId : nil
+            if needsMatch, !isJumping {
+                // No glide to wait for (not animated, or already there).
+                DispatchQueue.main.async { [weak self] in self?.aimAtPendingMatch() }
+            }
+        }
+
+        /// The focused match's middle (document y) in `row`, from its text view
+        /// — nil when the row is not the focused block or its view is not on
+        /// display.
+        private func focusedMatchMidY(row: Int) -> CGFloat? {
+            guard let tableView, row < blocks.count, !searchText.isEmpty,
+                  let occurrence = focusedOccInBlock, focusedBlockId == blocks[row].id,
+                  let textView = selection.displayedTextView(for: blocks[row].id, in: tableView),
+                  let rect = textView.searchMatchRect(term: searchText, occurrence: occurrence) else { return nil }
+            return textView.convert(rect, to: tableView).midY
+        }
+
+        /// A search jump into a block taller than the content area landed on
+        /// the block, whose view was not on display to ask where the match is:
+        /// now it is — glide on to the match. The row's cells are built by
+        /// the next layout pass; one is forced, and failing that it is asked
+        /// again on the next turns of the run loop.
+        private func aimAtPendingMatch(retries: Int = 2) {
+            guard let blockId = pendingMatchRow else { return }
+            // Not if the reader has scrolled on meanwhile.
+            guard let tableView, let scrollView, let row = rowForBlockId[blockId],
+                  anchoredRow(contentTop: contentTopY()) == row else {
+                pendingMatchRow = nil
+                return
+            }
+            var matchMidY = focusedMatchMidY(row: row)
+            if matchMidY == nil {
+                tableView.layoutSubtreeIfNeeded()
+                matchMidY = focusedMatchMidY(row: row)
+            }
+            guard let matchMidY else {
+                if retries > 0 {
+                    DispatchQueue.main.async { [weak self] in self?.aimAtPendingMatch(retries: retries - 1) }
+                } else {
+                    pendingMatchRow = nil
+                }
+                return
+            }
+            pendingMatchRow = nil
+            let insets = scrollView.contentInsets
+            let contentHeight = scrollView.contentView.bounds.height - insets.top - insets.bottom
+            let target = matchMidY - contentHeight / 2
+            guard abs(target - contentTopY()) > 0.5 else { return }
+            place(row: row, offset: target - blockTopY(row), animated: true)
         }
 
         // MARK: - Scroll offset arithmetic
@@ -1068,11 +1117,18 @@ struct VirtualBlockList: NSViewRepresentable {
         /// and `rootView(for:)` expresses the same `min` as a SwiftUI frame — so
         /// layout width == measurement width by construction, at any clip width.
         private func currentContentWidth() -> CGFloat {
+            let inner = columnInnerWidth()
+            guard inner != 0 else { return 0 }
+            return BlockLayout.Document.columnWidth(inner: inner, cap: layoutStyle.maxContentWidth)
+        }
+
+        /// The room the column has before any cap: the clip's whole points
+        /// minus the horizontal padding on both sides; 0 before the first
+        /// layout.
+        func columnInnerWidth() -> CGFloat {
             let available = quantizedClipWidth()
             guard available > 0 else { return 0 }
-            let inner = available - 2 * Metrics.contentHorizontalPadding
-            guard let cap = layoutStyle.maxContentWidth else { return max(0, inner) }
-            return max(0, floor(min(inner, cap)))
+            return available - 2 * Metrics.contentHorizontalPadding
         }
 
         // MARK: - Layout style (reading mode)
@@ -1183,6 +1239,17 @@ struct VirtualBlockList: NSViewRepresentable {
         func syncWidthIfNeeded(parentValue: CGFloat) {
             isWired = true
             syncColumnWidth()
+            if reportedContentWidth > 0, parentValue > 0, pendingPublishes == 0,
+               abs(parentValue - reportedContentWidth) >= 1 {
+                // The parent measured a parse at a width it worked out itself
+                // (a zoom in reading mode, `BlockLayout.Document.parseWidth`):
+                // that is the width its table has now. Take it as reported, and
+                // report the real column if the window moved meanwhile.
+                reportedContentWidth = parentValue
+                let width = currentContentWidth()
+                if width > 0, abs(width - parentValue) >= 1 { scheduleWidthReport() }
+                return
+            }
             guard reportedContentWidth == 0 else { return }
             let width = currentContentWidth()
             guard width > 0, !isLiveResizing else { return }
@@ -1227,7 +1294,11 @@ struct VirtualBlockList: NSViewRepresentable {
             listLog.debug("contentWidth: \(width, format: .fixed(precision: 1))")
             #endif
             // Never inside an AppKit layout pass — SwiftUI state, one turn later.
-            DispatchQueue.main.async { [weak self] in self?.setContentWidth(width) }
+            pendingPublishes += 1
+            DispatchQueue.main.async { [weak self] in
+                self?.setContentWidth(width)
+                self?.pendingPublishes -= 1
+            }
         }
 
         // MARK: - Cell content
@@ -2183,6 +2254,9 @@ final class SelectionController: NSObject {
         /// The row's text view, when the point maps through one.
         let textView: SelfSizingTextView?
         let pointInTextView: NSPoint?
+        /// In the space between two blocks: `point` is the end of the row above
+        /// (upper half) or the start of the row below (lower half).
+        var inGap = false
     }
 
     /// Maps a window point to a document position THROUGH THE TABLE: row under
@@ -2221,8 +2295,9 @@ final class SelectionController: NSObject {
         let spacing = spacingAbove(row)
         if row > 0, RowGeometry.belongsToPreviousRow(y: point.y, rowRect: rowRect, spacingAbove: spacing) {
             return Hit(point: SelectionPoint(row: row - 1, offset: rowLength(row - 1)), isAtomic: false,
-                       textView: nil, pointInTextView: nil)
+                       textView: nil, pointInTextView: nil, inGap: true)
         }
+        let inGap = row > 0 && point.y < RowGeometry.topTarget(rowRect: rowRect, spacingAbove: spacing)
         let block = blocks[row]
         let upperHalf = RowGeometry.isInUpperHalf(y: point.y, rowRect: rowRect, spacingAbove: spacing)
         if SelectionRows.isAtomic(block) {
@@ -2231,7 +2306,7 @@ final class SelectionController: NSObject {
             // middle, and so does dragging UP — symmetrical, like a very tall
             // character.
             return Hit(point: SelectionPoint(row: row, offset: upperHalf ? 0 : 1),
-                       isAtomic: true, textView: nil, pointInTextView: nil)
+                       isAtomic: true, textView: nil, pointInTextView: nil, inGap: inGap)
         }
 
         if let textView = registeredTextView(for: block.id, in: tableView) {
@@ -2241,13 +2316,55 @@ final class SelectionController: NSObject {
                                                  isTable: textView is TableTextView,
                                                  characterIndex: textView.selectionCharacterIndex(at:))
             return Hit(point: SelectionPoint(row: row, offset: offset), isAtomic: false,
-                       textView: textView, pointInTextView: local)
+                       textView: textView, pointInTextView: local, inGap: inGap)
         }
 
         // A text-kind row with no registered text view to ask (not yet
         // registered): its whole string, by half.
         return Hit(point: SelectionPoint(row: row, offset: upperHalf ? 0 : rowLength(row)),
-                   isAtomic: false, textView: nil, pointInTextView: nil)
+                   isAtomic: false, textView: nil, pointInTextView: nil, inGap: inGap)
+    }
+
+    /// What a double- (word) or triple-click (paragraph; in a table, the
+    /// cell) selects, from where it was pressed. In the space between two
+    /// blocks it acts where a single click there lands (`hit`): the end of
+    /// the row above (upper half) or the start of the row below (lower half)
+    /// — the last or the first word, as a text view selects the word next to
+    /// its insertion point — and a neighbouring image, diagram or formula
+    /// whole. Nil when there is nothing to select (no text view to ask).
+    private func multiClickUnit(for start: Hit, clickCount: Int,
+                                in tableView: NSTableView) -> (start: SelectionPoint, end: SelectionPoint)? {
+        let granularity: NSSelectionGranularity = clickCount == 2 ? .selectByWord : .selectByParagraph
+        let row = start.point.row
+        guard row >= 0, row < blocks.count else { return nil }
+        if start.inGap {
+            if SelectionRows.isAtomic(blocks[row]) {
+                return (SelectionPoint(row: row, offset: 0), SelectionPoint(row: row, offset: 1))
+            }
+            guard let textView = registeredTextView(for: blocks[row].id, in: tableView),
+                  let storage = textView.textStorage,
+                  let index = SelectionRows.multiClickIndex(atRowBoundary: start.point.offset,
+                                                            in: storage.string as NSString) else { return nil }
+            let range = textView.selectionRange(forProposedRange: NSRange(location: index, length: 0),
+                                                granularity: granularity)
+            return (SelectionPoint(row: row, offset: range.location),
+                    SelectionPoint(row: row, offset: NSMaxRange(range)))
+        }
+        // Double-click = word, triple-click = paragraph, in that row — in a
+        // table the cell (one paragraph per cell, TS-D7). The character is
+        // checked against the hook's answer (`start`), so a click in a cell's
+        // padding is about that cell, not TextKit's nearest glyph.
+        guard let textView = start.textView, let local = start.pointInTextView,
+              let index = textView.multiClickCharacterIndex(at: local, insertion: start.point.offset,
+                                                            inTableCell: textView is TableTextView) else { return nil }
+        let range = textView.selectionRange(forProposedRange: NSRange(location: index, length: 0),
+                                            granularity: granularity)
+        return (SelectionPoint(row: row, offset: range.location), SelectionPoint(row: row, offset: NSMaxRange(range)))
+    }
+
+    /// The text view of `blockId`'s row, if it is on display in `tableView`.
+    func displayedTextView(for blockId: String, in tableView: NSTableView) -> SelfSizingTextView? {
+        registeredTextView(for: blockId, in: tableView)
     }
 
     /// The registered view for `blockId` — if it is really on display in THIS
@@ -2297,19 +2414,7 @@ final class SelectionController: NSObject {
             anchor = existing.anchor
             anchorIsAtomic = false
             setSelection(DocumentSelection(anchor: anchor, focus: start.point))
-        } else if clickCount >= 2, let textView = start.textView, let local = start.pointInTextView,
-                  let index = textView.multiClickCharacterIndex(at: local, insertion: start.point.offset,
-                                                                inTableCell: textView is TableTextView) {
-            // Double-click = word, triple-click = paragraph, in that row — in
-            // a table the cell (one paragraph per cell, TS-D7). The character
-            // is checked against the hook's answer (`start`), so a click in a
-            // cell's padding is about that cell, not TextKit's nearest glyph.
-            let granularity: NSSelectionGranularity = clickCount == 2 ? .selectByWord : .selectByParagraph
-            let range = textView.selectionRange(forProposedRange: NSRange(location: index, length: 0),
-                                                granularity: granularity)
-            let row = start.point.row
-            let selected = (start: SelectionPoint(row: row, offset: range.location),
-                            end: SelectionPoint(row: row, offset: NSMaxRange(range)))
+        } else if clickCount >= 2, let selected = multiClickUnit(for: start, clickCount: clickCount, in: tableView) {
             unit = selected
             setSelection(DocumentSelection(anchor: selected.start, focus: selected.end))
         } else {

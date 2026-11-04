@@ -189,7 +189,7 @@ enum SectionExtractor {
         guard end > start else { return nil }
 
         var section = Array(lines[start..<end])
-        while let last = section.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+        while let last = section.last, MarkdownRenderer.isBlankLine(last) {
             section.removeLast()
         }
         return section.joined(separator: "\n")

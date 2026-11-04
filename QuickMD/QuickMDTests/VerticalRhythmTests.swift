@@ -112,6 +112,34 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(blocks.map(\.sourceLine), [0, 4])
     }
 
+    /// CommonMark: a blank line is nothing but spaces and tabs. A line of
+    /// no-break spaces (U+00A0) is text — `CharacterSet.whitespaces` counted
+    /// it blank. After text it continues the paragraph; alone it is a
+    /// paragraph of its own, one empty-looking line (GitHub: `<p>&nbsp;</p>`).
+    /// It ends no block and separates none.
+    func testALineOfNoBreakSpacesIsTextNotABlankLine() {
+        let nbsp = "\u{00A0}"
+        let continued = parse("Para one\n\(nbsp)\nPara two")
+        XCTAssertEqual(continued.count, 1)
+        XCTAssertEqual(plain(continued[0]), "Para one \(nbsp) Para two")
+        let alone = parse("Para one\n\n\(nbsp)\(nbsp)\n\nPara two")
+        XCTAssertEqual(alone.map(plain), ["Para one", "\(nbsp)\(nbsp)", "Para two"])
+        XCTAssertEqual(measure(alone).table.heights[1], measure(alone).table.heights[0], "one line")
+        // No separator in a list: one tight list.
+        XCTAssertEqual(parse("- a\n\(nbsp)\n- b").count, 1)
+        // A quote body: one paragraph.
+        guard case .blockquote(let body, _) = parse("> a\n> \(nbsp)\n> b")[0].content else {
+            return XCTFail("not a quote")
+        }
+        XCTAssertEqual(String(MarkdownRenderer(theme: theme).renderQuotedBody(body).characters), "a \(nbsp) b")
+        // Spaces and tabs are still a blank line.
+        XCTAssertEqual(parse("Para one\n \t \nPara two").count, 2)
+        XCTAssertTrue(MarkdownRenderer.isBlankLine(" \t "))
+        XCTAssertTrue(MarkdownRenderer.isBlankLine(""))
+        XCTAssertFalse(MarkdownRenderer.isBlankLine(nbsp))
+        XCTAssertFalse(MarkdownRenderer.isBlankLine(" \(nbsp)\t"))
+    }
+
     func testRowsAreCommonMarkBlocks() {
         let blocks = parse("Intro line one\nintro line two.\n- item a\n- item b\n\nOutro.\n***\nAfter the rule.")
         XCTAssertEqual(blocks.map(plain).count, 5, "\(blocks.map(plain))")
@@ -119,21 +147,29 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertTrue(blocks.allSatisfy { !$0.joinsPrevious })
     }
 
-    /// CommonMark: only a bullet, or an ordered item numbered 1, interrupts a
-    /// paragraph. `1984. …` after paragraph text continues the paragraph —
-    /// drawn as an item as before, but no new row and no gap.
+    /// CommonMark: only a bullet, or an ordered item numbered 1 (`1.` or
+    /// `1)`), interrupts a paragraph. `1984. …` after paragraph text continues
+    /// the paragraph — its text, in its row, with no gap.
     func testOnlyAnItemThatMayInterruptAParagraphStartsARow() {
-        for line in ["- item", "* item", "+ item", "- [ ] task", "1. first"] {
+        for line in ["- item", "* item", "+ item", "- [ ] task", "1. first", "1) first"] {
             XCTAssertEqual(parse("Paragraph text.\n" + line).count, 2, line)
         }
-        for line in ["1984. A year", "2. second", "-", "1."] {
+        for line in ["1984. A year", "2. second", "2) second", "-", "1."] {
             XCTAssertEqual(parse("Paragraph text.\n" + line).count, 1, line)
         }
-        // Still drawn on its own line, as an item.
-        let year = plain(parse("Paragraph text.\n1984. A year\n1985. Another")[0])
-        XCTAssertTrue(year.contains("\n1984.") && year.contains("\n1985."), year)
-        // A list that starts a row is still a list, whatever its number.
+        // CommonMark: the rest of the paragraph, drawn as its text — no item
+        // marker, no line of its own — and searched and copied as such.
+        let blocks = parse("Paragraph text.\n1984. A year\n1985) Another")
+        XCTAssertEqual(plain(blocks[0]), "Paragraph text. 1984. A year 1985) Another")
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "text. 1984. A year 1985)").matchBlockIds.count, 1)
+        // After a hard break: a line of its own, still text.
+        XCTAssertEqual(plain(parse("Paragraph text.  \n1984. A year")[0]), "Paragraph text.\n1984. A year")
+        // A list that starts a row is still a list, whatever its number or
+        // delimiter (drawn `n.`, as GitHub draws both).
         XCTAssertEqual(parse("Text.\n\n3. third\n4. fourth").count, 2)
+        XCTAssertTrue(plain(parse("1984) A year")[0]).hasPrefix("1984. A year"), plain(parse("1984) A year")[0]))
+        // Inside a list, an item of any number is the next item.
+        XCTAssertTrue(plain(parse("1. one\n1984. two")[0]).contains("\n1984. two"))
     }
 
     // MARK: - Headings
@@ -381,6 +417,99 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(headIndents.first, tightIndent)
     }
 
+    /// The paragraph head indent of every ordered item in the text rows, in
+    /// reading order — where each item's text starts.
+    private func orderedItemIndents(_ blocks: [MarkdownBlock]) throws -> [CGFloat] {
+        var indents: [CGFloat] = []
+        for block in blocks {
+            guard case .text(let attributed) = block.content else { continue }
+            let string = try NSAttributedString(attributed, including: \.appKit)
+            let text = string.string as NSString
+            text.enumerateSubstrings(in: NSRange(location: 0, length: text.length), options: .byParagraphs) {
+                paragraph, range, _, _ in
+                guard let paragraph, paragraph.range(of: #"^\s*\d+\.\s"#, options: .regularExpression) != nil
+                else { return }
+                let style = string.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+                indents.append((style as? NSParagraphStyle)?.headIndent ?? -1)
+            }
+        }
+        return indents
+    }
+
+    /// A list longer than a text row may be (`textChunkLineLimit`) is cut into
+    /// rows; 1.14.4 measured the widest marker per ROW, so items 1–8 above
+    /// the cut hung under "8. " and items 9–12 below it under "12. " — two
+    /// text edges in one list. The widest marker is the LIST's.
+    func testAnOrderedListCutIntoRowsKeepsOneTextEdge() throws {
+        let items = (1...12).map { n in
+            "\(n). item \(n)\n   - sub a\n   - sub b\n   - sub c"
+        }
+        let blocks = parse(items.joined(separator: "\n"))
+        XCTAssertEqual(blocks.count, 2)
+        XCTAssertEqual(blocks.map(\.joinsPrevious), [false, true])
+        let indents = try orderedItemIndents(blocks)
+        XCTAssertEqual(indents.count, 12)
+        XCTAssertEqual(Set(indents).count, 1, "\(indents)")
+    }
+
+    /// The steps of a list whose items each hold a code block: every step is
+    /// a row of its own between two code blocks, and 1.14.4 hung each under
+    /// its OWN number — the digits are proportional, so "1. " to "9. " each
+    /// started the text at a different x and "10. " further right still.
+    func testOrderedStepsWithCodeBlocksKeepOneTextEdge() throws {
+        let steps = (1...11).map { "\($0). Step \($0)\n   ```sh\n   run \($0)\n   ```" }
+        let blocks = parse(steps.joined(separator: "\n"))
+        XCTAssertEqual(blocks.filter { if case .codeBlock = $0.content { return true }; return false }.count, 11)
+        let indents = try orderedItemIndents(blocks)
+        XCTAssertEqual(indents.count, 11)
+        XCTAssertEqual(Set(indents).count, 1, "\(indents)")
+
+        // A block NOT under the list (not indented) ends it: the list after
+        // it hangs on its own.
+        let separate = try orderedItemIndents(parse("1. a\n2. b\n\n```\ncode\n```\n\n10. c"))
+        XCTAssertEqual(separate.count, 3)
+        XCTAssertEqual(separate[0], separate[1])
+        XCTAssertNotEqual(separate[1], separate[2])
+    }
+
+    // MARK: - Anchor signatures
+
+    /// The scroll anchor is found again after a reload by the block's content
+    /// (`anchorSignature`). A table's was its row count and header: every
+    /// header-less table (blank header cells) and the front-matter properties
+    /// table (no header) of the same length had the same one, so a reload
+    /// could put the reader on the wrong table.
+    func testHeaderlessTablesAndFrontMatterHaveDistinctAnchorSignatures() {
+        let markdown = """
+        ---
+        title: Notes
+        author: Ann
+        ---
+
+        | | |
+        |---|---|
+        | alpha | 1 |
+        | beta | 2 |
+
+        Between.
+
+        | | |
+        |---|---|
+        | gamma | 3 |
+        | delta | 4 |
+        """
+        let tables = parse(markdown).filter { if case .table = $0.content { return true }; return false }
+        XCTAssertEqual(tables.count, 3)
+        XCTAssertEqual(Set(tables.map(\.anchorSignature)).count, 3, "\(tables.map(\.anchorSignature))")
+        // Stable across a re-parse, and still distinctive with an edit above.
+        let again = parse("Edited above.\n\n" + markdown)
+            .filter { if case .table = $0.content { return true }; return false }
+        XCTAssertEqual(again.map(\.anchorSignature).suffix(2), tables.map(\.anchorSignature).suffix(2))
+        // A table with a header keeps it in front.
+        let headed = parse("| Name | Value |\n|---|---|\n| a | 1 |")[0]
+        XCTAssertTrue(headed.anchorSignature.hasPrefix("b|1|Name\u{1F}Value\u{1F}a"), headed.anchorSignature)
+    }
+
     // MARK: - Partial re-measures carry the column
 
     @MainActor
@@ -428,6 +557,47 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertFalse(RowGeometry.isInUpperHalf(y: 140, rowRect: row, spacingAbove: 20))
     }
 
+    /// ⌘G into a block taller than the window (a big table, a long code
+    /// block) used to centre the BLOCK: a match near its end stayed below the
+    /// window. The match is what is centred now; a block that fits is still
+    /// centred as a whole, and a step within it does not move it.
+    func testASearchJumpIntoABlockTallerThanTheWindowCentresTheMatch() throws {
+        let visible: CGFloat = 800
+        let tall = NSRect(x: 0, y: 1000, width: 600, height: 3016)   // block 1016...4016
+        let matchMidY: CGFloat = 3700
+
+        let jump = try XCTUnwrap(RowGeometry.searchTarget(rowRect: tall, spacingAbove: 16, visibleHeight: visible,
+                                                          matchMidY: matchMidY))
+        XCTAssertEqual(jump.target, 3300)
+        XCTAssertFalse(jump.needsMatch)
+        XCTAssertTrue((jump.target...(jump.target + visible)).contains(matchMidY))
+        // The old target (the block's middle) left that match off screen.
+        let blockCentre = RowGeometry.centerTarget(rowRect: tall, spacingAbove: 16, visibleHeight: visible)
+        XCTAssertFalse((blockCentre...(blockCentre + visible)).contains(matchMidY))
+
+        // Stepping to another match of the same tall block moves to it.
+        let step = try XCTUnwrap(RowGeometry.searchTarget(rowRect: tall, spacingAbove: 16, visibleHeight: visible,
+                                                          matchMidY: 1900, withinBlock: true))
+        XCTAssertEqual(step.target, 1500)
+
+        // The match not known yet (the block's view is not on display): the
+        // block first, then the match when it lands.
+        let blind = try XCTUnwrap(RowGeometry.searchTarget(rowRect: tall, spacingAbove: 16, visibleHeight: visible,
+                                                           matchMidY: nil))
+        XCTAssertEqual(blind.target, blockCentre)
+        XCTAssertTrue(blind.needsMatch)
+
+        // A block that fits: centred as before, the match ignored; a step
+        // within it does not scroll.
+        let short = NSRect(x: 0, y: 100, width: 500, height: 60)
+        let fits = try XCTUnwrap(RowGeometry.searchTarget(rowRect: short, spacingAbove: 20, visibleHeight: 400,
+                                                          matchMidY: 150))
+        XCTAssertEqual(fits.target, -60)
+        XCTAssertFalse(fits.needsMatch)
+        XCTAssertNil(RowGeometry.searchTarget(rowRect: short, spacingAbove: 20, visibleHeight: 400,
+                                              matchMidY: 150, withinBlock: true))
+    }
+
     // MARK: - Scroll anchor across layouts (Reading Mode, width, zoom, jumps)
 
     /// `VirtualBlockList.Coordinator`'s scrolling over a model column, step by
@@ -473,6 +643,9 @@ final class VerticalRhythmTests: XCTestCase {
         /// The style toggle pins the anchor until the install (false: the
         /// rules of 4f67351, sticky anchor without the pin).
         var pinsLayoutSwitch = true
+        /// Height reports that changed a row (`reportHeight` past its 0.5 pt
+        /// threshold): every one is a swing of the table.
+        var reports = 0
 
         var rects: [NSRect] {
             var y: CGFloat = 0
@@ -522,6 +695,7 @@ final class VerticalRhythmTests: XCTestCase {
             anchor = (row, offset, placed)
         }
         mutating func report(_ row: Int) {
+            reports += 1
             let top = contentTop
             let delta = rows[row].real - rows[row].height
             let blockTop = blockTop(row)
@@ -691,33 +865,236 @@ final class VerticalRhythmTests: XCTestCase {
         return rows
     }
 
-    /// A diagram placed at one zoom starts at another zoom at its height
-    /// there, scaled (fixture.md's diagram: 70 pt at 100 %, reported 77 and
-    /// 87.5 at 110 and 125 %), not at the 200 pt default; never placed, at the
-    /// default; and this block's own last height at this zoom still wins.
-    func testADiagramPlacedAtOneZoomStartsAnotherZoomScaled() throws {
-        let blocks = parse("```mermaid\nflowchart LR\n  A[Start] --> B[End]\n```")
-        guard case .mermaidDiagram(let source) = blocks[0].content else { return XCTFail("not a diagram") }
-        let chrome = 2 * BlockLayout.Mermaid.verticalPadding + 2 * BlockLayout.Document.mermaidOuterVerticalPadding
-        let cache = BlockHeightCache()
-        cache.setDiagramHeight(70, source: source, isDark: theme.isDark, fontScale: 1)
-        cache.removeAll()   // the re-parse of a zoom step
-        for (scale, diagram) in [(1.1, 77.0), (1.25, 87.5), (0.9, 63.0)] as [(CGFloat, CGFloat)] {
-            let measured = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: scale,
-                                                       contentWidth: 819, reportedHeights: cache.reportedSnapshot,
-                                                       math: math)
-            XCTAssertEqual(measured.table.heights[0], diagram + chrome, accuracy: 0.001, "at \(scale)")
-            XCTAssertEqual(ReportedHeights.diagramHeight(source: source, isDark: theme.isDark, fontScale: scale,
-                                                         in: cache.reportedSnapshot) ?? 0,
-                           diagram, accuracy: 0.001)
+    // MARK: - Pictures and diagrams shown once are measured exactly
+
+    /// The fixture's picture rows as the GUI reported them (debug logs of the
+    /// zoom and Reading Mode round trips): the 1024 px icon with its "QuickMD
+    /// icon" caption, and the "Start → End" flowchart — by width and zoom.
+    private let guiPictureRows: [(width: CGFloat, scale: CGFloat, image: CGFloat, diagram: CGFloat)] = [
+        (819, 1.0, 655, 94), (819, 1.1, 716, 101), (819, 1.25, 809, 111.5), (720, 1.0, 655, 94),
+    ]
+    private let fixtureDiagram = "flowchart LR\n  A[Start] --> B[End]"
+
+    /// Once the icon has been shown (its size known) and the diagram has
+    /// rendered (its geometry known), the measurer gives exactly the rows the
+    /// views reported in the GUI, at every width and zoom of the round trips —
+    /// so no re-measure sends them back to the 116 / 224 pt placeholders and no
+    /// view reports. Before the icon is known, the row is the loading view,
+    /// 155 — also what the GUI reported.
+    func testPicturesShownOnceAreMeasuredAsTheirViewsReportThem() throws {
+        let blocks = parse("![QuickMD icon](icon.png)\n\n```mermaid\n\(fixtureDiagram)\n```")
+        guard case .mermaidDiagram(let source) = blocks[1].content else { return XCTFail("not a diagram") }
+        MermaidGeometryStore.set(.init(naturalWidth: 240, naturalHeight: 70, overhead: 0),
+                                 source: source, isDark: theme.isDark)
+        let sizes: [NSString: CGSize] = ["icon.png": CGSize(width: 1024, height: 1024)]
+        for row in guiPictureRows {
+            let measured = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: row.scale,
+                                                       contentWidth: row.width, imageSizes: sizes, math: math)
+            XCTAssertEqual(measured.table.heights[0], row.image, "image at \(row.width) × \(row.scale)")
+            XCTAssertEqual(measured.table.heights[1], row.diagram, accuracy: 0.001,
+                           "diagram at \(row.width) × \(row.scale)")
         }
-        let unplaced = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1.25,
-                                                   contentWidth: 819, math: math)
-        XCTAssertEqual(unplaced.table.heights[0], BlockLayout.Mermaid.defaultHeight + chrome)
-        let ownSeed = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1.25, contentWidth: 720,
-                                                  heightSeeds: [blocks[0].id: 80],
-                                                  reportedHeights: cache.reportedSnapshot, math: math)
-        XCTAssertEqual(ownSeed.table.heights[0], 80 + chrome)
+        let unknown = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1, contentWidth: 819,
+                                                  math: math)
+        XCTAssertEqual(unknown.table.heights[0], 155)
+        // The cache keeps image sizes across a re-parse.
+        let cache = BlockHeightCache()
+        cache.setImageSize(CGSize(width: 1024, height: 1024), for: "icon.png")
+        cache.set(70, for: blocks[1].id)
+        cache.removeAll()
+        XCTAssertNil(cache.height(for: blocks[1].id))
+        XCTAssertEqual(cache.imageSizesSnapshot["icon.png"], CGSize(width: 1024, height: 1024))
+    }
+
+    /// The picture rule the views frame the picture with: the 600 pt cap ×
+    /// zoom within the column, never past the picture's own width × zoom or
+    /// an HTML width, at its aspect ratio, whole points.
+    func testAPictureIsDrawnAtTheSizeTheMeasurerUses() {
+        typealias Image = BlockLayout.ImageBlock
+        let icon = CGSize(width: 1024, height: 1024)
+        XCTAssertEqual(Image.pictureSize(imageSize: icon, htmlWidth: nil, fontScale: 1, contentWidth: 819),
+                       CGSize(width: 600, height: 600))
+        XCTAssertEqual(Image.pictureSize(imageSize: icon, htmlWidth: nil, fontScale: 1.25, contentWidth: 819),
+                       CGSize(width: 750, height: 750))
+        XCTAssertEqual(Image.pictureSize(imageSize: icon, htmlWidth: nil, fontScale: 1.5, contentWidth: 819),
+                       CGSize(width: 819, height: 819))
+        XCTAssertEqual(Image.pictureSize(imageSize: CGSize(width: 90, height: 30), htmlWidth: nil, fontScale: 1.5,
+                                         contentWidth: 819), CGSize(width: 135, height: 45))
+        XCTAssertEqual(Image.pictureSize(imageSize: CGSize(width: 1000, height: 333), htmlWidth: nil, fontScale: 1,
+                                         contentWidth: 819).height, 200)   // 199.8
+        let html = Image.pictureSize(imageSize: icon, htmlWidth: .points(200), fontScale: 1.1, contentWidth: 819)
+        XCTAssertEqual(html.width, 220, accuracy: 0.001)
+        XCTAssertEqual(html.height, 220)
+        XCTAssertEqual(Image.pictureSize(imageSize: icon, htmlWidth: .fraction(0.5), fontScale: 1,
+                                         contentWidth: 819), CGSize(width: 300, height: 300))
+    }
+
+    /// The caption as the row reporter sees it — `ImageCaption` hosted in a
+    /// window, its `GeometryReader` height — is the measurer's
+    /// `captionHeight`, at the zoom ladder, three widths and a caption that
+    /// wraps.
+    func testTheCaptionIsAsTallAsTheMeasurerSays() {
+        final class Box { var height: CGFloat = -1 }
+        struct Probe: View {
+            let caption: ImageCaption
+            let box: Box
+            var body: some View {
+                VStack(alignment: .leading, spacing: 0) { caption }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background(GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { box.height = proxy.size.height }
+                            .onChange(of: proxy.size.height) { box.height = $0 }
+                    })
+            }
+        }
+        let captions = ["QuickMD icon",
+                        String(repeating: "A longer caption that wraps onto several lines in a narrow column. ",
+                               count: 4)]
+        for scale: CGFloat in [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 3] {
+            for width: CGFloat in [819, 720, 300] {
+                for alt in captions {
+                    let box = Box()
+                    let caption = ImageCaption(alt: alt, color: .secondary, fontScale: scale, contentWidth: width)
+                    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 900),
+                                          styleMask: [.titled], backing: .buffered, defer: false)
+                    window.isReleasedWhenClosed = false
+                    let host = NSHostingView(rootView: Probe(caption: caption, box: box))
+                    host.frame = NSRect(x: 0, y: 0, width: width, height: 900)
+                    window.contentView = host
+                    host.layoutSubtreeIfNeeded()
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+                    host.layoutSubtreeIfNeeded()
+                    XCTAssertEqual(box.height,
+                                   BlockLayout.ImageBlock.captionHeight(alt: alt, fontScale: scale, contentWidth: width),
+                                   "\(alt.prefix(12)) at \(width) × \(scale)")
+                    window.close()
+                }
+            }
+        }
+    }
+
+    /// An SVG's size is known from its markup: the measurer decodes it once
+    /// (cached for the view, which then never shows the loading view on a
+    /// re-created row) and sizes the row as the view draws it. Markup that
+    /// does not decode stays at the loading view and reports.
+    func testAnSVGIsMeasuredAtItsDecodedSize() {
+        let markup = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\"><rect width=\"200\" height=\"100\"/></svg>"
+        let blocks = parse("```svg\n\(markup)\n```")
+        guard case .svgImage(let source) = blocks[0].content else { return XCTFail("not an SVG block") }
+        let pad = 2 * BlockLayout.Document.imageOuterVerticalPadding
+        for (scale, width, picture) in [(1.0, 819.0, 100.0), (1.5, 819.0, 150.0), (1.0, 150.0, 75.0)] as [(CGFloat, CGFloat, CGFloat)] {
+            let measured = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: scale,
+                                                       contentWidth: width, math: math)
+            XCTAssertEqual(measured.table.heights[0], picture + pad, "at \(width) × \(scale)")
+        }
+        XCTAssertNotNil(SVGImageDecoder.cachedImage(source))
+        XCTAssertEqual(SVGImageDecoder.cachedSize(source), CGSize(width: 200, height: 100))
+        let broken = parse("```svg\n<svg this is not svg\n```")
+        let measured = BlockHeightMeasurer.measure(blocks: broken, theme: theme, fontScale: 1, contentWidth: 819,
+                                                   math: math)
+        XCTAssertEqual(measured.table.heights[0], BlockLayout.ImageBlock.placeholderHeight + pad)
+    }
+
+    /// A diagram's height at any width and zoom from the geometry its web view
+    /// posted — the template's own formula: × zoom while it fits, never wider
+    /// than the view, plus the page's overhead. No floor (1.14.4 had 50 pt).
+    func testADiagramsHeightFollowsTheTemplatesFormula() {
+        typealias Mermaid = BlockLayout.Mermaid
+        let small = Mermaid.Geometry(naturalWidth: 240, naturalHeight: 70, overhead: 0)
+        XCTAssertEqual(Mermaid.diagramHeight(small, fontScale: 1.25, contentWidth: 819), 87.5)
+        XCTAssertEqual(Mermaid.diagramHeight(small, fontScale: 0.5, contentWidth: 819), 35)
+        // A flat diagram in a narrow column: fitted to 120 of 480 px.
+        let flat = Mermaid.Geometry(naturalWidth: 480, naturalHeight: 100, overhead: 0)
+        XCTAssertEqual(Mermaid.diagramHeight(flat, fontScale: 1, contentWidth: 120), 25)
+        let wide = Mermaid.Geometry(naturalWidth: 1600, naturalHeight: 400, overhead: 4)
+        XCTAssertEqual(Mermaid.diagramHeight(wide, fontScale: 1, contentWidth: 800), 204)     // fitted: 0.5
+        XCTAssertEqual(Mermaid.diagramHeight(wide, fontScale: 1.5, contentWidth: 800), 204)   // still fitted
+        XCTAssertEqual(Mermaid.diagramHeight(wide, fontScale: 0.5, contentWidth: 800), 104)   // 0.5 × fitted
+        XCTAssertEqual(Mermaid.diagramHeight(wide, fontScale: 1, contentWidth: 800.7), 204)   // innerWidth: whole px
+        // Never rendered: the measurer's default, and nothing in the store.
+        XCTAssertNil(MermaidGeometryStore.geometry(source: "graph TD; Never-->Rendered", isDark: false))
+    }
+
+    /// What the row takes from the height the web view reports: a diagram
+    /// that rendered is as tall as it is — the 25 pt flat one stayed 50 pt
+    /// tall in 1.14.4, 25 pt of it blank, and the measurer (exact since the
+    /// placeholder fix) and the view disagreed. A failed render (Mermaid's
+    /// error text) keeps a minimum; a report of nothing is not taken.
+    func testARenderedDiagramTakesItsReportedHeightExactly() {
+        typealias Mermaid = BlockLayout.Mermaid
+        XCTAssertEqual(Mermaid.acceptedHeight(reported: 25, rendered: true), 25)
+        XCTAssertEqual(Mermaid.acceptedHeight(reported: 87.5, rendered: true), 87.5)
+        XCTAssertNil(Mermaid.acceptedHeight(reported: 0, rendered: true))
+        XCTAssertNil(Mermaid.acceptedHeight(reported: .nan, rendered: true))
+        XCTAssertEqual(Mermaid.acceptedHeight(reported: 31, rendered: false), Mermaid.failedRenderMinimumHeight)
+        XCTAssertEqual(Mermaid.acceptedHeight(reported: 0, rendered: false), Mermaid.failedRenderMinimumHeight)
+        XCTAssertEqual(Mermaid.acceptedHeight(reported: 120, rendered: false), 120)
+        // The view and the measurer agree on a flat diagram.
+        let flat = Mermaid.Geometry(naturalWidth: 480, naturalHeight: 100, overhead: 0)
+        XCTAssertEqual(Mermaid.acceptedHeight(reported: 25, rendered: true),
+                       Mermaid.diagramHeight(flat, fontScale: 1, contentWidth: 120))
+    }
+
+    /// A diagram view without a snapshot at its zoom and width finds the
+    /// latest one of the same diagram in the same theme as its stand-in, so a
+    /// re-created row never shows the empty box the web view is for the half
+    /// second it takes to render (seen while recording). Another diagram, or
+    /// the other theme, has none; the exact key and the PDF exporter's key
+    /// are untouched.
+    func testADiagramWithoutASnapshotOfItsOwnFindsTheLatestOneAsAStandIn() {
+        let diagram = "flowchart LR\n  Stand-->In"
+        let image = NSImage(size: NSSize(width: 240, height: 70))
+        MermaidSnapshotStore.set(image, source: "1.0|819.0|\(diagram)", isDark: false)
+        MermaidSnapshotStore.setLatest(image, diagram: diagram, isDark: false)
+        XCTAssertNil(MermaidSnapshotStore.image(source: "1.25|819.0|\(diagram)", isDark: false))
+        XCTAssertTrue(MermaidSnapshotStore.latest(diagram: diagram, isDark: false) === image)
+        XCTAssertNil(MermaidSnapshotStore.latest(diagram: diagram, isDark: true))
+        XCTAssertNil(MermaidSnapshotStore.latest(diagram: "flowchart LR\n  Other-->Diagram", isDark: false))
+        XCTAssertNil(MermaidSnapshotStore.image(source: diagram, isDark: false))
+        XCTAssertTrue(MermaidSnapshotStore.image(source: "1.0|819.0|\(diagram)", isDark: false) === image)
+    }
+
+    /// The zoom round trip and the Reading Mode round trip with the reader in
+    /// the image, the rows as the measurer now gives them: no height report at
+    /// all (the table never swings) and the reader back on the very point. The
+    /// control, with the 116 / 224 pt placeholders every re-measure used to
+    /// start from, reports on every step.
+    func testRoundTripsWithPicturesShownOnceNeverSwingTheTable() throws {
+        let blocks = parse("![QuickMD icon](icon.png)\n\n```mermaid\n\(fixtureDiagram)\n```")
+        guard case .mermaidDiagram(let source) = blocks[1].content else { return XCTFail("not a diagram") }
+        MermaidGeometryStore.set(.init(naturalWidth: 240, naturalHeight: 70, overhead: 0),
+                                 source: source, isDark: theme.isDark)
+        let sizes: [NSString: CGSize] = ["icon.png": CGSize(width: 1024, height: 1024)]
+        func rows(width: CGFloat, scale: CGFloat, measured: Bool) -> [ListModel.Row] {
+            let gui = guiPictureRows.first { $0.width == width && $0.scale == scale }!
+            let table = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: scale,
+                                                    contentWidth: width, imageSizes: sizes, math: math).table
+            return fixtureRows(scale: scale, wrap: width < 800 ? 2 : 1, imageReal: gui.image,
+                               imageEstimate: measured ? table.heights[0] : 116,
+                               diagram: gui.diagram - 24, diagramEstimate: measured ? table.heights[1] : 224)
+        }
+        for measured in [true, false] {
+            var start = rows(width: 819, scale: 1, measured: true)
+            for index in start.indices { start[index].height = start[index].real }
+            var list = ListModel(rows: start, contentTop: 0)
+            list.contentTop = list.blockTop(image) + 300
+            let top = list.contentTop
+            for scale: CGFloat in [1.1, 1.25, 1.1, 1] {
+                list.install(rows(width: 819, scale: scale, measured: measured))
+            }
+            list.toggleStyle(inset: 48)
+            list.install(rows(width: 720, scale: 1, measured: measured))
+            list.toggleStyle(inset: 24)
+            list.install(rows(width: 819, scale: 1, measured: measured))
+            if measured {
+                XCTAssertEqual(list.reports, 0)
+                XCTAssertEqual(list.contentTop, top, accuracy: 0.001)
+            } else {
+                XCTAssertGreaterThanOrEqual(list.reports, 6)
+            }
+        }
     }
 
     /// The failing GUI run (f1dbg.log), step by step: ⌘F "Second part" and a
@@ -847,6 +1224,68 @@ final class VerticalRhythmTests: XCTestCase {
         }
     }
 
+    // MARK: - Reading column follows the zoom
+
+    /// Reading mode's column is 720 pt at 100 % and scales with the text, in
+    /// whole points; the window still caps it. 1.14.4 kept 720 at every zoom:
+    /// ~45 characters a line at 200 %.
+    func testTheReadingColumnScalesWithTheZoom() {
+        typealias Document = BlockLayout.Document
+        XCTAssertEqual(Document.readingColumnCap(fontScale: 1), 720)
+        XCTAssertEqual(Document.readingColumnCap(fontScale: 2), 1440)
+        XCTAssertEqual(Document.readingColumnCap(fontScale: 0.5), 360)
+        XCTAssertEqual(Document.readingColumnCap(fontScale: 3), 2160)
+        XCTAssertEqual(Document.readingColumnCap(fontScale: 1.1), 792)   // 792.0000000000001
+        // 200 %: the full 1440 where the window has room, the window otherwise.
+        XCTAssertEqual(Document.columnWidth(inner: 1600 - 64, cap: Document.readingColumnCap(fontScale: 2)), 1440)
+        XCTAssertEqual(Document.columnWidth(inner: 1000 - 64, cap: Document.readingColumnCap(fontScale: 2)), 936)
+        XCTAssertEqual(Document.columnWidth(inner: 1000 - 64, cap: Document.readingColumnCap(fontScale: 1)), 720)
+        XCTAssertEqual(Document.columnWidth(inner: 935.5, cap: nil), 935.5)
+        XCTAssertEqual(Document.columnWidth(inner: -10, cap: 720), 0)
+    }
+
+    /// A zoom in reading mode re-parses; the parse is measured at the column
+    /// the zoom's cap gives — the width the list publishes once the parse is
+    /// installed with that cap — so the zoomed text is laid out at the width
+    /// its heights were measured at, measured once per zoom.
+    func testAZoomInReadingModeMeasuresItsParseAtTheNewColumn() {
+        typealias Document = BlockLayout.Document
+        let blocks = parse(String(repeating: "A line of prose that wraps in every column it is given. ", count: 12))
+        for inner: CGFloat in [1600 - 64, 1000 - 64] {
+            for scale: CGFloat in [0.5, 1, 1.5, 2, 3] {
+                let column = Document.columnWidth(inner: inner, cap: Document.readingColumnCap(fontScale: scale))
+                let width = Document.parseWidth(contentWidth: 720, inner: inner, readingFontScale: scale)
+                XCTAssertEqual(width, column, "inner \(inner) × \(scale)")
+                XCTAssertEqual(measure(blocks, fontScale: scale, width: width).table.contentWidth, column)
+            }
+        }
+        // The standard layout: the list's width, whatever the zoom.
+        XCTAssertEqual(Document.parseWidth(contentWidth: 936, inner: 936, readingFontScale: nil), 936)
+        // No layout yet, or the list not wired: nothing to derive from.
+        XCTAssertEqual(Document.parseWidth(contentWidth: 0, inner: 1536, readingFontScale: 2), 0)
+        XCTAssertEqual(Document.parseWidth(contentWidth: 720, inner: 0, readingFontScale: 2), 720)
+    }
+
+    /// ⌘+ ⌘+ ⌘− ⌘− in reading mode with the viewport top inside the image:
+    /// every zoom is a style change (the cap) AND a new table, in one
+    /// update — the reader comes back to the very same point, as in the
+    /// standard layout.
+    func testAZoomRoundTripInReadingModeKeepsAReaderInsideAnImage() {
+        var rows = fixtureRows(wrap: 2, imageReal: 576)
+        for index in rows.indices { rows[index].height = rows[index].real }   // every view reported
+        var list = ListModel(rows: rows, contentTop: 0)
+        list.inset = 48
+        list.contentTop = list.blockTop(image) + 520   // its bottom 56 pt on screen
+        let start = list.contentTop
+        XCTAssertEqual(list.rowUnderContentTop(), image)
+        for scale: CGFloat in [1.1, 1.25, 1.1, 1] {
+            list.toggleStyle(inset: 48)
+            list.install(fixtureRows(scale: scale, wrap: 2, imageReal: min(655, 576 * scale)))
+            XCTAssertEqual(list.rowUnderContentTop(), image, "× \(scale)")
+        }
+        XCTAssertEqual(list.contentTop, start, accuracy: 0.001)
+    }
+
     /// Reading Mode on and off with the viewport top inside the image (the
     /// debug log: `row 21 + 579.5` on the way in, `row 29 + 0.0` on the way
     /// out). At 720 pt the image is smaller and the short paragraphs wrap.
@@ -930,35 +1369,6 @@ final class VerticalRhythmTests: XCTestCase {
                 XCTAssertGreaterThan(list.offCentre(secondPart), 300)
             }
         }
-    }
-
-    /// A picture or a diagram measured again where it was placed before
-    /// (Reading Mode off, a zoom back) starts at the height it reported
-    /// there, not at the placeholder; elsewhere it still starts at the
-    /// placeholder. Keyed by content, so a re-parse keeps it.
-    func testAReportedPictureHeightSeedsTheNextMeasureAtThatWidth() {
-        let blocks = parse("Text.\n\n![QuickMD icon](icon.png)\n\n```mermaid\ngraph TD; A-->B\n```")
-        let keys = [1, 2].map { ReportedHeights.key(for: blocks[$0], contentWidth: 819, fontScale: 1, theme: theme)! }
-        let seeds = [keys[0]: 655, keys[1]: 94] as [String: CGFloat]
-        let seeded = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1, contentWidth: 819,
-                                                 reportedHeights: seeds, math: math)
-        XCTAssertEqual(seeded.table.heights[1], 655)
-        XCTAssertEqual(seeded.table.heights[2], 94)
-        let elsewhere = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1, contentWidth: 720,
-                                                    reportedHeights: seeds, math: math)
-        XCTAssertEqual(elsewhere.table.heights[1], BlockLayout.ImageBlock.placeholderHeight
-                       + 2 * BlockLayout.Document.imageOuterVerticalPadding)
-        XCTAssertNotEqual(elsewhere.table.heights[2], 94)
-        // Another picture at the same position is another key.
-        XCTAssertNotEqual(ReportedHeights.key(for: parse("Text.\n\n![other](other.png)")[1], contentWidth: 819,
-                                              fontScale: 1, theme: theme), keys[0])
-        // A re-parse forgets the block-id heights, not the reported ones.
-        let cache = BlockHeightCache()
-        cache.set(70, for: "mermaid-2")
-        cache.setReported(655, forKey: keys[0])
-        cache.removeAll()
-        XCTAssertNil(cache.height(for: "mermaid-2"))
-        XCTAssertEqual(cache.reportedSnapshot[keys[0]], 655)
     }
 
     func testAnchorIsRelativeToTheBlockNotTheRowEdge() {

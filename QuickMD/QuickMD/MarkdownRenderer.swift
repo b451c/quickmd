@@ -255,7 +255,7 @@ struct MarkdownRenderer: Sendable {
     /// `renderListItem` will emit it (indent spaces + normalised number).
     private static func orderedItem(_ line: String) -> (prefix: String, level: Int)? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.range(of: #"^(\d+)\.\s"#, options: .regularExpression) != nil else { return nil }
+        guard trimmed.range(of: Self.orderedMarkerPattern, options: .regularExpression) != nil else { return nil }
         let level = listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" }))
         let number = Int(trimmed.prefix(while: { $0.isNumber })) ?? 1
         return (indentSpaces(level) + "\(number). ", level)
@@ -288,12 +288,16 @@ struct MarkdownRenderer: Sendable {
     static func joinSoftBreaksIndexed(_ lines: [String]) -> [(line: String, first: Int)] {
         var joined: [(line: String, first: Int)] = []
         var openParagraph = false  // last joined line can absorb a continuation
+        // Inside a paragraph that is not a list item's, until a blank or
+        // structural line — across hard breaks too.
+        var inPlainParagraph = false
 
         for (index, line) in lines.enumerated() {
             let kind = classify(line)
             guard kind != .structural else {
                 joined.append((line, index))
                 openParagraph = false
+                inPlainParagraph = false
                 continue
             }
 
@@ -302,10 +306,21 @@ struct MarkdownRenderer: Sendable {
             while text.last == " " || text.last == "\t" { text.removeLast() }
             if hardBreak && text.hasSuffix("\\") { text.removeLast() }
 
-            if kind == .paragraph && openParagraph {
-                joined[joined.count - 1].line += " " + text.trimmingCharacters(in: .whitespaces)
+            if kind == .listItem && inPlainParagraph && !canInterruptParagraph(line) {
+                // CommonMark: only a bullet or an ordered item numbered 1 may
+                // interrupt a paragraph. `1984. A year` after paragraph text
+                // is more of that text — drawn, copied and searched as such.
+                if openParagraph {
+                    joined[joined.count - 1].line += " " + continuationText(text)
+                } else {
+                    // After a hard break: its own visual line, still text.
+                    joined.append((asParagraphText(text), index))
+                }
+            } else if kind == .paragraph && openParagraph {
+                joined[joined.count - 1].line += " " + continuationText(text)
             } else {
                 joined.append((text, index))
+                inPlainParagraph = kind == .paragraph
             }
             openParagraph = !hardBreak
         }
@@ -327,15 +342,44 @@ struct MarkdownRenderer: Sendable {
     /// A bullet, ordered or task list item — `renderLine` renders it as one.
     static func isListItem(_ line: String) -> Bool { classify(line) == .listItem }
 
+    /// CommonMark's blank line: nothing but spaces and tabs — the ONE blank
+    /// test of the parser and the renderers. Not "any white space":
+    /// `CharacterSet.whitespaces` is every Unicode space separator, so it
+    /// counted a line of no-break spaces (U+00A0) blank. Such a line is
+    /// paragraph text (how authors write an empty-looking paragraph): after
+    /// text it continues the paragraph, alone it is a paragraph of its own;
+    /// it never ends a block or separates two.
+    static func isBlankLine<S: StringProtocol>(_ line: S) -> Bool {
+        line.allSatisfy { $0 == " " || $0 == "\t" }
+    }
+
+    /// A continuation line's text: CommonMark strips its leading spaces and
+    /// tabs, and nothing else (a no-break space is text).
+    private static func continuationText(_ text: String) -> String {
+        String(text.drop(while: { $0 == " " || $0 == "\t" }))
+    }
+
+    /// An ordered item's marker (CommonMark): one to nine digits, then `.` or
+    /// `)`, then white space. Drawn as `n.` whichever delimiter it had, as
+    /// GitHub draws both (an HTML list).
+    static let orderedMarkerPattern = #"^(\d{1,9})[.)]\s"#
+
+    /// `line` (an ordered item line that may not interrupt a paragraph) as
+    /// paragraph text: its delimiter backslash-escaped, so `renderLine` draws
+    /// `1984. A year` as the words it is and never as an item.
+    static func asParagraphText(_ line: String) -> String {
+        line.replacingOccurrences(of: #"^(\s*\d{1,9})([.)])"#, with: "$1\\\\$2", options: .regularExpression)
+    }
+
     /// Whether this item line may interrupt a paragraph (CommonMark): a
-    /// bullet or task item, or an ordered item numbered 1 — and not an empty
-    /// one. Any other item line after paragraph text (`1984. was a year`)
-    /// continues the paragraph: it is still drawn as an item, but it is no
-    /// block boundary, so the parser does not start a new row there.
+    /// bullet or task item, or an ordered item numbered 1 (`1.` or `1)`) —
+    /// and not an empty one. Any other item line after paragraph text
+    /// (`1984. was a year`) continues the paragraph: `joinSoftBreaks` makes
+    /// it paragraph text, so it is no item and no block boundary.
     static func canInterruptParagraph(_ line: String) -> Bool {
         guard isListItem(line) else { return false }
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if let marker = trimmed.range(of: #"^\d+\."#, options: .regularExpression) {
+        if let marker = trimmed.range(of: #"^\d{1,9}[.)]"#, options: .regularExpression) {
             guard Int(trimmed[marker].dropLast()) == 1 else { return false }
             return !trimmed[marker.upperBound...].trimmingCharacters(in: .whitespaces).isEmpty
         }
@@ -351,14 +395,14 @@ struct MarkdownRenderer: Sendable {
     /// Must mirror the dispatch in `renderLine`, or a structural line could
     /// get glued into the paragraph before it.
     private static func classify(_ line: String) -> LineKind {
+        if isBlankLine(line) { return .structural }
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty { return .structural }
         let nsRange = NSRange(line.startIndex..., in: line)
         if headerRegex.firstMatch(in: line, range: nsRange) != nil { return .structural }
         if trimmed.range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil { return .structural }
         if taskListRegex.firstMatch(in: line, range: nsRange) != nil { return .listItem }
         if ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) { return .listItem }
-        if trimmed.range(of: #"^(\d+)\.\s"#, options: .regularExpression) != nil { return .listItem }
+        if trimmed.range(of: orderedMarkerPattern, options: .regularExpression) != nil { return .listItem }
         return .paragraph
     }
 
@@ -402,7 +446,7 @@ struct MarkdownRenderer: Sendable {
         }
 
         // Ordered list
-        if let match = trimmed.range(of: #"^(\d+)\.\s"#, options: .regularExpression) {
+        if let match = trimmed.range(of: Self.orderedMarkerPattern, options: .regularExpression) {
             let level = Self.listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" }))
             let number = Int(trimmed.prefix(while: { $0.isNumber })) ?? 1
             let content = String(trimmed[match.upperBound...])
@@ -411,7 +455,7 @@ struct MarkdownRenderer: Sendable {
         }
 
         // Empty line
-        if trimmed.isEmpty {
+        if Self.isBlankLine(line) {
             return AttributedString("\n")
         }
 
@@ -457,7 +501,7 @@ struct MarkdownRenderer: Sendable {
         var result = AttributedString()
         let lines = Self.joinSoftBreaks(content.components(separatedBy: "\n"))
         for (index, line) in lines.enumerated() {
-            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+            if Self.isBlankLine(line) {
                 result.append(AttributedString(" "))
             } else {
                 result.append(renderInline(line))

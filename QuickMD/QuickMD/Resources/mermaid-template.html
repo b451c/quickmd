@@ -36,6 +36,21 @@
     resizeDiagram = null;
     container.innerHTML = '';
 
+    // What the height follows from at ANY width and zoom: the natural size and
+    // what the page adds around the SVG. The host computes the same formula as
+    // resizeDiagram (BlockLayout.Mermaid.diagramHeight), so a diagram that has
+    // rendered once never starts at a default height again. Same guard as
+    // reportHeight: hosts without the handler ignore it.
+    function reportGeometry(naturalWidth, naturalHeight, svgHeight) {
+      try {
+        window.webkit.messageHandlers.mermaidGeometry.postMessage({
+          naturalWidth: naturalWidth,
+          naturalHeight: naturalHeight,
+          overhead: container.getBoundingClientRect().height - svgHeight
+        });
+      } catch (e) { /* no handler in this host -- fine */ }
+    }
+
     // Report height back to Swift. The zoom viewer hosts this same template
     // WITHOUT a mermaidHeight handler -- the report must never break rendering
     // (an unguarded postMessage throws, and the catch() below would replace a
@@ -69,6 +84,7 @@
           svg.style.maxWidth = 'none';
           svg.style.width = (naturalWidth * factor) + 'px';
           svg.style.height = (naturalHeight * factor) + 'px';
+          if (!fitWindow) reportGeometry(naturalWidth, naturalHeight, naturalHeight * factor);
         }
         reportHeight();
       };
