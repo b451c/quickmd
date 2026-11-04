@@ -28,8 +28,12 @@ enum FrontMatter {
     /// - `key:` followed by `- item` lines (indented or at column 0, one
     ///   indentation per list) → the items joined with ", "; `key:` alone → "".
     /// - `key: [a, b, "c, d"]` → "a, b, c, d"; `[]` → "".
-    /// - `"…"` unescapes only `\"` and `\\`; `'…'` turns `''` into `'`; plain
-    ///   values are trimmed and lose a trailing ` # comment`.
+    /// - `"…"` unescapes only `\"` and `\\`; `'…'` turns `''` into `'` (a `#`
+    ///   inside quotes is text); plain values are trimmed.
+    /// - A comment anywhere in a value (` #`, or a value starting with `#`) →
+    ///   nil: a viewer never hides text, and `issue: Fix #42` or
+    ///   `tags: #project` show in full only in the code block. Full-line `#`
+    ///   comments are skipped; `a#b` and `https://x.y/#frag` are plain text.
     static func properties(fromYAML yaml: String) -> [Property]? {
         var properties: [Property] = []
         /// The last key whose inline value was empty: it may still collect
@@ -69,7 +73,8 @@ enum FrontMatter {
             closeOpenKey()
             guard let (key, rest) = splitKey(content) else { return nil }
             let valueText = rest.trimmingLeadingWhitespace()
-            if valueText.isEmpty || valueText.hasPrefix("#") {
+            if valueText.hasPrefix("#") { return nil }
+            if valueText.isEmpty {
                 properties.append((key, ""))
                 openKey = (properties.count - 1, [], nil)
             } else {
@@ -112,7 +117,7 @@ enum FrontMatter {
         switch text.first {
         case "[": return flowSequence(text)
         case "\"", "'":
-            guard let (value, rest) = quotedScalar(text), isTrailingComment(rest) else { return nil }
+            guard let (value, rest) = quotedScalar(text), isNothingAfter(rest) else { return nil }
             return value
         default: return plainScalar(text)
         }
@@ -124,7 +129,7 @@ enum FrontMatter {
         guard !text.isEmpty, !text.hasPrefix("#") else { return nil }
         switch text.first {
         case "\"", "'":
-            guard let (value, rest) = quotedScalar(text), isTrailingComment(rest) else { return nil }
+            guard let (value, rest) = quotedScalar(text), isNothingAfter(rest) else { return nil }
             return value
         default:
             guard let value = plainScalar(text), !isMappingEntry(value) else { return nil }
@@ -132,16 +137,16 @@ enum FrontMatter {
         }
     }
 
-    /// A plain (unquoted) scalar: trimmed, a trailing ` # comment` removed.
-    /// Nil when it starts with an indicator that would make it something else
-    /// (block scalar, anchor, alias, tag, flow mapping, reserved characters).
-    private static let plainIndicators: Set<Character> = ["|", ">", "&", "*", "!", "{", "[", "@", "`", "\"", "'"]
+    /// A plain (unquoted) scalar, trimmed. Nil when it starts with an
+    /// indicator that would make it something else (block scalar, anchor,
+    /// alias, tag, flow mapping, comment, reserved characters) or holds a
+    /// comment (` #`) — see `properties(fromYAML:)`.
+    private static let plainIndicators: Set<Character> = ["|", ">", "&", "*", "!", "{", "[", "@", "`", "\"", "'", "#"]
     private static func plainScalar(_ text: Substring) -> String? {
         guard let first = text.first, !plainIndicators.contains(first),
               text != "-", !text.hasPrefix("- ") else { return nil }
-        var value = text
-        if let comment = value.range(of: " #") { value = value[..<comment.lowerBound] }
-        let trimmed = value.trimmingTrailingWhitespace()
+        guard !text.contains(" #") else { return nil }
+        let trimmed = text.trimmingTrailingWhitespace()
         return trimmed.isEmpty ? nil : String(trimmed)
     }
 
@@ -150,10 +155,10 @@ enum FrontMatter {
         text.contains(": ") || text.hasSuffix(":")
     }
 
-    /// Nothing, or only a comment, after a closed quote / flow sequence.
-    private static func isTrailingComment(_ rest: Substring) -> Bool {
-        let trimmed = rest.trimmingLeadingWhitespace()
-        return trimmed.isEmpty || (trimmed.hasPrefix("#") && trimmed.count < rest.count)
+    /// Nothing but spaces after a closed quote / flow sequence (a comment
+    /// there is text the table would hide → nil).
+    private static func isNothingAfter(_ rest: Substring) -> Bool {
+        rest.trimmingLeadingWhitespace().isEmpty
     }
 
     /// A quoted scalar at the start of `text` and what follows its closing
@@ -198,7 +203,7 @@ enum FrontMatter {
         }
         skipSpaces()
         if index < text.endIndex, text[index] == "]" {
-            return isTrailingComment(text[text.index(after: index)...]) ? "" : nil
+            return isNothingAfter(text[text.index(after: index)...]) ? "" : nil
         }
         while true {
             skipSpaces()
@@ -222,7 +227,7 @@ enum FrontMatter {
             skipSpaces()
             guard index < text.endIndex else { return nil }
             if text[index] == "]" {
-                return isTrailingComment(text[text.index(after: index)...]) ? items.joined(separator: ", ") : nil
+                return isNothingAfter(text[text.index(after: index)...]) ? items.joined(separator: ", ") : nil
             }
             guard text[index] == "," else { return nil }
             index = text.index(after: index)

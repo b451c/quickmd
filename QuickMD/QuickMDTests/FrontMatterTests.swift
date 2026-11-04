@@ -34,14 +34,13 @@ final class FrontMatterTests: XCTestCase {
         XCTAssertEqual(properties("tags:\n  - a\n  - b"), ["tags=a, b"])
         XCTAssertEqual(properties("tags:\n- a\n- b\nnext: x"), ["tags=a, b", "next=x"])
         XCTAssertEqual(properties("tags:\n    - \"quoted, item\"\n    - 'it''s'"), ["tags=quoted, item, it's"])
-        XCTAssertEqual(properties("tags: # a comment\n  - a"), ["tags=a"])
         XCTAssertEqual(properties("tags:\n  - a\n  # between items\n\n  - b"), ["tags=a, b"])
     }
 
     func testFlowSequences() {
         XCTAssertEqual(properties("aliases: [Review 45]"), ["aliases=Review 45"])
         XCTAssertEqual(properties("tags: [a, b, \"c, d\"]"), ["tags=a, b, c, d"])
-        XCTAssertEqual(properties("tags: ['x', y ]  # comment"), ["tags=x, y"])
+        XCTAssertEqual(properties("tags: ['x', y ]  "), ["tags=x, y"])
         XCTAssertEqual(properties("tags: []"), ["tags="])
         XCTAssertEqual(properties("tags: [ ]"), ["tags="])
     }
@@ -49,12 +48,14 @@ final class FrontMatterTests: XCTestCase {
     func testQuotedScalars() {
         XCTAssertEqual(properties(#"a: "say \"hi\" \\ there""#), [#"a=say "hi" \ there"#])
         XCTAssertEqual(properties("a: 'it''s # not a comment'"), ["a=it's # not a comment"])
-        XCTAssertEqual(properties(#"a: "x" # trailing comment"#), ["a=x"])
+        XCTAssertEqual(properties(#"k: "x #y""#), ["k=x #y"])
         XCTAssertEqual(properties(#"a: """#), ["a="])
     }
 
     func testPlainValuesTrimmedAndCommentsStripped() {
-        XCTAssertEqual(properties("status:   draft   # wip"), ["status=draft"])
+        XCTAssertEqual(properties("status:   draft   "), ["status=draft"])
+        XCTAssertEqual(properties("k: a#b"), ["k=a#b"])
+        XCTAssertEqual(properties("url: https://x.y/#frag"), ["url=https://x.y/#frag"])
         XCTAssertEqual(properties("url: https://x.org/#anchor"), ["url=https://x.org/#anchor"])
         XCTAssertEqual(properties("# leading comment\n\nkey: v\n# trailing"), ["key=v"])
         XCTAssertEqual(properties("key: a | b"), ["key=a | b"])
@@ -94,6 +95,17 @@ final class FrontMatterTests: XCTestCase {
             ("quoted key", "\"key\": v"),
             ("complex key", "? key"),
             ("only comments", "# one\n# two"),
+            // A comment in a value would hide text: the code block shows it all.
+            ("issue number after ' #'", "issue: Fix #42"),
+            ("value starting with #", "tags: #project"),
+            ("trailing comment on a plain value", "status: draft # wip"),
+            ("comment as an empty value", "tags: # a comment\n  - a"),
+            ("comment after a closing quote", #"k: "a" # c"#),
+            ("comment after a flow sequence", "tags: [x, y] # c"),
+            ("comment inside a flow sequence", "tags: [x # c, y]"),
+            ("flow item starting with #", "tags: [#x]"),
+            ("comment on a sequence item", "tags:\n  - a # c"),
+            ("comment after a quoted sequence item", "tags:\n  - \"a\" # c"),
             ("value that is a sequence entry", "a: - b"),
         ]
         for (label, yaml) in refused {
