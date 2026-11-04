@@ -836,6 +836,43 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(try quoteShape("> ```\n>> [x]: http://e.com\n> ```\n\n[x]\n").last, "t:[x]")
     }
 
+    /// A link definition taken out of a quote opens a paragraph of that
+    /// quote — of definitions only, which draws nothing — and a lazy line
+    /// right after it goes on in that quote (GitHub, gfm/h8_*.html). The
+    /// pre-pass dropped the line, so the lazy line landed outside the quote
+    /// or in the outer one. More definitions may follow (marked, lazy or at
+    /// fewer markers); after them `===` is text. Nothing follows: nothing is
+    /// drawn, as before.
+    func testALazyLineAfterAQuoteDefinitionStaysInTheQuote() throws {
+        XCTAssertEqual(try quoteShape("> [y]: http://e.com\nlazy\n\n[y]\n"), ["q1:lazy", "t:y"])
+        XCTAssertEqual(try quoteShape("> a\n>\n> [y]: http://e.com\nlazy\n\n[y]\n"), ["q1:a\n\nlazy", "t:y"])
+        XCTAssertEqual(try quoteShape("> a\n>> [z]: http://e.com\ncode\n\n[z]\n"), ["q1:a", "q2:code", "t:z"])
+        XCTAssertEqual(try quoteShape("> a\n>> [z]: http://e.com\n> b\n\n[z]\n"), ["q1:a", "q2:b", "t:z"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n> text\nlazy\n\n[x]\n"), ["q1:text\nlazy", "t:x"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n[y]: http://f.com\nlazy\n\n[x] [y]\n"),
+                       ["q1:lazy", "t:x y"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n> [y]: http://f.com\nlazy\n\n[x] [y]\n"),
+                       ["q1:lazy", "t:x y"])
+        XCTAssertEqual(try quoteShape("> > [x]: http://e.com\n> [y]: http://f.com\n\n[x] [y]\n"), ["t:x y"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n> ===\nlazy\n\n[x]\n"), ["q1:===\nlazy", "t:x"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n> [!NOTE]\n> body\n\n[x]\n"), ["alert:note:body", "t:x"])
+        // Nothing follows, or a block does: no quote drawn.
+        XCTAssertEqual(try quoteShape("> [y]: http://e.com\n\n[y]\n"), ["t:y"])
+        XCTAssertEqual(try quoteShape("> [y]: http://e.com\n# H\n\n[y]\n"), ["h:H", "t:y"])
+
+        // The quote starts at its first drawn line; every later block keeps
+        // its source line; no definition is drawn.
+        let markdown = "> a\n>> [z]: http://e.com\ncode\n\n> [y]: http://f.com\nlazy\n\n[z] [y]\n"
+        let blocks = try XCTUnwrap(parseReturning(markdown))
+        XCTAssertEqual(blocks.map(\.sourceLine), [0, 2, 5, 7])
+        let theme = MarkdownTheme.cached(for: .light)
+        let measured = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,
+                                                   contentWidth: 600, math: nil)
+        let shown = blocks.compactMap { measured.converted[$0.id]?.string }
+        XCTAssertEqual(shown, ["a", "code", "lazy", "z y"])
+        XCTAssertEqual(blocks.map(\.joinsPrevious), [false, true, false, false])
+    }
+
     func testALinkDefinitionCannotInterruptAParagraph() throws {
         XCTAssertEqual(try quoteShape("> a\n[x]: http://e.com\n\n[x]\n"), ["q1:a\n[x]: http://e.com", "t:[x]"])
         XCTAssertEqual(try quoteShape("Para\n[x]: http://e.com\n\n[x]\n"), ["t:Para [x]: http://e.com", "t:[x]"])
