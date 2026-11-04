@@ -238,6 +238,19 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
+            // A line that is only ONE linked image (`[![alt](img)](url)`, the
+            // README logo/badge form): the same `.image` block as `![alt](img)`
+            // — drawn on screen and in PDF, click = preview. The link target is
+            // dropped, as it is for `<a href><img></a>` (links on images: 1.15).
+            if let image = InlineSyntaxScanner.linkedImage(in: line[...], references: referenceDefinitions) {
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+                blocks.append(.image(index: blockIndex, url: image.url, alt: HTMLEntities.decode(image.alt),
+                                     width: nil, sourceLine: sourceLine))
+                blockIndex += 1
+                i += 1
+                continue
+            }
+
             // HTML image line (T-C): nothing but `<img>` tags and layout
             // wrappers (`<p align="center">`, `</p>`, `<a …>`, …), possibly an
             // `<img` tag spread over several lines. Each `<img>` is an

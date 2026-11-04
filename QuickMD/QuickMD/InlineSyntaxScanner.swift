@@ -171,6 +171,46 @@ enum InlineSyntaxScanner {
         }
     }
 
+    /// A line that is nothing but ONE linked image — `[![alt](img)](url)`,
+    /// `[![alt][logo]][site]` or any link form `MarkdownRenderer.tryParseLink`
+    /// accepts around one image, whitespace around it allowed — as the image
+    /// it shows. The link target is NOT returned: the parser makes the line an
+    /// ordinary image block (click = preview), as `<a href><img></a>` is;
+    /// links on images are a later feature. Text beside the link, a second
+    /// image or an outer link that does not resolve → nil (a paragraph, as
+    /// before).
+    static func linkedImage(in line: Substring, references: [String: String]) -> ImageSyntax? {
+        let scalars = line.unicodeScalars
+        guard let first = scalars.firstIndex(where: { !$0.properties.isWhitespace }),
+              let last = scalars.lastIndex(where: { !$0.properties.isWhitespace }) else { return nil }
+        // Cheap reject before any copy: most lines are not this.
+        guard Substring(scalars[first...last]).utf8.starts(with: "[![".utf8) else { return nil }
+        let text = String(Substring(scalars[first...last]))
+        let pairs = PairTable(text)
+        guard let close = closingBracket(in: text[...], pairs: pairs) else { return nil }
+        let linkText = text[text.index(after: text.startIndex)..<close]
+
+        // The link text: exactly one image, spaces around it allowed.
+        let innerStart = linkText.firstIndex { !$0.isWhitespace } ?? linkText.endIndex
+        guard let image = self.image(atStartOf: linkText[innerStart...], references: references, pairs: pairs),
+              linkText[image.end...].allSatisfy(\.isWhitespace) else { return nil }
+
+        // The link itself, by `tryParseLink`'s rules, ending the line.
+        let after = text[text.index(after: close)...]
+        if after.hasPrefix("(") {
+            guard let destination = parenthesizedDestination(after, pairs: pairs),
+                  destination.end == text.endIndex else { return nil }
+        } else if after.hasPrefix("[") {
+            guard let labelClose = after.dropFirst().firstIndex(of: "]"),
+                  text.index(after: labelClose) == text.endIndex else { return nil }
+            let label = String(after[after.index(after: after.startIndex)..<labelClose])
+            guard references[(label.isEmpty ? String(linkText) : label).lowercased()] != nil else { return nil }
+        } else {
+            guard after.isEmpty, references[linkText.lowercased()] != nil else { return nil }
+        }
+        return ImageSyntax(alt: image.alt, url: image.url, end: line.endIndex)
+    }
+
     /// `data:` scheme (case-insensitive) — the destination of an embedded
     /// image. Looks at five bytes, never at the payload.
     static func isDataURI(_ url: String) -> Bool {

@@ -414,6 +414,54 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(rows[4], ["`p\\|q`", "c"])
     }
 
+    // MARK: - A line that is only one linked image (B16)
+
+    /// `[![alt](img)](url)` alone on a line is the picture, like `![alt](img)`
+    /// and `<a href><img></a>` — an `.image` block on that line (Section copy,
+    /// search of the alt and copy work as for a plain image line). The link
+    /// target is not kept (as for `<a><img>`). Text beside it, or two linked
+    /// images (a badge row), stay a paragraph.
+    func testLineOfOneLinkedImageIsAnImageBlock() {
+        let md = """
+        # Title
+        [![Logo](img/logo.png)](https://example.com)
+          [![Badge][shield]][site]\u{0020}\u{0020}
+        ![Plain](img/plain.png)
+        text before [![a](a.png)](https://a.example)
+
+        [![a](a.png)](https://a.example) text after
+
+        [![a](a.png)](https://a.example) [![b](b.png)](https://b.example)
+
+        [![a](a.png)][undefined]
+
+        [shield]: https://img.shields.io/x.svg
+        [site]: https://example.com/site
+        """
+        let blocks = parse(md)
+        let images: [(url: String, alt: String, line: Int)] = blocks.compactMap {
+            guard case .image(let url, let alt, nil) = $0.content else { return nil }
+            return (url, alt, $0.sourceLine)
+        }
+        XCTAssertEqual(images.map(\.url), ["img/logo.png", "https://img.shields.io/x.svg", "img/plain.png"])
+        XCTAssertEqual(images.map(\.alt), ["Logo", "Badge", "Plain"])
+        XCTAssertEqual(images.map(\.line), [1, 2, 3], "each on its own source line")
+
+        let paragraphs = blocks.compactMap(plainText)
+        XCTAssertEqual(paragraphs.count, 4, "\(paragraphs)")
+        XCTAssertTrue(paragraphs[0].hasPrefix("text before [Image: a]"))
+        XCTAssertEqual(paragraphs[1], "[Image: a] text after")
+        XCTAssertEqual(paragraphs[2], "[Image: a] [Image: b]", "a badge row stays a paragraph (1.15)")
+        XCTAssertTrue(paragraphs[3].contains("[undefined]"), "no link → not a linked image")
+
+        // Exactly what a plain `![Logo](img/logo.png)` line parses to, id aside.
+        guard case .image(let url, let alt, let width) = parse("![Logo](img/logo.png)")[0].content,
+              case .image(let linkedURL, let linkedAlt, let linkedWidth) =
+                parse("[![Logo](img/logo.png)](https://example.com)")[0].content else { return XCTFail("images") }
+        XCTAssertEqual([url, alt], [linkedURL, linkedAlt])
+        XCTAssertNil(width); XCTAssertNil(linkedWidth)
+    }
+
     // MARK: - Reference links in quotes, alerts and table cells
 
     /// Quotes, alerts and table cells keep their markdown and are rendered
