@@ -466,10 +466,45 @@ struct MarkdownRenderer: Sendable {
     // MARK: - Block Renderers
 
     func renderHeader(_ text: String, level: Int) -> AttributedString {
-        var attr = renderInlineFormatting(text)
+        var attr = Self.formulaSourceWithEscapes(renderInlineFormatting(text))
         attr.setDualFont(size: headerFontSize(level: level), bold: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         return attr
+    }
+
+    /// Headings typeset no inline math (the title view converts with
+    /// `hasInlineMath: false`), so a `$…$` shows its source — and that source
+    /// must keep its LaTeX escapes, which the Markdown escape pass removed:
+    /// `# H \% $a\,b$` shows "H % $a\,b$" (text outside the formula loses
+    /// its backslash as everywhere). The same split as math paragraphs
+    /// (`InlineMathSegmenter.pieces(of:)`); every heading consumer — view,
+    /// measurer, title cache, ids, Contents, search, copy, print — reads
+    /// `renderHeader`, so they all see this text.
+    private static func formulaSourceWithEscapes(_ attributed: AttributedString) -> AttributedString {
+        guard attributed.characters.contains("$") else { return attributed }
+        let pieces = InlineMathSegmenter.pieces(of: attributed)
+        guard pieces.contains(where: { if case .math = $0.segment { return true } else { return false } }) else {
+            return attributed
+        }
+        var result = AttributedString()
+        var index = attributed.startIndex
+        for piece in pieces {
+            guard let end = attributed.characters.index(index, offsetBy: piece.length,
+                                                        limitedBy: attributed.endIndex) else { break }
+            switch piece.segment {
+            case .text:
+                result.append(attributed[index..<end])
+            case .math(let latex):
+                // The formula's own attributes (its first run), its source with escapes.
+                var source = AttributedString("$" + latex + "$")
+                if let first = attributed[index..<end].runs.first {
+                    source.setAttributes(first.attributes)
+                }
+                result.append(source)
+            }
+            index = end
+        }
+        return result
     }
 
     /// Point size of a level-`level` heading at this renderer's scale.

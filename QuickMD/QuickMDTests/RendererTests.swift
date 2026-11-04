@@ -910,6 +910,26 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(String(renderer.renderQuotedBody(quote).characters), "a * b and c $5")
     }
 
+    // MARK: - Formula source in headings (review R14)
+
+    /// Headings show a formula's SOURCE (no inline math there yet), and it
+    /// keeps its LaTeX escapes: `# H \% $a\,b$` shows "H % $a\,b$". The
+    /// heading view, ids, the Contents sidebar and search all read this text.
+    func testHeadingFormulaSourceKeepsItsEscapes() {
+        let title = "H \\% $a\\,b$ and $50\\%$"
+        let shown = String(renderer.renderHeader(title, level: 1).characters)
+        XCTAssertEqual(shown, "H % $a\\,b$ and $50\\%$")
+        XCTAssertEqual(String(renderer.renderHeader("Price \\$5 and \\$6", level: 2).characters), "Price $5 and $6",
+                       "escaped dollars are no formula")
+        let entry = ToCEntry(id: "heading-0", level: 1, title: title, sourceLine: 0)
+        XCTAssertEqual(entry.shownTitle(renderer: renderer), shown)
+        let theme = MarkdownTheme.cached(for: .light)
+        let blocks = MarkdownBlockParser(theme: theme).parse("# " + title)
+        XCTAssertEqual(HeadingAnchors.headings(of: blocks, renderer: renderer).map(\.text), [shown])
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "a\\,b").matchBlockIds.count, 1,
+                       "search finds what the heading shows")
+    }
+
     // MARK: - References in link destinations (review R10)
 
     /// A destination's character references are decoded (hrefs from
