@@ -27,8 +27,10 @@ enum ReviewPromptSession {
 /// unoccluded, key, no sheet or app-modal panel. A tick that fails it, losing
 /// key, or a gap of more than 3 s between ticks (sleep, App Nap, a stalled
 /// main thread — measured on the monotonic `systemUptime`) restarts the 60 s.
-/// At 60 s it also needs user input within the last 60 s; an idle reader keeps
-/// it waiting. Source Edit stops it (the task id changes and the task returns
+/// At 60 s it also needs user input within the last 60 s; if the reader is
+/// idle the run is reset, so someone returning after a long break is never
+/// asked on their first touch — it takes a fresh 60 s of display that ends
+/// with recent input. Source Edit stops it (the task id changes and the task returns
 /// while editing; leaving starts a fresh 60 s), closing the window cancels it
 /// with the view's task.
 ///
@@ -94,17 +96,22 @@ struct ReviewPromptTrigger: ViewModifier {
             if displayedLongEnough {
                 // Another window may have asked meanwhile, or the policy changed.
                 guard Self.canRequest(policy) else { return }
-                // An unattended screen is not reading: keep waiting (the run
-                // stays complete) until the reader touches the Mac again.
-                if Self.userIsActive {
-                    ReviewPromptSession.hasRequested = true
-                    #if DEBUG
-                    reviewLog.debug("requestReview for \(Self.appVersion, privacy: .public)")
-                    #endif
-                    requestReview()
-                    policy.markRequested(now: Date(), appVersion: Self.appVersion)
-                    return
+                // An unattended screen is not reading. Start over rather than
+                // keep the run complete: a reader coming back after a long
+                // idle must never get the prompt on their first touch — it
+                // takes another 60 s of display that ends with recent input.
+                guard Self.userIsActive else {
+                    countdown.reset()
+                    try? await Task.sleep(nanoseconds: Self.tick)
+                    continue
                 }
+                ReviewPromptSession.hasRequested = true
+                #if DEBUG
+                reviewLog.debug("requestReview for \(Self.appVersion, privacy: .public)")
+                #endif
+                requestReview()
+                policy.markRequested(now: Date(), appVersion: Self.appVersion)
+                return
             }
             try? await Task.sleep(nanoseconds: Self.tick)
         }
