@@ -884,6 +884,15 @@ struct MarkdownView: View {
             fileWatcher = nil
             releaseEditSession()
         }
+        #if APPSTORE
+        // Rating prompt (App Store build only): counts this window's open once
+        // its first parse landed (`contentVersion` only grows — reloads, zoom
+        // and theme changes don't count again) and may ask after 60 s of
+        // display. Not while Source Edit is up.
+        .modifier(ReviewPromptTrigger(isRendered: contentVersion > 0,
+                                      isEditing: editSession.isActive,
+                                      window: hostWindow))
+        #endif
     }
 
     // MARK: - Auto-Reload & External Editor
