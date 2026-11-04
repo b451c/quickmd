@@ -1224,6 +1224,68 @@ final class VerticalRhythmTests: XCTestCase {
         }
     }
 
+    // MARK: - Reading column follows the zoom
+
+    /// Reading mode's column is 720 pt at 100 % and scales with the text, in
+    /// whole points; the window still caps it. 1.14.4 kept 720 at every zoom:
+    /// ~45 characters a line at 200 %.
+    func testTheReadingColumnScalesWithTheZoom() {
+        typealias Document = BlockLayout.Document
+        XCTAssertEqual(Document.readingColumnCap(fontScale: 1), 720)
+        XCTAssertEqual(Document.readingColumnCap(fontScale: 2), 1440)
+        XCTAssertEqual(Document.readingColumnCap(fontScale: 0.5), 360)
+        XCTAssertEqual(Document.readingColumnCap(fontScale: 3), 2160)
+        XCTAssertEqual(Document.readingColumnCap(fontScale: 1.1), 792)   // 792.0000000000001
+        // 200 %: the full 1440 where the window has room, the window otherwise.
+        XCTAssertEqual(Document.columnWidth(inner: 1600 - 64, cap: Document.readingColumnCap(fontScale: 2)), 1440)
+        XCTAssertEqual(Document.columnWidth(inner: 1000 - 64, cap: Document.readingColumnCap(fontScale: 2)), 936)
+        XCTAssertEqual(Document.columnWidth(inner: 1000 - 64, cap: Document.readingColumnCap(fontScale: 1)), 720)
+        XCTAssertEqual(Document.columnWidth(inner: 935.5, cap: nil), 935.5)
+        XCTAssertEqual(Document.columnWidth(inner: -10, cap: 720), 0)
+    }
+
+    /// A zoom in reading mode re-parses; the parse is measured at the column
+    /// the zoom's cap gives — the width the list publishes once the parse is
+    /// installed with that cap — so the zoomed text is laid out at the width
+    /// its heights were measured at, measured once per zoom.
+    func testAZoomInReadingModeMeasuresItsParseAtTheNewColumn() {
+        typealias Document = BlockLayout.Document
+        let blocks = parse(String(repeating: "A line of prose that wraps in every column it is given. ", count: 12))
+        for inner: CGFloat in [1600 - 64, 1000 - 64] {
+            for scale: CGFloat in [0.5, 1, 1.5, 2, 3] {
+                let column = Document.columnWidth(inner: inner, cap: Document.readingColumnCap(fontScale: scale))
+                let width = Document.parseWidth(contentWidth: 720, inner: inner, readingFontScale: scale)
+                XCTAssertEqual(width, column, "inner \(inner) × \(scale)")
+                XCTAssertEqual(measure(blocks, fontScale: scale, width: width).table.contentWidth, column)
+            }
+        }
+        // The standard layout: the list's width, whatever the zoom.
+        XCTAssertEqual(Document.parseWidth(contentWidth: 936, inner: 936, readingFontScale: nil), 936)
+        // No layout yet, or the list not wired: nothing to derive from.
+        XCTAssertEqual(Document.parseWidth(contentWidth: 0, inner: 1536, readingFontScale: 2), 0)
+        XCTAssertEqual(Document.parseWidth(contentWidth: 720, inner: 0, readingFontScale: 2), 720)
+    }
+
+    /// ⌘+ ⌘+ ⌘− ⌘− in reading mode with the viewport top inside the image:
+    /// every zoom is a style change (the cap) AND a new table, in one
+    /// update — the reader comes back to the very same point, as in the
+    /// standard layout.
+    func testAZoomRoundTripInReadingModeKeepsAReaderInsideAnImage() {
+        var rows = fixtureRows(wrap: 2, imageReal: 576)
+        for index in rows.indices { rows[index].height = rows[index].real }   // every view reported
+        var list = ListModel(rows: rows, contentTop: 0)
+        list.inset = 48
+        list.contentTop = list.blockTop(image) + 520   // its bottom 56 pt on screen
+        let start = list.contentTop
+        XCTAssertEqual(list.rowUnderContentTop(), image)
+        for scale: CGFloat in [1.1, 1.25, 1.1, 1] {
+            list.toggleStyle(inset: 48)
+            list.install(fixtureRows(scale: scale, wrap: 2, imageReal: min(655, 576 * scale)))
+            XCTAssertEqual(list.rowUnderContentTop(), image, "× \(scale)")
+        }
+        XCTAssertEqual(list.contentTop, start, accuracy: 0.001)
+    }
+
     /// Reading Mode on and off with the viewport top inside the image (the
     /// debug log: `row 21 + 579.5` on the way in, `row 29 + 0.0` on the way
     /// out). At 720 pt the image is smaller and the short paragraphs wrap.

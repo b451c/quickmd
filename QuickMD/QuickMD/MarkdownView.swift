@@ -115,7 +115,8 @@ struct MarkdownView: View {
     @State private var appliedDefaultZoom: Double
     /// ⌘⇧R — distraction-free reading: both sidebars, the top-right chrome pills
     /// and the Support/Tip Jar button step out of the way, and the text column
-    /// stops at `Metrics.readingMaxContentWidth` and centres itself.
+    /// stops at `Metrics.readingColumnCap(fontScale:)` (720 pt at 100 %, scaled
+    /// with the zoom) and centres itself.
     ///
     /// @State, not @AppStorage, for the same reason as `fontScale`: it belongs to
     /// this window and this reading session. A viewer that reopens with its
@@ -139,6 +140,8 @@ struct MarkdownView: View {
     /// on demand. A reference in @State on purpose: the coordinator fills it,
     /// nothing observes it, so scrolling never re-evaluates this body (E-D1).
     @State private var readingPosition = DocumentReadingPosition()
+    /// The list's column room, for a parse at a new zoom in reading mode.
+    @State private var documentColumn = DocumentColumn()
     /// Source Edit (v1.12): the raw-Markdown editor over the rendered list, its
     /// buffer, saving and the close guard's answers. One per window, lives with
     /// the tab. Publishes only rare events (enter / leave, dirty, banner) — the
@@ -286,7 +289,7 @@ struct MarkdownView: View {
                     focusedBlockId: focusedBlockId,
                     focusedOccInBlock: focusedOccInBlock,
                     scrollRequest: scrollRequest,
-                    layoutStyle: isReadingMode ? .reading : .standard,
+                    layoutStyle: isReadingMode ? .reading(fontScale: CGFloat(renderedFontScale)) : .standard,
                     contentWidth: $contentWidth,
                     onHeightReport: { blockId, row, height in
                         applyHeightReport(blockId: blockId, row: row, height: height)
@@ -305,7 +308,8 @@ struct MarkdownView: View {
                     // the focus back while covered, and leaves the
                     // accessibility tree meanwhile (set on the AppKit view).
                     isCovered: graphicPreview != nil || editSession.isActive,
-                    readingPosition: readingPosition
+                    readingPosition: readingPosition,
+                    column: documentColumn
                 )
                 .onChange(of: scrollTrigger) { _ in
                     scrollFocusedMatchIntoView()
@@ -649,8 +653,15 @@ struct MarkdownView: View {
             let scale = CGFloat(fontScale)
             // The width the list will lay the blocks out at. 0 before the host's
             // first layout — then the heights task below picks it up as soon as
-            // the coordinator reports one.
-            let width = contentWidth
+            // the coordinator reports one. A new zoom in reading mode changes
+            // the column's cap with these blocks (the style is derived from
+            // `renderedFontScale`): measure at THAT column. Only a zoom: any
+            // other parse keeps the list's width, which the list keeps in step
+            // with the window itself.
+            let listWidth = contentWidth
+            let width = BlockLayout.Document.parseWidth(
+                contentWidth: listWidth, inner: documentColumn.innerWidth?() ?? 0,
+                readingFontScale: isReadingMode && Double(scale) != renderedFontScale ? scale : nil)
             // Keyed by the link, so valid across this re-parse.
             let imageSizes = heightCache.imageSizesSnapshot
             let out: ParsedAndMeasured = await Task.detached(priority: .userInitiated) {
@@ -705,6 +716,10 @@ struct MarkdownView: View {
             cachedBlocks = blocks
             renderedFontScale = Double(scale)
             contentVersion += 1
+            // The column this parse was measured at, in the same transaction
+            // as the cap that gives it — unless the list published another
+            // width meanwhile (then the heights task re-measures at that one).
+            if width != listWidth, contentWidth == listWidth { contentWidth = width }
             textBlockMeta = parsed.textMeta
             installedText = text
             // Inline `$…$` paragraphs and display-math rows were deferred by the

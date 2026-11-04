@@ -437,17 +437,19 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     /// The rendered document's column, reproduced so the text does not jump
     /// sideways when the mode toggles. `VirtualBlockList.currentContentWidth()`
     /// computes `inner = floor(clip) − 2 × contentHorizontalPadding` (32 pt)
-    /// and, in reading mode, `floor(min(inner, 720))`; its cells centre that
+    /// and, in reading mode, `floor(min(inner, cap))` with the cap at the
+    /// zoom (`BlockLayout.Document.columnWidth`, `readingColumnCap`, 720 pt at
+    /// 100 %); its cells centre that
     /// column in the `floor(clip)`-wide table column, i.e. the column starts
     /// at `(floor(clip) − column) / 2` — 32 pt exactly in the standard layout,
     /// never less in reading mode. The vertical gap is the list's visible gap
     /// above the first block (`LayoutStyle.verticalPadding`: 24 / 48 pt).
-    static func columnGeometry(clipWidth: CGFloat, isReadingLayout: Bool) -> ColumnGeometry {
+    static func columnGeometry(clipWidth: CGFloat, isReadingLayout: Bool, fontScale: CGFloat) -> ColumnGeometry {
         let available = floor(max(clipWidth, 0))
         let inner = available - 2 * BlockLayout.Document.contentHorizontalPadding
-        let column = isReadingLayout
-            ? max(0, floor(min(inner, BlockLayout.Document.readingMaxContentWidth)))
-            : max(0, inner)
+        let column = BlockLayout.Document.columnWidth(
+            inner: inner,
+            cap: isReadingLayout ? BlockLayout.Document.readingColumnCap(fontScale: fontScale) : nil)
         let vertical = isReadingLayout
             ? BlockLayout.Document.readingContentVerticalPadding
             : BlockLayout.Document.contentVerticalPadding
@@ -464,7 +466,8 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
         isUpdatingGeometry = true
         defer { isUpdatingGeometry = false }
         let clip = scrollView.contentView.bounds.size
-        let geometry = Self.columnGeometry(clipWidth: clip.width, isReadingLayout: style.isReadingLayout)
+        let geometry = Self.columnGeometry(clipWidth: clip.width, isReadingLayout: style.isReadingLayout,
+                                           fontScale: CGFloat(style.fontScale))
         let inset = NSSize(width: geometry.horizontalInset, height: geometry.verticalInset)
         // At least as tall as the clip, so a click below a short text still
         // lands in the text view (and places the caret at the end).

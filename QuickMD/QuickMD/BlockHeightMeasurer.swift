@@ -82,11 +82,44 @@ enum BlockLayout {
         // so `BlockHeightMeasurer` needs no reading-mode branch at all — it is
         // handed the clamped `contentWidth` like any other width.
 
-        /// Upper bound on the text column in reading mode; wider windows centre
-        /// the column instead of stretching the lines. 720 pt is ~90 characters
-        /// at the 16 pt default body size — past that the eye loses the line it
-        /// came from on the way back to the left margin.
+        /// Upper bound on the text column in reading mode at 100 %; wider
+        /// windows centre the column instead of stretching the lines. 720 pt is
+        /// ~90 characters at the 16 pt default body size — past that the eye
+        /// loses the line it came from on the way back to the left margin.
+        /// The cap at other zooms is `readingColumnCap(fontScale:)`.
         static let readingMaxContentWidth: CGFloat = 720
+
+        /// Reading mode's column cap at `fontScale`: `readingMaxContentWidth`
+        /// scaled with the body text (16 pt × the zoom; there is no other body
+        /// size setting — Settings' default zoom IS the starting zoom), in
+        /// whole points. The line keeps its ~90 characters at every zoom:
+        /// until 1.14.4 the cap stayed 720 pt, so 200 % left ~45 characters a
+        /// line and 50 % ~180. Still capped by the window (`columnWidth`).
+        static func readingColumnCap(fontScale: CGFloat) -> CGFloat {
+            (readingMaxContentWidth * max(fontScale, 0)).rounded()
+        }
+
+        /// The width a block view gets — the width the heights are measured
+        /// at: `inner` (the clip's whole points − 2 × `contentHorizontalPadding`),
+        /// no wider than `cap` in reading mode. THE one definition, used by
+        /// `VirtualBlockList` (cells and published width), by `MarkdownView`
+        /// (the width a zoom in reading mode measures its parse at) and by
+        /// `SourceEditorController.columnGeometry`.
+        static func columnWidth(inner: CGFloat, cap: CGFloat?) -> CGFloat {
+            guard let cap else { return max(0, inner) }
+            return max(0, floor(min(inner, cap)))
+        }
+
+        /// The width a new parse is measured at: the list's `contentWidth` —
+        /// except at a new zoom in reading mode (`readingFontScale` = the
+        /// parse's zoom), whose cap follows the zoom: the column the list will have once the
+        /// parse is installed (`inner` capped at that zoom), so a zoom in
+        /// reading mode measures the document once, not at the old column
+        /// and then again. 0 (no layout yet) stays 0.
+        static func parseWidth(contentWidth: CGFloat, inner: CGFloat, readingFontScale: CGFloat?) -> CGFloat {
+            guard contentWidth > 0, inner > 0, let readingFontScale else { return contentWidth }
+            return columnWidth(inner: inner, cap: readingColumnCap(fontScale: readingFontScale))
+        }
         /// `contentVerticalPadding`'s reading-mode counterpart: the top and
         /// bottom breathing room, doubled, because in reading mode nothing else
         /// occupies the top of the window.

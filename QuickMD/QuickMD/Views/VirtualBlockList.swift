@@ -47,6 +47,18 @@ private let listLog = Logger(subsystem: "pl.falami.studio.QuickMD", category: "V
 private let listSignpost = OSSignposter(subsystem: "pl.falami.studio.QuickMD", category: "VirtualBlockList")
 #endif
 
+/// The room the document column has, asked for on demand — the same bridge
+/// as `DocumentReadingPosition`: `MarkdownView` owns one per tab (`@State`,
+/// reference identity, so nothing re-renders), the list's coordinator installs
+/// `innerWidth` on every update. A parse at a new zoom in reading mode reads
+/// it to measure at the column the zoom's cap will give
+/// (`BlockLayout.Document.parseWidth`). Main-thread by convention.
+final class DocumentColumn {
+    /// The clip's whole points − 2 × the horizontal padding; 0 before the
+    /// list's first layout or while it is not wired.
+    var innerWidth: (() -> CGFloat)?
+}
+
 struct VirtualBlockList: NSViewRepresentable {
 
     /// Where a programmatic scroll parks the target row.
@@ -86,8 +98,14 @@ struct VirtualBlockList: NSViewRepresentable {
 
         static let standard = LayoutStyle(maxContentWidth: nil,
                                           verticalPadding: Metrics.contentVerticalPadding)
-        static let reading = LayoutStyle(maxContentWidth: Metrics.readingMaxContentWidth,
-                                         verticalPadding: Metrics.readingContentVerticalPadding)
+        /// Reading mode at `fontScale`: the column cap follows the zoom
+        /// (`BlockLayout.Document.readingColumnCap`), so a zoom in reading mode
+        /// is a style change too — together with the parse that installs the
+        /// zoomed blocks (`MarkdownView` derives it from `renderedFontScale`).
+        static func reading(fontScale: CGFloat) -> LayoutStyle {
+            LayoutStyle(maxContentWidth: BlockLayout.Document.readingColumnCap(fontScale: fontScale),
+                        verticalPadding: Metrics.readingContentVerticalPadding)
+        }
 
         /// The scroll view's top/bottom content inset for this style: exactly
         /// `verticalPadding`. The table has no intercell spacing (the space
@@ -152,6 +170,8 @@ struct VirtualBlockList: NSViewRepresentable {
     /// ⌘E's reading-position handle (v1.11 E-D1). The coordinator installs a
     /// provider that is evaluated only when asked — no per-scroll publishing.
     var readingPosition: DocumentReadingPosition?
+    /// Answers "how wide is the column's room" on demand (`DocumentColumn`).
+    var column: DocumentColumn?
 
     typealias Metrics = BlockLayout.Document
 
@@ -261,6 +281,7 @@ struct VirtualBlockList: NSViewRepresentable {
         // has the property set at all.
         if nsView.isAccessibilityHidden() != isCovered { nsView.setAccessibilityHidden(isCovered) }
         readingPosition?.provider = { [weak coordinator] in coordinator?.readingEditorLine() }
+        column?.innerWidth = { [weak coordinator] in coordinator?.columnInnerWidth() ?? 0 }
         readingPosition?.selectionProvider = { [weak coordinator] in
             guard let coordinator,
                   let hint = coordinator.selection.sourceEditHint(
@@ -418,6 +439,9 @@ struct VirtualBlockList: NSViewRepresentable {
         /// Last width handed to the parent. 0 = never reported, which is the one
         /// case that skips the debounce (the height table is blocked on it).
         private var reportedContentWidth: CGFloat = 0
+        /// Published widths the parent's binding has not received yet
+        /// (`publish` hands each over one run-loop turn later).
+        private var pendingPublishes = 0
         private var widthWork: DispatchWorkItem?
         private var frameObserver: NSObjectProtocol?
         /// `updateNSView` has run at least once, so `setContentWidth` is the
@@ -1093,11 +1117,18 @@ struct VirtualBlockList: NSViewRepresentable {
         /// and `rootView(for:)` expresses the same `min` as a SwiftUI frame — so
         /// layout width == measurement width by construction, at any clip width.
         private func currentContentWidth() -> CGFloat {
+            let inner = columnInnerWidth()
+            guard inner != 0 else { return 0 }
+            return BlockLayout.Document.columnWidth(inner: inner, cap: layoutStyle.maxContentWidth)
+        }
+
+        /// The room the column has before any cap: the clip's whole points
+        /// minus the horizontal padding on both sides; 0 before the first
+        /// layout.
+        func columnInnerWidth() -> CGFloat {
             let available = quantizedClipWidth()
             guard available > 0 else { return 0 }
-            let inner = available - 2 * Metrics.contentHorizontalPadding
-            guard let cap = layoutStyle.maxContentWidth else { return max(0, inner) }
-            return max(0, floor(min(inner, cap)))
+            return available - 2 * Metrics.contentHorizontalPadding
         }
 
         // MARK: - Layout style (reading mode)
@@ -1208,6 +1239,17 @@ struct VirtualBlockList: NSViewRepresentable {
         func syncWidthIfNeeded(parentValue: CGFloat) {
             isWired = true
             syncColumnWidth()
+            if reportedContentWidth > 0, parentValue > 0, pendingPublishes == 0,
+               abs(parentValue - reportedContentWidth) >= 1 {
+                // The parent measured a parse at a width it worked out itself
+                // (a zoom in reading mode, `BlockLayout.Document.parseWidth`):
+                // that is the width its table has now. Take it as reported, and
+                // report the real column if the window moved meanwhile.
+                reportedContentWidth = parentValue
+                let width = currentContentWidth()
+                if width > 0, abs(width - parentValue) >= 1 { scheduleWidthReport() }
+                return
+            }
             guard reportedContentWidth == 0 else { return }
             let width = currentContentWidth()
             guard width > 0, !isLiveResizing else { return }
@@ -1252,7 +1294,11 @@ struct VirtualBlockList: NSViewRepresentable {
             listLog.debug("contentWidth: \(width, format: .fixed(precision: 1))")
             #endif
             // Never inside an AppKit layout pass — SwiftUI state, one turn later.
-            DispatchQueue.main.async { [weak self] in self?.setContentWidth(width) }
+            pendingPublishes += 1
+            DispatchQueue.main.async { [weak self] in
+                self?.setContentWidth(width)
+                self?.pendingPublishes -= 1
+            }
         }
 
         // MARK: - Cell content
