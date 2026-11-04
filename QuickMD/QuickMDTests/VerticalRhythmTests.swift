@@ -779,6 +779,40 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(try quoteShape("Text[^1]\n\n> a\n[^1]: note\n").prefix(2), ["t:Text¹", "q1:a"])
     }
 
+    // MARK: - Indented fences
+
+    /// A fence indented N spaces drops up to N spaces from each of its lines
+    /// (CommonMark; GitHub, gfm/b1_*.html). It kept them: every code block
+    /// of a numbered-steps list was drawn, searched and copied shifted right.
+    func testAnIndentedFenceDropsItsIndentationFromItsLines() throws {
+        XCTAssertEqual(try quoteShape("1. Step\n\n    ```bash\n    cmd\n      nested\n    ```\n"),
+                       ["t:1. Step", "c:cmd\n  nested"])
+        XCTAssertEqual(try quoteShape("  ```\n code\n   code2\nflush\n  ```\n"), ["c:code\n code2\nflush"])
+        XCTAssertEqual(try quoteShape("1. Step\n   ```\n   cmd\n   ```\n"), ["t:1. Step", "c:cmd"])
+        XCTAssertEqual(try quoteShape("```\n  keep\n```\n"), ["c:  keep"])
+        XCTAssertEqual(try quoteShape("    ~~~\n    a\n\n    b\n    ~~~\n"), ["c:a\n\nb"])
+        // Search counts, and copy reads, what is drawn.
+        let blocks = try XCTUnwrap(parseReturning("1. Step\n\n    ```\n    let needle = 1\n    ```\n"))
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "    let").matchBlockIds, [])
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "let needle").matchBlockIds, [blocks[1].id])
+    }
+
+    /// Source Edit finds a selection made in such a block in the source,
+    /// whose lines still carry the indentation: a multi-line selection is
+    /// matched with the spaces and tabs at the start of each source line
+    /// skipped (a literal match finds it no longer).
+    func testASelectionInAnIndentedFenceIsFoundInTheSource() {
+        let source = "1. Step\n\n    ```\n    cmd\n      nested\n    ```\n" as NSString
+        let range = SourceEditSupport.sourceRange(ofSelection: "cmd\n  nested", before: "", after: "",
+                                                  in: source, lines: 3..<5)
+        XCTAssertEqual(range.map { source.substring(with: $0) }, "cmd\n      nested")
+        // A literal match wins where there is one.
+        let flat = "```\ncmd\n  nested\n```\n" as NSString
+        let literal = SourceEditSupport.sourceRange(ofSelection: "cmd\n  nested", before: "", after: "",
+                                                    in: flat, lines: 1..<3)
+        XCTAssertEqual(literal.map { flat.substring(with: $0) }, "cmd\n  nested")
+    }
+
     /// The lines a quote absorbed are the quote's: its source line is its
     /// first, the next block starts after them, the tint spans them, search
     /// finds and copy reads them in the quote — and a long hard-wrapped quote

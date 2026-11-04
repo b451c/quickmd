@@ -161,6 +161,10 @@ struct MarkdownBlockParser: Sendable {
             if let opening = Self.fenceOpening(trimmedLine) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                 let fenceLength = opening.length
+                // CommonMark: a fence indented N columns drops up to N columns
+                // of indentation from each of its lines (a fence under a list
+                // item is not drawn shifted right).
+                let fenceIndent = Self.indentColumns(line)
 
                 // Extract language after fence
                 let language = String(trimmedLine.dropFirst(fenceLength)).trimmingCharacters(in: .whitespaces)
@@ -173,7 +177,7 @@ struct MarkdownBlockParser: Sendable {
                         i += 1
                         break
                     }
-                    codeLines.append(lines[i])
+                    codeLines.append(Self.removingIndentation(lines[i], upTo: fenceIndent))
                     i += 1
                 }
 
@@ -998,6 +1002,45 @@ struct MarkdownBlockParser: Sendable {
     }
 
     // MARK: - Fences and `$$` blocks
+
+    /// Columns of the spaces and tabs a line starts with (a tab runs to the
+    /// next multiple of 4, CommonMark).
+    static func indentColumns(_ line: String) -> Int {
+        var columns = 0
+        for character in line {
+            if character == " " {
+                columns += 1
+            } else if character == "\t" {
+                columns += 4 - columns % 4
+            } else {
+                break
+            }
+        }
+        return columns
+    }
+
+    /// `line` without up to `columns` columns of its leading spaces and tabs
+    /// (a tab that would reach past them stays).
+    static func removingIndentation(_ line: String, upTo columns: Int) -> String {
+        guard columns > 0 else { return line }
+        var used = 0
+        var index = line.startIndex
+        while index < line.endIndex {
+            let character = line[index]
+            let width: Int
+            if character == " " {
+                width = 1
+            } else if character == "\t" {
+                width = 4 - used % 4
+            } else {
+                break
+            }
+            guard used + width <= columns else { break }
+            used += width
+            index = line.index(after: index)
+        }
+        return String(line[index...])
+    }
 
     /// A code fence's marker character and length.
     typealias Fence = (marker: Character, length: Int)

@@ -192,7 +192,21 @@ enum SourceEditSupport {
             if wantBefore.isEmpty && wantAfter.isEmpty { break }
             searchFrom = found.location + 1
         }
-        return best
+        return best ?? indentedMatch(of: needle, in: text, scope: scope)
+    }
+
+    /// A multi-line selection that is not in the source literally, found
+    /// with the spaces and tabs at the start of each source line after the
+    /// first skipped: the renderer drops a fence's indentation from its
+    /// lines (CommonMark), so a selection inside a fenced block under a list
+    /// item reads "a\nb" where the source has "a\n    b". The first match.
+    private static func indentedMatch(of needle: String, in text: NSString, scope: NSRange) -> NSRange? {
+        guard needle.contains("\n") else { return nil }
+        let pattern = needle.components(separatedBy: "\n")
+            .map { NSRegularExpression.escapedPattern(for: $0) }
+            .joined(separator: "\n[ \t]*")
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        return regex.firstMatch(in: text as String, range: scope)?.range
     }
 
     static func sourceRange(ofSelection selectedText: String, before: String, after: String,
