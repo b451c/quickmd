@@ -950,13 +950,80 @@ struct MarkdownRenderer: Sendable {
         attr.setDualForeground(theme.linkColor)
         attr.setDualUnderline()
 
-        if let parsedUrl = URL(string: url) {
-            attr.link = parsedUrl
-        } else if let encoded = url.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-                  let parsedUrl = URL(string: encoded) {
+        if let parsedUrl = Self.linkURL(for: url) {
             attr.link = parsedUrl
         }
         return (attr, remaining)
+    }
+
+    /// The URL of a link destination as written, the SAME on every macOS.
+    ///
+    /// `URL(string:)` rejects a space or non-ASCII character on macOS 13 but
+    /// percent-encodes it on 14+, and the old fallback for 13 encoded the
+    /// whole string with `.urlPathAllowed` — the `#` too, so
+    /// `README.md#Install Guide` became a file named `README.md#Install Guide`
+    /// and the jump failed. Here a destination made only of characters a URL
+    /// may contain goes to `URL(string:)` as is (nothing for the OS to
+    /// encode); anything else is encoded by us, the part before the first `#`
+    /// and the fragment separately, so the `#` stays the fragment delimiter.
+    /// A `%` followed by two hex digits is an escape and kept; any other `%`
+    /// becomes `%25`.
+    static func linkURL(for destination: String) -> URL? {
+        let scalars = destination.unicodeScalars[...]
+        if !needsEncoding(scalars) {
+            return URL(string: destination)
+        }
+        guard let hash = scalars.firstIndex(of: "#") else {
+            return URL(string: percentEncoded(scalars))
+        }
+        return URL(string: percentEncoded(scalars[..<hash]) + "#"
+                   + percentEncoded(scalars[scalars.index(after: hash)...]))
+    }
+
+    /// RFC 3986 unreserved + reserved characters — what a URL may contain as
+    /// written (`%` only as the start of an escape, see `isEscape`).
+    private static let urlCharacters = CharacterSet(
+        charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~:/?#[]@!$&'()*+,;=")
+
+    private typealias Scalars = Substring.UnicodeScalarView
+
+    /// `%` followed by two hex digits.
+    private static func isEscape(_ scalars: Scalars, at index: Scalars.Index) -> Bool {
+        guard scalars[index] == "%" else { return false }
+        let first = scalars.index(after: index)
+        guard first < scalars.endIndex else { return false }
+        let second = scalars.index(after: first)
+        return second < scalars.endIndex
+            && scalars[first].properties.isASCIIHexDigit && scalars[second].properties.isASCIIHexDigit
+    }
+
+    private static func needsEncoding(_ scalars: Scalars) -> Bool {
+        var index = scalars.startIndex
+        while index < scalars.endIndex {
+            if !urlCharacters.contains(scalars[index]), !isEscape(scalars, at: index) { return true }
+            index = scalars.index(after: index)
+        }
+        return false
+    }
+
+    /// One part of a destination (no `#` delimiter inside): legal characters
+    /// and valid escapes kept, everything else — `#`, `[`, `]` too, which a
+    /// URL allows only in specific places — as UTF-8 `%XX`.
+    private static func percentEncoded(_ scalars: Scalars) -> String {
+        var out = ""
+        var index = scalars.startIndex
+        while index < scalars.endIndex {
+            let scalar = scalars[index]
+            let keep = scalar == "%" ? isEscape(scalars, at: index)
+                : scalar != "#" && scalar != "[" && scalar != "]" && urlCharacters.contains(scalar)
+            if keep {
+                out.unicodeScalars.append(scalar)
+            } else {
+                for byte in String(scalar).utf8 { out += String(format: "%%%02X", byte) }
+            }
+            index = scalars.index(after: index)
+        }
+        return out
     }
 
     /// Inline images stay text — an italic "[Image: alt]" placeholder (real
@@ -975,7 +1042,7 @@ struct MarkdownRenderer: Sendable {
         attr.setDualForeground(theme.secondaryTextColor)
         // No link for an embedded `data:` image: clicking it would hand a
         // multi-megabyte URL to the "Open link?" alert.
-        if !InlineSyntaxScanner.isDataURI(image.url), let url = URL(string: image.url) {
+        if !InlineSyntaxScanner.isDataURI(image.url), let url = Self.linkURL(for: image.url) {
             attr.link = url
         }
         return (attr, remaining[image.end...])

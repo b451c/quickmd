@@ -248,4 +248,41 @@ final class SectionExtractorTests: XCTestCase {
         XCTAssertNil(fragment("file:///tmp/a.md#install"))
         XCTAssertNil(fragment("docs/install"))
     }
+
+    /// A link destination becomes the same URL on every macOS: macOS 13's
+    /// `URL(string:)` rejects spaces / non-ASCII (14+ encodes them), and the
+    /// old 13 fallback encoded the `#` too, so `README.md#Install Guide` was a
+    /// file named "README.md#Install Guide". Every result must also parse
+    /// WITHOUT the OS encoding anything (strict parse on 14+), i.e. the
+    /// string handed to `URL(string:)` is already valid as macOS 13 sees it.
+    func testLinkURLKeepsTheFragmentDelimiterOnEveryMacOS() throws {
+        func link(_ destination: String) throws -> URL {
+            let url = try XCTUnwrap(MarkdownRenderer.linkURL(for: destination), destination)
+            if #available(macOS 14, *) {
+                XCTAssertNotNil(URL(string: url.absoluteString, encodingInvalidCharacters: false),
+                                "\(destination) must not rely on the OS encoding it")
+            }
+            return url
+        }
+
+        let sameFile = try link("README.md#Install Guide")
+        XCTAssertEqual(sameFile.relativeString, "README.md#Install%20Guide")
+        XCTAssertEqual(sameFile.path, "README.md")
+        XCTAssertEqual(sameFile.fragment(percentEncoded: false), "Install Guide")
+
+        let other = try link("Zażółć notes.md#Sekcja Ł#2")
+        XCTAssertEqual(other.path, "Zażółć notes.md")
+        XCTAssertEqual(other.fragment(percentEncoded: false), "Sekcja Ł#2", "a later # belongs to the fragment")
+
+        XCTAssertEqual(HeadingAnchors.inDocumentFragment(of: try link("#Install Guide")), "Install Guide")
+
+        let web = try link("https://example.com/a b?q=x y#frag z")
+        XCTAssertEqual(web.host, "example.com")
+        XCTAssertEqual(web.fragment(percentEncoded: false), "frag z")
+
+        XCTAssertEqual(try link("100% done.md").relativeString, "100%25%20done.md", "a bare % is not an escape")
+        XCTAssertEqual(try link("a%20b.md#x").relativeString, "a%20b.md#x", "valid URLs are untouched")
+        XCTAssertEqual(try link("https://example.com/docs_(v2)#top").absoluteString,
+                       "https://example.com/docs_(v2)#top")
+    }
 }
