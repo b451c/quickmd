@@ -494,6 +494,28 @@ final class ParserTests: XCTestCase {
                         .nonZero, "no list hang")
     }
 
+    /// An image line whose alt holds many inner `[a](` that never close: the
+    /// bracket scan must stay linear (a depth scan per `](` to the end of the
+    /// line made it quadratic, review round 7). Relative, not absolute: 8×
+    /// the input may take at most ~3× the linear share.
+    func testImageLineWithUnclosedInnerLinksParsesInLinearTime() {
+        let parser = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light))
+        func time(_ count: Int) -> TimeInterval {
+            let line = "![x" + String(repeating: "[a](", count: count) + "]"
+            _ = parser.parse(line)  // warm
+            var best = TimeInterval.infinity
+            for _ in 0..<3 {
+                let start = Date()
+                _ = parser.parse(line)
+                best = min(best, Date().timeIntervalSince(start))
+            }
+            return best
+        }
+        let small = time(5_000)
+        let large = time(40_000)
+        XCTAssertLessThan(large, max(small, 0.005) * 24, "5k: \(small) s, 40k: \(large) s (quadratic would be ~64×)")
+    }
+
     // MARK: - Reference links in quotes, alerts and table cells
 
     /// Quotes, alerts and table cells keep their markdown and are rendered

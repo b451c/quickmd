@@ -61,21 +61,11 @@ enum InlineSyntaxScanner {
         /// not open a "span" that swallows a later link's `[`.
         private static func build(_ text: String) -> (brackets: [Int: Int], parens: [Int: Int]) {
             InlineSyntaxScanner.withBytes(text[...]) { bytes in
-                var brackets: [Int: Int] = [:], parens: [Int: Int] = [:]
-                var openBrackets: [Int] = [], openParens: [Int] = []
-                var i = 0
-                while i < bytes.count {
-                    if isEscape(bytes, at: i, before: bytes.count) { i += 2; continue }
-                    switch bytes[i] {
-                    case UInt8(ascii: "("): openParens.append(i)
-                    case UInt8(ascii: ")"): if let open = openParens.popLast() { parens[open] = i }
-                    default: break
-                    }
-                    i += 1
-                }
-
+                var brackets: [Int: Int] = [:]
+                let parens = pairParens(bytes)
+                var openBrackets: [Int] = []
                 var codeSpans = CodeSpanScanner()
-                i = 0
+                var i = 0
                 while i < bytes.count {
                     if isEscape(bytes, at: i, before: bytes.count) { i += 2; continue }
                     if bytes[i] == backtick, let end = codeSpans.end(bytes, at: i) {
@@ -99,6 +89,24 @@ enum InlineSyntaxScanner {
                 return (brackets, parens)
             }
         }
+    }
+
+    /// Every `(` → its `)`, one stack pass, escapes respected — exactly the
+    /// closer a depth scan from that `(` finds (`scanParenDestination`).
+    fileprivate static func pairParens(_ bytes: Bytes) -> [Int: Int] {
+        var parens: [Int: Int] = [:]
+        var open: [Int] = []
+        var i = 0
+        while i < bytes.count {
+            if isEscape(bytes, at: i, before: bytes.count) { i += 2; continue }
+            switch bytes[i] {
+            case UInt8(ascii: "("): open.append(i)
+            case UInt8(ascii: ")"): if let start = open.popLast() { parens[start] = i }
+            default: break
+            }
+            i += 1
+        }
+        return parens
     }
 
     /// A pair table seen from a slice: offsets in the slice's byte buffer are
@@ -333,6 +341,10 @@ enum InlineSyntaxScanner {
         var depth = 0
         var i = open
         var codeSpans = CodeSpanScanner()
+        /// Built on the first inner `](` only: a depth scan per `](` that
+        /// never closes went to the end of the line each time (quadratic on
+        /// `![x` + `[a](` × N, review round 7).
+        var parens: [Int: Int]?
         while i < bytes.count {
             if isEscape(bytes, at: i, before: bytes.count) { i += 2; continue }
             if bytes[i] == backtick, let end = codeSpans.end(bytes, at: i) { i = end; continue }
@@ -343,10 +355,12 @@ enum InlineSyntaxScanner {
                 if depth == 0 { return i }
                 // An inner link's destination is not scanned for code spans
                 // (see `PairTable.build`).
-                if i + 1 < bytes.count, bytes[i + 1] == UInt8(ascii: "("),
-                   let close = scanParenDestination(bytes, open: i + 1, nil)?.end {
-                    i = close
-                    continue
+                if i + 1 < bytes.count, bytes[i + 1] == UInt8(ascii: "(") {
+                    if parens == nil { parens = pairParens(bytes) }
+                    if let close = parens?[i + 1] {
+                        i = close + 1
+                        continue
+                    }
                 }
             default: break
             }
