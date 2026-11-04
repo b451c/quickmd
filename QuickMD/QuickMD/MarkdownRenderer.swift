@@ -305,8 +305,22 @@ struct MarkdownRenderer: Sendable {
     }
 
     /// A bullet, ordered or task list item — `renderLine` renders it as one.
-    /// The parser starts a new row at an item that follows paragraph text.
     static func isListItem(_ line: String) -> Bool { classify(line) == .listItem }
+
+    /// Whether this item line may interrupt a paragraph (CommonMark): a
+    /// bullet or task item, or an ordered item numbered 1 — and not an empty
+    /// one. Any other item line after paragraph text (`1984. was a year`)
+    /// continues the paragraph: it is still drawn as an item, but it is no
+    /// block boundary, so the parser does not start a new row there.
+    static func canInterruptParagraph(_ line: String) -> Bool {
+        guard isListItem(line) else { return false }
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if let marker = trimmed.range(of: #"^\d+\."#, options: .regularExpression) {
+            guard Int(trimmed[marker].dropLast()) == 1 else { return false }
+            return !trimmed[marker.upperBound...].trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        return !trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces).isEmpty
+    }
 
     /// A thematic break (`---`, `***`, `___`) — `renderLine` draws it as a rule.
     static func isThematicBreak(_ line: String) -> Bool {

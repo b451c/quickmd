@@ -905,14 +905,19 @@ struct MarkdownBlockParser: Sendable {
                 inList = false
                 continue
             }
-            let isItem = MarkdownRenderer.isListItem(line)
-            if isItem, !inList { flushRow() }
+            // A list starts at an item that opens the row, or that may
+            // interrupt the paragraph before it (CommonMark: a bullet, or an
+            // ordered item numbered 1). Any other item line is paragraph text
+            // the renderer draws as an item, as it always did.
+            let startsList = !inList && MarkdownRenderer.isListItem(line)
+                && (row.isEmpty || MarkdownRenderer.canInterruptParagraph(line))
+            if startsList { flushRow() }
             if row.count >= Self.textChunkLineLimit {
                 flushRow()
                 rowJoinsPrevious = true
             }
             append(position)
-            if isItem { inList = true }
+            if startsList { inList = true }
         }
         flushRow()
     }

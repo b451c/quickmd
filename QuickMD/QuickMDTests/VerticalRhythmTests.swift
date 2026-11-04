@@ -119,6 +119,23 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertTrue(blocks.allSatisfy { !$0.joinsPrevious })
     }
 
+    /// CommonMark: only a bullet, or an ordered item numbered 1, interrupts a
+    /// paragraph. `1984. …` after paragraph text continues the paragraph —
+    /// drawn as an item as before, but no new row and no gap.
+    func testOnlyAnItemThatMayInterruptAParagraphStartsARow() {
+        for line in ["- item", "* item", "+ item", "- [ ] task", "1. first"] {
+            XCTAssertEqual(parse("Paragraph text.\n" + line).count, 2, line)
+        }
+        for line in ["1984. A year", "2. second", "-", "1."] {
+            XCTAssertEqual(parse("Paragraph text.\n" + line).count, 1, line)
+        }
+        // Still drawn on its own line, as an item.
+        let year = plain(parse("Paragraph text.\n1984. A year\n1985. Another")[0])
+        XCTAssertTrue(year.contains("\n1984.") && year.contains("\n1985."), year)
+        // A list that starts a row is still a list, whatever its number.
+        XCTAssertEqual(parse("Text.\n\n3. third\n4. fourth").count, 2)
+    }
+
     // MARK: - Headings
 
     func testEveryBlockUnderAHeadingGetsTheSameOpticalGap() {
