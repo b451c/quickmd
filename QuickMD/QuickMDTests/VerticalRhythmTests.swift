@@ -859,6 +859,48 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(HeadingAnchors.slug(entries[0].title), "para-one-line-two")
     }
 
+    // MARK: - Long quotes
+
+    /// A width change lays a quote or alert body out again WITHOUT rendering
+    /// it: the measurer takes the string the previous measurement of the same
+    /// parse built (`reusing`, the caller's `measured.converted`), as a
+    /// paragraph's string is stored in its block. It rendered the body again
+    /// on every width change and reading-mode toggle — a 5,000-line quote
+    /// cost ~530 ms per re-measure (-O) against ~160 ms for the same text as
+    /// a paragraph. The heights and the rhythm are a fresh measurement's.
+    func testAWidthChangeLaysAQuoteOutAgainWithoutRenderingIt() throws {
+        let long = "words that wrap at a narrow column but not at a wide one, and a few more of them"
+        let markdown = "Para\n\n> \(long)\nand a lazy line\n\n> > nested \(long)\n\n"
+            + "> [!NOTE]\n> \(long)\n\n> [!TIP]\n\nEnd\n"
+        let blocks = try XCTUnwrap(parseReturning(markdown))
+        let theme = MarkdownTheme.cached(for: .light)
+        let first = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,
+                                                contentWidth: 700, math: nil)
+        let again = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,
+                                                contentWidth: 260, reusing: first.converted, math: nil)
+        let fresh = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,
+                                                contentWidth: 260, math: nil)
+        XCTAssertNotEqual(first.table.heights, fresh.table.heights)   // the wrap moved
+        XCTAssertEqual(again.table.heights, fresh.table.heights)
+        XCTAssertEqual(again.rhythm, fresh.rhythm)
+        let bodies = blocks.filter { block in
+            switch block.content {
+            case .blockquote: return true
+            case .alert(_, let content): return !content.isEmpty
+            default: return false
+            }
+        }
+        XCTAssertEqual(bodies.count, 3)
+        for block in bodies {
+            let reused = try XCTUnwrap(again.converted[block.id], block.id)
+            XCTAssertTrue(reused === first.converted[block.id], block.id)
+            XCTAssertEqual(reused, fresh.converted[block.id], block.id)
+        }
+        // Only those: a paragraph's string is built from its block again.
+        let paragraph = try XCTUnwrap(blocks.first)
+        XCTAssertFalse(again.converted[paragraph.id] === first.converted[paragraph.id])
+    }
+
     /// The lines a quote absorbed are the quote's: its source line is its
     /// first, the next block starts after them, the tint spans them, search
     /// finds and copy reads them in the quote — and a long hard-wrapped quote

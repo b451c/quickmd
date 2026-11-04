@@ -1201,6 +1201,15 @@ enum BlockHeightMeasurer {
     ///     computed (`BlockLayout.ImageBlock`) instead of starting at the
     ///     loading view. SVG sizes come from `SVGImageDecoder`, diagram
     ///     geometry from `MermaidGeometryStore`.
+    ///   - reusing: strings a PREVIOUS measurement of the same parse built,
+    ///     keyed by block id — the caller's last `MeasuredBlocks.converted`.
+    ///     Quote and alert bodies found here are laid out again as they are:
+    ///     a paragraph's string is stored in its block, a quote's is rendered
+    ///     from its source (`renderQuotedBody`), and that render is the whole
+    ///     cost of a long quote (a 5,000-line one: ~370 ms of ~530). A width
+    ///     change does not change a character, so the render is done once per
+    ///     parse. Pass it ONLY for the same content, theme and zoom (the
+    ///     `measureMathRows` contract); a new parse passes nothing.
     ///   - math: the math engine, or `nil` when the call is NOT on the main
     ///     thread — see the thread rule in the file header. With `nil`, rows
     ///     that need the engine come back at a placeholder height, listed in
@@ -1221,6 +1230,7 @@ enum BlockHeightMeasurer {
                         contentWidth: CGFloat,
                         heightSeeds: [String: CGFloat] = [:],
                         imageSizes: [NSString: CGSize] = [:],
+                        reusing: [String: NSAttributedString] = [:],
                         math: MathRendering?) -> MeasuredBlocks {
         #if DEBUG
         let signpostID = heightSignpost.makeSignpostID()
@@ -1296,8 +1306,9 @@ enum BlockHeightMeasurer {
                 // The quote body is inline-rendered exactly as BlockquoteView
                 // does it, and passed to TextBlockView WITHOUT inline math (the
                 // view does not opt in), so we must not opt in either — which is
-                // also why a quote never needs the math engine.
-                let ns = BlockTextConverter.makeNSAttributedString(
+                // also why a quote never needs the math engine. A string the
+                // previous measurement built is only laid out again (`reusing`).
+                let ns = reusing[block.id] ?? BlockTextConverter.makeNSAttributedString(
                     from: renderer.renderQuotedBody(content), hasInlineMath: false,
                     theme: theme, fontScale: fontScale, math: engine)
                 converted[block.id] = ns
@@ -1312,7 +1323,7 @@ enum BlockHeightMeasurer {
                     + 2 * BlockLayout.Alert.verticalPadding
                     + 2 * BlockLayout.Document.alertOuterVerticalPadding
                 if !content.isEmpty {
-                    let ns = BlockTextConverter.makeNSAttributedString(
+                    let ns = reusing[block.id] ?? BlockTextConverter.makeNSAttributedString(
                         from: renderer.renderQuotedBody(content), hasInlineMath: false,
                         theme: theme, fontScale: fontScale, math: engine)
                     converted[block.id] = ns
