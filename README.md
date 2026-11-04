@@ -11,9 +11,9 @@
 
 [Features](#features) • [Installation](#installation) • [Usage](#usage) • [Under the Hood](#under-the-hood) • [Support](#support)
 
-[![App Store goal](https://qmd.app/api/donation-goal.svg)](https://qmd.app/#support-goal)
+[![Donation goal](https://qmd.app/api/donation-goal.svg)](https://qmd.app/#support-goal)
 
-**QuickMD is free. Donations help cover the yearly Apple Developer membership - [Buy Me a Coffee or Ko-fi](#support-development).**
+**QuickMD is free. Donations help renew the qmd.app domain - [Buy Me a Coffee or Ko-fi](#support-development).**
 
 </div>
 
@@ -244,9 +244,9 @@ CI runs the test suite plus Release builds of both flavors on every push and pul
 
 QuickMD is **free and open source**. If you find it useful, consider supporting development.
 
-Donations help cover the yearly Apple Developer membership ($99) - [see the goal on qmd.app](https://qmd.app/#support-goal).
+Donations help renew the qmd.app domain - [see the goal on qmd.app](https://qmd.app/#support-goal).
 
-[![App Store goal](https://qmd.app/api/donation-goal.svg)](https://qmd.app/#support-goal)
+[![Donation goal](https://qmd.app/api/donation-goal.svg)](https://qmd.app/#support-goal)
 
 
 <a href="https://buymeacoffee.com/bsroczynskh" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 40px !important;width: 145px !important;" ></a>
