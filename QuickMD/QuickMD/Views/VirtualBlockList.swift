@@ -94,8 +94,12 @@ struct VirtualBlockList: NSViewRepresentable {
     enum Anchor: Equatable {
         /// Row top at the top of the content area (ToC).
         case top
-        /// Row centre at the centre of the content area (search).
+        /// Row centre at the centre of the content area (search) — the focused
+        /// match's, in a block taller than that area.
         case center
+        /// ⌘G to another match of the SAME block: a block taller than the
+        /// content area brings that match to the centre; one that fits stays.
+        case match
     }
 
     /// One programmatic scroll. `token` is the trigger: the coordinator acts when
@@ -400,6 +404,9 @@ struct VirtualBlockList: NSViewRepresentable {
         /// clip; the install puts the reader back on it.
         private var isSwitchingLayout = false
         private var layoutSwitchGeneration = 0
+        /// A search jump into a block taller than the content area whose match
+        /// could not be located yet (`aimAtPendingMatch`): that block's id.
+        private var pendingMatchRow: String?
         #if DEBUG
         /// Where the last `setContentTop` left the content top, to tell a clip
         /// move this list made from one something else made (logged with the
@@ -576,6 +583,7 @@ struct VirtualBlockList: NSViewRepresentable {
             self.anchor = nil
             isJumping = false
             isSwitchingLayout = false
+            pendingMatchRow = nil
             reportedBlocks = []
 
             blocks = newBlocks
@@ -778,6 +786,7 @@ struct VirtualBlockList: NSViewRepresentable {
                 completion = { [weak self] in
                     guard let self, self.jumpGeneration == jump else { return }
                     self.isJumping = false
+                    self.aimAtPendingMatch()
                 }
             } else {
                 isJumping = false
@@ -932,26 +941,83 @@ struct VirtualBlockList: NSViewRepresentable {
             // it that reports its real height while the scroll is in flight, or
             // after it landed, moves the content top with it (`reportHeight`).
             let target: CGFloat
+            var needsMatch = false
             switch request.anchor {
             case .top:
                 // The block's top, below the space above it: the content inset
                 // is then the gap above it, as above the document's first block.
                 target = blockTopY(row)
-            case .center:
+            case .center, .match:
                 // The BLOCK's middle (not its row's, which includes the space
                 // above it) at the centre of the CONTENT area (between the
                 // insets), not of the clip view — with equal top/bottom insets
-                // these coincide.
+                // these coincide. A block taller than that area: its focused
+                // match (`RowGeometry.searchTarget`).
                 let insets = scrollView.contentInsets
                 let contentHeight = scrollView.contentView.bounds.height - insets.top - insets.bottom
-                target = RowGeometry.centerTarget(rowRect: tableView.rect(ofRow: row),
-                                                  spacingAbove: table.spacing(row),
-                                                  visibleHeight: contentHeight)
+                guard let search = RowGeometry.searchTarget(rowRect: tableView.rect(ofRow: row),
+                                                            spacingAbove: table.spacing(row),
+                                                            visibleHeight: contentHeight,
+                                                            matchMidY: focusedMatchMidY(row: row),
+                                                            withinBlock: request.anchor == .match)
+                else { return }
+                target = search.target
+                needsMatch = search.needsMatch
             }
             #if DEBUG
-            listLog.debug("scrollRequest: \(request.blockId, privacy: .public) row \(row) anchor=\(request.anchor == .top ? "top" : "center", privacy: .public) target=\(target, format: .fixed(precision: 1))")
+            listLog.debug("scrollRequest: \(request.blockId, privacy: .public) row \(row) anchor=\(String(describing: request.anchor), privacy: .public) target=\(target, format: .fixed(precision: 1))")
             #endif
             place(row: row, offset: target - blockTopY(row), animated: request.animated)
+            pendingMatchRow = needsMatch ? request.blockId : nil
+            if needsMatch, !isJumping {
+                // No glide to wait for (not animated, or already there).
+                DispatchQueue.main.async { [weak self] in self?.aimAtPendingMatch() }
+            }
+        }
+
+        /// The focused match's middle (document y) in `row`, from its text view
+        /// — nil when the row is not the focused block or its view is not on
+        /// display.
+        private func focusedMatchMidY(row: Int) -> CGFloat? {
+            guard let tableView, row < blocks.count, !searchText.isEmpty,
+                  let occurrence = focusedOccInBlock, focusedBlockId == blocks[row].id,
+                  let textView = selection.displayedTextView(for: blocks[row].id, in: tableView),
+                  let rect = textView.searchMatchRect(term: searchText, occurrence: occurrence) else { return nil }
+            return textView.convert(rect, to: tableView).midY
+        }
+
+        /// A search jump into a block taller than the content area landed on
+        /// the block, whose view was not on display to ask where the match is:
+        /// now it is — glide on to the match. The row's cells are built by
+        /// the next layout pass; one is forced, and failing that it is asked
+        /// again on the next turns of the run loop.
+        private func aimAtPendingMatch(retries: Int = 2) {
+            guard let blockId = pendingMatchRow else { return }
+            // Not if the reader has scrolled on meanwhile.
+            guard let tableView, let scrollView, let row = rowForBlockId[blockId],
+                  anchoredRow(contentTop: contentTopY()) == row else {
+                pendingMatchRow = nil
+                return
+            }
+            var matchMidY = focusedMatchMidY(row: row)
+            if matchMidY == nil {
+                tableView.layoutSubtreeIfNeeded()
+                matchMidY = focusedMatchMidY(row: row)
+            }
+            guard let matchMidY else {
+                if retries > 0 {
+                    DispatchQueue.main.async { [weak self] in self?.aimAtPendingMatch(retries: retries - 1) }
+                } else {
+                    pendingMatchRow = nil
+                }
+                return
+            }
+            pendingMatchRow = nil
+            let insets = scrollView.contentInsets
+            let contentHeight = scrollView.contentView.bounds.height - insets.top - insets.bottom
+            let target = matchMidY - contentHeight / 2
+            guard abs(target - contentTopY()) > 0.5 else { return }
+            place(row: row, offset: target - blockTopY(row), animated: true)
         }
 
         // MARK: - Scroll offset arithmetic
@@ -2289,6 +2355,11 @@ final class SelectionController: NSObject {
         let range = textView.selectionRange(forProposedRange: NSRange(location: index, length: 0),
                                             granularity: granularity)
         return (SelectionPoint(row: row, offset: range.location), SelectionPoint(row: row, offset: NSMaxRange(range)))
+    }
+
+    /// The text view of `blockId`'s row, if it is on display in `tableView`.
+    func displayedTextView(for blockId: String, in tableView: NSTableView) -> SelfSizingTextView? {
+        registeredTextView(for: blockId, in: tableView)
     }
 
     /// The registered view for `blockId` — if it is really on display in THIS

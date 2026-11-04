@@ -1432,9 +1432,16 @@ struct MarkdownView: View {
             currentMatchIndex = (currentMatchIndex - 1 + matchBlockIds.count) % matchBlockIds.count
         }
         updateFocusState()
-        // Only scroll when moving to a different block
-        if focusedBlockId != oldBlockId {
+        switch DocumentSearch.stepScroll(from: oldBlockId, to: focusedBlockId) {
+        case .toBlock:
             scrollTrigger += 1
+        case .withinBlock:
+            // Another match of the same block: the list brings it to the eye
+            // when the block is taller than the window (a big table, a long
+            // code block); a block that fits stays where it is.
+            if let blockId = focusedBlockId { requestScroll(to: blockId, anchor: .match, animated: true) }
+        case nil:
+            break
         }
     }
 

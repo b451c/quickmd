@@ -218,6 +218,28 @@ enum RowGeometry {
         contentRect(rowRect: rowRect, spacingAbove: spacingAbove).midY - visibleHeight / 2
     }
 
+    /// Where a search jump (⌘G) puts the content top. The block's middle at
+    /// the centre — unless the block is taller than the content area (a big
+    /// table, a long code block): then the focused MATCH's middle
+    /// (`matchMidY`, document y) at the centre, so every match in the block is
+    /// brought to the eye and stepping between them scrolls. `needsMatch`: a
+    /// tall block whose match is not known yet (its view is not on display) —
+    /// the jump goes to the block and aims at the match when it lands.
+    ///
+    /// `withinBlock`: a step between two matches of the same block. A block
+    /// that fits the content area is not moved for it (nil) — it was centred
+    /// when the search arrived in it.
+    static func searchTarget(rowRect: NSRect, spacingAbove: CGFloat, visibleHeight: CGFloat,
+                             matchMidY: CGFloat?, withinBlock: Bool = false) -> (target: CGFloat, needsMatch: Bool)? {
+        let block = contentRect(rowRect: rowRect, spacingAbove: spacingAbove)
+        guard block.height > visibleHeight else {
+            if withinBlock { return nil }
+            return (centerTarget(rowRect: rowRect, spacingAbove: spacingAbove, visibleHeight: visibleHeight), false)
+        }
+        if let matchMidY { return (matchMidY - visibleHeight / 2, false) }
+        return (centerTarget(rowRect: rowRect, spacingAbove: spacingAbove, visibleHeight: visibleHeight), true)
+    }
+
     /// The scroll anchor: how far below the row's BLOCK top the content top
     /// is. Negative when the content top is in the space above the block.
     /// Relative to the block, not to the row's edge, because that space

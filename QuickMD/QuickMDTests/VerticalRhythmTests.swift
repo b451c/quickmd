@@ -464,6 +464,47 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertFalse(RowGeometry.isInUpperHalf(y: 140, rowRect: row, spacingAbove: 20))
     }
 
+    /// ⌘G into a block taller than the window (a big table, a long code
+    /// block) used to centre the BLOCK: a match near its end stayed below the
+    /// window. The match is what is centred now; a block that fits is still
+    /// centred as a whole, and a step within it does not move it.
+    func testASearchJumpIntoABlockTallerThanTheWindowCentresTheMatch() throws {
+        let visible: CGFloat = 800
+        let tall = NSRect(x: 0, y: 1000, width: 600, height: 3016)   // block 1016...4016
+        let matchMidY: CGFloat = 3700
+
+        let jump = try XCTUnwrap(RowGeometry.searchTarget(rowRect: tall, spacingAbove: 16, visibleHeight: visible,
+                                                          matchMidY: matchMidY))
+        XCTAssertEqual(jump.target, 3300)
+        XCTAssertFalse(jump.needsMatch)
+        XCTAssertTrue((jump.target...(jump.target + visible)).contains(matchMidY))
+        // The old target (the block's middle) left that match off screen.
+        let blockCentre = RowGeometry.centerTarget(rowRect: tall, spacingAbove: 16, visibleHeight: visible)
+        XCTAssertFalse((blockCentre...(blockCentre + visible)).contains(matchMidY))
+
+        // Stepping to another match of the same tall block moves to it.
+        let step = try XCTUnwrap(RowGeometry.searchTarget(rowRect: tall, spacingAbove: 16, visibleHeight: visible,
+                                                          matchMidY: 1900, withinBlock: true))
+        XCTAssertEqual(step.target, 1500)
+
+        // The match not known yet (the block's view is not on display): the
+        // block first, then the match when it lands.
+        let blind = try XCTUnwrap(RowGeometry.searchTarget(rowRect: tall, spacingAbove: 16, visibleHeight: visible,
+                                                           matchMidY: nil))
+        XCTAssertEqual(blind.target, blockCentre)
+        XCTAssertTrue(blind.needsMatch)
+
+        // A block that fits: centred as before, the match ignored; a step
+        // within it does not scroll.
+        let short = NSRect(x: 0, y: 100, width: 500, height: 60)
+        let fits = try XCTUnwrap(RowGeometry.searchTarget(rowRect: short, spacingAbove: 20, visibleHeight: 400,
+                                                          matchMidY: 150))
+        XCTAssertEqual(fits.target, -60)
+        XCTAssertFalse(fits.needsMatch)
+        XCTAssertNil(RowGeometry.searchTarget(rowRect: short, spacingAbove: 20, visibleHeight: 400,
+                                              matchMidY: 150, withinBlock: true))
+    }
+
     // MARK: - Scroll anchor across layouts (Reading Mode, width, zoom, jumps)
 
     /// `VirtualBlockList.Coordinator`'s scrolling over a model column, step by
