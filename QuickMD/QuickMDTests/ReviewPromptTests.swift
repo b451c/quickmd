@@ -269,17 +269,62 @@ final class ReviewPromptTests: XCTestCase {
         XCTAssertFalse(countdown.advance(isDisplayed: true, now: uptime + 60))
     }
 
-    /// The trigger's idle path: a run that completed while the reader was
-    /// idle is reset, so the first tick after they come back does NOT
-    /// complete — it takes another full 60 s of display.
-    func testCompletedRunResetForIdleNeedsAFullNewRun() {
+    // MARK: - Reading: display AND recent input on every tick
+
+    /// Feeds the trigger's ticks one second apart, the window displayed, with
+    /// the reader's input at `inputs` (monotonic seconds). Returns the first
+    /// tick at which the run completed, or nil.
+    private func firstCompletion(_ countdown: inout ReviewPromptCountdown,
+                                 from start: TimeInterval, through end: TimeInterval,
+                                 inputs: [TimeInterval]) -> TimeInterval? {
+        var now = start
+        while now <= end {
+            let lastInput = inputs.filter { $0 <= now }.max()
+            let idle = lastInput.map { now - $0 } ?? .infinity
+            if countdown.advance(isDisplayed: true, secondsSinceLastInput: idle, now: now) { return now }
+            now += 1
+        }
+        return nil
+    }
+
+    /// A window left open on an unattended Mac never completes a run.
+    func testAnUnattendedWindowNeverCompletesARun() {
         var countdown = ReviewPromptCountdown(required: 60)
-        XCTAssertTrue(tick(&countdown, from: uptime, through: uptime + 60))
-        XCTAssertFalse(ReviewPrompt.isUserActive(secondsSinceLastInput: 600))
-        countdown.reset()
-        XCTAssertFalse(countdown.advance(isDisplayed: true, now: uptime + 61), "first tick after idle")
-        XCTAssertFalse(tick(&countdown, from: uptime + 62, through: uptime + 120))
-        XCTAssertTrue(countdown.advance(isDisplayed: true, now: uptime + 121))
+        XCTAssertNil(firstCompletion(&countdown, from: uptime, through: uptime + 600,
+                                     inputs: [uptime - 1_000]))
+        XCTAssertNil(firstCompletion(&countdown, from: uptime + 601, through: uptime + 900, inputs: []))
+    }
+
+    /// The E2E case (2026-11-04, App Store build): 150 s unattended, then a
+    /// single mouse move and nothing more. The old trigger asked 33.6 s after
+    /// that move, because the 60 s run had been counting while the reader was
+    /// away. One touch must never be enough.
+    func testASingleTouchAfterABreakIsNotEnough() {
+        var countdown = ReviewPromptCountdown(required: 60)
+        let touch = uptime + 150
+        XCTAssertNil(firstCompletion(&countdown, from: uptime, through: touch + 300,
+                                     inputs: [uptime - 1_000, touch]))
+    }
+
+    /// A reader who came back and keeps using the Mac (a scroll every 20 s)
+    /// completes the run exactly one minute after coming back, not before.
+    func testAnActiveReaderCompletesAMinuteAfterComingBack() {
+        var countdown = ReviewPromptCountdown(required: 60)
+        let back = uptime + 150
+        let inputs = [uptime - 1_000] + stride(from: back, through: back + 200, by: 20).map { $0 }
+        XCTAssertEqual(firstCompletion(&countdown, from: uptime, through: back + 200, inputs: inputs),
+                       back + 60)
+    }
+
+    /// A pause that leaves a full minute without input ends the run before it
+    /// completes: the minute is counted again from the first touch after it.
+    func testAPauseOfAMinuteRestartsTheRun() {
+        var countdown = ReviewPromptCountdown(required: 60)
+        let start = uptime + 10    // one touch: active through start + 59, idle 60 s at start + 60
+        let resume = start + 100
+        let inputs = [start] + stride(from: resume, through: resume + 200, by: 20).map { $0 }
+        XCTAssertEqual(firstCompletion(&countdown, from: uptime, through: resume + 200, inputs: inputs),
+                       resume + 60)
     }
 
     func testCountdownSurvivesTimeGoingBack() {

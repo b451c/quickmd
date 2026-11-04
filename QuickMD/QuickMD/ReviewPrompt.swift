@@ -43,10 +43,10 @@ struct ReviewPrompt {
     /// The day set only has to answer "at least 3 days"; 30 keeps it bounded
     /// for a reader who opens documents every day for years.
     static let maximumStoredDays = 30
-    /// At the moment of asking, the reader must have touched a key, the mouse
-    /// or the trackpad within this many seconds: a window left open on an
-    /// unattended Mac is not reading.
-    static let maximumIdleAtRequest: TimeInterval = 60
+    /// On every tick of the 60 s display run, the reader must have touched a
+    /// key, the mouse or the trackpad within this many seconds: a window left
+    /// open on an unattended Mac is not reading.
+    static let maximumIdle: TimeInterval = 60
 
     private static let secondsPerDay: TimeInterval = 86_400
 
@@ -116,7 +116,7 @@ struct ReviewPrompt {
     static func isUserActive(secondsSinceLastInput: TimeInterval) -> Bool {
         secondsSinceLastInput.isFinite
             && secondsSinceLastInput >= 0
-            && secondsSinceLastInput < maximumIdleAtRequest
+            && secondsSinceLastInput < maximumIdle
     }
 
     // MARK: Stored values, garbage-tolerant
@@ -209,6 +209,19 @@ struct ReviewPromptCountdown {
         }
         lastTick = now
         return now - since >= required
+    }
+
+    /// One tick of the trigger: it counts only while the window is displayed
+    /// AND the reader is active (`ReviewPrompt.isUserActive`). An idle tick
+    /// ends the run like a hidden window does, so a complete run is 60 s of
+    /// display during which the reader kept using the Mac. A run can never
+    /// run out while they are away and then complete on the first touch
+    /// after they return: that touch starts a new run from zero.
+    mutating func advance(isDisplayed: Bool, secondsSinceLastInput: TimeInterval,
+                          now: TimeInterval) -> Bool {
+        advance(isDisplayed: isDisplayed
+                    && ReviewPrompt.isUserActive(secondsSinceLastInput: secondsSinceLastInput),
+                now: now)
     }
 
     /// Ends the current run (the window stopped being key); the next
