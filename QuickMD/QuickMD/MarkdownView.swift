@@ -171,7 +171,12 @@ struct MarkdownView: View {
 
     private struct DocumentIdentity: Equatable {
         let text: String
-        let colorScheme: ColorScheme
+        /// Only for a theme that follows the system (Auto, or a name that no
+        /// longer resolves); nil for a light or dark theme, whose palette does
+        /// not depend on it. Otherwise a window whose theme differs from the
+        /// system would parse twice on open: once with the system's scheme,
+        /// again after `preferredColorScheme` flips the window.
+        let colorScheme: ColorScheme?
         let themeName: String
         let fonts: DocumentFonts
         let fontScale: Double
@@ -534,8 +539,10 @@ struct MarkdownView: View {
         })
         .preferredColorScheme(windowColorScheme)
         .background(SystemColorSchemeReader { systemColorScheme = $0 })
-        .onChange(of: selectedThemeName) { name in
-            if MarkdownTheme.windowColorScheme(forThemeNamed: name) != nil { windowSchemeWasForced = true }
+        // Keyed on the scheme actually forced, not on the theme name: a custom
+        // theme whose file comes back resolves without the name changing.
+        .onChange(of: MarkdownTheme.windowColorScheme(forThemeNamed: selectedThemeName)) { forced in
+            if forced != nil { windowSchemeWasForced = true }
         }
         .focusedSceneValue(\.documentText, currentText)
         .focusedSceneValue(\.exportName, exportName)
@@ -593,7 +600,10 @@ struct MarkdownView: View {
             return .handled
         })
         .frame(minWidth: 400, minHeight: 300)
-        .task(id: DocumentIdentity(text: currentText, colorScheme: colorScheme, themeName: selectedThemeName,
+        .task(id: DocumentIdentity(text: currentText,
+                                   colorScheme: MarkdownTheme.windowColorScheme(forThemeNamed: selectedThemeName) == nil
+                                       ? colorScheme : nil,
+                                   themeName: selectedThemeName,
                                    fonts: DocumentFonts(body: bodyFontFamily, code: codeFontFamily),
                                    fontScale: fontScale)) {
             let text = currentText
