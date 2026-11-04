@@ -395,9 +395,11 @@ enum TableTextBuilder {
 
     /// A `.properties` value: inline Markdown (a URL is a link, `**x**` is
     /// bold) except that a backslash is literal, as in the YAML it came from
-    /// (`C:\_tmp` shows `C:\_tmp`, not `C:_tmp`). Screen and print.
+    /// (`C:\_tmp` shows `C:\_tmp`, not `C:_tmp`), and so is a character
+    /// reference (`&amp;` stays `&amp;`: GitHub renders front matter as plain
+    /// text). Screen and print.
     static func valueCell(_ value: String, renderer: MarkdownRenderer) -> AttributedString {
-        renderer.renderInline(value, literalBackslashes: true)
+        renderer.renderInline(value, literalBackslashes: true, literalEntities: true)
     }
 
     /// Header cells are semibold. Only raises the weight: a `**bold**` run

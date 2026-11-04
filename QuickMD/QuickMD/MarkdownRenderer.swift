@@ -146,13 +146,20 @@ struct MarkdownRenderer: Sendable {
     /// written; every other inline form still renders. Copied into the link
     /// text renderer with the rest of `self`.
     private var escapesDisabled = false
-    /// True while rendering a HEADING (`renderHeader`): character references
-    /// in its plain text and link text (`&amp;`, `&lt;`, `&#169;` — the set
-    /// `HTMLImageSyntax.decodeEntities` knows) show as the character, as on
-    /// GitHub, and so the heading's id slugs `Q&A`, not `Q&amp;A`. Decoded
-    /// AFTER inline parsing, so `&#42;` is a literal `*`, never emphasis;
-    /// code spans keep the reference as written.
-    private var decodesEntities = false
+    /// Character references (`AT&amp;T`, `&copy;`, `&#169;`) are decoded in
+    /// every piece of inline TEXT this renderer draws — plain runs, emphasis,
+    /// link text, image alt — as on GitHub (`HTMLEntities`, full HTML5 table),
+    /// so a heading's id slugs `Q&A`, not `Q&amp;A`. AFTER inline parsing:
+    /// `&#42;` is a literal `*`, never emphasis; code spans keep the reference
+    /// as written. True only for a front-matter value
+    /// (`renderInline(_:literalBackslashes:literalEntities:)`): GitHub shows
+    /// front matter as plain text, references included.
+    private var entitiesLiteral = false
+
+    /// `text` with its character references decoded, unless `entitiesLiteral`.
+    private func decodedText(_ text: String) -> String {
+        entitiesLiteral ? text : HTMLEntities.decode(text)
+    }
 
     // Static precompiled regex for parsing (avoid recompilation per line)
     private static let taskListRegex = try! NSRegularExpression(pattern: MarkdownTheme.taskListPattern)
@@ -415,9 +422,7 @@ struct MarkdownRenderer: Sendable {
     // MARK: - Block Renderers
 
     func renderHeader(_ text: String, level: Int) -> AttributedString {
-        var heading = self
-        heading.decodesEntities = true
-        var attr = heading.renderInlineFormatting(text)
+        var attr = renderInlineFormatting(text)
         attr.setDualFont(size: headerFontSize(level: level), bold: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         return attr
@@ -701,11 +706,13 @@ struct MarkdownRenderer: Sendable {
     }
 
     /// `renderInline` with backslash escapes off when `literalBackslashes`
-    /// (see `escapesDisabled`).
-    func renderInline(_ text: String, literalBackslashes: Bool) -> AttributedString {
-        guard literalBackslashes else { return renderInlineFormatting(text) }
+    /// (see `escapesDisabled`) and character references shown as written when
+    /// `literalEntities` (see `entitiesLiteral`).
+    func renderInline(_ text: String, literalBackslashes: Bool, literalEntities: Bool = false) -> AttributedString {
+        guard literalBackslashes || literalEntities else { return renderInlineFormatting(text) }
         var literal = self
-        literal.escapesDisabled = true
+        literal.escapesDisabled = literalBackslashes
+        literal.entitiesLiteral = literalEntities
         return literal.renderInlineFormatting(text)
     }
 
@@ -726,8 +733,7 @@ struct MarkdownRenderer: Sendable {
         // Helper to flush buffered plain text
         func flushPlainText() {
             guard !plainTextBuffer.isEmpty else { return }
-            var attr = AttributedString(decodesEntities ? HTMLImageSyntax.decodeEntities(plainTextBuffer)
-                                                        : plainTextBuffer)
+            var attr = AttributedString(decodedText(plainTextBuffer))
             attr.setDualFont(size: scaled(14), fonts: theme.fonts)
             attr.setDualForeground(theme.textColor)
             result.append(attr)
@@ -815,7 +821,7 @@ struct MarkdownRenderer: Sendable {
         guard let endRange = afterMarker.range(of: marker) else { return nil }
 
         let text = String(afterMarker[..<endRange.lowerBound])
-        var attr = AttributedString(text)
+        var attr = AttributedString(decodedText(text))
         attr.setDualFont(size: scaled(14), bold: true, italic: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         return (attr, afterMarker[endRange.upperBound...])
@@ -883,7 +889,7 @@ struct MarkdownRenderer: Sendable {
         guard let endRange = afterMarker.range(of: "~~") else { return nil }
 
         let strikeText = String(afterMarker[..<endRange.lowerBound])
-        var attr = AttributedString(strikeText)
+        var attr = AttributedString(decodedText(strikeText))
         attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         attr.setDualStrikethrough()
@@ -944,7 +950,7 @@ struct MarkdownRenderer: Sendable {
             linkText.linksDisabled = true
             attr = linkText.renderInlineFormatting(text)
         } else {
-            attr = AttributedString(decodesEntities ? HTMLImageSyntax.decodeEntities(text) : text)
+            attr = AttributedString(decodedText(text))
             attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         }
         attr.setDualForeground(theme.linkColor)
@@ -1037,7 +1043,7 @@ struct MarkdownRenderer: Sendable {
               let image = InlineSyntaxScanner.image(atStartOf: remaining, references: referenceDefinitions,
                                                     pairs: pairs) else { return nil }
 
-        var attr = AttributedString(image.alt.isEmpty ? "[Image]" : "[Image: \(image.alt)]")
+        var attr = AttributedString(image.alt.isEmpty ? "[Image]" : "[Image: \(decodedText(image.alt))]")
         attr.setDualFont(size: scaled(14), italic: true, fonts: theme.fonts)
         attr.setDualForeground(theme.secondaryTextColor)
         // No link for an embedded `data:` image: clicking it would hand a

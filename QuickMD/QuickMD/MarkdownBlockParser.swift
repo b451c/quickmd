@@ -228,7 +228,10 @@ struct MarkdownBlockParser: Sendable {
             if let images = InlineSyntaxScanner.standaloneImages(in: line[...], references: referenceDefinitions) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
                 for image in images {
-                    blocks.append(.image(index: blockIndex, url: image.url, alt: image.alt, width: nil, sourceLine: sourceLine))
+                    // The alt is caption text: references decoded like any inline
+                    // text (an `<img alt>` is decoded by `HTMLImageSyntax`).
+                    blocks.append(.image(index: blockIndex, url: image.url, alt: HTMLEntities.decode(image.alt),
+                                         width: nil, sourceLine: sourceLine))
                     blockIndex += 1
                 }
                 i += 1

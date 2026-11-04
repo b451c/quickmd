@@ -512,9 +512,10 @@ final class SearchTests: XCTestCase {
         XCTAssertEqual(count("hidden", in: quote), 0, "link URL")
         XCTAssertEqual(count("\\", in: quote), 0, "escape")
         XCTAssertEqual(count("bold code label a*b", in: quote), 1, "rendered text across styles")
-        // HTML entities are drawn as written (the renderer does not decode
-        // them), so the source IS what shows — counted and highlighted alike.
-        XCTAssertEqual(count("&amp;", in: quote), 1)
+        // Character references are drawn decoded (`HTMLEntities`, as on
+        // GitHub): the drawn "&" is counted, the source "&amp;" is not.
+        XCTAssertEqual(count("&amp;", in: quote), 0)
+        XCTAssertEqual(count("a*b & done", in: quote), 1)
 
         let alert = "> [!WARNING]\n> **bold** [label](https://hidden.example)"
         XCTAssertEqual(count("**", in: alert), 0)

@@ -48,6 +48,10 @@
 		A1B2C3D401000304 /* CrossDocumentAnchors.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000303 /* CrossDocumentAnchors.swift */; };
 		A1B2C3D401000305 /* SettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000305 /* SettingsTab.swift */; };
 		A1B2C3D401000306 /* SettingsTab.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000305 /* SettingsTab.swift */; };
+		A1B2C3D401000309 /* HTMLEntityTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000309 /* HTMLEntityTable.swift */; };
+		A1B2C3D40100030A /* HTMLEntityTable.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000309 /* HTMLEntityTable.swift */; };
+		A1B2C3D401000307 /* HTMLEntities.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000307 /* HTMLEntities.swift */; };
+		A1B2C3D401000308 /* HTMLEntities.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000307 /* HTMLEntities.swift */; };
 		A1B2C3D4010001C2 /* TableSelectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000001C1 /* TableSelectionTests.swift */; };
 		A1B2C3D40100000E /* ImageBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000012 /* ImageBlockView.swift */; };
 		A1B2C3D40100000F /* BlockquoteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000013 /* BlockquoteView.swift */; };
@@ -244,6 +248,8 @@
 		A1B2C3D400000301 /* ReferenceLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceLinks.swift; sourceTree = "<group>"; };
 		A1B2C3D400000303 /* CrossDocumentAnchors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossDocumentAnchors.swift; sourceTree = "<group>"; };
 		A1B2C3D400000305 /* SettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTab.swift; sourceTree = "<group>"; };
+		A1B2C3D400000309 /* HTMLEntityTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTMLEntityTable.swift; sourceTree = "<group>"; };
+		A1B2C3D400000307 /* HTMLEntities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTMLEntities.swift; sourceTree = "<group>"; };
 		A1B2C3D4000001C1 /* TableSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableSelectionTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000012 /* ImageBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageBlockView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000013 /* BlockquoteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockquoteView.swift; sourceTree = "<group>"; };
@@ -399,6 +405,8 @@
 				A1B2C3D400000301 /* ReferenceLinks.swift */,
 				A1B2C3D400000303 /* CrossDocumentAnchors.swift */,
 				A1B2C3D400000305 /* SettingsTab.swift */,
+				A1B2C3D400000309 /* HTMLEntityTable.swift */,
+				A1B2C3D400000307 /* HTMLEntities.swift */,
 				A1B2C3D400000110 /* DocumentReadingPosition.swift */,
 				A1B2C3D400000120 /* DocumentFileFormat.swift */,
 				A1B2C3D400000121 /* DocumentFileWriter.swift */,
@@ -700,6 +708,8 @@
 				A1B2C3D401000301 /* ReferenceLinks.swift in Sources */,
 				A1B2C3D401000303 /* CrossDocumentAnchors.swift in Sources */,
 				A1B2C3D401000305 /* SettingsTab.swift in Sources */,
+				A1B2C3D401000309 /* HTMLEntityTable.swift in Sources */,
+				A1B2C3D401000307 /* HTMLEntities.swift in Sources */,
 				A1B2C3D401000110 /* DocumentReadingPosition.swift in Sources */,
 				A1B2C3D401000120 /* DocumentFileFormat.swift in Sources */,
 				A1B2C3D401000122 /* DocumentFileWriter.swift in Sources */,
@@ -757,6 +767,8 @@
 				A1B2C3D401000302 /* ReferenceLinks.swift in Sources (Tests) */,
 				A1B2C3D401000304 /* CrossDocumentAnchors.swift in Sources (Tests) */,
 				A1B2C3D401000306 /* SettingsTab.swift in Sources (Tests) */,
+				A1B2C3D40100030A /* HTMLEntityTable.swift in Sources (Tests) */,
+				A1B2C3D401000308 /* HTMLEntities.swift in Sources (Tests) */,
 				A1B2C3D4010000C2 /* DocumentSelectionTests.swift in Sources */,
 				A1B2C3D401000111 /* DocumentReadingPosition.swift in Sources (Tests) */,
 				A1B2C3D401000112 /* ExternalEditorLineTests.swift in Sources */,

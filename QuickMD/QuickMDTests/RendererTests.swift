@@ -730,4 +730,84 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(MarkdownZoom.bigger.applied(to: 1.25, defaultScale: 1.25), 1.5)
         XCTAssertEqual(MarkdownZoom.smaller.applied(to: 1.25, defaultScale: 1.25), 1.1)
     }
+
+    // MARK: - Character references (decoded like GitHub)
+
+    /// Expected strings from `gh api markdown` (2026-11-04): named references
+    /// from the full HTML5 table (`&ngE;` is two code points), numeric ones
+    /// per CommonMark (0, a surrogate or > U+10FFFF → U+FFFD), a reference
+    /// without its `;` or with an unknown name stays as written, and decoding
+    /// happens after inline parsing (`&#42;x&#42;` is "*x*", not emphasis).
+    func testCharacterReferencesDecodeLikeGitHub() {
+        XCTAssertEqual(HTMLEntities.decode("AT&amp;T &copy; a&nbsp;b &rarr; &#35; &#0; &#xD800; &#1234567; &bogus; &amp &ngE; &#X41;"),
+                       "AT&T © a\u{00A0}b → # \u{FFFD} \u{FFFD} \u{FFFD} &bogus; &amp \u{2267}\u{0338} A")
+        XCTAssertEqual(HTMLEntities.decode("&CounterClockwiseContourIntegral; &#12345678; &#x1234567; &#; &#x; & ;"),
+                       "\u{2233} &#12345678; &#x1234567; &#; &#x; & ;", "too many digits, no digits: literal")
+        XCTAssertEqual(HTMLEntities.decode("&NewLine;&Tab;"), "\n\t")
+        XCTAssertEqual(HTMLEntities.decode("no ampersand"), "no ampersand")
+
+        let line = "AT&amp;T `&amp;` **&lt;b&gt;** ~~&gt;~~ ***&gt;*** [&amp;](http://x) ![a&amp;b](i.png) &#42;x&#42;"
+        XCTAssertEqual(rendered(line), "AT&T &amp; <b> > > & [Image: a&b] *x*")
+        let attributed = renderer.renderInline("&#42;x&#42;")
+        XCTAssertEqual(attributed.runs.count, 1, "a decoded asterisk opens no emphasis")
+    }
+
+    /// Every kind that renders inline text decodes — paragraph, list, quote,
+    /// alert, table cell, heading, footnote — and never a code block; a
+    /// front-matter VALUE keeps its references, as GitHub shows front matter
+    /// as plain text.
+    func testCharacterReferencesDecodeInEveryTextKindButCodeAndFrontMatter() {
+        let theme = MarkdownTheme.cached(for: .light)
+        let md = """
+        ---
+        title: A&amp;B
+        ---
+        Para &copy; 2026[^n]
+
+        - item &rarr; next
+
+        > quote &amp; more
+
+        > [!NOTE]
+        > alert &hellip;
+
+        | h&amp;h |
+        |---|
+        | cell&nbsp;x |
+
+        ## Q&amp;A
+
+        ```
+        code &amp; stays
+        ```
+
+        ![a&amp;b](pic.png)
+
+        [^n]: Note &amp; text
+        """
+        let blocks = MarkdownBlockParser(theme: theme).parse(md)
+        let plain = MarkdownRenderer(theme: theme)
+        var shown: [String] = []
+        for block in blocks {
+            switch block.content {
+            case .text(let attributed): shown.append(String(attributed.characters))
+            case .blockquote(let content, _), .alert(_, let content):
+                shown.append(String(plain.renderQuotedBody(content).characters))
+            case .table(let headers, let rows, let alignments, let style):
+                shown.append(TableTextBuilder.plainString(headers: headers, rows: rows, alignments: alignments,
+                                                          style: style, theme: theme, fontScale: 1))
+            case .heading(let level, let title, _):
+                shown.append(String(plain.renderHeader(title, level: level).characters))
+            case .codeBlock(let code, _): shown.append(code)
+            case .image(_, let alt, _): shown.append("image:" + alt)
+            default: break
+            }
+        }
+        let all = shown.joined(separator: "|")
+        for expected in ["title\nA&amp;B\n", "Para © 2026", "item → next", "quote & more", "alert …",
+                         "h&h\ncell\u{00A0}x\n", "Q&A", "code &amp; stays", "image:a&b", "Note & text"] {
+            XCTAssertTrue(all.contains(expected), "\(expected.debugDescription) in \(all.debugDescription)")
+        }
+    }
+
 }
