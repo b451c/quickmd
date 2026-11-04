@@ -760,6 +760,33 @@ final class VerticalRhythmTests: XCTestCase {
     /// lazy line, a table's — it is that text, and `[x]` stays literal.
     /// The pre-pass took it out anywhere. A footnote definition MAY
     /// interrupt a paragraph (GitHub). Every shape: gfm/def_*.html, fn_*.html.
+    /// A link definition that starts a paragraph of a quote is a definition
+    /// (GitHub, gfm/h4_*.html): `> [x]: url` defines `x` and leaves the
+    /// quote empty — it was the quote's text. After the quote's text it is
+    /// that text (G7), in the quote's fence code, in its table a row, after
+    /// an alert's marker the alert's text.
+    func testALinkDefinitionMayStartAQuoteParagraph() throws {
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n\n[x]\n"), ["t:x"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n> text\n\n[x]\n"), ["q1:text", "t:x"])
+        XCTAssertEqual(try quoteShape("> [x]: http://e.com\n> [y]: http://f.com\n\n[x] [y]\n"), ["t:x y"])
+        XCTAssertEqual(try quoteShape("> > [x]: http://e.com\n\n[x]\n"), ["t:x"])
+        XCTAssertEqual(try quoteShape("Para\n> [x]: http://e.com\n\n[x]\n"), ["t:Para", "t:x"])
+        XCTAssertEqual(try quoteShape("> # H\n> [x]: http://e.com\n\n[x]\n"), ["q1:# H", "t:x"])
+        XCTAssertEqual(try quoteShape("> text\n>\n> [x]: http://e.com\n\n[x]\n"), ["q1:text", "t:x"])
+        XCTAssertEqual(try quoteShape("> text\n>\n> [x]: http://e.com\n>\n> more\n\n[x]\n"),
+                       ["q1:text\n\n\nmore", "t:x"])
+        // Text where GitHub has text.
+        XCTAssertEqual(try quoteShape("> text\n> [x]: http://e.com\n\n[x]\n"),
+                       ["q1:text\n[x]: http://e.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("> ```\n> [x]: http://e.com\n> ```\n\n[x]\n").last, "t:[x]")
+        XCTAssertEqual(try quoteShape("> | a |\n> |---|\n> | 1 |\n> [x]: http://e.com\n\n[x]\n").last, "t:[x]")
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> [x]: http://e.com\n\n[x]\n").last, "t:[x]")
+        XCTAssertEqual(try quoteShape("> > a\n> [x]: http://e.com\n\n[x]\n").last, "t:[x]")
+        // What follows keeps its source line.
+        let blocks = try XCTUnwrap(parseReturning("> [x]: http://e.com\n> text\n\n[x]\n"))
+        XCTAssertEqual(blocks.map(\.sourceLine), [1, 3])
+    }
+
     func testALinkDefinitionCannotInterruptAParagraph() throws {
         XCTAssertEqual(try quoteShape("> a\n[x]: http://e.com\n\n[x]\n"), ["q1:a\n[x]: http://e.com", "t:[x]"])
         XCTAssertEqual(try quoteShape("Para\n[x]: http://e.com\n\n[x]\n"), ["t:Para [x]: http://e.com", "t:[x]"])

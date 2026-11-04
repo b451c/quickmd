@@ -109,11 +109,11 @@ struct MarkdownBlockParser: Sendable {
                 footnoteDefinitions.append((id: fnId, content: fnContent))
                 if !footnoteIds.contains(fnId) { footnoteIds.append(fnId) }
                 placement.definition()
-            } else if !placement.paragraphOpen,
-                      let match = Self.refLinkDefRegex.firstMatch(in: trimmed, range: nsRange),
-                      let idRange = Range(match.range(at: 1), in: trimmed),
-                      let urlRange = Range(match.range(at: 2), in: trimmed) {
-                referenceDefinitions[String(trimmed[idRange]).lowercased()] = String(trimmed[urlRange])
+            } else if let text = placement.linkDefinitionText(trimmed),
+                      let match = Self.refLinkDefRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                      let idRange = Range(match.range(at: 1), in: text),
+                      let urlRange = Range(match.range(at: 2), in: text) {
+                referenceDefinitions[String(text[idRange]).lowercased()] = String(text[urlRange])
                 placement.definition()
             } else {
                 lines.append(line)
@@ -1157,6 +1157,11 @@ struct MarkdownBlockParser: Sendable {
         private var inTable = false
         private var previousHadPipe = false
 
+        /// Whether the group's next line would start a paragraph: none is
+        /// open, and it is not in the quote's fence or table — where a link
+        /// definition may stand (`DefinitionPlacement`).
+        var admitsDefinition: Bool { fence == nil && !inTable && !endsInParagraph }
+
         /// A lazily continued line (no marker, or fewer markers than the
         /// group): paragraph text whatever it looks like — CommonMark never
         /// reads a lazy line as a table separator, a Setext underline or any
@@ -1278,6 +1283,31 @@ struct MarkdownBlockParser: Sendable {
             quote = nil
         }
 
+        /// What a LINK definition on the next line (its `markerLine`) would
+        /// be read from, or nil where none may stand: the line itself where
+        /// no paragraph is open; what follows a quote line's markers where
+        /// the line starts a paragraph of its quote (GitHub: `> [x]: url`
+        /// defines `x` and leaves the quote empty) — not after the quote's
+        /// text, nor in its fence or table. One case GitHub reads as a
+        /// definition stays text: a deeper quote opened right under the
+        /// quote's text (`> a`, then `> > [x]: url`).
+        func linkDefinitionText(_ marker: String) -> String? {
+            guard marker.hasPrefix(">") else { return paragraphOpen ? nil : marker }
+            guard quote?.admitsDefinition ?? true else { return nil }
+            return MarkdownBlockParser.markerLine(String(Self.quoteContent(of: marker)))
+        }
+
+        /// What follows a quote line's markers (each `>` with one optional
+        /// space after it).
+        static func quoteContent(of marker: String) -> Substring {
+            var content = marker[...]
+            while content.hasPrefix(">") {
+                content = content.dropFirst()
+                if content.hasPrefix(" ") { content = content.dropFirst() }
+            }
+            return content
+        }
+
         /// Any other line, kept for the block loop.
         mutating func kept(_ line: String) {
             if MarkdownRenderer.isBlankLine(line) {
@@ -1287,13 +1317,8 @@ struct MarkdownBlockParser: Sendable {
             }
             let marker = MarkdownBlockParser.markerLine(line)
             if marker.hasPrefix(">") {
-                var content = marker[...]
-                while content.hasPrefix(">") {
-                    content = content.dropFirst()
-                    if content.hasPrefix(" ") { content = content.dropFirst() }
-                }
                 var tip = quote ?? QuoteTip()
-                tip.take(String(content))
+                tip.take(String(Self.quoteContent(of: marker)))
                 quote = tip
                 paragraphOpen = tip.endsInParagraph
                 return
