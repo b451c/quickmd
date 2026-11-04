@@ -140,6 +140,12 @@ struct MarkdownRenderer: Sendable {
     /// (makeLink → renderInlineFormatting → tryParseLink → makeLink …) and
     /// overflowed the parse task's stack at a few hundred levels.
     private var linksDisabled = false
+    /// True for a front-matter VALUE (`renderInline(_:literalBackslashes:)`):
+    /// YAML has no Markdown escapes — a plain scalar's backslash is a
+    /// character (`C:\_tmp`) — so `\` starts no escape there and shows as
+    /// written; every other inline form still renders. Copied into the link
+    /// text renderer with the rest of `self`.
+    private var escapesDisabled = false
 
     // Static precompiled regex for parsing (avoid recompilation per line)
     private static let taskListRegex = try! NSRegularExpression(pattern: MarkdownTheme.taskListPattern)
@@ -685,6 +691,15 @@ struct MarkdownRenderer: Sendable {
         renderInlineFormatting(text)
     }
 
+    /// `renderInline` with backslash escapes off when `literalBackslashes`
+    /// (see `escapesDisabled`).
+    func renderInline(_ text: String, literalBackslashes: Bool) -> AttributedString {
+        guard literalBackslashes else { return renderInlineFormatting(text) }
+        var literal = self
+        literal.escapesDisabled = true
+        return literal.renderInlineFormatting(text)
+    }
+
     private func renderInlineFormatting(_ text: String) -> AttributedString {
         var result = AttributedString()
         // Native contiguous UTF-8 storage up front (a no-op unless the line is
@@ -713,7 +728,7 @@ struct MarkdownRenderer: Sendable {
             // Try each inline format in order (escape first, then bold+italic to catch ***)
             var parsed: (AttributedString, Substring)?
 
-            if parsed == nil { parsed = tryParseEscape(&remaining) }
+            if parsed == nil, !escapesDisabled { parsed = tryParseEscape(&remaining) }
             if parsed == nil { parsed = tryParseInlineCode(&remaining) }
             if parsed == nil { parsed = tryParseFootnoteRef(&remaining) }
             if parsed == nil { parsed = tryParseBoldItalic(&remaining) }

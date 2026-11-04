@@ -268,8 +268,7 @@ struct PrintableTableView: View, TableAlignmentProvider {
                         .padding(.horizontal, Self.horizontalPadding)
                         .padding(.vertical, 4)
                     Rectangle().fill(theme.borderColor)
-                    Text(TableTextBuilder.printableCell(row.count > 1 ? row[1] : "", isHeader: false,
-                                                        renderer: renderer))
+                    Text(TableTextBuilder.valueCell(row.count > 1 ? row[1] : "", renderer: renderer))
                         .foregroundColor(.black)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, Self.horizontalPadding)

@@ -70,6 +70,36 @@ final class FrontMatterTests: XCTestCase {
         XCTAssertGreaterThan(wide, TableTextBuilder.height(of: oneLine.string, width: 600) + 10, "two lines")
     }
 
+    /// A YAML scalar's backslash is a character, not a Markdown escape: the
+    /// value shows as written (`C:\_tmp`, not `C:_tmp`) on screen, in search
+    /// and in print (`valueCell`), while its other inline Markdown renders.
+    /// Grid cells keep Markdown escapes.
+    func testValueBackslashesShowAsWritten() throws {
+        let theme = MarkdownTheme.cached(for: .light)
+        let blocks = parse("---\npath: C:\\_tmp\\new\nnote: a **bold** \\[x\\] \\\\\n---\n| a |\n|---|\n| \\_g\\_ |\n")
+        guard case .table(let headers, let rows, let alignments, .properties) = blocks.first?.content else {
+            return XCTFail("expected a properties table")
+        }
+        let table = TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
+                                           style: .properties, theme: theme, fontScale: 1)
+        let string = table.string.string as NSString
+        XCTAssertEqual(string.substring(with: table.layout.cellRanges[0][1]), "C:\\_tmp\\new")
+        XCTAssertEqual(string.substring(with: table.layout.cellRanges[1][1]), "a bold \\[x\\] \\\\")
+        let boldFont = try XCTUnwrap(table.string.attribute(.font, at: table.layout.cellRanges[1][1].location + 2,
+                                                            effectiveRange: nil) as? NSFont)
+        XCTAssertTrue(boldFont.fontDescriptor.symbolicTraits.contains(.bold), "other inline Markdown renders")
+        XCTAssertEqual(TableTextBuilder.plainString(headers: headers, rows: rows, alignments: alignments,
+                                                   style: .properties, theme: theme, fontScale: 1),
+                       table.string.string, "search counts what is shown")
+
+        let renderer = MarkdownRenderer(theme: theme)
+        XCTAssertEqual(String(TableTextBuilder.valueCell("C:\\_tmp", renderer: renderer).characters), "C:\\_tmp",
+                       "print draws the same value")
+
+        guard case .table(_, let gridRows, _, .grid) = blocks[1].content else { return XCTFail("grid table") }
+        XCTAssertEqual(String(renderer.renderInline(gridRows[0][0]).characters), "_g_", "grid keeps escapes")
+    }
+
     func testQuotedScalars() {
         XCTAssertEqual(properties(#"a: "say \"hi\" \\ there""#), [#"a=say "hi" \ there"#])
         XCTAssertEqual(properties("a: 'it''s # not a comment'"), ["a=it's # not a comment"])
