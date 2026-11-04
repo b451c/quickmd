@@ -910,6 +910,35 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(String(renderer.renderQuotedBody(quote).characters), "a * b and c $5")
     }
 
+    // MARK: - Plain link text fast path (review R15)
+
+    /// Link text with no inline syntax skips the inline pass; the run it gets
+    /// must be exactly the parsed one (characters and every attribute), at any
+    /// zoom, and text with syntax must take the parsed path.
+    func testPlainLinkTextFastPathEqualsTheParsedPath() {
+        let plain = ["Install", "Read the guide", "Zażółć gęślą", "a & b", "AT&amp;T &copy;", "50% off $5",
+                     "x < y > z", "e-mail: a@b.c", "1. not a list", "# not a heading", "", "  spaced  ", "emoji 🚀"]
+        for scale in [1.0, 1.5] as [CGFloat] {
+            let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .dark), fontScale: scale)
+            for text in plain {
+                XCTAssertFalse(MarkdownRenderer.linkTextNeedsParsing(text), text)
+                XCTAssertEqual(renderer.renderLinkText(text, parse: false), renderer.renderLinkText(text, parse: true),
+                               "\(text) @\(scale)")
+                let link = renderer.renderInline("[\(text)](https://x.example)")
+                XCTAssertEqual(link, {
+                    var parsed = renderer.renderLinkText(text, parse: true)
+                    parsed.setDualForeground(renderer.theme.linkColor)
+                    parsed.setDualUnderline()
+                    parsed.link = URL(string: "https://x.example")
+                    return parsed
+                }(), text)
+            }
+        }
+        for text in ["**b**", "`c`", "a_b", "~~s~~", "![i](p)", "[^1]", "a \\* b", "see https://x.y", "http://a"] {
+            XCTAssertTrue(MarkdownRenderer.linkTextNeedsParsing(text), text)
+        }
+    }
+
     // MARK: - Formula source in headings (review R14)
 
     /// Headings show a formula's SOURCE (no inline math there yet), and it

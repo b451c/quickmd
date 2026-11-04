@@ -1025,9 +1025,7 @@ struct MarkdownRenderer: Sendable {
         // one, an autolink's or an image's). Rendered with links disabled: a
         // link inside a link is literal text (bounds the recursion).
         // `ReferenceLinks` rewrites a link's text by the same rule.
-        var linkText = self
-        linkText.linksDisabled = true
-        var attr = linkText.renderInlineFormatting(text)
+        var attr = renderLinkText(text)
         attr.setDualForeground(theme.linkColor)
         attr.setDualUnderline()
 
@@ -1035,6 +1033,43 @@ struct MarkdownRenderer: Sendable {
             attr.link = parsedUrl
         }
         return (attr, remaining)
+    }
+
+    /// A link's text before the link colour, underline and URL go on:
+    /// inline-parsed with links disabled — or, when `parse` is false, the one
+    /// plain run that parse produces for text with no syntax in it (the
+    /// renderer's font, the colour is replaced by the caller). `parse: nil`
+    /// picks the plain run exactly when `linkTextNeedsParsing` is false, which
+    /// keeps the common `[Install](…)` from a full inline pass (+25 % on a
+    /// link-heavy document, review R15). Tests compare both paths.
+    func renderLinkText(_ text: String, parse: Bool? = nil) -> AttributedString {
+        if parse ?? Self.linkTextNeedsParsing(text) {
+            var linkText = self
+            linkText.linksDisabled = true
+            return linkText.renderInlineFormatting(text)
+        }
+        var attr = AttributedString(decodedText(text))
+        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
+        attr.setDualForeground(theme.textColor)
+        return attr
+    }
+
+    /// Whether `renderInlineFormatting` could do anything but one plain run:
+    /// a character some inline parser starts on — `\` escape, `` ` `` code,
+    /// `*` / `_` emphasis, `~` strikethrough, `!` image, `[` footnote or
+    /// link, `h` an autolink (`http://`, `https://`). Character references
+    /// (`&`) are decoded on the plain run too; `$` is only looked at later
+    /// (inline math, on the rendered text), as on the parsed path.
+    static func linkTextNeedsParsing(_ text: String) -> Bool {
+        text.utf8.contains { byte in
+            switch byte {
+            case UInt8(ascii: "\\"), UInt8(ascii: "`"), UInt8(ascii: "*"), UInt8(ascii: "_"),
+                 UInt8(ascii: "~"), UInt8(ascii: "!"), UInt8(ascii: "["):
+                return true
+            default:
+                return false
+            }
+        } || text.contains("http://") || text.contains("https://")
     }
 
     /// The URL of a link destination as written.
