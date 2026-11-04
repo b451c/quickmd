@@ -817,7 +817,7 @@ final class RendererTests: XCTestCase {
     /// rendered text). The Contents sidebar shows exactly the heading's text.
     func testEveryASCIIPunctuationEscapesAndTheToCShowsTheHeadingText() {
         XCTAssertEqual(rendered("a \\&amp; \\< \\~x\\~ \\\" \\@ \\^ \\, b"), "a &amp; < ~x~ \" @ ^ , b")
-        XCTAssertEqual(rendered("\\$5"), "\\$5", "no bare $ that inline math would take")
+        XCTAssertEqual(rendered("\\$5"), "$5", "an escaped dollar (R9: tagged, never math)")
         let heading = String(renderer.renderHeader("\\&amp; `&lt;x&gt;`", level: 1).characters)
         XCTAssertEqual(heading, "&amp; &lt;x&gt;")
 
@@ -825,6 +825,58 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(entry.shownTitle(renderer: renderer), "&amp; &lt;x&gt; Q&A", "the ToC row = the heading")
         XCTAssertEqual(entry.shownTitle(renderer: renderer),
                        String(renderer.renderHeader(entry.title, level: 1).characters))
+    }
+
+
+    // MARK: - Escaped dollars (review R9)
+
+    /// The text a paragraph's row shows, with every formula as "⟨latex⟩" (a
+    /// stub engine records what it was asked to typeset).
+    private func shownParagraph(_ markdown: String) -> (text: String, formulas: [String]) {
+        let theme = MarkdownTheme.cached(for: .light)
+        var formulas: [String] = []
+        let engine = MathRendering(inlineImage: { latex, _, _ in
+            formulas.append(latex)
+            return NSImage(size: NSSize(width: 1, height: 1))
+        }, displayHeight: { _, _, _ in 0 })
+        let blocks = MarkdownBlockParser(theme: theme).parse(markdown)
+        guard case .text(let attributed)? = blocks.first?.content else { return ("", []) }
+        let plain = String(attributed.characters)
+        let ns = BlockTextConverter.makeNSAttributedString(
+            from: attributed, hasInlineMath: BlockTextConverter.containsInlineMath(plain),
+            theme: theme, fontScale: 1, math: engine)
+        return (ns.string, formulas)
+    }
+
+    /// `\$` is a dollar sign (GitHub: "Price $5 and $10"), never a delimiter;
+    /// inside a formula it stays `\$` in the LaTeX; a dollar made by `&#36;`
+    /// IS a delimiter (GitHub renders `&#36;x&#36;` as math); a code span keeps
+    /// `\$` as written. Print (`PrintableMath.text`) and search use the same
+    /// split (`literalDollars`).
+    func testEscapedDollarsAreNeverMathDelimiters() {
+        let price = shownParagraph("Price \\$5 and \\$10")
+        XCTAssertEqual(price.text, "Price $5 and $10")
+        XCTAssertEqual(price.formulas, [])
+
+        let inside = shownParagraph("Cost $a\\$b$ here")
+        XCTAssertEqual(inside.formulas, ["a\\$b"], "the escaped dollar goes back into the LaTeX")
+        XCTAssertEqual(inside.text, "Cost \u{FFFC} here")
+
+        let entity = shownParagraph("Then &#36;x^2&#36; is math")
+        XCTAssertEqual(entity.formulas, ["x^2"], "a reference-made dollar is a delimiter")
+
+        let code = shownParagraph("Use `\\$HOME` and \\$PATH")
+        XCTAssertEqual(code.text, "Use \\$HOME and $PATH")
+        XCTAssertEqual(code.formulas, [])
+
+        // Table cells, quotes and alerts have no inline math: the dollar shows.
+        let theme = MarkdownTheme.cached(for: .light)
+        let cell = TableTextBuilder.plainString(headers: ["a"], rows: [["\\$5 and \\$10"]], alignments: [.leading],
+                                                style: .grid, theme: theme, fontScale: 1)
+        XCTAssertTrue(cell.contains("$5 and $10\n"))
+        XCTAssertEqual(String(renderer.renderQuotedBody("Pay \\$5").characters), "Pay $5")
+        // The segmenter itself: offsets of escaped dollars never delimit.
+        XCTAssertEqual(InlineMathSegmenter.split("a $5 and $6", literalDollars: [2, 9]), [.text("a $5 and $6")])
     }
 
 }

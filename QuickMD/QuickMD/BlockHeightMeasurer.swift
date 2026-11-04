@@ -738,7 +738,8 @@ enum BlockTextConverter {
         }
 
         let plain = String(attributed.characters)
-        let segments = InlineMathSegmenter.split(plain)
+        let segments = InlineMathSegmenter.split(plain,
+                                                 literalDollars: InlineMathSegmenter.literalDollars(in: attributed))
         let result = NSMutableAttributedString()
         var attrIndex = attributed.startIndex
 
@@ -756,9 +757,10 @@ enum BlockTextConverter {
                     attrIndex = end
                 }
 
-            case .math(let latex):
+            case .math(let source):
                 // Skip past the $latex$ in the source AttributedString
-                let skipCount = latex.count + 2
+                let skipCount = source.count + 2
+                let latex = InlineMathSegmenter.tex(source)
                 if let end = attributed.characters.index(attrIndex, offsetBy: skipCount,
                                                          limitedBy: attributed.endIndex) {
                     attrIndex = end
