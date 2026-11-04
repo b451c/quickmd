@@ -108,9 +108,26 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 <details>
 <summary><strong>More screenshots</strong></summary>
 
-| Diagrams in Dark Mode | Theme Picker | Table of Contents |
-|:-:|:-:|:-:|
-| <img src="QuickMD/Screenshots/screenshot-5.png" width="280"> | <img src="QuickMD/Screenshots/screenshot-6.png" width="280"> | <img src="QuickMD/Screenshots/screenshot-7.png" width="280"> |
+<div align="center">
+<table>
+<tr>
+<td align="center"><img src="QuickMD/Screenshots/screenshot-5.png" width="400" alt="Diagrams in Dark Mode (Gruvbox theme)"></td>
+<td align="center"><img src="QuickMD/Screenshots/screenshot-6.png" width="188" alt="Theme Picker"></td>
+</tr>
+<tr>
+<td align="center"><em>Diagrams in Dark Mode</em></td>
+<td align="center"><em>Theme Picker</em></td>
+</tr>
+<tr>
+<td align="center"><img src="QuickMD/Screenshots/screenshot-7.png" width="400" alt="Table of Contents and search"></td>
+<td align="center"><img src="QuickMD/Screenshots/screenshot-8.png" width="400" alt="Source Edit"></td>
+</tr>
+<tr>
+<td align="center"><em>Table of Contents and search</em></td>
+<td align="center"><em>Source Edit</em></td>
+</tr>
+</table>
+</div>
 
 </details>
 
