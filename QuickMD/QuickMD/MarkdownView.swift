@@ -732,12 +732,7 @@ struct MarkdownView: View {
                                                       theme: currentTheme, fontScale: scale,
                                                       contentWidth: width, math: .swiftMath)
                 : .empty
-            headings = blocks.compactMap { block in
-                if case .heading(let level, let title, let sourceLine) = block.content {
-                    return ToCEntry(id: block.id, level: level, title: title, sourceLine: sourceLine)
-                }
-                return nil
-            }
+            headings = ToCEntry.entries(of: blocks)
             // A landing that waited for THIS parse (Source Edit saved, then
             // left before the re-parse arrived): requested in the transaction
             // that installs the blocks, so it wins over the list's own anchor

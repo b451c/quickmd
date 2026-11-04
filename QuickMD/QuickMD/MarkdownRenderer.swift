@@ -458,8 +458,23 @@ struct MarkdownRenderer: Sendable {
 
     // MARK: - Block Renderers
 
+    /// A heading's title as shown: a Setext title keeps its paragraph's line
+    /// breaks (`MarkdownBlockParser.setextTitle`) and each reads as a space,
+    /// like a soft break in a paragraph — in the heading, the Contents
+    /// sidebar and search alike.
+    static func shownHeadingTitle(_ title: String) -> String {
+        title.replacingOccurrences(of: "\n", with: " ")
+    }
+
+    /// The text GitHub takes a heading's id from: the rendered title with a
+    /// Setext title's line breaks KEPT — the slug drops them (`Alpha⏎Beta`
+    /// is `alphabeta`), where the space shown would be a `-`.
+    func headingAnchorText(_ title: String) -> String {
+        String(renderInlineFormatting(title).characters)
+    }
+
     func renderHeader(_ text: String, level: Int) -> AttributedString {
-        var attr = renderInlineFormatting(text)
+        var attr = renderInlineFormatting(Self.shownHeadingTitle(text))
         attr.setDualFont(size: headerFontSize(level: level), bold: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         return attr

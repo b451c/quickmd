@@ -7,13 +7,7 @@ import XCTest
 final class SectionExtractorTests: XCTestCase {
 
     private func headings(of markdown: String) -> [ToCEntry] {
-        let blocks = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light)).parse(markdown)
-        return blocks.compactMap { block in
-            if case .heading(let level, let title, let sourceLine) = block.content {
-                return ToCEntry(id: block.id, level: level, title: title, sourceLine: sourceLine)
-            }
-            return nil
-        }
+        ToCEntry.entries(of: MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light)).parse(markdown))
     }
 
     func testSectionEndsAtNextSameLevelHeading() {
@@ -164,6 +158,41 @@ final class SectionExtractorTests: XCTestCase {
             "100-done-really", "x-\u{2173}--3", "love-\u{FE0F}-it", "family-\u{200D}\u{200D}-here",
             "foo-", "ω-σ-δ", "中文-标题", "i\u{307}stanbul",
         ])
+    }
+
+    /// A Setext title over several lines: GitHub keeps its line breaks in
+    /// the heading's text, and the id DROPS them — `Alpha⏎Beta` is
+    /// `alphabeta`, after a hard break too (gfm/h1_*.html). The title was
+    /// joined with spaces, which the slug made `-` (`alpha-beta`), so
+    /// `[go](#alphabeta)` went nowhere. Shown — the heading, the Contents
+    /// sidebar, search — each break is a space; Copy Section is the source.
+    func testAMultiLineSetextTitleHasGitHubsId() {
+        let md = "Alpha\nBeta\n===\n\nAlphaBeta\n===\n\nAlpha\nBeta\n---\n\nPara one\nline two\n---\n\n"
+            + "One  \nTwo\\\nThree\n---\n\n**Bold\nend**\n===\n\n[go](#alphabeta)\n"
+        let anchors = anchorHeadings(of: md)
+        XCTAssertEqual(HeadingAnchors.ids(for: anchors.map(\.text)), [
+            "alphabeta", "alphabeta-1", "alphabeta-2", "para-oneline-two", "onetwothree", "boldend",
+        ])
+        XCTAssertEqual(HeadingAnchors.target(forFragment: "alphabeta", in: anchors), .heading(anchors[0].id))
+        XCTAssertEqual(HeadingAnchors.target(forFragment: "para-oneline-two", in: anchors),
+                       .heading(anchors[3].id))
+
+        let theme = MarkdownTheme.cached(for: .light)
+        let blocks = MarkdownBlockParser(theme: theme).parse(md)
+        let renderer = MarkdownRenderer(theme: theme)
+        let shown = blocks.compactMap { block -> String? in
+            guard case .heading(let level, let title, _) = block.content else { return nil }
+            return String(renderer.renderHeader(title, level: level).characters)
+        }
+        XCTAssertEqual(shown, ["Alpha Beta", "AlphaBeta", "Alpha Beta", "Para one line two", "One Two Three",
+                               "Bold end"])
+        let entries = headings(of: md)
+        XCTAssertEqual(entries.map(\.title), ["Alpha Beta", "AlphaBeta", "Alpha Beta", "Para one line two",
+                                              "One Two Three", "**Bold end**"])
+        XCTAssertEqual(SectionExtractor.extractSection(from: md, entry: entries[0], headings: entries),
+                       "Alpha\nBeta\n===")
+        XCTAssertEqual(SectionExtractor.extractSection(from: md, entry: entries[4], headings: entries),
+                       "One  \nTwo\\\nThree\n---")
     }
 
     func testFragmentFindsItsHeading() {

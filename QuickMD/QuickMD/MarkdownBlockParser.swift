@@ -296,7 +296,8 @@ struct MarkdownBlockParser: Sendable {
 
             // Setext headers (underlined headers): the WHOLE paragraph above
             // the underline is the heading (CommonMark, GitHub), on the
-            // paragraph's first line, its lines joined like soft breaks. Not a
+            // paragraph's first line. Its title keeps the lines' breaks
+            // (`setextTitle`): shown as spaces, dropped by the anchor. Not a
             // list item's paragraph (`- a` over `===` is the item's text, over
             // `---` the list and a rule) nor a quote line's (the quote branch
             // takes those, lazy lines included).
@@ -318,8 +319,7 @@ struct MarkdownBlockParser: Sendable {
                     level = nil
                 }
                 if let level, let start = Self.setextParagraphStart(in: textBuffer, endingWith: line) {
-                    let title = (textBuffer[start...].map { Self.markerLine($0.line) } + [trimmed])
-                        .joined(separator: " ")
+                    let title = Self.setextTitle(textBuffer[start...].map(\.line) + [line])
                     let headingLine = start < textBuffer.count ? textBuffer[start].originalIndex : sourceLine
                     var preceding = Array(textBuffer[..<start])
                     textBuffer.removeAll()
@@ -1006,6 +1006,21 @@ struct MarkdownBlockParser: Sendable {
     }
 
     // MARK: - Setext headings
+
+    /// A Setext heading's title: its lines, trimmed, joined with the line
+    /// breaks between them — GitHub's heading text keeps them, and its id
+    /// drops them (`Alpha⏎Beta` is `alphabeta`, where a space would be a
+    /// `-`); `MarkdownRenderer.shownHeadingTitle` shows each as a space. A
+    /// hard break's backslash is not text (an odd run of them ends the
+    /// line; trailing spaces are trimmed anyway).
+    static func setextTitle(_ lines: [String]) -> String {
+        let trimmed = lines.map(markerLine)
+        return trimmed.enumerated().map { index, text in
+            guard index < trimmed.count - 1 else { return text }
+            let backslashes = text.reversed().prefix(while: { $0 == "\\" }).count
+            return backslashes % 2 == 1 ? String(text.dropLast()) : text
+        }.joined(separator: "\n")
+    }
 
     /// Where the paragraph that `line` (the line over a Setext underline)
     /// ends starts in the text buffer: after its last blank line or rule.

@@ -653,7 +653,7 @@ final class VerticalRhythmTests: XCTestCase {
             case .alert(let kind, let content): return "alert:\(kind.rawValue):\(content)"
             case .text(let attributed): return "t:" + String(attributed.characters)
             case .codeBlock(let code, _): return "c:\(code)"
-            case .heading(_, let title, _): return "h:\(title)"
+            case .heading(_, let title, _): return "h:" + MarkdownRenderer.shownHeadingTitle(title)
             case .image: return "img"
             case .table: return "table"
             default: return "other"
@@ -850,13 +850,12 @@ final class VerticalRhythmTests: XCTestCase {
         let spans = SourceTint.spans(for: blocks, lineStarts: SourceEditSupport.lineStarts(in: ns), in: ns)
         XCTAssertEqual(spans.filter { $0.kind == .heading }.map { ns.substring(with: $0.range) },
                        ["Para one\nline two\n---"])
-        let entries = blocks.compactMap { block -> ToCEntry? in
-            guard case .heading(let level, let title, let line) = block.content else { return nil }
-            return ToCEntry(id: block.id, level: level, title: title, sourceLine: line)
-        }
+        let entries = ToCEntry.entries(of: blocks)
         XCTAssertEqual(SectionExtractor.extractSection(from: markdown, entry: entries[0], headings: entries),
                        "Para one\nline two\n---\n\nAfter")
-        XCTAssertEqual(HeadingAnchors.slug(entries[0].title), "para-one-line-two")
+        // GitHub's id drops the line break (gfm/h1_words.html).
+        let anchors = HeadingAnchors.headings(of: blocks, renderer: MarkdownRenderer(theme: .cached(for: .light)))
+        XCTAssertEqual(HeadingAnchors.ids(for: anchors.map(\.text)), ["para-oneline-two"])
     }
 
     // MARK: - Long quotes
