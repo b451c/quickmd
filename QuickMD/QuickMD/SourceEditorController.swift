@@ -103,14 +103,20 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     /// `apply(style:)`, so SwiftUI may hand the same one on every update.
     struct Style: Equatable {
         var theme: MarkdownTheme
+        /// The editor's font size (the zoom asked for: it follows ⌘+ at once).
         var fontScale: Double
         var isReadingLayout: Bool
+        /// The zoom the Reading Mode column is capped at (`columnGeometry`);
+        /// nil = `fontScale`. Over a rendered document, the zoom the list
+        /// SHOWS (`overDocument`).
+        var columnFontScale: Double? = nil
 
         /// `MarkdownTheme` is not `Equatable`; compare what the editor reads
         /// from it. Colours as well as the name: a custom theme re-imported
         /// under the same name may change them.
         static func == (lhs: Style, rhs: Style) -> Bool {
             lhs.fontScale == rhs.fontScale
+                && lhs.columnFontScale == rhs.columnFontScale
                 && lhs.isReadingLayout == rhs.isReadingLayout
                 && lhs.theme.name == rhs.theme.name
                 && lhs.theme.isDark == rhs.theme.isDark
@@ -120,16 +126,18 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
                 && lhs.hasSameTintColors(as: rhs)
         }
 
-        /// The editor's style over a rendered document: at the zoom the
-        /// document is SHOWN at (`MarkdownView.renderedFontScale` — the scale
-        /// its blocks were parsed at and its Reading Mode column is capped
-        /// at), not the zoom just asked for. Between ⌘+ and the parse that
-        /// follows it the two differ; the editor's column (`columnGeometry`)
-        /// has to be the list's then too, or leaving Source Edit before the
-        /// parse lands moves the text sideways. The editor's font follows the
-        /// zoom when the parse lands, with the document's.
-        static func overDocument(theme: MarkdownTheme, shownFontScale: Double, isReadingMode: Bool) -> Style {
-            Style(theme: theme, fontScale: shownFontScale, isReadingLayout: isReadingMode)
+        /// The editor's style over a rendered document. Two zooms, because
+        /// between ⌘+ and the re-parse that follows it they differ:
+        /// - the font follows `fontScale`, the zoom asked for, at once;
+        /// - the Reading Mode column follows `shownFontScale`
+        ///   (`MarkdownView.renderedFontScale` — the zoom the list's blocks
+        ///   were parsed at and its column is capped at), so the editor's
+        ///   column is the list's at every moment and leaving Source Edit
+        ///   before the parse lands does not move the text sideways.
+        static func overDocument(theme: MarkdownTheme, fontScale: Double, shownFontScale: Double,
+                                 isReadingMode: Bool) -> Style {
+            Style(theme: theme, fontScale: fontScale, isReadingLayout: isReadingMode,
+                  columnFontScale: shownFontScale)
         }
 
         /// The colours of the block tint (`paintTint`).
@@ -479,7 +487,7 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
         defer { isUpdatingGeometry = false }
         let clip = scrollView.contentView.bounds.size
         let geometry = Self.columnGeometry(clipWidth: clip.width, isReadingLayout: style.isReadingLayout,
-                                           fontScale: CGFloat(style.fontScale))
+                                           fontScale: CGFloat(style.columnFontScale ?? style.fontScale))
         let inset = NSSize(width: geometry.horizontalInset, height: geometry.verticalInset)
         // At least as tall as the clip, so a click below a short text still
         // lands in the text view (and places the caret at the end).

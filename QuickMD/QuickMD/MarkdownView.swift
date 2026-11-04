@@ -324,7 +324,8 @@ struct MarkdownView: View {
                 Group {
                     if editSession.isActive {
                         SourceEditorView(controller: editSession.editor,
-                                         style: .overDocument(theme: theme, shownFontScale: renderedFontScale,
+                                         style: .overDocument(theme: theme, fontScale: fontScale,
+                                                              shownFontScale: renderedFontScale,
                                                               isReadingMode: isReadingMode))
                     }
                 }
