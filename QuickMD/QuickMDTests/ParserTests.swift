@@ -665,10 +665,17 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(level, 2)
     }
 
+    /// An alert needs a body (GitHub): the marker alone is a plain quote; a
+    /// nested quote right after it is a body, even an empty one, and the
+    /// alert's own body is then empty.
     func testAlertWithEmptyBodyParses() {
-        let blocks = parse("> [!WARNING]")
+        guard case .blockquote(let marker, 1) = parse("> [!WARNING]").first?.content else {
+            return XCTFail("a marker alone is a plain quote")
+        }
+        XCTAssertEqual(marker, "[!WARNING]")
+        let blocks = parse("> [!WARNING]\n> >")
         guard case .alert(let kind, let content) = blocks.first?.content else {
-            return XCTFail("header-only alert should still parse")
+            return XCTFail("an alert whose body is a nested quote should still parse")
         }
         XCTAssertEqual(kind, .warning)
         XCTAssertTrue(content.isEmpty)

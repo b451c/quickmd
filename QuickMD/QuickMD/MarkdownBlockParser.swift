@@ -492,10 +492,16 @@ struct MarkdownBlockParser: Sendable {
                     if !content.isEmpty, let groupSourceLine {
                         // GFM alert: level-1 quote whose first line is exactly
                         // `[!NOTE]` / `[!TIP]` / `[!IMPORTANT]` / `[!WARNING]` /
-                        // `[!CAUTION]` (marker alone on the line, per GitHub spec).
-                        if groupLevel == 1, let kind = AlertKind(markerLine: groupLines[0]) {
-                            let body = groupLines.dropFirst().joined(separator: "\n")
-                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                        // `[!CAUTION]` (marker alone on the line, per GitHub spec)
+                        // — and that has a body (GitHub): text after the marker,
+                        // or a nested quote right after it, even an empty one.
+                        // The marker alone (blank lines, definitions taken out)
+                        // is a plain quote "[!NOTE]".
+                        let alertKind = groupLevel == 1 ? AlertKind(markerLine: groupLines[0]) : nil
+                        let body = groupLines.dropFirst().joined(separator: "\n")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        let nestedQuoteFollows = i < lines.count && Self.markerLine(lines[i]).hasPrefix(">")
+                        if let kind = alertKind, !body.isEmpty || nestedQuoteFollows {
                             blocks.append(.alert(index: blockIndex, kind: kind, content: body, sourceLine: groupSourceLine))
                             previousGroupWasQuote = false
                         } else {

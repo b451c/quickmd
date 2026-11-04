@@ -205,9 +205,11 @@ final class BlockHeightMeasurerTests: XCTestCase {
         }
     }
 
-    /// An alert with a marker but no body skips the body and its VStack spacing.
+    /// An alert with a marker but no body text skips the body and its VStack
+    /// spacing. (Its body is an empty nested quote: the marker alone is a
+    /// plain quote, as on GitHub.)
     func testAlertWithoutBodyHasNoBodyChrome() {
-        let blocks = parse("> [!NOTE]")
+        let blocks = parse("> [!NOTE]\n> >")
         let measured = measure(blocks, width: 600)
         guard let index = blocks.firstIndex(where: { if case .alert = $0.content { return true } else { return false } }) else {
             return XCTFail("fixture did not parse as an alert")

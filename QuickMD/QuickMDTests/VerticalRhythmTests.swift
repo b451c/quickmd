@@ -903,6 +903,30 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(blocks.map(\.sourceLine).prefix(2), [0, 3])
     }
 
+    /// An alert needs a body (GitHub, gfm/h10_*.html): `> [!NOTE]` alone,
+    /// or followed only by blank `>` lines or definitions the pre-pass took
+    /// out, is a plain quote "[!NOTE]" — it was an alert with an empty box.
+    /// Any block after the marker is a body: text, a lazy line, a list, a
+    /// heading, a nested quote (even an empty one).
+    func testAnAlertNeedsABody() throws {
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n"), ["q1:[!NOTE]"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n>\n"), ["q1:[!NOTE]"])
+        XCTAssertEqual(try quoteShape("> [!TIP]\n\ntext\n"), ["q1:[!TIP]", "t:text"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n>\n> [x]: http://e.com\n\n[x]\n"), ["q1:[!NOTE]", "t:x"])
+        XCTAssertEqual(try quoteShape("x [^m]\n\n> [!NOTE]\n> [^m]: note\n").prefix(2), ["t:x ¹", "q1:[!NOTE]"])
+        // A body: an alert.
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> text\n"), ["alert:note:text"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n>\n> text\n"), ["alert:note:text"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\nlazy\n"), ["alert:note:lazy"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> - item\n"), ["alert:note:- item"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> # H\n"), ["alert:note:# H"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> [x]: http://e.com\n\n[x]\n"),
+                       ["alert:note:[x]: http://e.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> > nested\n"), ["alert:note:", "q2:nested"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> >\n"), ["alert:note:"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n>> [x]: http://e.com\n\n[x]\n"), ["alert:note:", "t:x"])
+    }
+
     func testALinkDefinitionCannotInterruptAParagraph() throws {
         XCTAssertEqual(try quoteShape("> a\n[x]: http://e.com\n\n[x]\n"), ["q1:a\n[x]: http://e.com", "t:[x]"])
         XCTAssertEqual(try quoteShape("Para\n[x]: http://e.com\n\n[x]\n"), ["t:Para [x]: http://e.com", "t:[x]"])
@@ -1028,7 +1052,7 @@ final class VerticalRhythmTests: XCTestCase {
     func testAWidthChangeLaysAQuoteOutAgainWithoutRenderingIt() throws {
         let long = "words that wrap at a narrow column but not at a wide one, and a few more of them"
         let markdown = "Para\n\n> \(long)\nand a lazy line\n\n> > nested \(long)\n\n"
-            + "> [!NOTE]\n> \(long)\n\n> [!TIP]\n\nEnd\n"
+            + "> [!NOTE]\n> \(long)\n\n> [!TIP]\n> >\n\nEnd\n"
         let blocks = try XCTUnwrap(parseReturning(markdown))
         let theme = MarkdownTheme.cached(for: .light)
         let first = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,
