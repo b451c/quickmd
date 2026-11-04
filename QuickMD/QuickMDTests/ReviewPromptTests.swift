@@ -222,28 +222,78 @@ final class ReviewPromptTests: XCTestCase {
 
     // MARK: - Continuous display countdown
 
+    /// Feeds displayed ticks one second apart from `start` through `end`
+    /// (inclusive) and returns the last result.
+    @discardableResult
+    private func tick(_ countdown: inout ReviewPromptCountdown,
+                      from start: TimeInterval, through end: TimeInterval) -> Bool {
+        var result = false
+        var now = start
+        while now <= end {
+            result = countdown.advance(isDisplayed: true, now: now)
+            now += 1
+        }
+        return result
+    }
+
+    /// Monotonic seconds, like `systemUptime`.
+    private let uptime: TimeInterval = 5_000
+
     func testCountdownNeedsUninterruptedDisplay() {
         var countdown = ReviewPromptCountdown(required: 60)
-        XCTAssertFalse(countdown.advance(isDisplayed: true, now: base))
-        XCTAssertFalse(countdown.advance(isDisplayed: true, now: base.addingTimeInterval(59)))
-        XCTAssertTrue(countdown.advance(isDisplayed: true, now: base.addingTimeInterval(60)))
+        XCTAssertFalse(tick(&countdown, from: uptime, through: uptime + 59))
+        XCTAssertTrue(countdown.advance(isDisplayed: true, now: uptime + 60))
+        XCTAssertTrue(countdown.advance(isDisplayed: true, now: uptime + 61), "a complete run stays complete")
     }
 
     func testCountdownRestartsAfterAnInterruption() {
         var countdown = ReviewPromptCountdown(required: 60)
-        _ = countdown.advance(isDisplayed: true, now: base)
-        XCTAssertFalse(countdown.advance(isDisplayed: false, now: base.addingTimeInterval(50)))
+        tick(&countdown, from: uptime, through: uptime + 50)
+        XCTAssertFalse(countdown.advance(isDisplayed: false, now: uptime + 51))
         XCTAssertNil(countdown.displayedSince)
-        XCTAssertFalse(countdown.advance(isDisplayed: true, now: base.addingTimeInterval(51)))
-        XCTAssertFalse(countdown.advance(isDisplayed: true, now: base.addingTimeInterval(110)))
-        XCTAssertTrue(countdown.advance(isDisplayed: true, now: base.addingTimeInterval(111)))
+        XCTAssertFalse(tick(&countdown, from: uptime + 52, through: uptime + 111))
+        XCTAssertTrue(countdown.advance(isDisplayed: true, now: uptime + 112))
     }
 
-    func testCountdownSurvivesTheClockGoingBack() {
+    func testCountdownRestartsAfterAGapBetweenTicks() {
+        var countdown = ReviewPromptCountdown(required: 60, maximumGap: 3)
+        tick(&countdown, from: uptime, through: uptime + 40)
+        // 3 s since the previous tick is still continuous…
+        XCTAssertFalse(countdown.advance(isDisplayed: true, now: uptime + 43))
+        XCTAssertEqual(countdown.displayedSince, uptime)
+        // …4 s is not (sleep, App Nap, a stalled main thread): a new run.
+        XCTAssertFalse(countdown.advance(isDisplayed: true, now: uptime + 47))
+        XCTAssertEqual(countdown.displayedSince, uptime + 47)
+        XCTAssertFalse(tick(&countdown, from: uptime + 48, through: uptime + 106))
+        XCTAssertTrue(countdown.advance(isDisplayed: true, now: uptime + 107))
+    }
+
+    func testCountdownResetStartsFromZero() {
         var countdown = ReviewPromptCountdown(required: 60)
-        _ = countdown.advance(isDisplayed: true, now: base)
-        XCTAssertFalse(countdown.advance(isDisplayed: true, now: base.addingTimeInterval(-3_600)))
-        XCTAssertEqual(countdown.displayedSince, base.addingTimeInterval(-3_600))
-        XCTAssertTrue(countdown.advance(isDisplayed: true, now: base.addingTimeInterval(-3_540)))
+        tick(&countdown, from: uptime, through: uptime + 59)
+        countdown.reset()
+        XCTAssertNil(countdown.displayedSince)
+        XCTAssertNil(countdown.lastTick)
+        XCTAssertFalse(countdown.advance(isDisplayed: true, now: uptime + 60))
+    }
+
+    func testCountdownSurvivesTimeGoingBack() {
+        var countdown = ReviewPromptCountdown(required: 60)
+        tick(&countdown, from: uptime, through: uptime + 30)
+        XCTAssertFalse(countdown.advance(isDisplayed: true, now: uptime - 100))
+        XCTAssertEqual(countdown.displayedSince, uptime - 100)
+        XCTAssertTrue(tick(&countdown, from: uptime - 99, through: uptime - 40))
+    }
+
+    // MARK: - Idle check at the moment of asking
+
+    func testUserActivityWindow() {
+        XCTAssertTrue(ReviewPrompt.isUserActive(secondsSinceLastInput: 0))
+        XCTAssertTrue(ReviewPrompt.isUserActive(secondsSinceLastInput: 59.9))
+        XCTAssertFalse(ReviewPrompt.isUserActive(secondsSinceLastInput: 60))
+        XCTAssertFalse(ReviewPrompt.isUserActive(secondsSinceLastInput: 3_600))
+        XCTAssertFalse(ReviewPrompt.isUserActive(secondsSinceLastInput: -1))
+        XCTAssertFalse(ReviewPrompt.isUserActive(secondsSinceLastInput: .nan))
+        XCTAssertFalse(ReviewPrompt.isUserActive(secondsSinceLastInput: .infinity))
     }
 }

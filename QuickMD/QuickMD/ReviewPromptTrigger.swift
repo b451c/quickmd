@@ -21,12 +21,16 @@ enum ReviewPromptSession {
 /// has settled in — asks StoreKit for a rating after 60 s of uninterrupted
 /// display of this window.
 ///
-/// "Displayed" is checked once a second: the window is visible, unoccluded,
-/// key (the reader is looking at THIS tab, the app is frontmost) and has no
-/// sheet or app-modal panel over it. A tick that fails any of it restarts the
-/// 60 s. Source Edit stops it (the task id changes and the task returns while
-/// editing; leaving starts a fresh 60 s), closing the window cancels it with
-/// the view's task.
+/// Ticks once a second ONLY while the window is key (the reader is looking at
+/// THIS tab, the app is frontmost); otherwise it waits for
+/// `didBecomeKeyNotification` and costs nothing. "Displayed" per tick: visible,
+/// unoccluded, key, no sheet or app-modal panel. A tick that fails it, losing
+/// key, or a gap of more than 3 s between ticks (sleep, App Nap, a stalled
+/// main thread — measured on the monotonic `systemUptime`) restarts the 60 s.
+/// At 60 s it also needs user input within the last 60 s; an idle reader keeps
+/// it waiting. Source Edit stops it (the task id changes and the task returns
+/// while editing; leaving starts a fresh 60 s), closing the window cancels it
+/// with the view's task.
 ///
 /// The policy is evaluated when the countdown arms AND when it completes: in
 /// the usual case (thresholds not met, or this version already asked) no
@@ -74,26 +78,63 @@ struct ReviewPromptTrigger: ViewModifier {
         guard !isEditing, let window, Self.canRequest(policy) else { return }
 
         var countdown = ReviewPromptCountdown(required: Self.requiredDisplay)
-        _ = countdown.advance(isDisplayed: Self.isDisplayed(window), now: Date())
-        while true {
+        while !Task.isCancelled {
+            // Another window asked: stop for good, no further ticks.
+            guard !ReviewPromptSession.hasRequested else { return }
+            // Not key (background tab, another app or window in front, a
+            // sheet): no ticking at all — sleep until AppKit says the window
+            // is key again, then count a fresh 60 s.
+            if !window.isKeyWindow {
+                countdown.reset()
+                guard await Self.waitUntilKey(window) else { return }
+                continue
+            }
+            let displayedLongEnough = countdown.advance(isDisplayed: Self.isDisplayed(window),
+                                                        now: ProcessInfo.processInfo.systemUptime)
+            if displayedLongEnough {
+                // Another window may have asked meanwhile, or the policy changed.
+                guard Self.canRequest(policy) else { return }
+                // An unattended screen is not reading: keep waiting (the run
+                // stays complete) until the reader touches the Mac again.
+                if Self.userIsActive {
+                    ReviewPromptSession.hasRequested = true
+                    #if DEBUG
+                    reviewLog.debug("requestReview for \(Self.appVersion, privacy: .public)")
+                    #endif
+                    requestReview()
+                    policy.markRequested(now: Date(), appVersion: Self.appVersion)
+                    return
+                }
+            }
             try? await Task.sleep(nanoseconds: Self.tick)
-            guard !Task.isCancelled else { return }
-            guard countdown.advance(isDisplayed: Self.isDisplayed(window), now: Date()) else { continue }
-            // Another window may have asked meanwhile, or the policy changed.
-            guard Self.canRequest(policy) else { return }
-            ReviewPromptSession.hasRequested = true
-            #if DEBUG
-            reviewLog.debug("requestReview for \(Self.appVersion, privacy: .public)")
-            #endif
-            requestReview()
-            policy.markRequested(now: Date(), appVersion: Self.appVersion)
-            return
         }
+    }
+
+    /// Suspends until `window` becomes key; false when the task was cancelled
+    /// (window closed, view gone, Source Edit entered). The notification
+    /// sequence is created BEFORE the key check, so a window that becomes key
+    /// in between is not missed.
+    @MainActor
+    private static func waitUntilKey(_ window: NSWindow) async -> Bool {
+        let becameKey = NotificationCenter.default.notifications(named: NSWindow.didBecomeKeyNotification,
+                                                                 object: window)
+        var iterator = becameKey.makeAsyncIterator()
+        if window.isKeyWindow { return !Task.isCancelled }
+        let arrived = await iterator.next() != nil
+        return arrived && !Task.isCancelled
     }
 
     @MainActor
     private static func canRequest(_ policy: ReviewPrompt) -> Bool {
         !ReviewPromptSession.hasRequested && policy.shouldRequest(now: Date(), appVersion: appVersion)
+    }
+
+    /// Any keyboard / mouse / trackpad event within `maximumIdleAtRequest`.
+    /// `~0` is `kCGAnyInputEventType`; an unconvertible type reads as idle.
+    private static var userIsActive: Bool {
+        guard let anyInput = CGEventType(rawValue: ~0) else { return false }
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
+        return ReviewPrompt.isUserActive(secondsSinceLastInput: idle)
     }
 
     @MainActor

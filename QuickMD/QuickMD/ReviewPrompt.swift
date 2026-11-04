@@ -43,6 +43,10 @@ struct ReviewPrompt {
     /// The day set only has to answer "at least 3 days"; 30 keeps it bounded
     /// for a reader who opens documents every day for years.
     static let maximumStoredDays = 30
+    /// At the moment of asking, the reader must have touched a key, the mouse
+    /// or the trackpad within this many seconds: a window left open on an
+    /// unattended Mac is not reading.
+    static let maximumIdleAtRequest: TimeInterval = 60
 
     private static let secondsPerDay: TimeInterval = 86_400
 
@@ -106,6 +110,15 @@ struct ReviewPrompt {
         defaults.set(appVersion, forKey: Keys.lastRequestVersion)
     }
 
+    /// True when the last user input (seconds ago, from the system's event
+    /// source) is recent enough to ask. Negative / NaN / infinite = unknown =
+    /// not active: an unreadable answer must not cause a prompt.
+    static func isUserActive(secondsSinceLastInput: TimeInterval) -> Bool {
+        secondsSinceLastInput.isFinite
+            && secondsSinceLastInput >= 0
+            && secondsSinceLastInput < maximumIdleAtRequest
+    }
+
     // MARK: Stored values, garbage-tolerant
 
     var openCount: Int {
@@ -134,7 +147,7 @@ struct ReviewPrompt {
     /// DateFormatter: no locale (or non-Gregorian era) can change the shape.
     func dayKey(for date: Date) -> String {
         let parts = calendar.dateComponents([.year, .month, .day], from: date)
-        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
+        return String(format: "%04ld-%02ld-%02ld", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 
     static func isDayKey(_ string: String) -> Bool {
@@ -159,29 +172,49 @@ struct ReviewPrompt {
 // MARK: - Continuous display countdown
 
 /// "The window has been on screen for 60 s in one go." Fed by a periodic tick
-/// with whether the window is displayed right now; any tick that is not
-/// resets the run. Pure so the rule is tested without timers.
+/// (about once a second) with whether the window is displayed right now; any
+/// tick that is not resets the run. Pure so the rule is tested without timers.
+///
+/// Times are MONOTONIC seconds (`ProcessInfo.systemUptime`: it does not
+/// advance while the Mac sleeps, and no clock change moves it). A gap of more
+/// than `maximumGap` between two ticks also resets the run: the ticks stopped
+/// (sleep, App Nap, a stalled main thread), so nobody can say the window was
+/// being read in between.
 struct ReviewPromptCountdown {
     let required: TimeInterval
+    let maximumGap: TimeInterval
     /// Start of the current uninterrupted run; nil = not displayed.
-    private(set) var displayedSince: Date?
+    private(set) var displayedSince: TimeInterval?
+    /// The previous displayed tick of this run.
+    private(set) var lastTick: TimeInterval?
 
-    init(required: TimeInterval) {
+    init(required: TimeInterval, maximumGap: TimeInterval = 3) {
         self.required = required
+        self.maximumGap = maximumGap
     }
 
     /// Returns true once `required` seconds of uninterrupted display have
-    /// passed by `now`.
-    mutating func advance(isDisplayed: Bool, now: Date) -> Bool {
+    /// passed by `now`. Keeps returning true on later displayed ticks of the
+    /// same run (the caller may still be waiting for other conditions).
+    mutating func advance(isDisplayed: Bool, now: TimeInterval) -> Bool {
         guard isDisplayed else {
-            displayedSince = nil
+            reset()
             return false
         }
-        // The clock went back: count from here rather than never.
-        guard let since = displayedSince, since <= now else {
+        guard let since = displayedSince, let last = lastTick,
+              now >= last, now - last <= maximumGap else {
             displayedSince = now
+            lastTick = now
             return false
         }
-        return now.timeIntervalSince(since) >= required
+        lastTick = now
+        return now - since >= required
+    }
+
+    /// Ends the current run (the window stopped being key); the next
+    /// displayed tick starts a new one from zero.
+    mutating func reset() {
+        displayedSince = nil
+        lastTick = nil
     }
 }
