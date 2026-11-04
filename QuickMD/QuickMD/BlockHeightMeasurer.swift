@@ -1024,7 +1024,7 @@ enum BlockHeightMeasurer {
                                + 2 * BlockLayout.Document.mermaidOuterVerticalPadding)
                 kinds.append(.reported)
             }
-            rhythm.append(textEdges.map { rhythmRow(block, edges: $0) } ?? boxRhythm(block, row: row))
+            rhythm.append(textEdges.map { rhythmRow(block, edges: $0) } ?? boxRhythm(block))
         }
 
         #if DEBUG
@@ -1058,26 +1058,23 @@ enum BlockHeightMeasurer {
 
     /// The rhythm input of a row whose edges its view fixes: the vertical
     /// padding between the row's edge and the visible box (or the picture).
-    /// `row` decides front matter: a properties table counts as front matter
-    /// only as the document's first block.
-    private static func boxRhythm(_ block: MarkdownBlock, row: Int) -> BlockLayout.Spacing.Row {
+    /// Front matter (either form) is the parser's call: `isFrontMatter`.
+    private static func boxRhythm(_ block: MarkdownBlock) -> BlockLayout.Spacing.Row {
         typealias Document = BlockLayout.Document
         let pad: CGFloat
-        var role = BlockLayout.Spacing.Role.box
         switch block.content {
         case .blockquote: pad = BlockLayout.Quote.verticalPadding
         case .alert: pad = Document.alertOuterVerticalPadding
         case .codeBlock: pad = Document.codeOuterVerticalPadding
-        case .table(_, _, _, let style):
+        case .table:
             pad = Document.tableOuterVerticalPadding
-            if style == .properties, row == 0 { role = .frontMatter }
         case .mathBlock: pad = Document.mathOuterVerticalPadding + BlockLayout.Math.verticalPadding
         case .mermaidDiagram: pad = Document.mermaidOuterVerticalPadding + BlockLayout.Mermaid.verticalPadding
         case .image, .svgImage: pad = Document.imageOuterVerticalPadding
         case .text, .heading: pad = 0  // measured, never here
         }
-        return BlockLayout.Spacing.Row(role: role, edges: .box(top: pad, bottom: pad),
-                                       joinsPrevious: block.joinsPrevious)
+        return BlockLayout.Spacing.Row(role: block.isFrontMatter ? .frontMatter : .box,
+                                       edges: .box(top: pad, bottom: pad), joinsPrevious: block.joinsPrevious)
     }
 
     /// One `.codeBlock` row: the code laid out at `codeWidth` plus `chrome`
@@ -1155,7 +1152,7 @@ enum BlockHeightMeasurer {
         // guard only keeps a mismatched call from trapping.
         var rhythm = measured.rhythm.count == blocks.count
             ? measured.rhythm
-            : blocks.enumerated().map { boxRhythm($0.element, row: $0.offset) }
+            : blocks.map { boxRhythm($0) }
         let textWidth = BlockLayout.clampedWidth(contentWidth)
 
         for index in pending {
@@ -1199,7 +1196,7 @@ enum BlockHeightMeasurer {
                     codeWidth: BlockLayout.clampedWidth(contentWidth - 2 * BlockLayout.Code.horizontalPadding),
                     chrome: BlockLayout.Code.verticalChrome(hasLanguage: !language.isEmpty, fontScale: fontScale))
                 kinds[index] = .exact
-                rhythm[index] = boxRhythm(block, row: index)
+                rhythm[index] = boxRhythm(block)
 
             default:
                 continue

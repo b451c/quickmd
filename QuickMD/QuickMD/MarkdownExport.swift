@@ -745,8 +745,7 @@ class PDFExportManager {
         // of the PRINTED views, at 1.0 zoom — print never follows the window's.
         let printRenderer = MarkdownRenderer(colorScheme: .light)
         let rhythm = measuredBlocks.enumerated().map { index, measured in
-            PrintRhythm.row(for: measured.block, isFirst: index == 0,
-                            renderer: printRenderer, width: contentWidth)
+            PrintRhythm.row(for: measured.block, renderer: printRenderer, width: contentWidth)
         }
         let spacing = BlockLayout.Spacing.column(rhythm, fontScale: 1)
 

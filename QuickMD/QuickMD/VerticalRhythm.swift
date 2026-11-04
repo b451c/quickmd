@@ -310,10 +310,8 @@ enum PrintRhythm {
     /// styles, so their ink is measured without them. Every box (code, quote,
     /// alert, table, image, diagram) prints its background or its picture from
     /// its frame's edge; a display formula has its vertical padding.
-    ///
-    /// - Parameter isFirst: the block is the document's first (front matter).
-    static func row(for block: MarkdownBlock, isFirst: Bool,
-                    renderer: MarkdownRenderer, width: CGFloat) -> BlockLayout.Spacing.Row {
+    /// Front matter (either form) is the parser's call: `isFrontMatter`.
+    static func row(for block: MarkdownBlock, renderer: MarkdownRenderer, width: CGFloat) -> BlockLayout.Spacing.Row {
         typealias Spacing = BlockLayout.Spacing
         let role: Spacing.Role
         let edges: Spacing.Edges
@@ -325,17 +323,15 @@ enum PrintRhythm {
             role = .heading(level: level)
             edges = .text(BlockHeightMeasurer.textInk(text: printed(renderer.renderHeader(title, level: level)),
                                                       width: width))
-        case .table(_, _, _, let style):
-            role = style == .properties && isFirst ? .frontMatter : .box
-            edges = .box(top: 0, bottom: 0)
         case .mathBlock:
             role = .box
             edges = .box(top: BlockLayout.Math.verticalPadding, bottom: BlockLayout.Math.verticalPadding)
-        case .codeBlock, .blockquote, .alert, .image, .svgImage, .mermaidDiagram:
+        case .table, .codeBlock, .blockquote, .alert, .image, .svgImage, .mermaidDiagram:
             role = .box
             edges = .box(top: 0, bottom: 0)
         }
-        return Spacing.Row(role: role, edges: edges, joinsPrevious: block.joinsPrevious)
+        return Spacing.Row(role: block.isFrontMatter ? .frontMatter : role, edges: edges,
+                           joinsPrevious: block.joinsPrevious)
     }
 
     /// The string as SwiftUI `Text` lays it out: no paragraph styles.

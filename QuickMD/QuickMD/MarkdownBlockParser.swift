@@ -64,9 +64,10 @@ struct MarkdownBlockParser: Sendable {
                         blocks.append(.table(index: blockIndex, headers: [],
                                              rows: properties.map { [$0.key, $0.value] },
                                              alignments: [.leading, .leading], style: .properties,
-                                             sourceLine: 0))
+                                             sourceLine: 0, isFrontMatter: true))
                     } else {
-                        blocks.append(.codeBlock(index: blockIndex, code: yaml, language: "yaml", sourceLine: 0))
+                        blocks.append(.codeBlock(index: blockIndex, code: yaml, language: "yaml", sourceLine: 0,
+                                                 isFrontMatter: true))
                     }
                     blockIndex += 1
                 }

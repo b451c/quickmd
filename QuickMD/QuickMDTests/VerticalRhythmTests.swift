@@ -158,10 +158,36 @@ final class VerticalRhythmTests: XCTestCase {
     }
 
     func testFrontMatterToTitleIsOneMarginEdgeToEdge() {
-        let measured = measure(parse("---\ntitle: Notes\ntags: [a, b]\n---\n# Notes\n\nText."))
-        XCTAssertEqual(measured.rhythm.first?.role, .frontMatter)
-        XCTAssertEqual(measured.rhythm.count, 3)
-        XCTAssertEqual(realizedGap(measured.rhythm, measured.table.spacingAbove, 1), 1.75 * 14, accuracy: tolerance)
+        // The properties table, and the yaml code block the parser falls back
+        // to when `FrontMatter` cannot read the YAML (a nested map here) —
+        // on screen and in print.
+        let renderer = MarkdownRenderer(colorScheme: .light)
+        for markdown in ["---\ntitle: Notes\ntags: [a, b]\n---\n# Notes\n\nText.",
+                         "---\nauthor:\n  name: X\n---\n# Notes\n\nText."] {
+            let blocks = parse(markdown)
+            XCTAssertTrue(blocks[0].isFrontMatter, markdown)
+            let measured = measure(blocks)
+            XCTAssertEqual(measured.rhythm.first?.role, .frontMatter, markdown)
+            XCTAssertEqual(measured.rhythm.count, 3)
+            XCTAssertEqual(realizedGap(measured.rhythm, measured.table.spacingAbove, 1), 1.75 * 14,
+                           accuracy: tolerance, markdown)
+            let printRows = blocks.map { PrintRhythm.row(for: $0, renderer: renderer, width: 532) }
+            XCTAssertEqual(printRows.first?.role, .frontMatter, markdown)
+            XCTAssertEqual(realizedGap(printRows, Spacing.column(printRows, fontScale: 1), 1), 1.75 * 14,
+                           accuracy: tolerance, markdown)
+        }
+        if case .codeBlock(_, let language) = parse("---\nauthor:\n  name: X\n---\n# Notes")[0].content {
+            XCTAssertEqual(language, "yaml")
+        } else {
+            XCTFail("the fallback is a yaml code block")
+        }
+    }
+
+    func testAYamlFenceOnTheFirstLineIsAnOrdinaryCodeBlock() {
+        let blocks = parse("```yaml\ntitle: Notes\n```\n# Notes")
+        XCTAssertFalse(blocks[0].isFrontMatter)
+        XCTAssertEqual(measure(blocks).rhythm.first?.role, .box)
+        XCTAssertFalse(parse("# Notes\n\n---\ntitle: x\n---")[1...].contains { $0.isFrontMatter })
     }
 
     // MARK: - Between other blocks
@@ -719,7 +745,7 @@ final class VerticalRhythmTests: XCTestCase {
         let blocks = MarkdownBlockParser(theme: printTheme, fontScale: 1).parse(markdown)
         let renderer = MarkdownRenderer(colorScheme: .light)
         let printRows = blocks.enumerated().map {
-            PrintRhythm.row(for: $0.element, isFirst: $0.offset == 0, renderer: renderer, width: 532)
+            PrintRhythm.row(for: $0.element, renderer: renderer, width: 532)
         }
         let printSpacing = Spacing.column(printRows, fontScale: 1)
         let screen = BlockHeightMeasurer.measure(blocks: blocks, theme: printTheme, fontScale: 1,

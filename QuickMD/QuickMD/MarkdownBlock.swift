@@ -121,12 +121,20 @@ struct MarkdownBlock: Identifiable, Sendable {
     /// across the cut joins the two rows with a line break, not a blank line
     /// (`DocumentCopyBuilder`).
     let joinsPrevious: Bool
+    /// The document's YAML front matter — as the properties table, or as the
+    /// `yaml` code block it falls back to when `FrontMatter` cannot read it.
+    /// Set by the parser alone (only it knows where the fence was): a user's
+    /// own ```` ```yaml ```` fence on the first line is an ordinary code block.
+    /// The rhythm gives it its own role (`BlockLayout.Spacing.Role.frontMatter`).
+    let isFrontMatter: Bool
 
-    init(id: String, content: BlockContent, sourceLine: Int, joinsPrevious: Bool = false) {
+    init(id: String, content: BlockContent, sourceLine: Int, joinsPrevious: Bool = false,
+         isFrontMatter: Bool = false) {
         self.id = id
         self.content = content
         self.sourceLine = sourceLine
         self.joinsPrevious = joinsPrevious
+        self.isFrontMatter = isFrontMatter
     }
 
     enum BlockContent: Sendable {
@@ -170,13 +178,15 @@ struct MarkdownBlock: Identifiable, Sendable {
                              joinsPrevious: joinsPrevious)
     }
     static func table(index: Int, headers: [String], rows: [[String]], alignments: [TextAlignment],
-                      style: TableStyle, sourceLine: Int) -> MarkdownBlock {
+                      style: TableStyle, sourceLine: Int, isFrontMatter: Bool = false) -> MarkdownBlock {
         MarkdownBlock(id: "table-\(index)",
                       content: .table(headers: headers, rows: rows, alignments: alignments, style: style),
-                      sourceLine: sourceLine)
+                      sourceLine: sourceLine, isFrontMatter: isFrontMatter)
     }
-    static func codeBlock(index: Int, code: String, language: String, sourceLine: Int) -> MarkdownBlock {
-        MarkdownBlock(id: "code-\(index)", content: .codeBlock(code: code, language: language), sourceLine: sourceLine)
+    static func codeBlock(index: Int, code: String, language: String, sourceLine: Int,
+                          isFrontMatter: Bool = false) -> MarkdownBlock {
+        MarkdownBlock(id: "code-\(index)", content: .codeBlock(code: code, language: language),
+                      sourceLine: sourceLine, isFrontMatter: isFrontMatter)
     }
     static func image(index: Int, url: String, alt: String, width: ImageWidth?, sourceLine: Int) -> MarkdownBlock {
         MarkdownBlock(id: "image-\(index)", content: .image(url: url, alt: alt, width: width), sourceLine: sourceLine)
