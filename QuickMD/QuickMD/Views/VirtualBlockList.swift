@@ -366,20 +366,41 @@ struct VirtualBlockList: NSViewRepresentable {
         /// re-measure even when its natural height happens to be unchanged.
         private(set) var generation: Int = 0
         private var rowForBlockId: [String: Int] = [:]
-        /// The anchor this list last put the content top on (a restore, the
-        /// reading-mode toggle, a `.top` jump), by block id. While the content
-        /// top is still exactly there it IS the reader's place, and two things
-        /// read it instead of the geometry:
+        /// The reader's place as this list last set it — a restore, the
+        /// reading-mode toggle, a jump — by block id. While the content top is
+        /// still where it was put (`placed`; or a jump to it is in flight) this
+        /// IS the reader's place, and it is read instead of the geometry:
         /// - `captureAnchor`: a style toggle or a restore can move the content
         ///   top across a row boundary (24 pt of inset, an offset into the gap
-        ///   above the anchored block), and re-anchoring on whatever row is
-        ///   under it now would tie the next layout to a DIFFERENT block — the
-        ///   round trip then drifts by any difference between the two layouts
-        ///   in between (the space between those two blocks, a placeholder
-        ///   height). Keeping the block keeps every round trip exact.
-        /// - `reportHeight`: the anchored block's own report is not
-        ///   compensated (`RowGeometry.contentTopAfterReport`).
-        private var lastAnchor: (blockId: String, offsetFromBlockTop: CGFloat)?
+        ///   above the anchored block, an offset past a placeholder), and
+        ///   re-anchoring on whatever row is under it now would tie the next
+        ///   layout to a DIFFERENT block — the round trip then drifts by any
+        ///   difference between the two layouts in between. Keeping the block
+        ///   and the offset keeps every round trip exact.
+        /// - `reportHeight`: the anchored block stays put on screen
+        ///   (`RowGeometry.reportAction`).
+        private var anchor: ReaderAnchor?
+        /// A programmatic animated scroll is on its way to `anchor`: reports
+        /// re-aim it instead of compensating a content top that is mid-flight.
+        private var isJumping = false
+        /// Bumped per animated jump, so an older animation's completion does
+        /// not end a newer one.
+        private var jumpGeneration = 0
+        /// `.reported` blocks whose view has told this table its height: their
+        /// height is no longer an estimate (`RowGeometry.anchorPlacement`).
+        private var reportedBlocks: Set<String> = []
+
+        private struct ReaderAnchor {
+            let blockId: String
+            /// Where the reader is: the content top's offset below the block's
+            /// top, as captured from a real layout or asked for by a jump.
+            var offset: CGFloat
+            /// Where the content top actually is relative to that block top:
+            /// `offset`, unless the block's estimated height cannot hold it
+            /// (`RowGeometry.anchorPlacement`) or AppKit clamped the scroll at
+            /// an end of the document.
+            var placed: CGFloat
+        }
 
         // MARK: Inputs refreshed per update
 
@@ -491,7 +512,9 @@ struct VirtualBlockList: NSViewRepresentable {
 
             let anchor = captureAnchor()
             let previousCount = blocks.count
-            lastAnchor = nil
+            self.anchor = nil
+            isJumping = false
+            reportedBlocks = []
 
             blocks = newBlocks
             table = newTable
@@ -593,11 +616,8 @@ struct VirtualBlockList: NSViewRepresentable {
             }
 
             let top = contentTopY()
-            if preferringLastAnchor, let last = lastAnchor, let row = rowForBlockId[last.blockId],
-               row < tableView.numberOfRows, row < blocks.count,
-               RowGeometry.isAt(anchorOffset: last.offsetFromBlockTop, contentTop: top,
-                                rowRect: tableView.rect(ofRow: row), spacingAbove: table.spacing(row)) {
-                return CapturedAnchor(row: row, offsetFromBlockTop: last.offsetFromBlockTop,
+            if preferringLastAnchor, let anchor, let row = anchoredRow(contentTop: top) {
+                return CapturedAnchor(row: row, offsetFromBlockTop: anchor.offset,
                                       sourceLine: blocks[row].sourceLine,
                                       signature: blockSignature(blocks[row]))
             }
@@ -670,21 +690,53 @@ struct VirtualBlockList: NSViewRepresentable {
             #if DEBUG
             listLog.debug("restoreAnchor: by \(matchedBy, privacy: .public), row \(anchor.row) → \(row), offset=\(anchor.offsetFromBlockTop, format: .fixed(precision: 1))")
             #endif
-            setContentTop(contentTop(anchorOffset: anchor.offsetFromBlockTop, row: row), animated: false)
-            noteAnchor(row: row, offsetFromBlockTop: anchor.offsetFromBlockTop)
+            place(row: row, offset: anchor.offsetFromBlockTop, animated: false)
         }
 
-        /// The content top that puts the reader `anchorOffset` below row
-        /// `row`'s block top in the CURRENT layout (`RowGeometry`).
-        private func contentTop(anchorOffset: CGFloat, row: Int) -> CGFloat {
-            guard let tableView else { return 0 }
-            return RowGeometry.contentTop(anchorOffset: anchorOffset, rowRect: tableView.rect(ofRow: row),
-                                          spacingAbove: table.spacing(row))
+        /// Puts the reader `offset` below row `row`'s block top in the CURRENT
+        /// layout — or inside the block, while its estimated height cannot hold
+        /// that offset (`RowGeometry.anchorPlacement`) — and makes that the
+        /// list's `anchor`. Animated = a jump: `isJumping` until it lands.
+        private func place(row: Int, offset: CGFloat, animated: Bool) {
+            guard let tableView, let scrollView, row >= 0, row < blocks.count,
+                  row < tableView.numberOfRows else { return }
+            let rect = tableView.rect(ofRow: row)
+            let spacing = table.spacing(row)
+            let blockTop = RowGeometry.topTarget(rowRect: rect, spacingAbove: spacing)
+            let placement = RowGeometry.anchorPlacement(
+                offset: offset, blockHeight: RowGeometry.contentRect(rowRect: rect, spacingAbove: spacing).height,
+                topInset: scrollView.contentInsets.top,
+                heightIsEstimate: row < table.kinds.count && table.kinds[row] == .reported
+                    && !reportedBlocks.contains(blocks[row].id))
+            var completion: (() -> Void)?
+            if animated {
+                jumpGeneration += 1
+                let jump = jumpGeneration
+                isJumping = true
+                completion = { [weak self] in
+                    guard let self, self.jumpGeneration == jump else { return }
+                    self.isJumping = false
+                }
+            } else {
+                isJumping = false
+            }
+            let reached = setContentTop(blockTop + placement, animated: animated, completion: completion)
+            anchor = ReaderAnchor(blockId: blocks[row].id, offset: offset, placed: reached - blockTop)
+            #if DEBUG
+            listLog.debug("place: row \(row) offset=\(offset, format: .fixed(precision: 1)) placed=\(reached - blockTop, format: .fixed(precision: 1))\(animated ? " (jump)" : "", privacy: .public)")
+            #endif
         }
 
-        /// Records the anchor the content top was just put on (`lastAnchor`).
-        private func noteAnchor(row: Int, offsetFromBlockTop: CGFloat) {
-            lastAnchor = row >= 0 && row < blocks.count ? (blocks[row].id, offsetFromBlockTop) : nil
+        /// The row of `anchor` while it still holds: a jump to it is in
+        /// flight, or the content top is where it was put. Nil once the reader
+        /// has scrolled away (or the anchor's block is gone).
+        private func anchoredRow(contentTop: CGFloat) -> Int? {
+            guard let anchor, let tableView, let row = rowForBlockId[anchor.blockId],
+                  row < tableView.numberOfRows, row < blocks.count else { return nil }
+            if isJumping { return row }
+            return RowGeometry.isAt(anchorOffset: anchor.placed, contentTop: contentTop,
+                                    rowRect: tableView.rect(ofRow: row), spacingAbove: table.spacing(row))
+                ? row : nil
         }
 
         /// The row whose content fingerprint equals `signature`, closest to
@@ -722,6 +774,7 @@ struct VirtualBlockList: NSViewRepresentable {
             guard let row = rowForBlockId[blockId], row < table.heights.count else { return }
             // Defensive: an exact row cannot know better than the measurer.
             guard row < table.kinds.count, table.kinds[row] == .reported else { return }
+            reportedBlocks.insert(blockId)
             guard abs(height - table.heights[row]) >= 0.5 else { return }
 
             // The coordinator's own table is patched SYNCHRONOUSLY so that a
@@ -766,24 +819,37 @@ struct VirtualBlockList: NSViewRepresentable {
                 // shrinking row shortens the table and AppKit clamps the clip
                 // origin by itself right there — reading the content top after
                 // that applied the shrink twice (the last line ended up on the
-                // window's bottom edge). Which reports move the scroll offset:
-                // `RowGeometry.contentTopAfterReport`.
+                // window's bottom edge). Which reports move the scroll offset,
+                // and how: `RowGeometry.reportAction`.
                 let top = self.contentTopY()
-                let anchored = self.lastAnchor.flatMap { $0.blockId == blockId ? $0.offsetFromBlockTop : nil }
-                let newTop = RowGeometry.contentTopAfterReport(contentTop: top, blockTop: self.blockTopY(row),
-                                                               delta: delta, anchoredOffset: anchored)
+                let anchorRow = self.anchoredRow(contentTop: top)
+                let action = RowGeometry.reportAction(row: row, anchorRow: anchorRow,
+                                                      blockTop: self.blockTopY(row), contentTop: top)
 
                 NSAnimationContext.beginGrouping()
                 NSAnimationContext.current.duration = 0
                 tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
                 NSAnimationContext.endGrouping()
 
-                if let newTop {
-                    self.setContentTop(newTop, animated: false)
+                switch action {
+                case .keep:
+                    break
+                case .shift where self.isJumping, .placeAnchor:
+                    // Re-aim a jump in flight at its target's new place, or put
+                    // the reader back into the block that just reported.
+                    if let anchorRow, let anchor = self.anchor {
+                        self.place(row: anchorRow, offset: anchor.offset, animated: self.isJumping)
+                    }
+                case .shift:
+                    let reached = self.setContentTop(top + delta, animated: false)
+                    if let anchorRow, self.anchor != nil {
+                        // Moved with the block, unless AppKit clamped it.
+                        self.anchor?.placed = reached - self.blockTopY(anchorRow)
+                    }
                 }
 
                 #if DEBUG
-                listLog.debug("reportHeight: row \(row) (\(blockId, privacy: .public)) \(applied, format: .fixed(precision: 1)) → \(target, format: .fixed(precision: 1)) at top \(top, format: .fixed(precision: 1))\(newTop != nil ? " (compensated)" : anchored != nil ? " (anchor inside)" : "")")
+                listLog.debug("reportHeight: row \(row) (\(blockId, privacy: .public)) \(applied, format: .fixed(precision: 1)) → \(target, format: .fixed(precision: 1)) at top \(top, format: .fixed(precision: 1)), anchor row \(anchorRow ?? -1): \(String(describing: action), privacy: .public)\(self.isJumping ? " (jump)" : "", privacy: .public)")
                 #endif
 
                 // The parent holds the authoritative table (it feeds the next
@@ -798,13 +864,15 @@ struct VirtualBlockList: NSViewRepresentable {
             guard let tableView, let scrollView,
                   let row = rowForBlockId[request.blockId],
                   row < tableView.numberOfRows else { return }
+            // The jump target is the reader's anchor from here on: a block above
+            // it that reports its real height while the scroll is in flight, or
+            // after it landed, moves the content top with it (`reportHeight`).
             let target: CGFloat
             switch request.anchor {
             case .top:
                 // The block's top, below the space above it: the content inset
                 // is then the gap above it, as above the document's first block.
                 target = blockTopY(row)
-                noteAnchor(row: row, offsetFromBlockTop: 0)
             case .center:
                 // The BLOCK's middle (not its row's, which includes the space
                 // above it) at the centre of the CONTENT area (between the
@@ -815,12 +883,11 @@ struct VirtualBlockList: NSViewRepresentable {
                 target = RowGeometry.centerTarget(rowRect: tableView.rect(ofRow: row),
                                                   spacingAbove: table.spacing(row),
                                                   visibleHeight: contentHeight)
-                lastAnchor = nil
             }
             #if DEBUG
             listLog.debug("scrollRequest: \(request.blockId, privacy: .public) row \(row) anchor=\(request.anchor == .top ? "top" : "center", privacy: .public) target=\(target, format: .fixed(precision: 1))")
             #endif
-            setContentTop(target, animated: request.animated)
+            place(row: row, offset: target - blockTopY(row), animated: request.animated)
         }
 
         // MARK: - Scroll offset arithmetic
@@ -838,8 +905,16 @@ struct VirtualBlockList: NSViewRepresentable {
                 + scrollView.contentInsets.top
         }
 
-        private func setContentTop(_ documentY: CGFloat, animated: Bool) {
-            guard let scrollView, let tableView else { return }
+        /// Scrolls so the content top is at `documentY`, as far as AppKit's
+        /// clamp allows; returns the content top it goes to. `completion` runs
+        /// when it is there (at once when nothing animates).
+        @discardableResult
+        private func setContentTop(_ documentY: CGFloat, animated: Bool,
+                                   completion: (() -> Void)? = nil) -> CGFloat {
+            guard let scrollView, let tableView else {
+                completion?()
+                return documentY
+            }
             let clipView = scrollView.contentView
             let rawY = documentY + tableView.frame.origin.y - scrollView.contentInsets.top
             // AppKit's own clamp: honours the content insets, the document
@@ -851,8 +926,12 @@ struct VirtualBlockList: NSViewRepresentable {
             #if DEBUG
             listLog.debug("setContentTop: documentY=\(documentY, format: .fixed(precision: 1)) tableOrigin=\(tableView.frame.origin.y, format: .fixed(precision: 1)) tableH=\(tableView.frame.height, format: .fixed(precision: 1)) clipOrigin=\(clipView.bounds.origin.y, format: .fixed(precision: 1)) clipH=\(clipView.bounds.height, format: .fixed(precision: 1)) insetTop=\(scrollView.contentInsets.top, format: .fixed(precision: 1)) rawY=\(rawY, format: .fixed(precision: 1)) constrained=\(constrained.y, format: .fixed(precision: 1)) animated=\(animated)")
             #endif
+            let reached = constrained.y - tableView.frame.origin.y + scrollView.contentInsets.top
             guard abs(constrained.y - clipView.bounds.origin.y) > 0.01
-                    || abs(constrained.x - clipView.bounds.origin.x) > 0.01 else { return }
+                    || abs(constrained.x - clipView.bounds.origin.x) > 0.01 else {
+                completion?()
+                return reached
+            }
 
             if animated {
                 NSAnimationContext.runAnimationGroup({ context in
@@ -860,14 +939,16 @@ struct VirtualBlockList: NSViewRepresentable {
                     context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                     clipView.animator().setBoundsOrigin(constrained)
                 }, completionHandler: { [weak scrollView] in
-                    guard let scrollView else { return }
-                    scrollView.reflectScrolledClipView(scrollView.contentView)
+                    if let scrollView { scrollView.reflectScrolledClipView(scrollView.contentView) }
+                    completion?()
                 })
                 scrollView.reflectScrolledClipView(clipView)
             } else {
                 clipView.scroll(to: constrained)
                 scrollView.reflectScrolledClipView(clipView)
+                completion?()
             }
+            return reached
         }
 
         // MARK: - contentWidth reporting (D4)
@@ -955,9 +1036,7 @@ struct VirtualBlockList: NSViewRepresentable {
                     // (a 24 pt jolt on every toggle); keeping the raw clip origin
                     // means restoring the document offset minus that delta.
                     let delta = layoutStyle.edgeInset - previousInset
-                    let offset = anchor.offsetFromBlockTop - delta
-                    setContentTop(contentTop(anchorOffset: offset, row: anchor.row), animated: false)
-                    noteAnchor(row: anchor.row, offsetFromBlockTop: offset)
+                    place(row: anchor.row, offset: anchor.offsetFromBlockTop - delta, animated: false)
                 }
             }
             #if DEBUG

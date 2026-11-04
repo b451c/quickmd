@@ -66,7 +66,14 @@ struct MermaidBlockView: View {
         _diagramHeight = State(initialValue: heightCache.height(for: blockId) ?? Metrics.defaultHeight)
         let cached = MermaidSnapshotStore.image(source: "\(fontScale)|\(contentWidth)|\(source)", isDark: theme.isDark)
         _snapshot = State(initialValue: cached)
-        if let cached { _diagramHeight = State(initialValue: cached.size.height) }
+        if let cached {
+            _diagramHeight = State(initialValue: cached.size.height)
+            // The web view path seeds the cache through `onHeight`; this path
+            // never runs it. Without the seed every re-measure after a re-parse
+            // (zoom, theme) — which empties the cache — measures the diagram at
+            // the 200 pt default again and it reports back on screen.
+            heightCache.set(cached.size.height, for: blockId)
+        }
     }
 
     var body: some View {

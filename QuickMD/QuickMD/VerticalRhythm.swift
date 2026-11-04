@@ -230,26 +230,54 @@ enum RowGeometry {
                                          spacingAbove: spacingAbove)) < 0.5
     }
 
-    /// Where the content top goes after a `.reported` row's block changed
-    /// height by `delta`; nil leaves the scroll offset alone.
+    /// Where to put the content top for a reader `offset` below a block whose
+    /// height in the current layout is `blockHeight`: at `offset`, unless the
+    /// block would then be wholly above the visible area (`topInset`, the top
+    /// content inset, still shows content) while its height is only an
+    /// estimate — an image placeholder, the diagram default. Its view would
+    /// never be built, never report its real height, and the reader would
+    /// stay in whatever follows the estimate. The content top then goes to the
+    /// block's last point instead, so the block is on screen and reports, and
+    /// the anchor is placed again at `offset` when it does (`reportAction`).
+    static func anchorPlacement(offset: CGFloat, blockHeight: CGFloat, topInset: CGFloat,
+                                heightIsEstimate: Bool) -> CGFloat {
+        guard heightIsEstimate, offset - topInset >= blockHeight else { return offset }
+        return max(0, blockHeight - 1)
+    }
+
+    /// What a `.reported` row's height change does to the scroll offset.
+    enum ReportAction: Equatable {
+        /// Nothing: the change is below what the reader is anchored on.
+        case keep
+        /// Move the content top by the change: it is above the anchor, so the
+        /// anchor stays where it is on screen.
+        case shift
+        /// The anchored block itself: place the anchor again (`anchorPlacement`)
+        /// against the block's new height.
+        case placeAnchor
+    }
+
+    /// The rule for a height report of `row`. A block changes height at its
+    /// BOTTOM (rows are top-aligned), so the change moves everything below it.
     ///
-    /// A block changes height at its BOTTOM (rows are top-aligned), so the
-    /// change moves everything below that bottom. A block whose top is above
-    /// the content top — the one straddling it included — is compensated by
-    /// the same amount, so what the reader sees below it stays put. A block
-    /// whose top is in view needs nothing.
+    /// With an anchor (`anchorRow`: the list's last anchor while the content
+    /// top is still where it put it, or the target of a jump in flight) the
+    /// anchored block is what stays put: rows above it shift the content top
+    /// with them — rows in view above a jump target included, so a search hit
+    /// stays centred while the images above it load — and the anchored block
+    /// itself is placed again. Its offset was measured at its real height
+    /// while the block sat at an estimate; compensating would move the reader
+    /// by the estimate's error, a whole image.
     ///
-    /// Except the block the reader is anchored on: `anchoredOffset` is the
-    /// list's last scroll anchor when it is in this very block, and if the
-    /// content top is still where that anchor put it, the offset was measured
-    /// at the block's previous real height while the block sat at an estimate
-    /// (a restore after a zoom or a re-measure) — compensating would move the
-    /// reader by the estimate's error, a whole image. `contentTop` must be
-    /// read BEFORE the table applies the change.
-    static func contentTopAfterReport(contentTop: CGFloat, blockTop: CGFloat, delta: CGFloat,
-                                      anchoredOffset: CGFloat?) -> CGFloat? {
-        if let anchoredOffset, abs(contentTop - (blockTop + anchoredOffset)) < 0.5 { return nil }  // see `isAt`
-        return blockTop < contentTop ? contentTop + delta : nil
+    /// Without one (the reader scrolled), a block whose top is above the
+    /// content top — the one straddling it included — shifts the content top,
+    /// and a block whose top is in view needs nothing. `contentTop` must be
+    /// read BEFORE the table applies the change (at the end of the document
+    /// AppKit clamps the clip origin when the table shrinks).
+    static func reportAction(row: Int, anchorRow: Int?, blockTop: CGFloat, contentTop: CGFloat) -> ReportAction {
+        guard let anchorRow else { return blockTop < contentTop ? .shift : .keep }
+        if row < anchorRow { return .shift }
+        return row == anchorRow ? .placeAnchor : .keep
     }
 
     /// Whether a point at `y` in a row belongs to the row BEFORE it: the upper
