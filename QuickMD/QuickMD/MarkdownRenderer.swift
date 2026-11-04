@@ -291,13 +291,13 @@ struct MarkdownRenderer: Sendable {
                 // interrupt a paragraph. `1984. A year` after paragraph text
                 // is more of that text — drawn, copied and searched as such.
                 if openParagraph {
-                    joined[joined.count - 1].line += " " + text.trimmingCharacters(in: .whitespaces)
+                    joined[joined.count - 1].line += " " + continuationText(text)
                 } else {
                     // After a hard break: its own visual line, still text.
                     joined.append((asParagraphText(text), index))
                 }
             } else if kind == .paragraph && openParagraph {
-                joined[joined.count - 1].line += " " + text.trimmingCharacters(in: .whitespaces)
+                joined[joined.count - 1].line += " " + continuationText(text)
             } else {
                 joined.append((text, index))
                 inPlainParagraph = kind == .paragraph
@@ -321,6 +321,23 @@ struct MarkdownRenderer: Sendable {
 
     /// A bullet, ordered or task list item — `renderLine` renders it as one.
     static func isListItem(_ line: String) -> Bool { classify(line) == .listItem }
+
+    /// CommonMark's blank line: nothing but spaces and tabs — the ONE blank
+    /// test of the parser and the renderers. Not "any white space":
+    /// `CharacterSet.whitespaces` is every Unicode space separator, so it
+    /// counted a line of no-break spaces (U+00A0) blank. Such a line is
+    /// paragraph text (how authors write an empty-looking paragraph): after
+    /// text it continues the paragraph, alone it is a paragraph of its own;
+    /// it never ends a block or separates two.
+    static func isBlankLine<S: StringProtocol>(_ line: S) -> Bool {
+        line.allSatisfy { $0 == " " || $0 == "\t" }
+    }
+
+    /// A continuation line's text: CommonMark strips its leading spaces and
+    /// tabs, and nothing else (a no-break space is text).
+    private static func continuationText(_ text: String) -> String {
+        String(text.drop(while: { $0 == " " || $0 == "\t" }))
+    }
 
     /// An ordered item's marker (CommonMark): one to nine digits, then `.` or
     /// `)`, then white space. Drawn as `n.` whichever delimiter it had, as
@@ -358,8 +375,8 @@ struct MarkdownRenderer: Sendable {
     /// Must mirror the dispatch in `renderLine`, or a structural line could
     /// get glued into the paragraph before it.
     private static func classify(_ line: String) -> LineKind {
+        if isBlankLine(line) { return .structural }
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty { return .structural }
         let nsRange = NSRange(line.startIndex..., in: line)
         if headerRegex.firstMatch(in: line, range: nsRange) != nil { return .structural }
         if trimmed.range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil { return .structural }
@@ -418,7 +435,7 @@ struct MarkdownRenderer: Sendable {
         }
 
         // Empty line
-        if trimmed.isEmpty {
+        if Self.isBlankLine(line) {
             return AttributedString("\n")
         }
 
@@ -464,7 +481,7 @@ struct MarkdownRenderer: Sendable {
         var result = AttributedString()
         let lines = Self.joinSoftBreaks(content.components(separatedBy: "\n"))
         for (index, line) in lines.enumerated() {
-            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+            if Self.isBlankLine(line) {
                 result.append(AttributedString(" "))
             } else {
                 result.append(renderInline(line))

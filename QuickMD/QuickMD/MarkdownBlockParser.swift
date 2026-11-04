@@ -145,7 +145,7 @@ struct MarkdownBlockParser: Sendable {
                 // Closing fence must be same char, same or greater length, nothing else
                 while i < lines.count {
                     let closeLine = lines[i].trimmingCharacters(in: .whitespaces)
-                    if closeLine.hasPrefix(openingFence) && closeLine.drop(while: { $0 == fenceChar }).trimmingCharacters(in: .whitespaces).isEmpty {
+                    if closeLine.hasPrefix(openingFence) && MarkdownRenderer.isBlankLine(closeLine.drop(while: { $0 == fenceChar })) {
                         i += 1
                         break
                     }
@@ -337,7 +337,9 @@ struct MarkdownBlockParser: Sendable {
                 var previousGroupWasQuote = false
 
                 while i < lines.count {
-                    let qLine = lines[i].trimmingCharacters(in: .whitespaces)
+                    // Spaces and tabs only: a quote line of no-break spaces
+                    // (`> \u{00A0}`) is text, not an empty quote line.
+                    let qLine = lines[i].trimmingCharacters(in: Self.spacesAndTabs)
                     guard qLine.hasPrefix(">") else { break }
 
                     // Count nesting level (number of leading > chars)
@@ -361,7 +363,7 @@ struct MarkdownBlockParser: Sendable {
                     i += 1
 
                     while i < lines.count {
-                        let nextLine = lines[i].trimmingCharacters(in: .whitespaces)
+                        let nextLine = lines[i].trimmingCharacters(in: Self.spacesAndTabs)
                         guard nextLine.hasPrefix(">") else { break }
 
                         var nextLevel = 0
@@ -603,11 +605,17 @@ struct MarkdownBlockParser: Sendable {
         // whitespace is kept: two trailing spaces are a hard break, and the
         // renderer's soft-break pass has to still see them.
         let text = String(scanner.drop(while: { $0 == " " || $0 == "\t" }))
-        return text.trimmingCharacters(in: .whitespaces).isEmpty ? nil : text
+        return MarkdownRenderer.isBlankLine(text) ? nil : text
     }
 
+    /// CommonMark's white space around block markers: spaces and tabs, not
+    /// every Unicode space separator (`isBlank`).
+    static let spacesAndTabs = CharacterSet(charactersIn: " \t")
+
+    /// CommonMark's blank line (`MarkdownRenderer.isBlankLine`): a line of
+    /// no-break spaces is text, not a separator.
     private static func isBlank(_ line: String) -> Bool {
-        line.trimmingCharacters(in: .whitespaces).isEmpty
+        MarkdownRenderer.isBlankLine(line)
     }
 
     /// Can this line be a definition-list TERM? Non-blank, not a definition
@@ -622,7 +630,7 @@ struct MarkdownBlockParser: Sendable {
     /// block, so it must not be a term either.
     private func isTermCandidate(_ line: String, references: [String: String]) -> Bool {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, Self.definitionText(of: line) == nil else { return false }
+        guard !Self.isBlank(line), Self.definitionText(of: line) == nil else { return false }
 
         // Fences, quotes, display math
         if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") { return false }

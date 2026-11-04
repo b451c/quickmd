@@ -112,6 +112,34 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(blocks.map(\.sourceLine), [0, 4])
     }
 
+    /// CommonMark: a blank line is nothing but spaces and tabs. A line of
+    /// no-break spaces (U+00A0) is text — `CharacterSet.whitespaces` counted
+    /// it blank. After text it continues the paragraph; alone it is a
+    /// paragraph of its own, one empty-looking line (GitHub: `<p>&nbsp;</p>`).
+    /// It ends no block and separates none.
+    func testALineOfNoBreakSpacesIsTextNotABlankLine() {
+        let nbsp = "\u{00A0}"
+        let continued = parse("Para one\n\(nbsp)\nPara two")
+        XCTAssertEqual(continued.count, 1)
+        XCTAssertEqual(plain(continued[0]), "Para one \(nbsp) Para two")
+        let alone = parse("Para one\n\n\(nbsp)\(nbsp)\n\nPara two")
+        XCTAssertEqual(alone.map(plain), ["Para one", "\(nbsp)\(nbsp)", "Para two"])
+        XCTAssertEqual(measure(alone).table.heights[1], measure(alone).table.heights[0], "one line")
+        // No separator in a list: one tight list.
+        XCTAssertEqual(parse("- a\n\(nbsp)\n- b").count, 1)
+        // A quote body: one paragraph.
+        guard case .blockquote(let body, _) = parse("> a\n> \(nbsp)\n> b")[0].content else {
+            return XCTFail("not a quote")
+        }
+        XCTAssertEqual(String(MarkdownRenderer(theme: theme).renderQuotedBody(body).characters), "a \(nbsp) b")
+        // Spaces and tabs are still a blank line.
+        XCTAssertEqual(parse("Para one\n \t \nPara two").count, 2)
+        XCTAssertTrue(MarkdownRenderer.isBlankLine(" \t "))
+        XCTAssertTrue(MarkdownRenderer.isBlankLine(""))
+        XCTAssertFalse(MarkdownRenderer.isBlankLine(nbsp))
+        XCTAssertFalse(MarkdownRenderer.isBlankLine(" \(nbsp)\t"))
+    }
+
     func testRowsAreCommonMarkBlocks() {
         let blocks = parse("Intro line one\nintro line two.\n- item a\n- item b\n\nOutro.\n***\nAfter the rule.")
         XCTAssertEqual(blocks.map(plain).count, 5, "\(blocks.map(plain))")
@@ -119,9 +147,9 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertTrue(blocks.allSatisfy { !$0.joinsPrevious })
     }
 
-    /// CommonMark: only a bullet, or an ordered item numbered 1, interrupts a
-    /// paragraph. `1984. …` after paragraph text continues the paragraph —
-    /// drawn as an item as before, but no new row and no gap.
+    /// CommonMark: only a bullet, or an ordered item numbered 1 (`1.` or
+    /// `1)`), interrupts a paragraph. `1984. …` after paragraph text continues
+    /// the paragraph — its text, in its row, with no gap.
     func testOnlyAnItemThatMayInterruptAParagraphStartsARow() {
         for line in ["- item", "* item", "+ item", "- [ ] task", "1. first", "1) first"] {
             XCTAssertEqual(parse("Paragraph text.\n" + line).count, 2, line)
