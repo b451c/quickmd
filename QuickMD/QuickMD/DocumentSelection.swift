@@ -371,6 +371,7 @@ enum DocumentCopyBuilder {
         case .text(let text):
             let cleaned = replacingAttachments(in: text)
             trimBlankLines(cleaned)
+            emptyWhitespaceLines(cleaned)
             collapseBlankLineRuns(cleaned)
             return cleaned
         case .code(let code):
@@ -484,6 +485,22 @@ enum DocumentCopyBuilder {
             text.deleteCharacters(in: NSRange(location: 0, length: current.length))
         } else if lastBreak >= 0 {
             text.deleteCharacters(in: NSRange(location: 0, length: lastBreak + 1))
+        }
+    }
+
+    private static let whitespaceLine = try? NSRegularExpression(pattern: "^[ \t]+$",
+                                                                 options: .anchorsMatchLines)
+
+    /// A line of nothing but spaces and tabs becomes an empty line: a quote
+    /// or alert body draws a blank line as one space so it keeps its height
+    /// (`renderQuotedBody`), and a paragraph break must paste as an empty
+    /// line, not as a space. Only lines between others are left by
+    /// `trimBlankLines`; a line of no-break spaces is text and stays.
+    private static func emptyWhitespaceLines(_ text: NSMutableAttributedString) {
+        guard let whitespaceLine else { return }
+        let matches = whitespaceLine.matches(in: text.string, range: NSRange(location: 0, length: text.length))
+        for match in matches.reversed() {
+            text.replaceCharacters(in: match.range, with: "")
         }
     }
 

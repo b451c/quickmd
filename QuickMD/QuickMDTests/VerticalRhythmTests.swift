@@ -765,6 +765,38 @@ final class VerticalRhythmTests: XCTestCase {
     /// quote empty — it was the quote's text. After the quote's text it is
     /// that text (G7), in the quote's fence code, in its table a row, after
     /// an alert's marker the alert's text.
+    /// A run of blank lines in a quote or an alert is ONE paragraph break,
+    /// at every nesting level (GitHub, gfm/h5_*.html; at the top level our
+    /// spacing comes from structure, not from blank lines): two blank `>`
+    /// lines drew two gaps. Blank lines at a quote's start or end add
+    /// nothing; inside the quote's fence they are code. The body every
+    /// consumer reads (view, measurer, search, copy, print) has one.
+    func testARunOfBlankQuoteLinesIsOneParagraphBreak() throws {
+        XCTAssertEqual(try quoteShape("> a\n>\n>\n> b\n"), ["q1:a\n\nb"])
+        XCTAssertEqual(try quoteShape("> a\n>\n>\n>\n> b\n>\n>\n> c\n"), ["q1:a\n\nb\n\nc"])
+        XCTAssertEqual(try quoteShape("> > a\n> >\n> >\n> > b\n"), ["q2:a\n\nb"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> a\n>\n>\n> b\n"), ["alert:note:a\n\nb"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n>\n>\n> a\n>\n>\n"), ["alert:note:a"])
+        XCTAssertEqual(try quoteShape(">\n>\n> a\n>\n>\n\nafter\n"), ["q1:a", "t:after"])
+        XCTAssertEqual(try quoteShape("> a\n>\n>\n> > b\n> >\n> >\n> c\n"), ["q1:a", "q2:b", "q1:c"])
+        // A definition taken out (H4) leaves no gap of its own.
+        XCTAssertEqual(try quoteShape("> text\n>\n> [x]: http://e.com\n>\n> more\n\n[x]\n"),
+                       ["q1:text\n\nmore", "t:x"])
+        // Code keeps its blank lines.
+        XCTAssertEqual(try quoteShape("> ```\n> a\n>\n>\n> b\n> ```\n"), ["q1:```\na\n\n\nb\n```"])
+
+        let theme = MarkdownTheme.cached(for: .light)
+        let blocks = try XCTUnwrap(parseReturning("> a\n>\n>\n> b\n\n> [!TIP]\n> c\n>\n>\n> d\n"))
+        let measured = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,
+                                                   contentWidth: 600, math: nil)
+        XCTAssertEqual(blocks.map { measured.converted[$0.id]?.string }, ["a\n \nb", "c\n \nd"])
+        let all = try XCTUnwrap(DocumentSelection.selectAll(rowCount: blocks.count,
+                                                            lengths: { measured.converted[blocks[$0].id]?.length ?? 0 }))
+        let parts = SelectionRows.parts(of: all, blocks: blocks, text: { measured.converted[$0.id] },
+                                        table: { _ in nil })
+        XCTAssertEqual(DocumentCopyBuilder.build(parts: parts).plain, "a\n\nb\n\nc\n\nd")
+    }
+
     func testALinkDefinitionMayStartAQuoteParagraph() throws {
         XCTAssertEqual(try quoteShape("> [x]: http://e.com\n\n[x]\n"), ["t:x"])
         XCTAssertEqual(try quoteShape("> [x]: http://e.com\n> text\n\n[x]\n"), ["q1:text", "t:x"])
@@ -773,8 +805,6 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(try quoteShape("Para\n> [x]: http://e.com\n\n[x]\n"), ["t:Para", "t:x"])
         XCTAssertEqual(try quoteShape("> # H\n> [x]: http://e.com\n\n[x]\n"), ["q1:# H", "t:x"])
         XCTAssertEqual(try quoteShape("> text\n>\n> [x]: http://e.com\n\n[x]\n"), ["q1:text", "t:x"])
-        XCTAssertEqual(try quoteShape("> text\n>\n> [x]: http://e.com\n>\n> more\n\n[x]\n"),
-                       ["q1:text\n\n\nmore", "t:x"])
         // Text where GitHub has text.
         XCTAssertEqual(try quoteShape("> text\n> [x]: http://e.com\n\n[x]\n"),
                        ["q1:text\n[x]: http://e.com", "t:[x]"])

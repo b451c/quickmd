@@ -445,6 +445,8 @@ struct MarkdownBlockParser: Sendable {
                         i += 1
                     }
 
+                    // One paragraph break per run of blank lines (`collapsingBlankRuns`).
+                    groupLines = Self.collapsingBlankRuns(groupLines)
                     let content = groupLines.joined(separator: "\n")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     if !content.isEmpty {
@@ -1041,6 +1043,29 @@ struct MarkdownBlockParser: Sendable {
     }
 
     // MARK: - Fences and `$$` blocks
+
+    /// A quote's or alert's lines with each run of blank lines made ONE: a
+    /// blank line only separates paragraphs, and any run of them is one
+    /// paragraph break (GitHub, every nesting level; a definition the
+    /// pre-pass took out between two blank lines leaves none of its own).
+    /// Inside the quote's fence a blank line is code and stays.
+    static func collapsingBlankRuns(_ lines: [String]) -> [String] {
+        var result: [String] = []
+        result.reserveCapacity(lines.count)
+        var fence: Fence?
+        for line in lines {
+            let marker = markerLine(line)
+            if let open = fence {
+                if closesFence(marker, open) { fence = nil }
+            } else if let opening = fenceOpening(marker) {
+                fence = opening
+            } else if isBlank(line), let last = result.last, isBlank(last) {
+                continue
+            }
+            result.append(line)
+        }
+        return result
+    }
 
     /// Columns of the spaces and tabs a line starts with (a tab runs to the
     /// next multiple of 4, CommonMark).
