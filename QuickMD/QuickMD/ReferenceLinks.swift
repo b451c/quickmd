@@ -146,26 +146,22 @@ enum ReferenceLinks {
         let afterBracket = remaining.index(after: closeBracket)
         let linkText = String(remaining[remaining.index(after: remaining.startIndex)..<closeBracket])
 
-        // Inline link: its destination is copied as written; its text only
-        // when it holds no image — the renderer parses a link's text (with
-        // links disabled) only then, so `[![build][badge]](https://ci…)`, the
-        // usual README badge, needs its image reference inlined too.
+        // Inline link: its destination is copied as written; its text is
+        // rewritten (links disabled) because the renderer parses a link's text
+        // as inline Markdown — `[![build][badge]](https://ci…)`, the usual
+        // README badge, needs its image reference inlined.
         if remaining[afterBracket...].hasPrefix("(") {
             guard let inline = InlineSyntaxScanner.parenthesizedDestination(remaining[afterBracket...],
                                                                            pairs: pairs) else { return nil }
-            guard MarkdownRenderer.parsesLinkText(String(linkText)) else {
-                return (String(remaining[..<inline.end]), remaining[inline.end...])
-            }
             let text = inlinedLine(linkText, sources: sources, linksDisabled: true)
             return ("[\(text)]" + remaining[afterBracket..<inline.end], remaining[inline.end...])
         }
 
         func resolved(_ url: String, rest: Substring) -> (String, Substring) {
             let destination = inlineDestination(url)
-            // The renderer parses a link's text only when it holds an image
-            // (and then with links disabled) — rewrite it under the same rule.
-            let text = MarkdownRenderer.parsesLinkText(String(linkText))
-                ? inlinedLine(linkText, sources: sources, linksDisabled: true) : linkText
+            // The renderer parses a link's text (links disabled): rewrite it
+            // under the same rule.
+            let text = inlinedLine(linkText, sources: sources, linksDisabled: true)
             return ("[\(text)](\(destination))", rest)
         }
 

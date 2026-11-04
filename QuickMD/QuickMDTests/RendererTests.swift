@@ -861,6 +861,34 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(InlineMathSegmenter.pieces(of: attributed).map(\.length), [2, 5], "spans in the rendered text: $50%$")
     }
 
+    // MARK: - Formatting inside link text (review R13)
+
+    /// A link's text is inline Markdown, as on GitHub (`gh api markdown`):
+    /// `<a><strong>Docs</strong></a>`, `<a><em>plain</em></a>`,
+    /// `<a><code>npm install</code></a>`, `<a><del>old</del></a>`,
+    /// `<a>a <strong>b</strong> c</a>`, `<a href=u>https://x.com</a>`,
+    /// `<a>a &amp; b</a>` — and the whole visible text carries the link.
+    func testLinkTextIsInlineMarkdown() {
+        let line = "[**Docs**](u) [*plain*](v) [`npm install`](u) [~~old~~](u) [a **b** c](u) [https://x.com](u) [a &amp; b](u)"
+        let attributed = renderer.renderInline(line)
+        XCTAssertEqual(String(attributed.characters), "Docs plain npm install old a b c https://x.com a & b")
+        func run(_ text: String) -> AttributedString.Runs.Run? {
+            attributed.runs.first { String(attributed[$0.range].characters) == text }
+        }
+        func font(_ text: String) -> NSFont? { run(text)?[AttributeScopes.AppKitAttributes.FontAttribute.self] }
+        XCTAssertTrue(font("Docs")?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
+        XCTAssertTrue(font("plain")?.fontDescriptor.symbolicTraits.contains(.italic) ?? false)
+        XCTAssertTrue(font("npm install")?.fontDescriptor.symbolicTraits.contains(.monoSpace) ?? false)
+        XCTAssertNotNil(run("old")?[AttributeScopes.AppKitAttributes.StrikethroughStyleAttribute.self])
+        XCTAssertTrue(font("b")?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
+        // Every visible character outside the spaces between links is linked;
+        // the autolink-looking text links to the OUTER destination.
+        for linked in ["Docs", "plain", "npm install", "old", "a ", "b", " c", "a & b"] {
+            XCTAssertNotNil(run(linked)?.link, linked)
+        }
+        XCTAssertEqual(run("https://x.com")?.link?.absoluteString, "u")
+    }
+
     // MARK: - Escapes in link text (review R12)
 
     /// A link's text with a backslash escape is parsed like the image case:
@@ -871,7 +899,7 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(cost.text, "cost $5 and $6")
         XCTAssertEqual(cost.formulas, [])
         let star = renderer.renderInline("[a \\* b](u) and [*plain*](v)")
-        XCTAssertEqual(String(star.characters), "a * b and *plain*")
+        XCTAssertEqual(String(star.characters), "a * b and plain", "R13: link text is inline Markdown")
         XCTAssertEqual(Set(star.runs.compactMap { $0.link?.absoluteString }), ["u", "v"])
         XCTAssertTrue(star.runs.filter { String(star[$0.range].characters).contains("*") }.allSatisfy { $0.link != nil },
                       "the whole link text stays linked")

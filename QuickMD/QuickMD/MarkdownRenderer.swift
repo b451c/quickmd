@@ -981,32 +981,18 @@ struct MarkdownRenderer: Sendable {
         return nil
     }
 
-    /// Whether a link's text is inline-parsed (with links disabled) rather
-    /// than drawn as written: when it holds an image (`[![b](img)](link)`)
-    /// or a backslash escape (`[cost \$5 and \$6](u)`, `[a \* b](u)` — GitHub
-    /// shows "cost $5 and $6", "a * b"). `ReferenceLinks` follows the same
-    /// rule when it rewrites a link's text.
-    static func parsesLinkText(_ text: String) -> Bool {
-        text.contains("![") || text.contains("\\")
-    }
-
     private func makeLink(text: String, url: String, remaining: Substring) -> (AttributedString, Substring) {
-        var attr: AttributedString
-        if Self.parsesLinkText(text) {
-            // Link-wrapped image (`[![b](img)](link)`): the text is rendered
-            // inline so the image becomes its "[Image: b]" placeholder, and the
-            // whole run carries the OUTER link (set below, over the image's
-            // own); an escape loses its backslash (and an escaped `$` is never
-            // math). Every other link keeps its exact plain-text rendering.
-            // Rendered with links disabled: a link inside a link is literal
-            // text (bounds the recursion).
-            var linkText = self
-            linkText.linksDisabled = true
-            attr = linkText.renderInlineFormatting(text)
-        } else {
-            attr = AttributedString(decodedText(text))
-            attr.setDualFont(size: scaled(14), fonts: theme.fonts)
-        }
+        // A link's text is inline Markdown, as on GitHub: `[**Docs**](u)` is
+        // bold, ``[`npm install`](u)`` code, `[~~old~~](u)` struck through, an
+        // escape loses its backslash (an escaped `$` is never math), an image
+        // becomes its "[Image: b]" placeholder (`[![b](img)](link)`). The
+        // whole run then carries the OUTER link (set below, over any inner
+        // one, an autolink's or an image's). Rendered with links disabled: a
+        // link inside a link is literal text (bounds the recursion).
+        // `ReferenceLinks` rewrites a link's text by the same rule.
+        var linkText = self
+        linkText.linksDisabled = true
+        var attr = linkText.renderInlineFormatting(text)
         attr.setDualForeground(theme.linkColor)
         attr.setDualUnderline()
 
