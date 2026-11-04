@@ -56,7 +56,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - **Inline SVG** — fenced ```svg blocks and `.svg` image links render natively (no web view), scale with the text and print as vectors
 - Images — local files, remote URLs, embedded `data:` images, reference-style `![alt][ref]`, and HTML `<img>` tags with `width` (the logo/screenshot idiom of GitHub READMEs, `<p align="center">` wrappers included)
 - Links (inline, reference-style, autolinks), footnotes (`[^id]`), nested blockquotes; `#heading` links jump within the document, using GitHub's heading ids
-- YAML frontmatter (rendered as a neutral code block)
+- YAML front matter as a table of its fields (title, tags, dates); front matter with nested fields stays a code block
 - CommonMark soft breaks; Windows (CRLF) and legacy line endings; UTF-16 and Latin-1 files
 
 ### Navigation & Search
