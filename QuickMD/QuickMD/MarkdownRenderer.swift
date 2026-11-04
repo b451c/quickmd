@@ -962,28 +962,26 @@ struct MarkdownRenderer: Sendable {
         return (attr, remaining)
     }
 
-    /// The URL of a link destination as written, the SAME on every macOS.
+    /// The URL of a link destination as written.
     ///
-    /// `URL(string:)` rejects a space or non-ASCII character on macOS 13 but
-    /// percent-encodes it on 14+, and the old fallback for 13 encoded the
-    /// whole string with `.urlPathAllowed` — the `#` too, so
-    /// `README.md#Install Guide` became a file named `README.md#Install Guide`
-    /// and the jump failed. Here a destination made only of characters a URL
-    /// may contain goes to `URL(string:)` as is (nothing for the OS to
-    /// encode); anything else is encoded by us, the part before the first `#`
-    /// and the fragment separately, so the `#` stays the fragment delimiter.
-    /// A `%` followed by two hex digits is an escape and kept; any other `%`
-    /// becomes `%25`.
-    static func linkURL(for destination: String) -> URL? {
+    /// `URL(string:)` first, exactly as before 1.14.4: on macOS 14+ it encodes
+    /// what needs encoding itself (spaces, non-ASCII, IDN hosts to punycode),
+    /// and every destination it accepts keeps that behaviour. Only when it
+    /// returns nil — macOS 13 rejects spaces, non-ASCII, `[` `]` in a path, a
+    /// second `#` — do we encode, the part before the FIRST `#` and the
+    /// fragment separately, so the `#` stays the fragment delimiter (the old
+    /// `.urlPathAllowed` fallback encoded it too: `README.md#Install Guide`
+    /// became a file named "README.md#Install Guide" and the jump failed).
+    /// `parse` is `URL(string:)`; tests pass the strict (macOS 13) parser.
+    static func linkURL(for destination: String,
+                        parse: (String) -> URL? = { URL(string: $0) }) -> URL? {
+        if let url = parse(destination) { return url }
         let scalars = destination.unicodeScalars[...]
-        if !needsEncoding(scalars) {
-            return URL(string: destination)
-        }
         guard let hash = scalars.firstIndex(of: "#") else {
-            return URL(string: percentEncoded(scalars))
+            return parse(percentEncoded(scalars))
         }
-        return URL(string: percentEncoded(scalars[..<hash]) + "#"
-                   + percentEncoded(scalars[scalars.index(after: hash)...]))
+        return parse(percentEncoded(scalars[..<hash]) + "#"
+                     + percentEncoded(scalars[scalars.index(after: hash)...]))
     }
 
     /// RFC 3986 unreserved + reserved characters — what a URL may contain as
@@ -1001,15 +999,6 @@ struct MarkdownRenderer: Sendable {
         let second = scalars.index(after: first)
         return second < scalars.endIndex
             && scalars[first].properties.isASCIIHexDigit && scalars[second].properties.isASCIIHexDigit
-    }
-
-    private static func needsEncoding(_ scalars: Scalars) -> Bool {
-        var index = scalars.startIndex
-        while index < scalars.endIndex {
-            if !urlCharacters.contains(scalars[index]), !isEscape(scalars, at: index) { return true }
-            index = scalars.index(after: index)
-        }
-        return false
     }
 
     /// One part of a destination (no `#` delimiter inside): legal characters

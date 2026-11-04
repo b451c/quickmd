@@ -272,6 +272,34 @@ final class SectionExtractorTests: XCTestCase {
         XCTAssertNil(fragment("docs/install"))
     }
 
+    /// Review R3: `URL(string:)` comes first, so every destination macOS
+    /// accepts keeps its URL exactly (IDN hosts included on 14+); our encoder
+    /// only runs when the parse fails — on macOS 13 that includes `[` `]` in a
+    /// path and a second `#`, which must still become links.
+    func testLinkURLFallsBackOnlyWhenTheParseFails() throws {
+        guard #available(macOS 14, *) else { throw XCTSkip("needs the strict-parse API to emulate macOS 13") }
+        let strict: (String) -> URL? = { URL(string: $0, encodingInvalidCharacters: false) }
+        let cases: [(String, String)] = [
+            ("docs/a[1].md", "docs/a%5B1%5D.md"),
+            ("https://x/?a[]=1", "https://x/?a%5B%5D=1"),
+            ("a#b#c", "a#b%23c"),
+            ("README.md#Install Guide", "README.md#Install%20Guide"),
+            ("https://example.com/docs_(v2)#top", "https://example.com/docs_(v2)#top"),
+        ]
+        for (destination, expected) in cases {
+            let url = try XCTUnwrap(MarkdownRenderer.linkURL(for: destination, parse: strict), destination)
+            XCTAssertEqual(url.absoluteString, expected, destination)
+        }
+        XCTAssertEqual(try XCTUnwrap(MarkdownRenderer.linkURL(for: "a#b#c", parse: strict))
+                        .fragment(percentEncoded: false), "b#c")
+
+        // The default parse (this OS): whatever URL(string:) gives, unchanged.
+        for destination in ["https://bücher.de/x", "docs/a[1].md", "https://x/?a[]=1", "README.md#Install Guide",
+                            "a%20b.md#x", "mailto:a@b.c"] {
+            XCTAssertEqual(MarkdownRenderer.linkURL(for: destination), URL(string: destination), destination)
+        }
+    }
+
     /// `other.md#section`: the fragment is parked for the other document's
     /// window (which takes it once laid out, or at once when already open).
     func testCrossDocumentAnchorIsHandedToTheOtherDocument() throws {
