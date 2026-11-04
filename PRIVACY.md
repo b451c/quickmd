@@ -1,6 +1,6 @@
 # Privacy Policy for QuickMD
 
-**Last updated: October 5, 2026**
+**Last updated: November 4, 2026**
 
 ## Overview
 
@@ -35,6 +35,7 @@ QuickMD works with the files **you open**, and with what those files point to.
 - It reads the Markdown file you open, the local images that file references, and another Markdown file when you click a link to it
 - It writes to a file only when you ask it to: saving your changes in Source Edit writes to the document you are editing; "Save a Copy" and "Export as PDF" write where you choose
 - Your settings, the list of recent documents and any custom themes you add are stored on your Mac
+- The Mac App Store version also notes on which days you open documents, so it asks for a rating at most once per version. This stays on your Mac and is never sent anywhere.
 - Remote images you view may be kept in the standard macOS network cache on your Mac
 - File contents are never transmitted over the internet and never uploaded to any server
 
