@@ -932,6 +932,41 @@ enum MermaidGeometryStore {
     }
 }
 
+// MARK: - Mermaid snapshots
+
+/// Shared store of rendered-diagram snapshots, keyed by (isDark, source).
+/// Written by the inline MermaidBlockView after each successful render; read
+/// back by MermaidBlockView on re-creation AND by the PDF exporter
+/// (MermaidPDFRenderer) as a fast path before spinning up an offscreen
+/// WebView. NSCache evicts under memory pressure. Here rather than in the
+/// view's file so the unit tests compile it.
+enum MermaidSnapshotStore {
+    private static let cache = NSCache<NSString, NSImage>()
+
+    private static func key(source: String, isDark: Bool) -> NSString {
+        "\(isDark)|\(source)" as NSString
+    }
+
+    static func image(source: String, isDark: Bool) -> NSImage? {
+        cache.object(forKey: key(source: source, isDark: isDark))
+    }
+
+    static func set(_ image: NSImage, source: String, isDark: Bool) {
+        cache.setObject(image, forKey: key(source: source, isDark: isDark))
+    }
+
+    /// The latest snapshot of `diagram` in this theme at ANY zoom and width:
+    /// what a view without a snapshot of its own shows while its web view
+    /// renders, instead of an empty box.
+    static func latest(diagram: String, isDark: Bool) -> NSImage? {
+        cache.object(forKey: key(source: "latest|" + diagram, isDark: isDark))
+    }
+
+    static func setLatest(_ image: NSImage, diagram: String, isDark: Bool) {
+        cache.setObject(image, forKey: key(source: "latest|" + diagram, isDark: isDark))
+    }
+}
+
 // MARK: - Height table
 
 /// How a row's height was obtained, and therefore whether the placed view is

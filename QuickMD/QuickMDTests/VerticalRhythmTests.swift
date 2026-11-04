@@ -844,6 +844,25 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertNil(MermaidGeometryStore.geometry(source: "graph TD; Never-->Rendered", isDark: false))
     }
 
+    /// A diagram view without a snapshot at its zoom and width finds the
+    /// latest one of the same diagram in the same theme as its stand-in, so a
+    /// re-created row never shows the empty box the web view is for the half
+    /// second it takes to render (seen while recording). Another diagram, or
+    /// the other theme, has none; the exact key and the PDF exporter's key
+    /// are untouched.
+    func testADiagramWithoutASnapshotOfItsOwnFindsTheLatestOneAsAStandIn() {
+        let diagram = "flowchart LR\n  Stand-->In"
+        let image = NSImage(size: NSSize(width: 240, height: 70))
+        MermaidSnapshotStore.set(image, source: "1.0|819.0|\(diagram)", isDark: false)
+        MermaidSnapshotStore.setLatest(image, diagram: diagram, isDark: false)
+        XCTAssertNil(MermaidSnapshotStore.image(source: "1.25|819.0|\(diagram)", isDark: false))
+        XCTAssertTrue(MermaidSnapshotStore.latest(diagram: diagram, isDark: false) === image)
+        XCTAssertNil(MermaidSnapshotStore.latest(diagram: diagram, isDark: true))
+        XCTAssertNil(MermaidSnapshotStore.latest(diagram: "flowchart LR\n  Other-->Diagram", isDark: false))
+        XCTAssertNil(MermaidSnapshotStore.image(source: diagram, isDark: false))
+        XCTAssertTrue(MermaidSnapshotStore.image(source: "1.0|819.0|\(diagram)", isDark: false) === image)
+    }
+
     /// The zoom round trip and the Reading Mode round trip with the reader in
     /// the image, the rows as the measurer now gives them: no height report at
     /// all (the table never swings) and the reader back on the very point. The

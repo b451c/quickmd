@@ -14,27 +14,6 @@ import WebKit
 /// the height is seeded from BlockHeightCache (no scroll jump).
 ///
 /// Clicking the diagram opens a window-filling preview with pinch/button zoom.
-/// Shared store of rendered-diagram snapshots, keyed by (isDark, source).
-/// Written by the inline MermaidBlockView after each successful render; read
-/// back by MermaidBlockView on LazyVStack re-creation AND by the PDF exporter
-/// (MermaidPDFRenderer) as a fast path before spinning up an offscreen
-/// WebView. NSCache evicts under memory pressure.
-enum MermaidSnapshotStore {
-    private static let cache = NSCache<NSString, NSImage>()
-
-    private static func key(source: String, isDark: Bool) -> NSString {
-        "\(isDark)|\(source)" as NSString
-    }
-
-    static func image(source: String, isDark: Bool) -> NSImage? {
-        cache.object(forKey: key(source: source, isDark: isDark))
-    }
-
-    static func set(_ image: NSImage, source: String, isDark: Bool) {
-        cache.setObject(image, forKey: key(source: source, isDark: isDark))
-    }
-}
-
 struct MermaidBlockView: View {
     let blockId: String
     let source: String
@@ -43,6 +22,11 @@ struct MermaidBlockView: View {
 
     @State private var diagramHeight: CGFloat
     @State private var snapshot: NSImage?
+    /// No snapshot at this zoom and width: the latest one of this diagram at
+    /// another, shown over the web view until it has painted — a re-created
+    /// row never flashes empty for the half second WebKit takes to render.
+    @State private var standIn: NSImage?
+    @State private var webViewPainted = false
     let fontScale: CGFloat
     let contentWidth: CGFloat
     let onEnlarge: (GraphicPreview) -> Void
@@ -74,6 +58,8 @@ struct MermaidBlockView: View {
                                ?? Metrics.defaultHeight)
         let cached = MermaidSnapshotStore.image(source: "\(fontScale)|\(contentWidth)|\(source)", isDark: theme.isDark)
         _snapshot = State(initialValue: cached)
+        _standIn = State(initialValue: cached == nil
+                         ? MermaidSnapshotStore.latest(diagram: source, isDark: theme.isDark) : nil)
         if let cached {
             _diagramHeight = State(initialValue: cached.size.height)
             // The web view path seeds the cache through `onHeight`; this path
@@ -96,21 +82,36 @@ struct MermaidBlockView: View {
                         .frame(maxHeight: diagramHeight)
                         .frame(maxWidth: .infinity)
                 } else {
-                    MermaidWebView(
-                        source: source,
-                        isDark: theme.isDark,
-                        fontScale: fontScale,
-                        diagramHeight: $diagramHeight,
-                        onHeight: { height in
-                            heightCache.set(height, for: blockId)
-                        },
-                        onSnapshot: { image in
-                            MermaidSnapshotStore.set(image, source: snapshotKey, isDark: theme.isDark)
-                            if fontScale == 1 {
-                                MermaidSnapshotStore.set(image, source: source, isDark: theme.isDark)
-                            }
+                    ZStack {
+                        MermaidWebView(
+                            source: source,
+                            isDark: theme.isDark,
+                            fontScale: fontScale,
+                            diagramHeight: $diagramHeight,
+                            onHeight: { height in
+                                heightCache.set(height, for: blockId)
+                            },
+                            onSnapshot: { image in
+                                MermaidSnapshotStore.set(image, source: snapshotKey, isDark: theme.isDark)
+                                MermaidSnapshotStore.setLatest(image, diagram: source, isDark: theme.isDark)
+                                if fontScale == 1 {
+                                    MermaidSnapshotStore.set(image, source: source, isDark: theme.isDark)
+                                }
+                            },
+                            onPainted: { webViewPainted = true }
+                        )
+                        if let standIn, !webViewPainted {
+                            // The diagram at another zoom or width, scaled to
+                            // the height this one will have (exact once it has
+                            // rendered anywhere: `MermaidGeometryStore`).
+                            Image(nsImage: standIn)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxHeight: diagramHeight)
+                                .frame(maxWidth: .infinity)
+                                .allowsHitTesting(false)
                         }
-                    )
+                    }
                     .frame(height: diagramHeight)
                 }
             }
@@ -280,6 +281,9 @@ private struct MermaidWebView: NSViewRepresentable {
     @Binding var diagramHeight: CGFloat
     let onHeight: (CGFloat) -> Void
     let onSnapshot: (NSImage) -> Void
+    /// The page has drawn a render (the snapshot delay has passed after its
+    /// height message) — what a stand-in snapshot waits for.
+    let onPainted: () -> Void
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -372,6 +376,7 @@ private struct MermaidWebView: NSViewRepresentable {
             guard let webView = message.webView else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self, weak webView] in
                 guard let self, let webView else { return }
+                self.parent.onPainted()
                 // Snapshot only a web view whose frame already matches the
                 // height it reported. A row that is not laid out yet (created
                 // below the fold, a cell AppKit has not placed) keeps its old
