@@ -29,6 +29,32 @@ enum ReferenceLabel {
         // ASCII labels (nearly all): lowercasing IS the fold, no bridging.
         return ascii ? collapsed.lowercased() : collapsed.folding(options: .caseInsensitive, locale: nil)
     }
+
+    /// The `]` closing a label whose text starts at `start` (just past its
+    /// `[`): the first UNESCAPED one, so `[x][a\]b]` reads the label `a\]b`.
+    /// An unescaped `[` inside makes it no label (CommonMark, GitHub) → nil.
+    /// The label is matched as written, backslashes included
+    /// (`[a\]b]: url` defines `a\]b`). `InlineSyntaxScanner.matchLabel` is
+    /// the same rule over bytes.
+    static func closingBracket(in text: Substring, from start: Substring.Index) -> Substring.Index? {
+        var index = start
+        while index < text.endIndex {
+            let character = text[index]
+            if character == "\\" {
+                let next = text.index(after: index)
+                if next < text.endIndex, MarkdownTheme.escapableChars.contains(text[next]) {
+                    index = text.index(after: next)
+                    continue
+                }
+            } else if character == "]" {
+                return index
+            } else if character == "[" {
+                return nil
+            }
+            index = text.index(after: index)
+        }
+        return nil
+    }
 }
 
 // MARK: - Reference links inside quotes, alerts and table cells
@@ -215,7 +241,7 @@ enum ReferenceLinks {
         if remaining[afterBracket...].hasPrefix("[") {
             let afterSecondOpen = remaining.index(after: afterBracket)
             if afterSecondOpen < remaining.endIndex,
-               let closeSecondBracket = remaining[afterSecondOpen...].firstIndex(of: "]") {
+               let closeSecondBracket = ReferenceLabel.closingBracket(in: remaining, from: afterSecondOpen) {
                 let refId = String(remaining[afterSecondOpen..<closeSecondBracket])
                 let effectiveId = ReferenceLabel.normalized(refId.isEmpty ? linkText : refId)
                 if let url = definitions[effectiveId] {

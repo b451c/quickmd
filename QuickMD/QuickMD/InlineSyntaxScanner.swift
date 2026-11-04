@@ -235,7 +235,7 @@ enum InlineSyntaxScanner {
             guard let destination = parenthesizedDestination(after, pairs: pairs),
                   destination.end == text.endIndex else { return nil }
         } else if after.hasPrefix("[") {
-            guard let labelClose = after.dropFirst().firstIndex(of: "]"),
+            guard let labelClose = ReferenceLabel.closingBracket(in: after, from: after.index(after: after.startIndex)),
                   text.index(after: labelClose) == text.endIndex else { return nil }
             let label = String(after[after.index(after: after.startIndex)..<labelClose])
             guard references[ReferenceLabel.normalized(label.isEmpty ? String(linkText) : label)] != nil else { return nil }

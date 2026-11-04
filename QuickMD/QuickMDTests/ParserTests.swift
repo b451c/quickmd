@@ -733,6 +733,57 @@ final class ParserTests: XCTestCase {
                        [[], ["https://empty"], ["https://tab"]])
     }
 
+    /// R21c: a label may hold backslash-escaped brackets, matched as
+    /// written: `[a\]b]: url` is a definition, found by `[a\]b]`,
+    /// `[y][a\]b]`, `[w][A\]B]`, `![a\]b]`, in a quote and a heading; an
+    /// UNESCAPED `[` makes no label (`[a[b]:` is text, `[v][a[b]` literal).
+    /// GitHub (`gh api markdown`, 2026-11-04). The definition pattern
+    /// stopped at the first `]` and the full form's label too.
+    func testEscapedBracketsInLabelsLikeGitHub() {
+        let md = #"""
+        # [w][A\]B]
+
+        [a\]b] and [y][a\]b] and [a\[c] and [z][a\\] and [w][A\]B]
+
+        > Quoted [q][a\]b].
+
+        ![a\]b]
+
+        [v][a[b]
+
+        [a\]b]: https://esc
+        [a\[c]: https://open
+        [a\\]: https://bs
+
+        [a[b]: https://ab
+        """#
+        let blocks = parse(md)
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
+        // One entry per link: an escape splits a link's text into runs.
+        func links(_ text: AttributedString) -> [String] {
+            text.runs[\.link].compactMap { link, range in
+                link.map { "\(String(text[range].characters))=\($0.absoluteString)" }
+            }
+        }
+        guard blocks.count == 6,
+              case .heading(let level, let title, _) = blocks[0].content,
+              case .text(let paragraph) = blocks[1].content,
+              case .blockquote(let quote, _) = blocks[2].content,
+              case .image(let url, _, _) = blocks[3].content,
+              case .text(let literal) = blocks[4].content,
+              case .text(let notDefinition) = blocks[5].content else {
+            return XCTFail("blocks: \(blocks.map(\.content))")
+        }
+        XCTAssertEqual(links(renderer.renderHeader(title, level: level)), ["w=https://esc"])
+        XCTAssertEqual(links(paragraph), ["a]b=https://esc", "y=https://esc", "a[c=https://open", "z=https://bs",
+                                          "w=https://esc"])
+        XCTAssertEqual(links(renderer.renderQuotedBody(quote)), ["q=https://esc"])
+        XCTAssertEqual(url, "https://esc")
+        XCTAssertEqual(String(literal.characters), "[v][a[b]")
+        XCTAssertEqual(links(literal), [])
+        XCTAssertEqual(String(notDefinition.characters), "[a[b]: https://ab")
+    }
+
     /// R19: reference labels match as CommonMark's (`ReferenceLabel`) in
     /// every lookup — whitespace runs (tab, line break) are one space, the
     /// ends trimmed, Unicode case folding (`ẞ` = `SS`, `straße` = `STRASSE`,

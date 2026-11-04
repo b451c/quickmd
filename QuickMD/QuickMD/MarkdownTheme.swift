@@ -321,7 +321,9 @@ struct MarkdownTheme: Sendable, Identifiable {
 
     /// Matches reference link definitions: [id]: url or [id]: <url> with optional title
     /// Captures: (1) reference ID, (2) URL
-    static let referenceLinkDefinitionPattern = #"^[ \t]*\[([^\]]+)\]:[ \t]+<?([^\s>]+)>?"#
+    /// The label: no unescaped bracket, backslash escapes kept as written
+    /// (`[a\]b]:` defines `a\]b`, `[a[b]:` is text — CommonMark, GitHub).
+    static let referenceLinkDefinitionPattern = #"^[ \t]*\[((?:[^\[\]\\]|\\.)+)\]:[ \t]+<?([^\s>]+)>?"#
 
     /// Matches footnote definitions: [^id]: text
     /// Captures: (1) footnote ID, (2) content

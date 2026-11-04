@@ -1041,7 +1041,7 @@ struct MarkdownRenderer: Sendable {
         if remaining[afterBracket...].hasPrefix("[") {
             let afterSecondOpen = remaining.index(after: afterBracket)
             if afterSecondOpen < remaining.endIndex,
-               let closeSecondBracket = remaining[afterSecondOpen...].firstIndex(of: "]") {
+               let closeSecondBracket = ReferenceLabel.closingBracket(in: remaining, from: afterSecondOpen) {
                 let refId = String(remaining[afterSecondOpen..<closeSecondBracket])
                 let effectiveId = ReferenceLabel.normalized(refId.isEmpty ? linkText : refId)
                 if let url = referenceDefinitions[effectiveId] {
