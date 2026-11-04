@@ -5,6 +5,13 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.4] - 2026-11-04
+
+Spacing around headings is back.
+
+### Fixed
+- Headings and lists have the spacing they had before 1.14.3 again. The 1.14.3 change that dropped the blank lines around blocks left headings too close to their text, so documents looked cramped; it is withdrawn. The other 1.14.3 changes stay.
+
 ## [1.14.3] - 2026-11-04
 
 Two rendering fixes.
