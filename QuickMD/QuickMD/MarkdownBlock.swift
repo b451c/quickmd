@@ -127,14 +127,20 @@ struct MarkdownBlock: Identifiable, Sendable {
     /// own ```` ```yaml ```` fence on the first line is an ordinary code block.
     /// The rhythm gives it its own role (`BlockLayout.Spacing.Role.frontMatter`).
     let isFrontMatter: Bool
+    /// A display formula the math engine cannot typeset, shown as its source
+    /// in a ```` ```latex ```` code block
+    /// (`MathRendering.substitutingUntypesettableMath`). Copied whole, it
+    /// reads `$$…$$` again, as the formula it is (`SelectionRows`).
+    let substitutesFormula: Bool
 
     init(id: String, content: BlockContent, sourceLine: Int, joinsPrevious: Bool = false,
-         isFrontMatter: Bool = false) {
+         isFrontMatter: Bool = false, substitutesFormula: Bool = false) {
         self.id = id
         self.content = content
         self.sourceLine = sourceLine
         self.joinsPrevious = joinsPrevious
         self.isFrontMatter = isFrontMatter
+        self.substitutesFormula = substitutesFormula
     }
 
     enum BlockContent: Sendable {

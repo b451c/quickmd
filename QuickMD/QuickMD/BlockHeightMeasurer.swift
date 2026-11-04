@@ -643,7 +643,7 @@ struct MathRendering {
             guard case .mathBlock(let latex) = block.content, !typesets(latex) else { return block }
             return MarkdownBlock(id: block.id,
                                  content: .codeBlock(code: latex, language: "latex"),
-                                 sourceLine: block.sourceLine)
+                                 sourceLine: block.sourceLine, substitutesFormula: true)
         }
     }
 }

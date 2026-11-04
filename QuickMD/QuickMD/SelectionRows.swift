@@ -79,6 +79,13 @@ enum SelectionRows {
         case .codeBlock, .text, .blockquote, .alert, .heading:
             guard let string = text(block),
                   let covered = selection.range(inRow: row, rowLength: string.length) else { return nil }
+            if block.substitutesFormula, case .codeBlock(let latex, _) = block.content,
+               covered.location == 0, covered.length == string.length {
+                // A formula shown as its source, covered whole (a drag across
+                // it, ⌘A): the formula, `$$…$$`, as 1.14.2 copied it. Part of
+                // its text copies as that text, like any selection.
+                return .displayMath(latex: latex)
+            }
             let part = string.attributedSubstring(from: covered)
             if case .codeBlock = block.content { return .code(part) }
             return .text(part)

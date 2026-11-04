@@ -959,6 +959,51 @@ extension BlockHeightMeasurerTests {
         XCTAssertEqual(working, "x")
     }
 
+    /// A formula shown as its source copies as the formula it is when the
+    /// selection covers it whole — ⌘A, a drag across it — `$$…$$`, as 1.14.2
+    /// copied it; a selection inside its text copies that text, like any
+    /// selection. A user's own ```latex block still copies as code, and search
+    /// still counts in the same string the row shows.
+    func testASubstitutedFormulaCopiesAsTheFormulaWhenCoveredWhole() {
+        let blocks = refusingNot.substitutingUntypesettableMath(in: parse(Self.failingFormulaDocument)
+                                                                + parse("```latex\n\\not\\le\n```"))
+        guard case .codeBlock(let latex, _) = blocks[1].content, blocks[1].substitutesFormula else {
+            return XCTFail("fixture: row 1 was not substituted")
+        }
+        XCTAssertFalse(blocks[4].substitutesFormula, "a user's own latex fence")
+        func text(_ block: MarkdownBlock) -> NSAttributedString? {
+            switch block.content {
+            case .text(let attributed):
+                return BlockTextConverter.makeNSAttributedString(from: attributed, hasInlineMath: false,
+                                                                 theme: theme, fontScale: 1, math: .none)
+            case .codeBlock(let code, _):
+                return BlockTextConverter.plainCode(code, theme: theme, fontScale: 1)
+            default:
+                return nil
+            }
+        }
+        func copy(_ anchor: SelectionPoint, _ focus: SelectionPoint) -> String {
+            DocumentCopyBuilder.build(SelectionRows.pieces(of: DocumentSelection(anchor: anchor, focus: focus),
+                                                           blocks: blocks, text: text, table: { _ in nil })).plain
+        }
+        let length = (latex as NSString).length
+        let outro = text(blocks[3])!.length
+        // ⌘A: intro, the formula as $$…$$, the working formula, outro, the fence.
+        let all = DocumentSelection.selectAll(rowCount: blocks.count) { text(blocks[$0])?.length ?? 1 }!
+        XCTAssertEqual(copy(all.anchor, all.focus),
+                       "Intro paragraph.\n\n$$\n\(latex)\n$$\n\n$$\nx = \\frac{1}{2}\n$$\n\nOutro paragraph.\n\n\\not\\le")
+        // A drag from the intro into the outro covers the formula whole.
+        XCTAssertTrue(copy(SelectionPoint(row: 0, offset: 6), SelectionPoint(row: 3, offset: outro))
+            .contains("\n\n$$\n\(latex)\n$$\n\n"))
+        // The formula's own text, start to end, from inside: still whole.
+        XCTAssertEqual(copy(SelectionPoint(row: 1, offset: 0), SelectionPoint(row: 1, offset: length)),
+                       "$$\n\(latex)\n$$")
+        // Part of it: those characters.
+        XCTAssertEqual(copy(SelectionPoint(row: 1, offset: 0), SelectionPoint(row: 1, offset: 6)), "V(e_1)")
+        // Search counts in what the row shows.
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "not", theme: theme).matchBlockIds.count, 3)
+    }
+
     func testDocumentWithoutDisplayMathNeverConsultsTheEngine() {
         let parsed = parse("Text with $x$ inline only.\n\n```latex\n\\not\\le\n```")
         let engine = MathRendering(inlineImage: { _, _, _ in nil }, displayHeight: { _, _, _ in 0 },
