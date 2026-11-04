@@ -30,6 +30,8 @@ struct MarkdownView: View {
     @State private var fileWatcher: FileWatcher?
     /// The watched file disappeared from its path (moved/deleted).
     @State private var fileMissing = false
+    /// What the `fileMissing` banner says (gone, or there but unreadable).
+    @State private var fileProblem: FileWatcher.Problem = .missing
     @State private var cachedBlocks: [MarkdownBlock] = []
     /// Incremented on every successful parse. Text blocks use it to invalidate
     /// their NSAttributedString caches — a font-size-only change leaves the
@@ -366,7 +368,7 @@ struct MarkdownView: View {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundColor(.yellow)
-                            Text("File no longer exists at \(documentURL?.path ?? "this location")")
+                            Text(fileProblem.bannerText(path: documentURL?.path))
                                 .font(.system(size: 12))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -931,6 +933,11 @@ struct MarkdownView: View {
         let watcher = FileWatcher()
         watcher.onChange = { reloadFromDisk() }
         watcher.onFileMissing = {
+            fileProblem = .missing
+            withAnimation(.easeInOut(duration: 0.2)) { fileMissing = true }
+        }
+        watcher.onFileUnreadable = {
+            fileProblem = .unreadable
             withAnimation(.easeInOut(duration: 0.2)) { fileMissing = true }
         }
         watcher.start(watching: url)
