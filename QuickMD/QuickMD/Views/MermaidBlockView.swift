@@ -63,12 +63,14 @@ struct MermaidBlockView: View {
         self.fontScale = fontScale
         self.contentWidth = contentWidth
         self.onEnlarge = onEnlarge
-        // The measurer's seed, so the first frame matches the table's row and
-        // the cell does not report the 200 pt default first.
-        _diagramHeight = State(initialValue: heightCache.height(for: blockId)
-                               ?? ReportedHeights.diagramHeight(source: source, isDark: theme.isDark,
-                                                                fontScale: fontScale,
-                                                                in: heightCache.reportedSnapshot)
+        // The measurer's rule, in the measurer's order, so the first frame is
+        // the table's row and the cell does not report the 200 pt default:
+        // computed from the geometry of an earlier render, else this block's
+        // last height, else the default.
+        _diagramHeight = State(initialValue: MermaidGeometryStore.diagramHeight(
+                                    source: source, isDark: theme.isDark, fontScale: fontScale,
+                                    contentWidth: contentWidth)
+                               ?? heightCache.height(for: blockId)
                                ?? Metrics.defaultHeight)
         let cached = MermaidSnapshotStore.image(source: "\(fontScale)|\(contentWidth)|\(source)", isDark: theme.isDark)
         _snapshot = State(initialValue: cached)
@@ -79,8 +81,6 @@ struct MermaidBlockView: View {
             // (zoom, theme) — which empties the cache — measures the diagram at
             // the 200 pt default again and it reports back on screen.
             heightCache.set(cached.size.height, for: blockId)
-            heightCache.setDiagramHeight(cached.size.height, source: source, isDark: theme.isDark,
-                                         fontScale: fontScale)
         }
     }
 
@@ -103,8 +103,6 @@ struct MermaidBlockView: View {
                         diagramHeight: $diagramHeight,
                         onHeight: { height in
                             heightCache.set(height, for: blockId)
-                            heightCache.setDiagramHeight(height, source: source, isDark: theme.isDark,
-                                                         fontScale: fontScale)
                         },
                         onSnapshot: { image in
                             MermaidSnapshotStore.set(image, source: snapshotKey, isDark: theme.isDark)
@@ -286,6 +284,7 @@ private struct MermaidWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.userContentController.add(context.coordinator, name: "mermaidHeight")
+        config.userContentController.add(context.coordinator, name: "mermaidGeometry")
 
         let webView = ScrollPassthroughWebView(frame: .zero, configuration: config)
         webView.setValue(false, forKey: "drawsBackground")
@@ -345,6 +344,20 @@ private struct MermaidWebView: NSViewRepresentable {
 
         func userContentController(_ controller: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
+            if message.name == "mermaidGeometry" {
+                // What the diagram's height follows from at any width and zoom
+                // (`BlockLayout.Mermaid.diagramHeight`) — posted just before
+                // the height, after every render.
+                guard let body = message.body as? [String: Any],
+                      let width = (body["naturalWidth"] as? NSNumber)?.doubleValue,
+                      let height = (body["naturalHeight"] as? NSNumber)?.doubleValue,
+                      let overhead = (body["overhead"] as? NSNumber)?.doubleValue,
+                      let source = lastSource, let isDark = lastIsDark else { return }
+                MermaidGeometryStore.set(.init(naturalWidth: width, naturalHeight: height,
+                                               overhead: max(0, overhead)),
+                                         source: source, isDark: isDark)
+                return
+            }
             guard let height = message.body as? Double else { return }
             let newHeight = max(CGFloat(height), 50)
             if abs(newHeight - parent.diagramHeight) > 1 {

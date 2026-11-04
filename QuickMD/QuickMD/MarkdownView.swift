@@ -651,8 +651,8 @@ struct MarkdownView: View {
             // first layout — then the heights task below picks it up as soon as
             // the coordinator reports one.
             let width = contentWidth
-            // Content-keyed (`ReportedHeights`): valid across this re-parse.
-            let reported = heightCache.reportedSnapshot
+            // Keyed by the link, so valid across this re-parse.
+            let imageSizes = heightCache.imageSizesSnapshot
             let out: ParsedAndMeasured = await Task.detached(priority: .userInitiated) {
                 let blocks = MarkdownBlockParser(theme: currentTheme, fontScale: scale).parse(text)
                 // Pre-compute per-text-block metadata on the background thread so the
@@ -676,12 +676,13 @@ struct MarkdownView: View {
                 // the rows it defers are finished on main just below.
                 // No `heightSeeds`: `heightCache` is cleared for this parse, and
                 // block ids are positional, so the previous document's diagram
-                // heights would seed the wrong diagrams. `reportedHeights` are
-                // keyed by content, width and zoom instead.
+                // heights would seed the wrong diagrams. Pictures and diagrams
+                // that were shown before are computed (`imageSizes`, the SVG
+                // decoder, `MermaidGeometryStore`).
                 let measured = width > 0
                     ? BlockHeightMeasurer.measure(blocks: blocks, theme: currentTheme,
                                                   fontScale: scale, contentWidth: width,
-                                                  reportedHeights: reported, math: nil)
+                                                  imageSizes: imageSizes, math: nil)
                     : MeasuredBlocks.empty
                 return ParsedAndMeasured(parsed: ParsedDocument(blocks: blocks, textMeta: meta),
                                          measured: measured)
@@ -753,9 +754,8 @@ struct MarkdownView: View {
             // Mermaid rows: seed from the heights the WebViews actually reported,
             // so a re-measure doesn't send every diagram back to the 200 pt default.
             let seeds = heightCache.snapshot
-            // Pictures and diagrams placed at this width before (Reading Mode
-            // off again, a window back to its size): their reported heights.
-            let reported = heightCache.reportedSnapshot
+            // Images shown before: their rows are computed at the new width.
+            let imageSizes = heightCache.imageSizesSnapshot
             // Inline-math paragraphs: hand the previous pass's strings back so the
             // main-actor step re-wraps them instead of re-rendering every `$…$`
             // segment through SwiftMath. Safe only because this task never runs
@@ -766,7 +766,7 @@ struct MarkdownView: View {
             let raw: MeasuredBlocks = await Task.detached(priority: .userInitiated) {
                 BlockHeightMeasurer.measure(blocks: blocks, theme: currentTheme, fontScale: scale,
                                             contentWidth: width, heightSeeds: seeds,
-                                            reportedHeights: reported, math: nil)
+                                            imageSizes: imageSizes, math: nil)
             }.value
             // A parse that landed while we were measuring owns the state now —
             // its own transaction published a matching table.
@@ -1157,7 +1157,7 @@ struct MarkdownView: View {
 
             case .image(let url, let alt, let width):
                 ImageBlockView(url: url, alt: alt, width: width, theme: theme, documentURL: documentURL,
-                               fontScale: scale, contentWidth: contentWidth,
+                               fontScale: scale, contentWidth: contentWidth, heightCache: heightCache,
                                onEnlarge: presentGraphicPreview)
                     .padding(.vertical, Metrics.imageOuterVerticalPadding)
 
@@ -1408,11 +1408,6 @@ struct MarkdownView: View {
         // ignores such reports too — this is the same rule on the parent's side,
         // so a stale report can never overwrite an exact height).
         guard row < table.kinds.count, table.kinds[row] == .reported else { return }
-        // Remembered by content, width and zoom for the next measure there.
-        if let key = ReportedHeights.key(for: cachedBlocks[row], contentWidth: table.contentWidth,
-                                         fontScale: CGFloat(renderedFontScale), theme: theme) {
-            heightCache.setReported(height, forKey: key)
-        }
         guard row < table.heights.count, abs(table.heights[row] - height) >= 0.5 else { return }
         // The block's height only: its space above stays as measured.
         measured = measured.replacingHeight(height, at: row)

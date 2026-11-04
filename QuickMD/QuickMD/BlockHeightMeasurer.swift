@@ -414,6 +414,81 @@ enum BlockLayout {
             let available = max(1, contentWidth)
             return min(available, min(maxDisplayWidth, available) * fontScale)
         }
+
+        /// The size a picture — a bitmap image (`ImageBlockView`) or an SVG
+        /// (`SVGBlockView`) — is drawn at, from its own size (`NSImage.size`:
+        /// the ORIGINAL pixel size for a bitmap, see `ImageLoader`, the declared
+        /// size for an SVG): `displayWidth`, never wider than its own width ×
+        /// zoom (D4, GitHub parity) or an HTML `<img width>` in its place, at
+        /// its aspect ratio. The height is rounded to whole points, so it is
+        /// pixel-exact at 1× and 2×. The views FRAME the picture with this and
+        /// the measurer sizes the row with it: once a picture's size is known,
+        /// its row is exact at every width and zoom.
+        static func pictureSize(imageSize: CGSize, htmlWidth: ImageWidth?, fontScale: CGFloat,
+                                contentWidth: CGFloat) -> CGSize {
+            let cap = displayWidth(fontScale: fontScale, contentWidth: contentWidth)
+            let width: CGFloat
+            if let htmlWidth {
+                width = htmlWidth.displayWidth(cap: cap, fontScale: fontScale)
+            } else if imageSize.width > 0 {
+                width = min(cap, imageSize.width * fontScale)
+            } else {
+                width = cap
+            }
+            guard imageSize.width > 0, imageSize.height > 0 else {
+                return CGSize(width: width, height: placeholderHeight)
+            }
+            return CGSize(width: width, height: (width * imageSize.height / imageSize.width).rounded())
+        }
+
+        /// The alt-text caption under an image (`ImageCaption`): 12 pt × zoom,
+        /// system italic.
+        static let captionFontSize: CGFloat = 12
+
+        static func captionFont(fontScale: CGFloat) -> NSFont {
+            let size = captionFontSize * fontScale
+            let base = NSFont.systemFont(ofSize: size)
+            return NSFont(descriptor: base.fontDescriptor.withSymbolicTraits(.italic), size: size) ?? base
+        }
+
+        /// The caption's height at `contentWidth`: its lines, broken by TextKit
+        /// as SwiftUI breaks them, × `singleLineHeight` — an upper bound of
+        /// SwiftUI's own line height, which no font metric reproduces.
+        /// `ImageCaption` is at least this tall, so the row is exactly this
+        /// whenever the two agree on the lines, and grows (and reports) if
+        /// they ever don't, rather than clipping. 0 without a caption.
+        static func captionHeight(alt: String, fontScale: CGFloat, contentWidth: CGFloat) -> CGFloat {
+            guard !alt.isEmpty else { return 0 }
+            let font = captionFont(fontScale: fontScale)
+            // A fresh stack per call: TextKit is not thread-safe and this runs
+            // off-main in the measurer.
+            let storage = NSTextStorage(string: alt, attributes: [.font: font])
+            let layoutManager = NSLayoutManager()
+            storage.addLayoutManager(layoutManager)
+            let container = NSTextContainer(size: NSSize(width: BlockLayout.clampedWidth(contentWidth),
+                                                         height: .greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            layoutManager.addTextContainer(container)
+            layoutManager.ensureLayout(for: container)
+            var lines = 0
+            layoutManager.enumerateLineFragments(forGlyphRange: layoutManager.glyphRange(for: container)) { _, _, _, _, _ in
+                lines += 1
+            }
+            return CGFloat(max(1, lines)) * BlockLayout.singleLineHeight(for: font)
+        }
+
+        /// An image row: the view's body is a two-view tuple (picture, then the
+        /// caption), so the row's vertical padding applies to EACH of them, and
+        /// the row's stack puts `captionSpacing` between them (measured in the
+        /// GUI: a 1024 px icon at 819 pt reports 8 + 600 + 8 + 8 + 8 + 15 + 8 =
+        /// 655). `picture` is `pictureSize(...).height`, or the 100 pt loading
+        /// view while the size is unknown.
+        static func rowHeight(picture: CGFloat, alt: String, fontScale: CGFloat, contentWidth: CGFloat) -> CGFloat {
+            let outer = BlockLayout.Document.imageOuterVerticalPadding
+            guard !alt.isEmpty else { return picture + 2 * outer }
+            return picture + 2 * outer + captionSpacing
+                + captionHeight(alt: alt, fontScale: fontScale, contentWidth: contentWidth) + 2 * outer
+        }
     }
 
     // MARK: Display math
@@ -441,6 +516,34 @@ enum BlockLayout {
         /// Height a diagram starts at when nothing has measured it yet.
         static let defaultHeight: CGFloat = 200
         static let cornerRadius: CGFloat = 6
+        /// The least height the web view reports (`MermaidWebView`).
+        static let minimumHeight: CGFloat = 50
+
+        /// What a rendered diagram's height follows from, as the inline web view
+        /// posts it (`mermaidGeometry` in mermaid-template.html): the SVG's
+        /// natural size (its viewBox) and what the page adds below it.
+        struct Geometry: Equatable {
+            var naturalWidth: CGFloat
+            var naturalHeight: CGFloat
+            var overhead: CGFloat
+        }
+
+        /// The diagram's height in a web view `contentWidth` wide at
+        /// `fontScale` — the template's `resizeDiagram`: the natural size ×
+        /// zoom, never wider than the view (`window.innerWidth`, whole CSS
+        /// px), plus the page's overhead, and at least `minimumHeight`.
+        static func diagramHeight(_ geometry: Geometry, fontScale: CGFloat, contentWidth: CGFloat) -> CGFloat {
+            let viewport = floor(contentWidth)
+            guard geometry.naturalWidth > 0, geometry.naturalHeight > 0, viewport > 0 else { return defaultHeight }
+            let fit = viewport / geometry.naturalWidth
+            let factor = min(fontScale * min(1, fit), fit)
+            return max(minimumHeight, geometry.naturalHeight * factor + geometry.overhead)
+        }
+
+        /// A diagram row: the diagram, the view's padding and the row's.
+        static func rowHeight(diagram: CGFloat) -> CGFloat {
+            diagram + 2 * verticalPadding + 2 * BlockLayout.Document.mermaidOuterVerticalPadding
+        }
     }
 
     // MARK: - Derived text widths
@@ -721,6 +824,30 @@ class DocumentCellTextView: NSTextView {
     }
 }
 
+// MARK: - Image caption
+
+/// The italic alt-text line under an image (`ImageBlockView`). Here rather
+/// than in the view's file so the unit tests host the very view the measurer
+/// sizes (`BlockLayout.ImageBlock.captionHeight`): at least that tall, so the
+/// row is exact whenever SwiftUI breaks the caption into the lines TextKit
+/// counted.
+struct ImageCaption: View {
+    let alt: String
+    let color: Color
+    let fontScale: CGFloat
+    let contentWidth: CGFloat
+
+    var body: some View {
+        Text(alt)
+            .font(.system(size: BlockLayout.ImageBlock.captionFontSize * fontScale))
+            .foregroundColor(color)
+            .italic()
+            .frame(minHeight: BlockLayout.ImageBlock.captionHeight(alt: alt, fontScale: fontScale,
+                                                                   contentWidth: contentWidth),
+                   alignment: .topLeading)
+    }
+}
+
 // MARK: - Block Height Cache
 
 /// Remembers the last measured height of each block, keyed by block id.
@@ -737,84 +864,71 @@ class DocumentCellTextView: NSTextView {
 /// compile error (caught by CI on the GitHub runner toolchain).
 final class BlockHeightCache {
     private var heights: [String: CGFloat] = [:]
-    /// Row heights reported by placed pictures and diagrams, by
-    /// `ReportedHeights.key` — content keys, so a re-parse keeps them.
-    private var reported: [String: CGFloat] = [:]
+    /// The size of every image this document has shown (`NSImage.size`, the
+    /// original pixel size), by its link as written. An `NSString` key, like
+    /// `ImageLoader`'s caches: a multi-megabyte `data:` link hashes in
+    /// constant time. Per document, because a relative link names another file
+    /// in another folder. A re-parse keeps them: they are keyed by the link.
+    private var imageSizes: [NSString: CGSize] = [:]
 
     func height(for id: String) -> CGFloat? { heights[id] }
     func set(_ height: CGFloat, for id: String) { heights[id] = height }
-    /// Forgets the block-id heights (a re-parse: ids are positional). The
-    /// reported heights stay — they are keyed by content.
+    /// Forgets the block-id heights (a re-parse: ids are positional).
     func removeAll() { heights.removeAll() }
 
-    /// A diagram's height as its web view (or snapshot) gave it, per unit of
-    /// zoom (`ReportedHeights.diagramHeight`).
-    func setDiagramHeight(_ height: CGFloat, source: String, isDark: Bool, fontScale: CGFloat) {
-        guard fontScale > 0, height > 0 else { return }
-        setReported(height / fontScale, forKey: ReportedHeights.diagramUnitKey(source: source, isDark: isDark))
+    func setImageSize(_ size: CGSize, for url: String) {
+        guard size.width > 0, size.height > 0 else { return }
+        imageSizes[url as NSString] = size
     }
-
-    func setReported(_ height: CGFloat, forKey key: String) {
-        // A live resize reports at every width it passes through: keep the
-        // cache small rather than complete.
-        if reported.count >= Self.reportedLimit, reported[key] == nil { reported.removeAll() }
-        reported[key] = height
-    }
-    static let reportedLimit = 512
+    func imageSize(for url: String) -> CGSize? { imageSizes[url as NSString] }
 
     /// A value copy for `BlockHeightMeasurer.measure(heightSeeds:)` — the
     /// measurer runs off-main and must not read this reference type from there.
     var snapshot: [String: CGFloat] { heights }
-    /// The same for `measure(reportedHeights:)`.
-    var reportedSnapshot: [String: CGFloat] { reported }
+    /// The same for `measure(imageSizes:)`.
+    var imageSizesSnapshot: [NSString: CGSize] { imageSizes }
 }
 
-// MARK: - Reported heights
+// MARK: - Mermaid geometry
 
-/// The heights the placed views of pictures and diagrams reported, by what
-/// they show: a block id is a position, which a re-parse (zoom, an edit
-/// elsewhere) reassigns, and a width change re-measures every row — the
-/// image went back to its 116 pt placeholder and the diagram to the 200 pt
-/// default each time, swinging the table by hundreds of points and moving
-/// the reader with it. Keyed by the block's content and the width, zoom and
-/// theme it was laid out at, a reported height is valid wherever the key
-/// matches: Reading Mode on and off, a zoom and back.
-enum ReportedHeights {
-    /// The key of `block`'s row at `contentWidth`, `fontScale` and `theme`;
-    /// nil for the kinds the measurer computes exactly (or estimates from
-    /// text, a heading).
-    static func key(for block: MarkdownBlock, contentWidth: CGFloat, fontScale: CGFloat,
-                    theme: MarkdownTheme) -> String? {
-        let place = "\(Int(contentWidth.rounded()))|\(fontScale)|\(theme.name)|\(theme.isDark)"
-        switch block.content {
-        case .image(let url, let alt, let width):
-            return "image|\(place)|\(url)|\(alt)|\(String(describing: width))"
-        case .svgImage(let source):
-            return "svg|\(place)|\(source)"
-        case .mermaidDiagram(let source):
-            return "mermaid|\(place)|\(source)"
-        default:
-            return nil
-        }
+/// The geometry (`BlockLayout.Mermaid.Geometry`) of every diagram a web view
+/// has rendered, by theme and source. With it a diagram that rendered once
+/// never starts at the 200 pt default again: the measurer and the view's
+/// first frame compute its height at any width and zoom. Process-wide, like
+/// `MermaidSnapshotStore`, because a diagram re-created from a snapshot never
+/// runs its web view — in this document or another. Locked: the measurer
+/// reads it off-main.
+enum MermaidGeometryStore {
+    private static let lock = NSLock()
+    private static var geometries: [NSString: BlockLayout.Mermaid.Geometry] = [:]
+    /// Entries are tiny; the cap only keeps a session-long store bounded.
+    static let limit = 1024
+
+    private static func key(source: String, isDark: Bool) -> NSString { "\(isDark)|\(source)" as NSString }
+
+    static func set(_ geometry: BlockLayout.Mermaid.Geometry, source: String, isDark: Bool) {
+        guard geometry.naturalWidth > 0, geometry.naturalHeight > 0 else { return }
+        let key = key(source: source, isDark: isDark)
+        lock.lock()
+        defer { lock.unlock() }
+        if geometries.count >= limit, geometries[key] == nil { geometries.removeAll() }
+        geometries[key] = geometry
     }
 
-    /// A Mermaid diagram's height per unit of zoom, by what it shows. One that
-    /// fits its column is drawn at `fontScale` times its natural size
-    /// (mermaid-template.html), so a zoom it was never placed at starts from
-    /// the last one it was placed at, scaled — not from the 200 pt default
-    /// (which swung the table by ~120 pt on every zoom step). One wider than
-    /// its column is drawn smaller than that and reports it.
-    static func diagramUnitKey(source: String, isDark: Bool) -> String {
-        "mermaid-unit|\(isDark)|\(source)"
+    static func geometry(source: String, isDark: Bool) -> BlockLayout.Mermaid.Geometry? {
+        let key = key(source: source, isDark: isDark)
+        lock.lock()
+        defer { lock.unlock() }
+        return geometries[key]
     }
 
-    /// The diagram height (without the block's padding) `source` is expected
-    /// to have at `fontScale`; nil if it was never placed. Shared by the
-    /// measurer and `MermaidBlockView`'s first frame, so the two agree.
+    /// The diagram's height at `fontScale` and `contentWidth`, if it ever
+    /// rendered in this theme.
     static func diagramHeight(source: String, isDark: Bool, fontScale: CGFloat,
-                              in reported: [String: CGFloat]) -> CGFloat? {
-        // 50: the web view's minimum (`MermaidWebView`).
-        reported[diagramUnitKey(source: source, isDark: isDark)].map { max(50, $0 * fontScale) }
+                              contentWidth: CGFloat) -> CGFloat? {
+        geometry(source: source, isDark: isDark).map {
+            BlockLayout.Mermaid.diagramHeight($0, fontScale: fontScale, contentWidth: contentWidth)
+        }
     }
 }
 
@@ -999,10 +1113,11 @@ enum BlockHeightMeasurer {
     ///     the list column width minus `2 * Document.contentHorizontalPadding`.
     ///   - heightSeeds: last-known heights (`BlockHeightCache`) used to seed
     ///     Mermaid rows so a re-created diagram doesn't start at the default.
-    ///   - reportedHeights: row heights the placed views of pictures and
-    ///     diagrams reported, by `ReportedHeights.key` — what the block shows,
-    ///     at which width, zoom and theme. Such a row starts at the height it
-    ///     had there instead of the placeholder.
+    ///   - imageSizes: the sizes of the images this document has shown
+    ///     (`BlockHeightCache.imageSizesSnapshot`): such an image's row is
+    ///     computed (`BlockLayout.ImageBlock`) instead of starting at the
+    ///     loading view. SVG sizes come from `SVGImageDecoder`, diagram
+    ///     geometry from `MermaidGeometryStore`.
     ///   - math: the math engine, or `nil` when the call is NOT on the main
     ///     thread — see the thread rule in the file header. With `nil`, rows
     ///     that need the engine come back at a placeholder height, listed in
@@ -1022,7 +1137,7 @@ enum BlockHeightMeasurer {
                         fontScale: CGFloat,
                         contentWidth: CGFloat,
                         heightSeeds: [String: CGFloat] = [:],
-                        reportedHeights: [String: CGFloat] = [:],
+                        imageSizes: [NSString: CGSize] = [:],
                         math: MathRendering?) -> MeasuredBlocks {
         #if DEBUG
         let signpostID = heightSignpost.makeSignpostID()
@@ -1159,39 +1274,42 @@ enum BlockHeightMeasurer {
                 }
                 kinds.append(.reported)
 
-            case .image:
-                // Only the image itself: when `alt` is non-empty the view's body
-                // is a two-view tuple (image + italic caption `Text`), so the
-                // placed view reports a taller row than this. It is `.reported`
-                // precisely because the real size — decoded bitmap, caption or
-                // no caption — only exists once the view is placed. Unless it
-                // was placed before at this width and zoom (`reportedHeights`).
-                heights.append(reportedHeights[ReportedHeights.key(for: block, contentWidth: contentWidth,
-                                                                   fontScale: fontScale, theme: theme) ?? ""]
-                               ?? BlockLayout.ImageBlock.placeholderHeight
-                                  + 2 * BlockLayout.Document.imageOuterVerticalPadding)
+            case .image(let url, let alt, let htmlWidth):
+                // An image this document has shown has a known size, and the
+                // row is what the view draws for it (`ImageBlock.rowHeight`) at
+                // any width and zoom. Until then: the loading view, 100 pt
+                // plus the caption — also exact, until the image arrives. Still
+                // `.reported`: a link whose file changed, or failed, reports.
+                let picture = imageSizes[url as NSString].map {
+                    BlockLayout.ImageBlock.pictureSize(imageSize: $0, htmlWidth: htmlWidth, fontScale: fontScale,
+                                                       contentWidth: contentWidth).height
+                } ?? BlockLayout.ImageBlock.placeholderHeight
+                heights.append(BlockLayout.ImageBlock.rowHeight(picture: picture, alt: alt, fontScale: fontScale,
+                                                                contentWidth: contentWidth))
                 kinds.append(.reported)
 
-            case .svgImage:
-                // Same shape as `.image`: the decoded size only exists once the
-                // view is placed (decode is off-main), so the row is reported.
-                heights.append(reportedHeights[ReportedHeights.key(for: block, contentWidth: contentWidth,
-                                                                   fontScale: fontScale, theme: theme) ?? ""]
-                               ?? BlockLayout.ImageBlock.placeholderHeight
-                                  + 2 * BlockLayout.Document.imageOuterVerticalPadding)
+            case .svgImage(let source):
+                // The markup is in the block, so its size is known here: decoded
+                // once (off-main safe) and cached by `SVGImageDecoder`, where the
+                // view finds it too. Markup that does not decode shows a notice
+                // and reports.
+                let picture = SVGImageDecoder.size(of: source).map {
+                    BlockLayout.ImageBlock.pictureSize(imageSize: $0, htmlWidth: nil, fontScale: fontScale,
+                                                       contentWidth: contentWidth).height
+                } ?? BlockLayout.ImageBlock.placeholderHeight
+                heights.append(picture + 2 * BlockLayout.Document.imageOuterVerticalPadding)
                 kinds.append(.reported)
 
             case .mermaidDiagram(let source):
-                // This block's last height at this zoom (a width-only re-measure),
-                // else the diagram's height at another zoom, scaled.
-                let diagram = heightSeeds[block.id]
-                    ?? ReportedHeights.diagramHeight(source: source, isDark: theme.isDark,
-                                                     fontScale: fontScale, in: reportedHeights)
+                // A diagram that rendered once (in either document, from either
+                // its web view or the snapshot that came of it) has its height
+                // computed for this width and zoom; else this block's last
+                // height (a width-only re-measure), else the default.
+                let diagram = MermaidGeometryStore.diagramHeight(source: source, isDark: theme.isDark,
+                                                                 fontScale: fontScale, contentWidth: contentWidth)
+                    ?? heightSeeds[block.id]
                     ?? BlockLayout.Mermaid.defaultHeight
-                heights.append(reportedHeights[ReportedHeights.key(for: block, contentWidth: contentWidth,
-                                                                   fontScale: fontScale, theme: theme) ?? ""]
-                               ?? diagram + 2 * BlockLayout.Mermaid.verticalPadding
-                                  + 2 * BlockLayout.Document.mermaidOuterVerticalPadding)
+                heights.append(BlockLayout.Mermaid.rowHeight(diagram: diagram))
                 kinds.append(.reported)
             }
             rhythm.append(textEdges.map { rhythmRow(block, edges: $0) }

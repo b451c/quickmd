@@ -491,7 +491,16 @@ final class BlockHeightMeasurerTests: XCTestCase {
         guard let index = blocks.firstIndex(where: { if case .image = $0.content { return true } else { return false } }) else {
             return XCTFail("fixture did not parse as an image")
         }
+        // The loading view as drawn: the 100 pt placeholder AND the caption
+        // under it, each with the row's padding (`ImageBlock.rowHeight`).
         XCTAssertEqual(measured.table.heights[index],
+                       BlockLayout.ImageBlock.placeholderHeight
+                       + 4 * BlockLayout.Document.imageOuterVerticalPadding
+                       + BlockLayout.ImageBlock.captionSpacing
+                       + BlockLayout.ImageBlock.captionHeight(alt: "alt", fontScale: 1, contentWidth: 600),
+                       accuracy: tolerance)
+        let uncaptioned = parse("![](picture.png)")
+        XCTAssertEqual(measure(uncaptioned, width: 600).table.heights[0],
                        BlockLayout.ImageBlock.placeholderHeight
                        + 2 * BlockLayout.Document.imageOuterVerticalPadding,
                        accuracy: tolerance)

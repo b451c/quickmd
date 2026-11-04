@@ -473,6 +473,9 @@ final class VerticalRhythmTests: XCTestCase {
         /// The style toggle pins the anchor until the install (false: the
         /// rules of 4f67351, sticky anchor without the pin).
         var pinsLayoutSwitch = true
+        /// Height reports that changed a row (`reportHeight` past its 0.5 pt
+        /// threshold): every one is a swing of the table.
+        var reports = 0
 
         var rects: [NSRect] {
             var y: CGFloat = 0
@@ -522,6 +525,7 @@ final class VerticalRhythmTests: XCTestCase {
             anchor = (row, offset, placed)
         }
         mutating func report(_ row: Int) {
+            reports += 1
             let top = contentTop
             let delta = rows[row].real - rows[row].height
             let blockTop = blockTop(row)
@@ -691,33 +695,194 @@ final class VerticalRhythmTests: XCTestCase {
         return rows
     }
 
-    /// A diagram placed at one zoom starts at another zoom at its height
-    /// there, scaled (fixture.md's diagram: 70 pt at 100 %, reported 77 and
-    /// 87.5 at 110 and 125 %), not at the 200 pt default; never placed, at the
-    /// default; and this block's own last height at this zoom still wins.
-    func testADiagramPlacedAtOneZoomStartsAnotherZoomScaled() throws {
-        let blocks = parse("```mermaid\nflowchart LR\n  A[Start] --> B[End]\n```")
-        guard case .mermaidDiagram(let source) = blocks[0].content else { return XCTFail("not a diagram") }
-        let chrome = 2 * BlockLayout.Mermaid.verticalPadding + 2 * BlockLayout.Document.mermaidOuterVerticalPadding
-        let cache = BlockHeightCache()
-        cache.setDiagramHeight(70, source: source, isDark: theme.isDark, fontScale: 1)
-        cache.removeAll()   // the re-parse of a zoom step
-        for (scale, diagram) in [(1.1, 77.0), (1.25, 87.5), (0.9, 63.0)] as [(CGFloat, CGFloat)] {
-            let measured = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: scale,
-                                                       contentWidth: 819, reportedHeights: cache.reportedSnapshot,
-                                                       math: math)
-            XCTAssertEqual(measured.table.heights[0], diagram + chrome, accuracy: 0.001, "at \(scale)")
-            XCTAssertEqual(ReportedHeights.diagramHeight(source: source, isDark: theme.isDark, fontScale: scale,
-                                                         in: cache.reportedSnapshot) ?? 0,
-                           diagram, accuracy: 0.001)
+    // MARK: - Pictures and diagrams shown once are measured exactly
+
+    /// The fixture's picture rows as the GUI reported them (debug logs of the
+    /// zoom and Reading Mode round trips): the 1024 px icon with its "QuickMD
+    /// icon" caption, and the "Start → End" flowchart — by width and zoom.
+    private let guiPictureRows: [(width: CGFloat, scale: CGFloat, image: CGFloat, diagram: CGFloat)] = [
+        (819, 1.0, 655, 94), (819, 1.1, 716, 101), (819, 1.25, 809, 111.5), (720, 1.0, 655, 94),
+    ]
+    private let fixtureDiagram = "flowchart LR\n  A[Start] --> B[End]"
+
+    /// Once the icon has been shown (its size known) and the diagram has
+    /// rendered (its geometry known), the measurer gives exactly the rows the
+    /// views reported in the GUI, at every width and zoom of the round trips —
+    /// so no re-measure sends them back to the 116 / 224 pt placeholders and no
+    /// view reports. Before the icon is known, the row is the loading view,
+    /// 155 — also what the GUI reported.
+    func testPicturesShownOnceAreMeasuredAsTheirViewsReportThem() throws {
+        let blocks = parse("![QuickMD icon](icon.png)\n\n```mermaid\n\(fixtureDiagram)\n```")
+        guard case .mermaidDiagram(let source) = blocks[1].content else { return XCTFail("not a diagram") }
+        MermaidGeometryStore.set(.init(naturalWidth: 240, naturalHeight: 70, overhead: 0),
+                                 source: source, isDark: theme.isDark)
+        let sizes: [NSString: CGSize] = ["icon.png": CGSize(width: 1024, height: 1024)]
+        for row in guiPictureRows {
+            let measured = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: row.scale,
+                                                       contentWidth: row.width, imageSizes: sizes, math: math)
+            XCTAssertEqual(measured.table.heights[0], row.image, "image at \(row.width) × \(row.scale)")
+            XCTAssertEqual(measured.table.heights[1], row.diagram, accuracy: 0.001,
+                           "diagram at \(row.width) × \(row.scale)")
         }
-        let unplaced = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1.25,
-                                                   contentWidth: 819, math: math)
-        XCTAssertEqual(unplaced.table.heights[0], BlockLayout.Mermaid.defaultHeight + chrome)
-        let ownSeed = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1.25, contentWidth: 720,
-                                                  heightSeeds: [blocks[0].id: 80],
-                                                  reportedHeights: cache.reportedSnapshot, math: math)
-        XCTAssertEqual(ownSeed.table.heights[0], 80 + chrome)
+        let unknown = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1, contentWidth: 819,
+                                                  math: math)
+        XCTAssertEqual(unknown.table.heights[0], 155)
+        // The cache keeps image sizes across a re-parse.
+        let cache = BlockHeightCache()
+        cache.setImageSize(CGSize(width: 1024, height: 1024), for: "icon.png")
+        cache.set(70, for: blocks[1].id)
+        cache.removeAll()
+        XCTAssertNil(cache.height(for: blocks[1].id))
+        XCTAssertEqual(cache.imageSizesSnapshot["icon.png"], CGSize(width: 1024, height: 1024))
+    }
+
+    /// The picture rule the views frame the picture with: the 600 pt cap ×
+    /// zoom within the column, never past the picture's own width × zoom or
+    /// an HTML width, at its aspect ratio, whole points.
+    func testAPictureIsDrawnAtTheSizeTheMeasurerUses() {
+        typealias Image = BlockLayout.ImageBlock
+        let icon = CGSize(width: 1024, height: 1024)
+        XCTAssertEqual(Image.pictureSize(imageSize: icon, htmlWidth: nil, fontScale: 1, contentWidth: 819),
+                       CGSize(width: 600, height: 600))
+        XCTAssertEqual(Image.pictureSize(imageSize: icon, htmlWidth: nil, fontScale: 1.25, contentWidth: 819),
+                       CGSize(width: 750, height: 750))
+        XCTAssertEqual(Image.pictureSize(imageSize: icon, htmlWidth: nil, fontScale: 1.5, contentWidth: 819),
+                       CGSize(width: 819, height: 819))
+        XCTAssertEqual(Image.pictureSize(imageSize: CGSize(width: 90, height: 30), htmlWidth: nil, fontScale: 1.5,
+                                         contentWidth: 819), CGSize(width: 135, height: 45))
+        XCTAssertEqual(Image.pictureSize(imageSize: CGSize(width: 1000, height: 333), htmlWidth: nil, fontScale: 1,
+                                         contentWidth: 819).height, 200)   // 199.8
+        let html = Image.pictureSize(imageSize: icon, htmlWidth: .points(200), fontScale: 1.1, contentWidth: 819)
+        XCTAssertEqual(html.width, 220, accuracy: 0.001)
+        XCTAssertEqual(html.height, 220)
+        XCTAssertEqual(Image.pictureSize(imageSize: icon, htmlWidth: .fraction(0.5), fontScale: 1,
+                                         contentWidth: 819), CGSize(width: 300, height: 300))
+    }
+
+    /// The caption as the row reporter sees it — `ImageCaption` hosted in a
+    /// window, its `GeometryReader` height — is the measurer's
+    /// `captionHeight`, at the zoom ladder, three widths and a caption that
+    /// wraps.
+    func testTheCaptionIsAsTallAsTheMeasurerSays() {
+        final class Box { var height: CGFloat = -1 }
+        struct Probe: View {
+            let caption: ImageCaption
+            let box: Box
+            var body: some View {
+                VStack(alignment: .leading, spacing: 0) { caption }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background(GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { box.height = proxy.size.height }
+                            .onChange(of: proxy.size.height) { box.height = $0 }
+                    })
+            }
+        }
+        let captions = ["QuickMD icon",
+                        String(repeating: "A longer caption that wraps onto several lines in a narrow column. ",
+                               count: 4)]
+        for scale: CGFloat in [0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 3] {
+            for width: CGFloat in [819, 720, 300] {
+                for alt in captions {
+                    let box = Box()
+                    let caption = ImageCaption(alt: alt, color: .secondary, fontScale: scale, contentWidth: width)
+                    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 900),
+                                          styleMask: [.titled], backing: .buffered, defer: false)
+                    window.isReleasedWhenClosed = false
+                    let host = NSHostingView(rootView: Probe(caption: caption, box: box))
+                    host.frame = NSRect(x: 0, y: 0, width: width, height: 900)
+                    window.contentView = host
+                    host.layoutSubtreeIfNeeded()
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+                    host.layoutSubtreeIfNeeded()
+                    XCTAssertEqual(box.height,
+                                   BlockLayout.ImageBlock.captionHeight(alt: alt, fontScale: scale, contentWidth: width),
+                                   "\(alt.prefix(12)) at \(width) × \(scale)")
+                    window.close()
+                }
+            }
+        }
+    }
+
+    /// An SVG's size is known from its markup: the measurer decodes it once
+    /// (cached for the view, which then never shows the loading view on a
+    /// re-created row) and sizes the row as the view draws it. Markup that
+    /// does not decode stays at the loading view and reports.
+    func testAnSVGIsMeasuredAtItsDecodedSize() {
+        let markup = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\"><rect width=\"200\" height=\"100\"/></svg>"
+        let blocks = parse("```svg\n\(markup)\n```")
+        guard case .svgImage(let source) = blocks[0].content else { return XCTFail("not an SVG block") }
+        let pad = 2 * BlockLayout.Document.imageOuterVerticalPadding
+        for (scale, width, picture) in [(1.0, 819.0, 100.0), (1.5, 819.0, 150.0), (1.0, 150.0, 75.0)] as [(CGFloat, CGFloat, CGFloat)] {
+            let measured = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: scale,
+                                                       contentWidth: width, math: math)
+            XCTAssertEqual(measured.table.heights[0], picture + pad, "at \(width) × \(scale)")
+        }
+        XCTAssertNotNil(SVGImageDecoder.cachedImage(source))
+        XCTAssertEqual(SVGImageDecoder.cachedSize(source), CGSize(width: 200, height: 100))
+        let broken = parse("```svg\n<svg this is not svg\n```")
+        let measured = BlockHeightMeasurer.measure(blocks: broken, theme: theme, fontScale: 1, contentWidth: 819,
+                                                   math: math)
+        XCTAssertEqual(measured.table.heights[0], BlockLayout.ImageBlock.placeholderHeight + pad)
+    }
+
+    /// A diagram's height at any width and zoom from the geometry its web view
+    /// posted — the template's own formula: × zoom while it fits, never wider
+    /// than the view, plus the page's overhead, at least 50 pt.
+    func testADiagramsHeightFollowsTheTemplatesFormula() {
+        typealias Mermaid = BlockLayout.Mermaid
+        let small = Mermaid.Geometry(naturalWidth: 240, naturalHeight: 70, overhead: 0)
+        XCTAssertEqual(Mermaid.diagramHeight(small, fontScale: 1.25, contentWidth: 819), 87.5)
+        XCTAssertEqual(Mermaid.diagramHeight(small, fontScale: 0.5, contentWidth: 819), 50)   // the minimum
+        let wide = Mermaid.Geometry(naturalWidth: 1600, naturalHeight: 400, overhead: 4)
+        XCTAssertEqual(Mermaid.diagramHeight(wide, fontScale: 1, contentWidth: 800), 204)     // fitted: 0.5
+        XCTAssertEqual(Mermaid.diagramHeight(wide, fontScale: 1.5, contentWidth: 800), 204)   // still fitted
+        XCTAssertEqual(Mermaid.diagramHeight(wide, fontScale: 0.5, contentWidth: 800), 104)   // 0.5 × fitted
+        XCTAssertEqual(Mermaid.diagramHeight(wide, fontScale: 1, contentWidth: 800.7), 204)   // innerWidth: whole px
+        // Never rendered: the measurer's default, and nothing in the store.
+        XCTAssertNil(MermaidGeometryStore.geometry(source: "graph TD; Never-->Rendered", isDark: false))
+    }
+
+    /// The zoom round trip and the Reading Mode round trip with the reader in
+    /// the image, the rows as the measurer now gives them: no height report at
+    /// all (the table never swings) and the reader back on the very point. The
+    /// control, with the 116 / 224 pt placeholders every re-measure used to
+    /// start from, reports on every step.
+    func testRoundTripsWithPicturesShownOnceNeverSwingTheTable() throws {
+        let blocks = parse("![QuickMD icon](icon.png)\n\n```mermaid\n\(fixtureDiagram)\n```")
+        guard case .mermaidDiagram(let source) = blocks[1].content else { return XCTFail("not a diagram") }
+        MermaidGeometryStore.set(.init(naturalWidth: 240, naturalHeight: 70, overhead: 0),
+                                 source: source, isDark: theme.isDark)
+        let sizes: [NSString: CGSize] = ["icon.png": CGSize(width: 1024, height: 1024)]
+        func rows(width: CGFloat, scale: CGFloat, measured: Bool) -> [ListModel.Row] {
+            let gui = guiPictureRows.first { $0.width == width && $0.scale == scale }!
+            let table = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: scale,
+                                                    contentWidth: width, imageSizes: sizes, math: math).table
+            return fixtureRows(scale: scale, wrap: width < 800 ? 2 : 1, imageReal: gui.image,
+                               imageEstimate: measured ? table.heights[0] : 116,
+                               diagram: gui.diagram - 24, diagramEstimate: measured ? table.heights[1] : 224)
+        }
+        for measured in [true, false] {
+            var start = rows(width: 819, scale: 1, measured: true)
+            for index in start.indices { start[index].height = start[index].real }
+            var list = ListModel(rows: start, contentTop: 0)
+            list.contentTop = list.blockTop(image) + 300
+            let top = list.contentTop
+            for scale: CGFloat in [1.1, 1.25, 1.1, 1] {
+                list.install(rows(width: 819, scale: scale, measured: measured))
+            }
+            list.toggleStyle(inset: 48)
+            list.install(rows(width: 720, scale: 1, measured: measured))
+            list.toggleStyle(inset: 24)
+            list.install(rows(width: 819, scale: 1, measured: measured))
+            if measured {
+                XCTAssertEqual(list.reports, 0)
+                XCTAssertEqual(list.contentTop, top, accuracy: 0.001)
+            } else {
+                XCTAssertGreaterThanOrEqual(list.reports, 6)
+            }
+        }
     }
 
     /// The failing GUI run (f1dbg.log), step by step: ⌘F "Second part" and a
@@ -930,35 +1095,6 @@ final class VerticalRhythmTests: XCTestCase {
                 XCTAssertGreaterThan(list.offCentre(secondPart), 300)
             }
         }
-    }
-
-    /// A picture or a diagram measured again where it was placed before
-    /// (Reading Mode off, a zoom back) starts at the height it reported
-    /// there, not at the placeholder; elsewhere it still starts at the
-    /// placeholder. Keyed by content, so a re-parse keeps it.
-    func testAReportedPictureHeightSeedsTheNextMeasureAtThatWidth() {
-        let blocks = parse("Text.\n\n![QuickMD icon](icon.png)\n\n```mermaid\ngraph TD; A-->B\n```")
-        let keys = [1, 2].map { ReportedHeights.key(for: blocks[$0], contentWidth: 819, fontScale: 1, theme: theme)! }
-        let seeds = [keys[0]: 655, keys[1]: 94] as [String: CGFloat]
-        let seeded = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1, contentWidth: 819,
-                                                 reportedHeights: seeds, math: math)
-        XCTAssertEqual(seeded.table.heights[1], 655)
-        XCTAssertEqual(seeded.table.heights[2], 94)
-        let elsewhere = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1, contentWidth: 720,
-                                                    reportedHeights: seeds, math: math)
-        XCTAssertEqual(elsewhere.table.heights[1], BlockLayout.ImageBlock.placeholderHeight
-                       + 2 * BlockLayout.Document.imageOuterVerticalPadding)
-        XCTAssertNotEqual(elsewhere.table.heights[2], 94)
-        // Another picture at the same position is another key.
-        XCTAssertNotEqual(ReportedHeights.key(for: parse("Text.\n\n![other](other.png)")[1], contentWidth: 819,
-                                              fontScale: 1, theme: theme), keys[0])
-        // A re-parse forgets the block-id heights, not the reported ones.
-        let cache = BlockHeightCache()
-        cache.set(70, for: "mermaid-2")
-        cache.setReported(655, forKey: keys[0])
-        cache.removeAll()
-        XCTAssertNil(cache.height(for: "mermaid-2"))
-        XCTAssertEqual(cache.reportedSnapshot[keys[0]], 655)
     }
 
     func testAnchorIsRelativeToTheBlockNotTheRowEdge() {
