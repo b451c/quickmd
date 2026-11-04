@@ -1278,7 +1278,7 @@ enum BlockHeightMeasurer {
         kinds.reserveCapacity(blocks.count)
         rhythm.reserveCapacity(blocks.count)
 
-        for (row, block) in blocks.enumerated() {
+        for block in blocks {
             // Text and headings have their edges measured below; every other
             // kind's are fixed by its view (`boxRhythm`) — a quote's from its
             // text's ink.
