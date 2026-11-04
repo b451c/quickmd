@@ -846,7 +846,7 @@ struct MarkdownBlockParser: Sendable {
         // blockquotes, a heading and a code fence, …) used to flush an EMPTY
         // text block that rendered as a ~42 pt gap. Drop it: block spacing is
         // the stack's job, not the parser's.
-        guard buffer.contains(where: { !Self.isBlank($0.line) }) else {
+        guard buffer.contains(where: { !$0.line.trimmingCharacters(in: .whitespaces).isEmpty }) else {
             buffer.removeAll()
             return
         }
@@ -874,28 +874,16 @@ struct MarkdownBlockParser: Sendable {
             }
 
             let chunk = buffer[chunkStart..<sliceEnd]
-            // Blank lines at either END of a chunk are block separators, not
-            // content: the renderer turns every blank line into empty
-            // paragraphs, so `## H\n\ntext` drew a whole empty line above
-            // "text" that `## H\ntext` did not (GitHub/CommonMark render both
-            // alike), and a list followed by a blank line and a heading an
-            // extra one below the list. Spacing between blocks is the list's
-            // job. Only blank lines BETWEEN content lines stay — they are the
-            // paragraph separation inside the block. Trimmed per chunk, so a
-            // chunk cut after a blank line (see above) does not end with it
-            // and the next one does not start with the rest of the run.
-            //
-            // The chunk reports the original line of its first NON-blank line,
-            // which is now also the first line it renders. A chunk with no
-            // content at all (a long run of blank lines sliced off on its own)
-            // is dropped for the same reason as the all-blank buffer above.
-            guard let first = chunk.firstIndex(where: { !Self.isBlank($0.line) }),
-                  let last = chunk.lastIndex(where: { !Self.isBlank($0.line) }) else {
+            // Each chunk reports the original line of ITS first NON-BLANK line —
+            // the separator blank lines the previous block left behind are not
+            // content. A chunk with no content at all (a long run of blank lines
+            // sliced off on its own) is dropped for the same reason as above.
+            guard let chunkSourceLine = chunk.first(where: { !$0.line.trimmingCharacters(in: .whitespaces).isEmpty })?.originalIndex else {
                 chunkStart = sliceEnd
                 continue
             }
-            let slice = buffer[first...last].map(\.line).joined(separator: "\n")
-            blocks.append(.text(index: index, renderer.render(slice), sourceLine: buffer[first].originalIndex))
+            let slice = chunk.map(\.line).joined(separator: "\n")
+            blocks.append(.text(index: index, renderer.render(slice), sourceLine: chunkSourceLine))
             index += 1
             chunkStart = sliceEnd
         }

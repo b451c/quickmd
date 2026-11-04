@@ -106,7 +106,6 @@ final class BlockHeightMeasurerTests: XCTestCase {
             ("ordered list", "1. first\n2. second item long enough to wrap at the narrow widths under test\n3. third"),
             ("footnote block", "Text with a ref[^a] and another[^b].\n\n[^a]: First footnote body, long enough to wrap somewhere.\n[^b]: Second footnote body."),
             ("inline math", "Einstein wrote $E = mc^2$ and also $x^2 + y^2 = z^2$ in one paragraph that wraps at the narrower widths."),
-            ("blank-separated blocks", "## H\n\n- a\n- b\n\nText after blank.\n\n\n## Next\n\nLast.\n\n"),
         ]
 
         for fixture in fixtures {
@@ -135,20 +134,6 @@ final class BlockHeightMeasurerTests: XCTestCase {
                                    "\(fixture.name) @\(width): measured \(measured.table.heights[index]) vs live \(live)")
                 }
             }
-        }
-    }
-
-    /// A blank line between a heading and its paragraph or list (or after the
-    /// list) adds no height: the text rows of the loose document measure
-    /// exactly like those of the tight one (1.14.3).
-    func testBlankLinesAroundBlocksAddNoHeight() {
-        let loose = parse("## Para\n\nText after blank.\n\n## List\n\n- one\n- two\n\n## End")
-        let tight = parse("## Para\nText after blank.\n## List\n- one\n- two\n## End")
-        XCTAssertEqual(loose.map(\.id), tight.map(\.id))
-        for width in widths {
-            let looseHeights = measure(loose, width: width).table.heights
-            let tightHeights = measure(tight, width: width).table.heights
-            XCTAssertEqual(looseHeights, tightHeights, "@\(width)")
         }
     }
 
