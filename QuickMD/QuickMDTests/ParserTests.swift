@@ -430,6 +430,7 @@ final class ParserTests: XCTestCase {
         | A | B |
         |---|---|
         | [x][docs] | ![i][img] |
+        | [![build][img]](https://ci.example) | |
 
         [docs]: https://example.com/docs_(v2)
         [img]: img/logo.png
@@ -454,6 +455,10 @@ final class ParserTests: XCTestCase {
         guard case .table(_, let rows, _, .grid) = blocks[2].content else { return XCTFail("table") }
         XCTAssertEqual(rows[0], ["[x](<https://example.com/docs_\\(v2\\)>)", "![i](<img/logo.png>)"])
         XCTAssertEqual(links(renderer.renderInline(rows[0][0])), ["https://example.com/docs_(v2)"])
+        // Review R2: the README badge — an image reference inside an INLINE link.
+        let badge = renderer.renderInline(rows[1][0])
+        XCTAssertEqual(String(badge.characters), "[Image: build]")
+        XCTAssertEqual(links(badge), ["https://ci.example"])
     }
 
     /// Footnote references in quotes, alerts and table cells drew `[^note]`
@@ -537,6 +542,7 @@ final class ParserTests: XCTestCase {
             "***[docs]*** and ~~[docs]~~ stay plain, **[docs]** is a link",
             "[![badge][img]][docs] and ![img] and ![alt][]",
             "[inline](https://x.y/(a)) next to [docs]",
+            "[![build][img]](https://ci.example/b) and [![x](i.png)](https://ci.example/c) and [t ![i][img]](<a b>)",
             "[unknown][nope] [unknown] [docs][nope]",
             "[bad] and [paren] escape what the <…> form needs",
             "a ` lone backtick [docs] then ``` three ``` [docs]",
