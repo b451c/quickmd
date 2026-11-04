@@ -935,21 +935,19 @@ enum PrintableMath {
 
         var result = Text("")
         var index = attributed.startIndex
-        for segment in InlineMathSegmenter.split(plain,
-                                                 literalDollars: InlineMathSegmenter.literalDollars(in: attributed)) {
-            switch segment {
-            case .text(let str):
-                if let end = attributed.characters.index(index, offsetBy: str.count,
+        for piece in InlineMathSegmenter.pieces(of: attributed) {
+            switch piece.segment {
+            case .text:
+                if let end = attributed.characters.index(index, offsetBy: piece.length,
                                                          limitedBy: attributed.endIndex) {
                     result = result + Text(AttributedString(attributed[index..<end]))
                     index = end
                 }
-            case .math(let source):
-                if let end = attributed.characters.index(index, offsetBy: source.count + 2,
+            case .math(let latex):
+                if let end = attributed.characters.index(index, offsetBy: piece.length,
                                                          limitedBy: attributed.endIndex) {
                     index = end
                 }
-                let latex = InlineMathSegmenter.tex(source)
                 if let rendered = inlineImage(latex) {
                     // Sit the image on the baseline: its own descent goes below.
                     result = result + Text(Image(nsImage: rendered.image)).baselineOffset(-rendered.descent)

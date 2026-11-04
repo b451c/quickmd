@@ -737,16 +737,13 @@ enum BlockTextConverter {
                 ?? NSAttributedString(string: String(attributed.characters))
         }
 
-        let plain = String(attributed.characters)
-        let segments = InlineMathSegmenter.split(plain,
-                                                 literalDollars: InlineMathSegmenter.literalDollars(in: attributed))
         let result = NSMutableAttributedString()
         var attrIndex = attributed.startIndex
 
-        for segment in segments {
-            switch segment {
+        for piece in InlineMathSegmenter.pieces(of: attributed) {
+            switch piece.segment {
             case .text(let str):
-                if let end = attributed.characters.index(attrIndex, offsetBy: str.count,
+                if let end = attributed.characters.index(attrIndex, offsetBy: piece.length,
                                                          limitedBy: attributed.endIndex) {
                     let slice = AttributedString(attributed[attrIndex..<end])
                     if let ns = try? NSAttributedString(slice, including: \.appKit) {
@@ -757,11 +754,9 @@ enum BlockTextConverter {
                     attrIndex = end
                 }
 
-            case .math(let source):
+            case .math(let latex):
                 // Skip past the $latex$ in the source AttributedString
-                let skipCount = source.count + 2
-                let latex = InlineMathSegmenter.tex(source)
-                if let end = attributed.characters.index(attrIndex, offsetBy: skipCount,
+                if let end = attributed.characters.index(attrIndex, offsetBy: piece.length,
                                                          limitedBy: attributed.endIndex) {
                     attrIndex = end
                 }

@@ -1095,8 +1095,9 @@ struct MarkdownRenderer: Sendable {
         var attr = AttributedString(String(escaped))
         attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
-        // `\$` is a dollar sign, never a math delimiter (`InlineMathSegmenter`).
-        if escaped == "$" { attr[LiteralDollarAttribute.self] = true }
+        // Inline math is found in the rendered text: tagged so `\$` is never
+        // a delimiter and a formula gets its LaTeX escapes back.
+        attr[EscapedCharacterAttribute.self] = true
         return (attr, remaining.dropFirst(2))
     }
 

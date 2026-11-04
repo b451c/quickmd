@@ -828,6 +828,39 @@ final class RendererTests: XCTestCase {
     }
 
 
+    // MARK: - LaTeX escapes inside inline math (review R11)
+
+    /// Inline math is found in the RENDERED text, after every `\<punct>`
+    /// escape ran; the formula must still reach the engine with its LaTeX
+    /// escapes (`$50\%$` typesets "50%": a bare `%` starts a TeX comment).
+    /// Text outside the formula keeps Markdown's escapes. The copy tag carries
+    /// the same LaTeX, and print uses the same `pieces(of:)`.
+    func testInlineMathKeepsItsLaTeXEscapes() throws {
+        for (source, latex) in [("$50\\%$", "50\\%"), ("$a\\,b$", "a\\,b"), ("$\\{x\\}$", "\\{x\\}"),
+                                ("$a\\_b$", "a\\_b"), ("$a\\$b$", "a\\$b"), ("$a\\;b\\:c$", "a\\;b\\:c")] {
+            XCTAssertEqual(shownParagraph("x " + source + " y").formulas, [latex], source)
+        }
+        let mixed = shownParagraph("Price \\$5, \\* and $a\\,b + \\{c\\}$ then \\_")
+        XCTAssertEqual(mixed.formulas, ["a\\,b + \\{c\\}"])
+        XCTAssertEqual(mixed.text, "Price $5, * and \u{FFFC} then _")
+
+        // The copy tag (DocumentCopyBuilder writes `$<tag>$`) is the LaTeX too.
+        let theme = MarkdownTheme.cached(for: .light)
+        guard case .text(let attributed)? = MarkdownBlockParser(theme: theme).parse("t $50\\%$").first?.content else {
+            return XCTFail("paragraph")
+        }
+        let ns = BlockTextConverter.makeNSAttributedString(
+            from: attributed, hasInlineMath: true, theme: theme, fontScale: 1,
+            math: MathRendering(inlineImage: { _, _, _ in NSImage(size: NSSize(width: 1, height: 1)) },
+                                displayHeight: { _, _, _ in 0 }))
+        var tags: [String] = []
+        ns.enumerateAttribute(.qmdInlineMathSource, in: NSRange(location: 0, length: ns.length)) { value, _, _ in
+            if let value = value as? String { tags.append(value) }
+        }
+        XCTAssertEqual(tags, ["50\\%"])
+        XCTAssertEqual(InlineMathSegmenter.pieces(of: attributed).map(\.length), [2, 5], "spans in the rendered text: $50%$")
+    }
+
     // MARK: - References in link destinations (review R10)
 
     /// A destination's character references are decoded (hrefs from
@@ -908,7 +941,7 @@ final class RendererTests: XCTestCase {
         XCTAssertTrue(cell.contains("$5 and $10\n"))
         XCTAssertEqual(String(renderer.renderQuotedBody("Pay \\$5").characters), "Pay $5")
         // The segmenter itself: offsets of escaped dollars never delimit.
-        XCTAssertEqual(InlineMathSegmenter.split("a $5 and $6", literalDollars: [2, 9]), [.text("a $5 and $6")])
+        XCTAssertEqual(InlineMathSegmenter.split("a $5 and $6", escaped: [2, 9]), [.text("a $5 and $6")])
     }
 
 }
