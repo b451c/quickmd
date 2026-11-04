@@ -797,6 +797,21 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "let needle").matchBlockIds, [blocks[1].id])
     }
 
+    /// A tab that reaches past the fence's indentation keeps the columns it
+    /// has left, as spaces (CommonMark; GitHub, gfm/h3_*.html): the tab was
+    /// kept whole, a code line drawn two columns too deep. A later tab stays.
+    func testAnIndentedFenceKeepsWhatATabHasLeft() throws {
+        XCTAssertEqual(try quoteShape("- a\n\n  ```\n\tTab\n  ```\n"), ["t:• a", "c:  Tab"])
+        XCTAssertEqual(try quoteShape("  ```\n\tTab\n  ```\n"), ["c:  Tab"])
+        XCTAssertEqual(try quoteShape(" ```\n\tTab\n ```\n"), ["c:   Tab"])
+        XCTAssertEqual(try quoteShape("  ```\n\t\tTab\n  ```\n"), ["c:  \tTab"])
+        XCTAssertEqual(try quoteShape("  ```\n \tTab\n  ```\n"), ["c:  Tab"])
+        // A tab inside the indentation goes, one after it stays whole.
+        XCTAssertEqual(MarkdownBlockParser.removingIndentation("\tx", upTo: 4), "x")
+        XCTAssertEqual(MarkdownBlockParser.removingIndentation("  \tx", upTo: 2), "\tx")
+        XCTAssertEqual(MarkdownBlockParser.removingIndentation("x", upTo: 2), "x")
+    }
+
     /// Source Edit finds a selection made in such a block in the source,
     /// whose lines still carry the indentation: a multi-line selection is
     /// matched with the spaces and tabs at the start of each source line

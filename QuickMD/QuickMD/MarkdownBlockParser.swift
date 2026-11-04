@@ -1058,13 +1058,14 @@ struct MarkdownBlockParser: Sendable {
         return columns
     }
 
-    /// `line` without up to `columns` columns of its leading spaces and tabs
-    /// (a tab that would reach past them stays).
+    /// `line` without up to `columns` columns of its leading spaces and tabs.
+    /// A tab that reaches past them leaves the columns it has left as spaces
+    /// (CommonMark: `\tTab` under a fence indented 2 is `  Tab`).
     static func removingIndentation(_ line: String, upTo columns: Int) -> String {
         guard columns > 0 else { return line }
         var used = 0
         var index = line.startIndex
-        while index < line.endIndex {
+        while index < line.endIndex, used < columns {
             let character = line[index]
             let width: Int
             if character == " " {
@@ -1074,9 +1075,11 @@ struct MarkdownBlockParser: Sendable {
             } else {
                 break
             }
-            guard used + width <= columns else { break }
-            used += width
             index = line.index(after: index)
+            if used + width > columns {
+                return String(repeating: " ", count: used + width - columns) + line[index...]
+            }
+            used += width
         }
         return String(line[index...])
     }
