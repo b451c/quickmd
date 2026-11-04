@@ -335,6 +335,24 @@ final class ParserTests: XCTestCase {
         XCTAssertTrue(rows.allSatisfy { $0.count == 3 })
     }
 
+    /// GFM spec (tables extension, example 204): "The remainder of the table's
+    /// rows may vary in the number of cells. If a number of cells fewer than
+    /// the number of cells in the header row, empty cells are inserted. If
+    /// greater, the excess is ignored". Dropping the excess is by design.
+    func testBodyRowCellCountFollowsGFM() {
+        let md = """
+        | abc | def |
+        | --- | --- |
+        | bar |
+        | bar | baz | boo |
+        """
+        guard case .table(let headers, let rows, _, .grid) = parse(md)[0].content else {
+            return XCTFail("expected table")
+        }
+        XCTAssertEqual(headers, ["abc", "def"])
+        XCTAssertEqual(rows, [["bar", ""], ["bar", "baz"]])
+    }
+
     func testHeaderlessTableKeepsColumnsFromSeparator() {
         let md = """
         | | |
