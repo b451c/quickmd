@@ -23,6 +23,24 @@ struct FontPickerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Form {
+                // First: the one control here that is not a font family, and
+                // the one a reader looks for (#48) — below the two family
+                // sections it sat under the fold of the fixed 420 pt window.
+                Section {
+                    Picker("Default zoom", selection: defaultZoomSelection) {
+                        ForEach(DefaultZoom.choices, id: \.self) { scale in
+                            Text(DefaultZoom.title(for: scale)).tag(scale)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                } header: {
+                    header("Size")
+                } footer: {
+                    Text("Documents open at this size. ⌘+ and ⌘− zoom one window; ⌘0 returns to this size. Print and PDF export always use 100%.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+
                 Section {
                     familyPicker("Body text", selection: $bodyFontFamily, systemLabel: "System (San Francisco)")
                     preview("The quick brown fox jumps over the lazy dog — 0123456789",
@@ -39,21 +57,6 @@ struct FontPickerView: View {
                     header("Code")
                 } footer: {
                     Text("Applies to the document, print and PDF export — the app's own controls keep the system font. A custom theme can override these with bodyFontFamily / codeFontFamily in its JSON.")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
-
-                Section {
-                    Picker("Default zoom", selection: defaultZoomSelection) {
-                        ForEach(DefaultZoom.choices, id: \.self) { scale in
-                            Text(DefaultZoom.title(for: scale)).tag(scale)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                } header: {
-                    header("Size")
-                } footer: {
-                    Text("Documents open at this size. ⌘+ and ⌘− zoom one window; ⌘0 returns to this size. Print and PDF export always use 100%.")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
