@@ -356,6 +356,17 @@ struct PendingMatchAim: Equatable {
 
     /// Taken, given up, or a new table.
     mutating func drop() { blockId = nil }
+
+    /// Whether a scroll-wheel event is the reader's scroll: it moves the
+    /// document (a vertical delta), or a gesture or its momentum begins or
+    /// goes on. Fingers resting on the trackpad (`.mayBegin`), a gesture's
+    /// end and zero-delta events move nothing and leave the aim alone.
+    static func isReaderScroll(_ phase: NSEvent.Phase, _ momentumPhase: NSEvent.Phase,
+                               _ deltaY: CGFloat) -> Bool {
+        if deltaY != 0 { return true }
+        let moving: NSEvent.Phase = [.began, .changed]
+        return !phase.isDisjoint(with: moving) || !momentumPhase.isDisjoint(with: moving)
+    }
 }
 
 // MARK: - Print / PDF

@@ -1522,7 +1522,9 @@ final class BlockScrollView: NSScrollView {
     var onReaderScroll: (() -> Void)?
 
     override func scrollWheel(with event: NSEvent) {
-        onReaderScroll?()
+        if PendingMatchAim.isReaderScroll(event.phase, event.momentumPhase, event.scrollingDeltaY) {
+            onReaderScroll?()
+        }
         super.scrollWheel(with: event)
     }
     /// Clicks in the content insets above the first / below the last row land

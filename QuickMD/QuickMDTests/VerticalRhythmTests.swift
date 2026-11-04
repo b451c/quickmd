@@ -507,6 +507,25 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(AlertKind(markerLine: " [!TIP] "), .tip)
     }
 
+    /// Which wheel events are the reader's scroll and drop a jump's aim: the
+    /// ones that move the document. Fingers resting on the trackpad
+    /// (`.mayBegin`), a gesture's end and zero-delta events used to drop it
+    /// too, so ⌘G with fingers on the trackpad landed on the block's centre.
+    func testOnlyAWheelEventThatScrollsDropsTheAim() {
+        let scrolls = PendingMatchAim.isReaderScroll
+        XCTAssertFalse(scrolls([.mayBegin], [], 0))           // fingers resting
+        XCTAssertFalse(scrolls([], [], 0))                    // a zero-delta event
+        XCTAssertFalse(scrolls([.ended], [], 0))              // the gesture lifts
+        XCTAssertFalse(scrolls([.cancelled], [], 0))
+        XCTAssertFalse(scrolls([.stationary], [], 0))
+        XCTAssertFalse(scrolls([], [.ended], 0))              // momentum runs out
+        XCTAssertTrue(scrolls([], [], -3))                    // a mouse wheel notch
+        XCTAssertTrue(scrolls([.began], [], 0))               // a gesture starts
+        XCTAssertTrue(scrolls([.changed], [], 1.5))
+        XCTAssertTrue(scrolls([], [.began], 0))               // momentum
+        XCTAssertTrue(scrolls([], [.changed], -12))
+    }
+
     // MARK: - Block markers: spaces and tabs only
 
     /// Parses on a worker thread: a parser that never returns fails the test
