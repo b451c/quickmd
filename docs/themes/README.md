@@ -47,12 +47,12 @@ The two font fields are optional (QuickMD 1.8+) — omit them to use the system 
 | `name` | Display label in the picker. Must be unique across your custom themes. |
 | `isDark` | Mermaid diagrams sync their theme to this flag (light vs dark variant). |
 | `textColor` | Body paragraph text. |
-| `secondaryTextColor` | Captions, muted UI labels. |
+| `secondaryTextColor` | Captions, front matter field names, muted UI labels. |
 | `linkColor` | Inline and reference links. |
 | `blockquoteColor` | Blockquote body text. |
 | `backgroundColor` | Document background. |
 | `codeBackgroundColor` | Inline `code` and fenced code block background. |
-| `headerBackgroundColor` | (reserved for future heading background variant) |
+| `headerBackgroundColor` | Table header row background. |
 | `borderColor` | Table borders, code block outline. |
 | `keywordColor` | Syntax: `func`, `class`, `if`, etc. |
 | `stringColor` | Syntax: string literals. |

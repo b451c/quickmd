@@ -56,7 +56,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - **Inline SVG** — fenced ```svg blocks and `.svg` image links render natively (no web view), scale with the text and print as vectors
 - Images — local files, remote URLs, embedded `data:` images, reference-style `![alt][ref]`, and HTML `<img>` tags with `width` (the logo/screenshot idiom of GitHub READMEs, `<p align="center">` wrappers included)
 - Links (inline, reference-style, autolinks), footnotes (`[^id]`), nested blockquotes; `#heading` links jump within the document, using GitHub's heading ids
-- YAML front matter as a table of its fields (title, tags, dates); front matter with nested fields stays a code block
+- YAML front matter as a table of its fields (title, tags, dates); anything more complex stays a code block
 - CommonMark soft breaks; Windows (CRLF) and legacy line endings; UTF-16 and Latin-1 files
 
 ### Navigation & Search
@@ -78,7 +78,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ### Privacy Focused
 - No analytics, no tracking
-- Works completely offline (except for remote images)
+- Works completely offline (except for remote images and the optional Check for Updates)
 - Your files stay on your device
 - Open source—see exactly what the code does
 
@@ -153,6 +153,7 @@ Now all your Markdown files will open instantly with QuickMD!
 |----------|--------|
 | `⌘O` | Open file |
 | `⌘W` | Close tab (or window if last tab) |
+| `⌘R` | Reload the document from disk |
 | `⌥⌘E` | Edit the Markdown source in place / done editing |
 | `⌘S` | Save (while editing the source) |
 | `⌘E` | Open in External Editor (at the line you are reading, where supported) |
@@ -179,7 +180,7 @@ Now all your Markdown files will open instantly with QuickMD!
 - Per-block **vector PDF export** — selectable text, embedded fonts, Mermaid diagrams as images, multi-page pagination
 - Source Edit writes the file in place (inode, permissions and extended attributes survive) and re-encodes exactly what it decoded; the unsaved-changes guard sits in front of the window's own delegate, so the system's document machinery is untouched
 - The Mac App Store build runs in the App Sandbox (security-scoped bookmarks for local images); the GitHub and Homebrew build is Developer ID signed and notarized, not sandboxed
-- 688 unit tests; GitHub Actions builds every flavor on each push
+- 800+ unit tests; GitHub Actions builds every flavor on each push
 
 ### Where Things Live
 
