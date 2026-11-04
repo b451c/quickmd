@@ -220,3 +220,89 @@ enum RowGeometry {
         y < contentRect(rowRect: rowRect, spacingAbove: spacingAbove).midY
     }
 }
+
+// MARK: - Print / PDF
+
+/// The rhythm for print and PDF (`PDFExportManager.generateMultiPagePDF`):
+/// the same `BlockLayout.Spacing` rules, applied to the edges of the PRINTED
+/// views (`MarkdownPrintableBlockView`), which have no outer paddings and no
+/// heading copy button.
+enum PrintRhythm {
+
+    /// Role and edges of `block` as `MarkdownPrintableBlockView` prints it at
+    /// `width`, at 1.0 zoom.
+    ///
+    /// Text and headings print through SwiftUI `Text`, which ignores paragraph
+    /// styles, so their ink is measured without them. Every box (code, quote,
+    /// alert, table, image, diagram) prints its background or its picture from
+    /// its frame's edge; a display formula has its vertical padding.
+    ///
+    /// - Parameter isFirst: the block is the document's first (front matter).
+    static func row(for block: MarkdownBlock, isFirst: Bool,
+                    renderer: MarkdownRenderer, width: CGFloat) -> BlockLayout.Spacing.Row {
+        typealias Spacing = BlockLayout.Spacing
+        let role: Spacing.Role
+        let edges: Spacing.Edges
+        switch block.content {
+        case .text(let attributed):
+            role = .text
+            edges = .text(BlockHeightMeasurer.textInk(text: printed(attributed), width: width))
+        case .heading(let level, let title, _):
+            role = .heading(level: level)
+            edges = .text(BlockHeightMeasurer.textInk(text: printed(renderer.renderHeader(title, level: level)),
+                                                      width: width))
+        case .table(_, _, _, let style):
+            role = style == .properties && isFirst ? .frontMatter : .box
+            edges = .box(top: 0, bottom: 0)
+        case .mathBlock:
+            role = .box
+            edges = .box(top: BlockLayout.Math.verticalPadding, bottom: BlockLayout.Math.verticalPadding)
+        case .codeBlock, .blockquote, .alert, .image, .svgImage, .mermaidDiagram:
+            role = .box
+            edges = .box(top: 0, bottom: 0)
+        }
+        return Spacing.Row(role: role, edges: edges, joinsPrevious: block.joinsPrevious)
+    }
+
+    /// The string as SwiftUI `Text` lays it out: no paragraph styles.
+    private static func printed(_ attributed: AttributedString) -> NSAttributedString {
+        let ns = NSMutableAttributedString(attributedString:
+            (try? NSAttributedString(attributed, including: \.appKit))
+                ?? NSAttributedString(string: String(attributed.characters)))
+        ns.removeAttribute(.paragraphStyle, range: NSRange(location: 0, length: ns.length))
+        return ns
+    }
+
+    /// Where a segment lands: its page and its y from the top of the page's
+    /// content area.
+    struct Placement: Equatable {
+        let page: Int
+        let y: CGFloat
+    }
+
+    /// Lays `segments` (a block, or one slice of a block taller than a page)
+    /// out top to bottom on pages `pageHeight` tall.
+    ///
+    /// A segment gets its `spacingAbove` unless it is first on its page — the
+    /// page's margin already separates it from the page above. A segment that
+    /// does not fit below the last one starts a new page.
+    static func paginate(_ segments: [(height: CGFloat, spacingAbove: CGFloat)],
+                         pageHeight: CGFloat) -> [Placement] {
+        var placements: [Placement] = []
+        placements.reserveCapacity(segments.count)
+        var page = 0
+        var bottom: CGFloat = 0
+        var pageIsEmpty = true
+        for segment in segments {
+            var y = pageIsEmpty ? 0 : bottom + segment.spacingAbove
+            if !pageIsEmpty, y + segment.height > pageHeight {
+                page += 1
+                y = 0
+            }
+            placements.append(Placement(page: page, y: y))
+            bottom = y + segment.height
+            pageIsEmpty = false
+        }
+        return placements
+    }
+}

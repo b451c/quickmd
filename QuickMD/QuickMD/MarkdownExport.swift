@@ -170,79 +170,6 @@ extension FocusedValues {
     }
 }
 
-// MARK: - Printable View (Light mode, white background)
-// NOTE: ImageRenderer uses DEFAULT environment, not app's environment
-// So we must explicitly set ALL colors, not rely on colorScheme
-
-struct MarkdownPrintableView: View {
-    let documentText: String
-    /// Base for relative image paths (nil for an untitled buffer).
-    let documentURL: URL?
-
-    /// Parsed blocks with light theme - computed once on init
-    private let lightBlocks: [MarkdownBlock]
-
-    init(documentText: String, documentURL: URL? = nil) {
-        self.documentText = documentText
-        self.documentURL = documentURL
-        self.lightBlocks = MarkdownBlockParser(colorScheme: .light).parse(documentText)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(lightBlocks) { block in
-                switch block.content {
-                case .text(let attributedString):
-                    // Force black text color; inline $math$ as images (PrintableMath)
-                    PrintableMath.text(from: attributedString)
-                        .foregroundColor(.black)
-
-                case .table(let headers, let rows, let alignments, let style):
-                    PrintableTableView(headers: headers, rows: rows, alignments: alignments, style: style)
-                        .padding(.vertical, 8)
-
-                case .codeBlock(let code, let language):
-                    PrintableCodeBlockView(code: code, language: language)
-                        .padding(.vertical, 4)
-
-                case .image(let url, let alt, let width):
-                    PrintableImageView(url: url, alt: alt, width: width, documentURL: documentURL)
-                        .padding(.vertical, 8)
-
-                case .blockquote(let content, let level):
-                    PrintableBlockquoteView(content: content, level: level)
-                        .padding(.vertical, 4)
-
-                case .alert(let kind, let content):
-                    PrintableAlertView(kind: kind, content: content)
-                        .padding(.vertical, 4)
-
-                case .heading(let level, let title, _):
-                    let renderer = MarkdownRenderer(colorScheme: .light)
-                    Text(renderer.renderHeader(title, level: level))
-                        .foregroundColor(.black)
-
-                case .mathBlock(let latex):
-                    PrintableMathBlockView(latex: latex)
-                        .padding(.vertical, 4)
-
-                case .mermaidDiagram(let source):
-                    // Graceful degradation: render as styled code block in PDF
-                    PrintableCodeBlockView(code: source, language: "mermaid")
-                        .padding(.vertical, 4)
-
-                case .svgImage(let source):
-                    PrintableSVGView(source: source)
-                        .padding(.vertical, 4)
-                }
-            }
-        }
-        .padding(40)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white)
-    }
-}
-
 // MARK: - Table Alignment Protocol
 
 /// Column alignment for the SwiftUI table (`PrintableTableView`). The on-screen
@@ -534,6 +461,10 @@ enum PrintFolderAccess {
 }
 
 // MARK: - Single Block Printable View (for per-block PDF rendering)
+// NOTE: ImageRenderer uses the DEFAULT environment, not the app's, so every
+// printable view sets ALL its colours explicitly rather than relying on
+// colorScheme. Blocks carry no outer padding: the space between them is
+// `BlockLayout.Spacing`, applied by `PDFExportManager` (`PrintRhythm`).
 
 struct MarkdownPrintableBlockView: View {
     let block: MarkdownBlock
@@ -810,24 +741,33 @@ class PDFExportManager {
             return nil
         }
 
-        // Paginate: distribute blocks/segments across pages
-        var pages: [[PlacedSegment]] = [[]]
-        var currentY: CGFloat = 0
+        // The screen's vertical rhythm (`BlockLayout.Spacing`), from the edges
+        // of the PRINTED views, at 1.0 zoom — print never follows the window's.
+        let printRenderer = MarkdownRenderer(colorScheme: .light)
+        let rhythm = measuredBlocks.enumerated().map { index, measured in
+            PrintRhythm.row(for: measured.block, isFirst: index == 0,
+                            renderer: printRenderer, width: contentWidth)
+        }
+        let spacing = BlockLayout.Spacing.column(rhythm, fontScale: 1)
 
-        for (block, size) in measuredBlocks {
-            let segments = sliceBlockIfOversized(block: block, size: size, maxHeight: contentHeight)
-            for segment in segments {
-                let blockHeight = segment.sliceHeight
-
-                // If block doesn't fit on current page and page isn't empty, start new page
-                if currentY + blockHeight > contentHeight && !pages[pages.count - 1].isEmpty {
-                    pages.append([])
-                    currentY = 0
-                }
-
-                pages[pages.count - 1].append(PlacedSegment(segment: segment, yOffset: currentY))
-                currentY += blockHeight + 8  // 8pt spacing between blocks
+        // Paginate: a block taller than a page is sliced; only its first slice
+        // has the block's space above it.
+        var segments: [BlockSegment] = []
+        var segmentSpacing: [CGFloat] = []
+        for (index, measured) in measuredBlocks.enumerated() {
+            let slices = sliceBlockIfOversized(block: measured.block, size: measured.size, maxHeight: contentHeight)
+            for (slice, segment) in slices.enumerated() {
+                segments.append(segment)
+                segmentSpacing.append(slice == 0 ? spacing[index] : 0)
             }
+        }
+        let placements = PrintRhythm.paginate(
+            zip(segments, segmentSpacing).map { (height: $0.sliceHeight, spacingAbove: $1) },
+            pageHeight: contentHeight)
+        var pages: [[PlacedSegment]] = [[]]
+        for (segment, placement) in zip(segments, placements) {
+            while pages.count <= placement.page { pages.append([]) }
+            pages[placement.page].append(PlacedSegment(segment: segment, yOffset: placement.y))
         }
 
         let pdfData = NSMutableData()
