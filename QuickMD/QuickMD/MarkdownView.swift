@@ -78,16 +78,24 @@ struct MarkdownView: View {
     /// families are baked into the AttributedStrings at parse time.
     @AppStorage(DocumentFonts.bodyDefaultsKey) private var bodyFontFamily: String = ""
     @AppStorage(DocumentFonts.codeDefaultsKey) private var codeFontFamily: String = ""
+    /// Settings ▸ Fonts ▸ Default zoom (#48), raw as stored; read it through
+    /// `defaultZoom`, which normalizes whatever `defaults write` left there.
+    @AppStorage(DefaultZoom.defaultsKey) private var defaultZoomSetting: Double = 1.0
     /// ⌘+ / ⌘- / ⌘0 zoom. Deliberately @State, not @AppStorage: zoom belongs to
-    /// this window only and every document starts back at 100%.
+    /// this window only. Every window starts at the Settings default; starting
+    /// BOTH this and `renderedFontScale` there means a new window parses once,
+    /// at the default — no 100% frame first, no second parse.
     /// This is the *requested* scale — it drives the re-parse.
-    @State private var fontScale: Double = 1.0
+    @State private var fontScale: Double = DefaultZoom.current
     /// The scale `cachedBlocks` was actually parsed with. Views render from
     /// this, never from `fontScale`, so headings (rendered synchronously in
     /// body) can't resize a frame ahead of body text (which waits for the
     /// background parse). Updated in the same transaction as `cachedBlocks`,
     /// so the whole document changes size in one step.
-    @State private var renderedFontScale: Double = 1.0
+    @State private var renderedFontScale: Double = DefaultZoom.current
+    /// The default this window last followed. A window still AT it follows a
+    /// change in Settings; one the user zoomed away from keeps its size.
+    @State private var appliedDefaultZoom: Double = DefaultZoom.current
     /// ⌘⇧R — distraction-free reading: both sidebars, the top-right chrome pills
     /// and the Support/Tip Jar button step out of the way, and the text column
     /// stops at `Metrics.readingMaxContentWidth` and centres itself.
@@ -430,8 +438,8 @@ struct MarkdownView: View {
             .padding(.trailing, 24)
         } else if !isReadingMode {
             HStack(spacing: 8) {
-                if fontScale != 1.0 {
-                    ZoomResetButton(theme: theme, fontScale: fontScale) {
+                if fontScale != defaultZoom {
+                    ZoomResetButton(theme: theme, fontScale: fontScale, defaultScale: defaultZoom) {
                         applyZoom(.actualSize)
                     }
                     .transition(.opacity)
@@ -448,7 +456,7 @@ struct MarkdownView: View {
                     copyToClipboard(currentText)
                 }
             }
-            .animation(.easeInOut(duration: 0.15), value: fontScale != 1.0)
+            .animation(.easeInOut(duration: 0.15), value: fontScale != defaultZoom)
             .chromeHoverCluster()
             .padding(.top, topChromeInset)
             .padding(.trailing, 24)
@@ -534,6 +542,16 @@ struct MarkdownView: View {
             withAnimation(.easeInOut(duration: 0.2)) { isDocumentListVisible.toggle() }
         })
         .focusedSceneValue(\.zoomAction, { zoom in applyZoom(zoom) })
+        // Settings ▸ Fonts ▸ Default zoom changed: a window still at the old
+        // default follows (no toast — the user is looking at Settings), a
+        // window zoomed elsewhere keeps its size. Single-parameter onChange:
+        // the two-parameter variant is macOS 14+.
+        .onChange(of: defaultZoom) { newDefault in
+            if fontScale == appliedDefaultZoom {
+                fontScale = newDefault
+            }
+            appliedDefaultZoom = newDefault
+        }
         .focusedSceneValue(\.toggleReadingModeAction, { toggleReadingMode() })
         // The menu item's title flips with the state, so the View menu needs the
         // flag as well as the action (⌘⇧R routes to the focused tab only).
@@ -1212,11 +1230,15 @@ struct MarkdownView: View {
                                       theme: theme, fontScale: scale)
     }
 
+    /// The Settings default, normalized (never blank, never 0).
+    private var defaultZoom: Double { DefaultZoom.normalized(defaultZoomSetting) }
+
     /// ⌘+ / ⌘− / ⌘0 (menu, shortcuts, the zoom pill). Announces the resulting
     /// level in the toast so the user always knows where the ladder stands;
-    /// the top-right zoom pill keeps showing it while != 100%.
+    /// the top-right zoom pill keeps showing it while != the default.
+    /// ⌘0 returns to the Settings default, not to a fixed 100%.
     private func applyZoom(_ zoom: MarkdownZoom) {
-        let next = zoom.applied(to: fontScale)
+        let next = zoom.applied(to: fontScale, defaultScale: defaultZoom)
         fontScale = next
         showToast("Zoom \(Int((next * 100).rounded()))%")
     }

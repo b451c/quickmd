@@ -58,23 +58,72 @@ extension AttributedString {
 
 // MARK: - Zoom (⌘+ / ⌘- / ⌘0)
 
-/// One step of the text-size ladder. Deliberately NOT a theme property and NOT
-/// persisted: zoom belongs to the window you're reading in, so every document
-/// opens at 100% and adjusting one tab leaves the others alone.
+/// One step of the text-size ladder. Deliberately NOT a theme property and the
+/// window's level is NOT persisted: zoom belongs to the window you're reading
+/// in, so adjusting one tab leaves the others alone. Each window STARTS at the
+/// default from Settings ▸ Fonts (`DefaultZoom`, #48), and ⌘0 returns to it.
 enum MarkdownZoom {
     case bigger, smaller, actualSize
 
     static let steps: [Double] = [0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
 
     /// Applies this step to `current`, clamped at both ends of the ladder.
-    func applied(to current: Double) -> Double {
-        guard self != .actualSize else { return 1.0 }
+    /// Bigger / Smaller step from wherever the window is; Actual Size (⌘0)
+    /// goes back to `defaultScale` — the user's default, not a fixed 100%
+    /// (Safari's Actual Size does the same with its default page zoom).
+    func applied(to current: Double, defaultScale: Double = 1.0) -> Double {
+        guard self != .actualSize else { return defaultScale }
         // Snap to the nearest rung first so we never get stuck between steps.
         let index = Self.steps.enumerated()
             .min(by: { abs($0.element - current) < abs($1.element - current) })?.offset ?? 0
         let target = self == .bigger ? index + 1 : index - 1
         return Self.steps[min(max(target, 0), Self.steps.count - 1)]
     }
+}
+
+/// The size every document window opens at (Settings ▸ Fonts ▸ Default zoom,
+/// #48). One stored value, read by the Settings picker and by `MarkdownView`;
+/// print and PDF export ignore it and always render at 1.0.
+///
+/// Every choice is a rung of `MarkdownZoom.steps`, so ⌘+ / ⌘− from the
+/// default land on the neighbouring rungs instead of snapping first.
+enum DefaultZoom {
+    static let defaultsKey = "defaultZoom"
+    static let choices: [Double] = [0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0]
+
+    /// The nearest value in `choices`. A missing key reads as 0 and garbage
+    /// from `defaults write` can be anything, so non-finite or non-positive
+    /// values mean 1.0 — the Picker never shows an empty selection and a
+    /// document never opens unreadably small. Out-of-range values clamp to the
+    /// nearest end. Ties (1.05 between 1.0 and 1.1) go to the SMALLER choice;
+    /// the 1e-9 tolerance keeps that true despite binary floating point.
+    static func normalized(_ stored: Double) -> Double {
+        guard stored.isFinite, stored > 0 else { return 1.0 }
+        var best = choices[0]
+        var bestDistance = abs(best - stored)
+        for choice in choices.dropFirst() {
+            let distance = abs(choice - stored)
+            if distance < bestDistance - 1e-9 {
+                best = choice
+                bestDistance = distance
+            }
+        }
+        return best
+    }
+
+    /// "125%" — the Picker label and the zoom pill's help text.
+    static func title(for scale: Double) -> String {
+        "\(Int((scale * 100).rounded()))%"
+    }
+
+    /// The stored default from `defaults`, normalized (missing key → 1.0).
+    /// Separate from `current` so tests can use their own suite.
+    static func stored(in defaults: UserDefaults) -> Double {
+        normalized(defaults.double(forKey: defaultsKey))
+    }
+
+    /// The default for a window being created now.
+    static var current: Double { stored(in: .standard) }
 }
 
 struct MarkdownRenderer: Sendable {

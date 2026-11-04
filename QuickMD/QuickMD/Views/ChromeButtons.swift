@@ -316,20 +316,23 @@ struct ChromePill<Icon: View>: View {
 
 // MARK: - Zoom Indicator / Reset Pill
 
-/// Shown in the top-right cluster only while the document is zoomed
-/// (`fontScale != 1`): the collapsed pill reads the current level ("120%"),
-/// hovering reveals "Reset zoom", clicking resets — the same thing ⌘0 does.
-/// The pill answers "how far did I zoom, and how do I get back?" without a
-/// permanent HUD.
+/// Shown in the top-right cluster only while the document is zoomed away from
+/// the Settings default (`fontScale != defaultScale`): the collapsed pill reads
+/// the current level ("120%"), hovering reveals "Reset zoom", clicking resets
+/// to the default — the same thing ⌘0 does. The pill answers "how far did I
+/// zoom, and how do I get back?" without a permanent HUD.
 struct ZoomResetButton: View {
     let theme: MarkdownTheme
     let fontScale: Double
+    /// Where a reset goes (Settings ▸ Fonts ▸ Default zoom); named in the help.
+    let defaultScale: Double
     let action: () -> Void
 
-    private var percentText: String { "\(Int((fontScale * 100).rounded()))%" }
+    private var percentText: String { DefaultZoom.title(for: fontScale) }
 
     var body: some View {
-        ChromePill(theme: theme, title: "Reset zoom", help: "Reset zoom to 100% (⌘0)", action: action) {
+        ChromePill(theme: theme, title: "Reset zoom",
+                   help: "Reset zoom to \(DefaultZoom.title(for: defaultScale)) (⌘0)", action: action) {
             Text(percentText)
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
         }
