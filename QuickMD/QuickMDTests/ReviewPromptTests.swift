@@ -277,6 +277,19 @@ final class ReviewPromptTests: XCTestCase {
         XCTAssertFalse(countdown.advance(isDisplayed: true, now: uptime + 60))
     }
 
+    /// The trigger's idle path: a run that completed while the reader was
+    /// idle is reset, so the first tick after they come back does NOT
+    /// complete — it takes another full 60 s of display.
+    func testCompletedRunResetForIdleNeedsAFullNewRun() {
+        var countdown = ReviewPromptCountdown(required: 60)
+        XCTAssertTrue(tick(&countdown, from: uptime, through: uptime + 60))
+        XCTAssertFalse(ReviewPrompt.isUserActive(secondsSinceLastInput: 600))
+        countdown.reset()
+        XCTAssertFalse(countdown.advance(isDisplayed: true, now: uptime + 61), "first tick after idle")
+        XCTAssertFalse(tick(&countdown, from: uptime + 62, through: uptime + 120))
+        XCTAssertTrue(countdown.advance(isDisplayed: true, now: uptime + 121))
+    }
+
     func testCountdownSurvivesTimeGoingBack() {
         var countdown = ReviewPromptCountdown(required: 60)
         tick(&countdown, from: uptime, through: uptime + 30)
