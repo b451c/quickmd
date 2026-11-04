@@ -137,10 +137,14 @@ enum HeadingAnchors {
     }
 
     /// The percent-decoded fragment of an in-document link (`#install`), nil
-    /// for any other link. Read from the link as written: a destination
-    /// `URL(string:)` rejects (non-ASCII or spaces on macOS 13) arrives
-    /// percent-encoded, its `#` as `%23`. The accepted cost: a file whose
-    /// name starts with `#`, linked as `%23notes.md`, reads as an anchor.
+    /// for any other link. Read from the link as written, decoded: link URLs
+    /// come from `MarkdownRenderer.linkURL(for:)`, which keeps the `#` and
+    /// encodes only the rest (`#Install Guide` → `#Install%20Guide`) on every
+    /// macOS. Until 1.14.4 the renderer's macOS 13 fallback encoded the `#`
+    /// itself as `%23`, and decoding before the `#` test is what still made
+    /// those links work; it is kept for any URL that arrives encoded that
+    /// way. Its cost: a file whose name starts with `#`, linked as
+    /// `%23notes.md`, reads as an anchor.
     static func inDocumentFragment(of url: URL) -> String? {
         guard url.scheme == nil else { return nil }
         let written = url.relativeString.removingPercentEncoding ?? url.relativeString
