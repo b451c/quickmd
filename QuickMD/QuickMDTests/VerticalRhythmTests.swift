@@ -813,6 +813,52 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(literal.map { flat.substring(with: $0) }, "cmd\n  nested")
     }
 
+    // MARK: - Setext headings over a paragraph
+
+    /// A Setext underline makes the WHOLE paragraph above it the heading
+    /// (CommonMark; GitHub, gfm/g4_*.html), its lines joined like soft
+    /// breaks, on the paragraph's first line. Only the last line was the
+    /// heading; the lines above stayed a paragraph. A paragraph that is a
+    /// list item's is no heading (its `===` goes on as text, its `---` is a
+    /// rule), and a quote's lazy lines are the quote's (F6).
+    func testASetextUnderlineMakesTheWholeParagraphTheHeading() throws {
+        XCTAssertEqual(try quoteShape("Para one\nline two\n===\n"), ["h:Para one line two"])
+        XCTAssertEqual(try quoteShape("one\ntwo\nthree\n---\n"), ["h:one two three"])
+        let markdown = "Intro\n\nPara one\nline two\n---\n\nAfter\n"
+        let blocks = try XCTUnwrap(parseReturning(markdown))
+        XCTAssertEqual(try quoteShape(markdown), ["t:Intro", "h:Para one line two", "t:After"])
+        XCTAssertEqual(blocks.map(\.sourceLine), [0, 2, 6])
+        if case .heading(let level, _, let line) = blocks[1].content {
+            XCTAssertEqual(level, 2)
+            XCTAssertEqual(line, 2)
+        }
+        // After blocks that close a paragraph.
+        XCTAssertEqual(try quoteShape("# H\nline a\nline b\n===\n"), ["h:H", "h:line a line b"])
+        XCTAssertEqual(try quoteShape("```\nx\n```\nline a\nline b\n===\n"), ["c:x", "h:line a line b"])
+        XCTAssertEqual(try quoteShape("***\nline a\nline b\n===\n").last, "h:line a line b")
+        // A list item's paragraph is no heading.
+        XCTAssertEqual(try quoteShape("- a\nb\n===\n"), ["t:• a b ==="])
+        XCTAssertEqual(try quoteShape("- a\nb\n---\n").first, "t:• a b")
+        XCTAssertEqual(try quoteShape("- a\nb\n---\n").count, 2)
+        XCTAssertEqual(try quoteShape("Para\n- item\nb\n===\n"), ["t:Para", "t:• item b ==="])
+        XCTAssertEqual(try quoteShape("1984. A year\nline\n===\n"), ["t:1984. A year line ==="])
+        XCTAssertEqual(try quoteShape("> a\nb\n===\n"), ["q1:a\nb\n==="])
+
+        // The tint spans the paragraph and its underline; Section copy
+        // starts at its first line; the anchor is the whole title's.
+        let ns = markdown as NSString
+        let spans = SourceTint.spans(for: blocks, lineStarts: SourceEditSupport.lineStarts(in: ns), in: ns)
+        XCTAssertEqual(spans.filter { $0.kind == .heading }.map { ns.substring(with: $0.range) },
+                       ["Para one\nline two\n---"])
+        let entries = blocks.compactMap { block -> ToCEntry? in
+            guard case .heading(let level, let title, let line) = block.content else { return nil }
+            return ToCEntry(id: block.id, level: level, title: title, sourceLine: line)
+        }
+        XCTAssertEqual(SectionExtractor.extractSection(from: markdown, entry: entries[0], headings: entries),
+                       "Para one\nline two\n---\n\nAfter")
+        XCTAssertEqual(HeadingAnchors.slug(entries[0].title), "para-one-line-two")
+    }
+
     /// The lines a quote absorbed are the quote's: its source line is its
     /// first, the next block starts after them, the tint spans them, search
     /// finds and copy reads them in the quote — and a long hard-wrapped quote

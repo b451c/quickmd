@@ -294,33 +294,37 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
-            // Setext headers (underlined headers). The title is paragraph
-            // text: a quote line or a list item never is one (GitHub: `> a`
-            // or `- a` over `---` is the quote or list, then a rule; over
-            // `===`, the quote's or item's text goes on).
+            // Setext headers (underlined headers): the WHOLE paragraph above
+            // the underline is the heading (CommonMark, GitHub), on the
+            // paragraph's first line, its lines joined like soft breaks. Not a
+            // list item's paragraph (`- a` over `===` is the item's text, over
+            // `---` the list and a rule) nor a quote line's (the quote branch
+            // takes those, lazy lines included).
+            //
+            // NOTE: no `!isTableSeparator(nextLine)` guard — a line of pure
+            // dashes ALWAYS matches the table-separator pattern (pipes are
+            // optional in it), which once made setext H2 unreachable. A
+            // pipe-bearing separator can't match setextH2Pattern anyway.
+            // (Caught by ParserTests.testSetextHeadings.)
             let trimmed = trimmedLine
-            if i + 1 < lines.count && !trimmed.isEmpty && !trimmed.contains("|")
-                && !trimmed.hasPrefix(">") && !MarkdownRenderer.isListItem(line) {
+            if i + 1 < lines.count && !trimmed.isEmpty && !trimmed.contains("|") && !trimmed.hasPrefix(">") {
                 let nextLine = Self.markerLine(lines[i + 1])
-
+                let level: Int?
                 if nextLine.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil {
-                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-                    // Setext: the TEXT line owns the heading, not the `===` underline.
-                    blocks.append(.heading(index: blockIndex, level: 1, title: trimmed, sourceLine: sourceLine))
-                    blockIndex += 1
-                    i += 2
-                    continue
+                    level = 1
+                } else if nextLine.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
+                    level = 2
+                } else {
+                    level = nil
                 }
-
-                // NOTE: no `!isTableSeparator(nextLine)` guard here — a line of
-                // pure dashes ALWAYS matches the table-separator pattern (pipes
-                // are optional in it), which made this branch unreachable and
-                // silently disabled setext H2 for years. A pipe-bearing table
-                // separator can't match setextH2Pattern anyway, so the guard
-                // added nothing. (Caught by ParserTests.testSetextHeadings.)
-                if nextLine.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
-                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-                    blocks.append(.heading(index: blockIndex, level: 2, title: trimmed, sourceLine: sourceLine))
+                if let level, let start = Self.setextParagraphStart(in: textBuffer, endingWith: line) {
+                    let title = (textBuffer[start...].map { Self.markerLine($0.line) } + [trimmed])
+                        .joined(separator: " ")
+                    let headingLine = start < textBuffer.count ? textBuffer[start].originalIndex : sourceLine
+                    var preceding = Array(textBuffer[..<start])
+                    textBuffer.removeAll()
+                    flushTextBuffer(&preceding, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                    blocks.append(.heading(index: blockIndex, level: level, title: title, sourceLine: headingLine))
                     blockIndex += 1
                     i += 2
                     continue
@@ -999,6 +1003,25 @@ struct MarkdownBlockParser: Sendable {
             if startsList { inList = true }
         }
         flushRow()
+    }
+
+    // MARK: - Setext headings
+
+    /// Where the paragraph that `line` (the line over a Setext underline)
+    /// ends starts in the text buffer: after its last blank line or rule.
+    /// Nil when that paragraph is a list item's — an item line starts it or
+    /// interrupts it, by the rule rows are cut by (`flushTextBuffer`).
+    static func setextParagraphStart(in buffer: [(line: String, originalIndex: Int)],
+                                     endingWith line: String) -> Int? {
+        var start = buffer.count
+        while start > 0, !isBlank(buffer[start - 1].line), !MarkdownRenderer.isThematicBreak(buffer[start - 1].line) {
+            start -= 1
+        }
+        let paragraph = buffer[start...].map(\.line) + [line]
+        for (offset, text) in paragraph.enumerated() where MarkdownRenderer.isListItem(text) {
+            if offset == 0 || MarkdownRenderer.canInterruptParagraph(text) { return nil }
+        }
+        return start
     }
 
     // MARK: - Fences and `$$` blocks
