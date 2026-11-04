@@ -329,14 +329,32 @@ enum DocumentCopyBuilder {
 
     /// Rows are joined with one blank line, like Markdown paragraphs.
     static let rowSeparator = "\n\n"
+    /// A row that only continues the row before it (`MarkdownBlock
+    /// .joinsPrevious`) is joined with the line break the cut replaced.
+    static let continuationSeparator = "\n"
 
+    /// One covered row's piece, and whether its row continues the row of the
+    /// piece before it (`SelectionRows.parts`).
+    struct Part {
+        let piece: SelectionPiece
+        let continuesPrevious: Bool
+    }
+
+    /// Pieces of separate blocks: every row joined with `rowSeparator`.
     static func build(_ pieces: [SelectionPiece]) -> DocumentCopyOutput {
+        build(parts: pieces.map { Part(piece: $0, continuesPrevious: false) })
+    }
+
+    static func build(parts: [Part]) -> DocumentCopyOutput {
         let result = NSMutableAttributedString()
-        for piece in pieces {
-            let part = attributed(for: piece)
-            guard part.length > 0 else { continue }
-            if result.length > 0 { result.append(NSAttributedString(string: rowSeparator)) }
-            result.append(part)
+        for part in parts {
+            let text = attributed(for: part.piece)
+            guard text.length > 0 else { continue }
+            if result.length > 0 {
+                result.append(NSAttributedString(string: part.continuesPrevious ? continuationSeparator
+                                                                                  : rowSeparator))
+            }
+            result.append(text)
         }
         let full = NSRange(location: 0, length: result.length)
         // Colours come from the theme the document is displayed in, not from

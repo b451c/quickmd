@@ -32,42 +32,57 @@ enum SelectionRows {
     static func pieces(of selection: DocumentSelection, blocks: [MarkdownBlock],
                        text: (MarkdownBlock) -> NSAttributedString?,
                        table: (MarkdownBlock) -> TableText?) -> [SelectionPiece] {
+        parts(of: selection, blocks: blocks, text: text, table: table).map(\.piece)
+    }
+
+    /// `pieces`, each marked with whether it CONTINUES the piece before it:
+    /// its row only continues the previous row (`MarkdownBlock.joinsPrevious`
+    /// — a long block cut into rows, a nested quote group) and that row gave
+    /// a piece too. `DocumentCopyBuilder.build(parts:)` joins those with a
+    /// line break instead of a blank line.
+    static func parts(of selection: DocumentSelection, blocks: [MarkdownBlock],
+                      text: (MarkdownBlock) -> NSAttributedString?,
+                      table: (MarkdownBlock) -> TableText?) -> [DocumentCopyBuilder.Part] {
         guard let span = selection.rowSpan else { return [] }
-        var pieces: [SelectionPiece] = []
-        pieces.reserveCapacity(span.count)
+        var parts: [DocumentCopyBuilder.Part] = []
+        parts.reserveCapacity(span.count)
+        var lastRowWithPiece: Int?
 
         for row in span where row < blocks.count {
             let block = blocks[row]
-            switch block.content {
-            case .table:
-                guard let built = table(block),
-                      let covered = selection.range(inRow: row, rowLength: built.string.length),
-                      let piece = tablePiece(built, covered: covered) else { continue }
-                pieces.append(piece)
-            case .image(_, let alt, _):
-                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                pieces.append(.image(alt: alt))
-            case .svgImage:
-                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                pieces.append(.image(alt: ""))
-            case .mathBlock(let latex):
-                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                pieces.append(.displayMath(latex: latex))
-            case .mermaidDiagram(let source):
-                guard selection.range(inRow: row, rowLength: 1) != nil else { continue }
-                pieces.append(.mermaid(source: source))
-            case .codeBlock, .text, .blockquote, .alert, .heading:
-                guard let string = text(block),
-                      let covered = selection.range(inRow: row, rowLength: string.length) else { continue }
-                let part = string.attributedSubstring(from: covered)
-                if case .codeBlock = block.content {
-                    pieces.append(.code(part))
-                } else {
-                    pieces.append(.text(part))
-                }
-            }
+            guard let piece = piece(of: selection, row: row, block: block, text: text, table: table) else { continue }
+            parts.append(DocumentCopyBuilder.Part(
+                piece: piece, continuesPrevious: block.joinsPrevious && lastRowWithPiece == row - 1))
+            lastRowWithPiece = row
         }
-        return pieces
+        return parts
+    }
+
+    /// The covered part of ONE row as a copy piece; nil when the selection
+    /// covers nothing of it.
+    private static func piece(of selection: DocumentSelection, row: Int, block: MarkdownBlock,
+                              text: (MarkdownBlock) -> NSAttributedString?,
+                              table: (MarkdownBlock) -> TableText?) -> SelectionPiece? {
+        switch block.content {
+        case .table:
+            guard let built = table(block),
+                  let covered = selection.range(inRow: row, rowLength: built.string.length) else { return nil }
+            return tablePiece(built, covered: covered)
+        case .image(_, let alt, _):
+            return selection.range(inRow: row, rowLength: 1) == nil ? nil : .image(alt: alt)
+        case .svgImage:
+            return selection.range(inRow: row, rowLength: 1) == nil ? nil : .image(alt: "")
+        case .mathBlock(let latex):
+            return selection.range(inRow: row, rowLength: 1) == nil ? nil : .displayMath(latex: latex)
+        case .mermaidDiagram(let source):
+            return selection.range(inRow: row, rowLength: 1) == nil ? nil : .mermaid(source: source)
+        case .codeBlock, .text, .blockquote, .alert, .heading:
+            guard let string = text(block),
+                  let covered = selection.range(inRow: row, rowLength: string.length) else { return nil }
+            let part = string.attributedSubstring(from: covered)
+            if case .codeBlock = block.content { return .code(part) }
+            return .text(part)
+        }
     }
 
     /// The piece for the `covered` part of a table's string (TS-D8):

@@ -1883,11 +1883,11 @@ final class SelectionController: NSObject {
     func selectionOutput() -> DocumentCopyOutput? {
         guard let selection else { return nil }
         let version = contentVersion
-        let pieces = SelectionRows.pieces(of: selection, blocks: blocks,
-                                          text: { selectableText($0, version) },
-                                          table: { selectableTable($0, version) })
-        guard !pieces.isEmpty else { return nil }
-        let output = DocumentCopyBuilder.build(pieces)
+        let parts = SelectionRows.parts(of: selection, blocks: blocks,
+                                        text: { selectableText($0, version) },
+                                        table: { selectableTable($0, version) })
+        guard !parts.isEmpty else { return nil }
+        let output = DocumentCopyBuilder.build(parts: parts)
         return output.plain.isEmpty ? nil : output
     }
 
