@@ -456,13 +456,45 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(links(renderer.renderInline(rows[0][0])), ["https://example.com/docs_(v2)"])
     }
 
+    /// Footnote references in quotes, alerts and table cells drew `[^note]`
+    /// literally; they now draw the paragraph's superscript number.
+    func testFootnoteReferencesResolveInQuotesAlertsAndTableCells() {
+        let md = """
+        Body[^b].
+
+        > Quoted[^a] and [^missing].
+
+        > [!TIP]
+        > Tip[^b].
+
+        | A |
+        |---|
+        | cell[^a] `[^a]` |
+
+        [^a]: First.
+        [^b]: Second.
+        """
+        let blocks = parse(md)
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))  // no definitions
+        guard case .text(let body) = blocks[0].content else { return XCTFail("paragraph") }
+        XCTAssertEqual(String(body.characters), "Body\u{00B2}.", "the paragraph's numbering (definition order)")
+        guard case .blockquote(let quote, _) = blocks[1].content,
+              case .alert(_, let alert) = blocks[2].content,
+              case .table(_, let rows, _, .grid) = blocks[3].content else { return XCTFail("blocks") }
+        XCTAssertEqual(String(renderer.renderQuotedBody(quote).characters), "Quoted\u{00B9} and [^missing].")
+        XCTAssertEqual(String(renderer.renderQuotedBody(alert).characters), "Tip\u{00B2}.")
+        XCTAssertEqual(String(renderer.renderInline(rows[0][0]).characters), "cell\u{00B9} [^a]", "code span kept")
+    }
+
     /// The rewrite must draw exactly what the paragraph renderer (which HAS the
     /// definitions) draws for the same line: characters and links.
     func testReferenceInliningMatchesTheDefinitionAwareRenderer() {
         let theme = MarkdownTheme.cached(for: .light)
         let definitions = ["docs": "https://example.com/docs_(v2)", "img": "img/My Pic.png",
                            "a b": "https://example.com/ab", "bad": "https://example.com/a<b>\\\\c", "paren": "https://e.x/a)b(c"]
-        let withDefinitions = MarkdownRenderer(theme: theme, referenceDefinitions: definitions)
+        let footnotes = [(id: "n1", content: "x"), (id: "docs", content: "y")]
+        let withDefinitions = MarkdownRenderer(theme: theme, referenceDefinitions: definitions,
+                                               footnoteDefinitions: footnotes)
         let plain = MarkdownRenderer(theme: theme)
         let lines = [
             "[docs] and [Docs][] and [text][DOCS] and [A B]",
@@ -473,9 +505,10 @@ final class ParserTests: XCTestCase {
             "[unknown][nope] [unknown] [docs][nope]",
             "[bad] and [paren] escape what the <…> form needs",
             "a ` lone backtick [docs] then ``` three ``` [docs]",
+            "note[^n1] and [^docs] then [^none] `[^n1]` **b[^n1]** [![x][img]][docs][^n1]",
         ]
         for line in lines {
-            let inlined = ReferenceLinks.inlined(line, definitions: definitions)
+            let inlined = ReferenceLinks.inlined(line, definitions: definitions, footnoteIds: footnotes.map(\.id))
             let expected = withDefinitions.renderInline(line)
             let actual = plain.renderInline(inlined)
             XCTAssertEqual(String(actual.characters), String(expected.characters), line)

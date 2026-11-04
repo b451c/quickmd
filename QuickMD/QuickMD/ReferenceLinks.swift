@@ -27,18 +27,32 @@ import Foundation
 /// exactly `url` (an escaped paren does not count for pairing either).
 enum ReferenceLinks {
 
+    /// What the document defines: link/image definitions (ids lowercased)
+    /// and footnote ids in definition order (a reference's number is its
+    /// 1-based position, as `tryParseFootnoteRef` numbers it).
+    private struct Sources {
+        let definitions: [String: String]
+        let footnoteIds: [String]
+    }
+
     /// `text` with every resolvable reference inlined, line by line (the
     /// renderers take quote bodies line by line, so a reference never spans
-    /// lines). Unchanged when there are no definitions or no `[`.
-    static func inlined(_ text: String, definitions: [String: String]) -> String {
-        guard !definitions.isEmpty, text.contains("[") else { return text }
+    /// lines). Unchanged when there is nothing defined or no `[`.
+    ///
+    /// Footnote references (`[^note]`) become `[^<marker>N]`
+    /// (`MarkdownRenderer.numberedFootnoteMarker` + the number): Markdown has
+    /// no inline form for "footnote number N", and a definition-less renderer
+    /// draws that form as the same superscript a paragraph's `[^note]` gets.
+    static func inlined(_ text: String, definitions: [String: String], footnoteIds: [String] = []) -> String {
+        guard !definitions.isEmpty || !footnoteIds.isEmpty, text.contains("[") else { return text }
+        let sources = Sources(definitions: definitions, footnoteIds: footnoteIds)
         return text.split(separator: "\n", omittingEmptySubsequences: false)
-            .map { inlinedLine(String($0), definitions: definitions, linksDisabled: false) }
+            .map { inlinedLine(String($0), sources: sources, linksDisabled: false) }
             .joined(separator: "\n")
     }
 
-    private static func inlinedLine(_ line: String, definitions: [String: String],
-                                    linksDisabled: Bool) -> String {
+    private static func inlinedLine(_ line: String, sources: Sources, linksDisabled: Bool) -> String {
+        let definitions = sources.definitions
         guard line.contains("[") else { return line }
         var text = line
         text.makeContiguousUTF8()
@@ -67,6 +81,12 @@ enum ReferenceLinks {
                 remaining = remaining.dropFirst(verbatim)
                 continue
             }
+            // `tryParseFootnoteRef` runs before emphasis and links.
+            if remaining.hasPrefix("[^"), let (numbered, rest) = footnote(remaining, sources: sources) {
+                out += numbered
+                remaining = rest
+                continue
+            }
             if remaining.hasPrefix("![") {
                 if let inline = InlineSyntaxScanner.image(atStartOf: remaining, references: [:], pairs: pairs) {
                     out += remaining[..<inline.end]
@@ -84,7 +104,7 @@ enum ReferenceLinks {
                 continue
             }
             if first == "[", !linksDisabled,
-               let (rewritten, rest) = link(remaining, pairs: pairs, definitions: definitions) {
+               let (rewritten, rest) = link(remaining, pairs: pairs, sources: sources) {
                 out += rewritten
                 remaining = rest
                 continue
@@ -98,7 +118,8 @@ enum ReferenceLinks {
     /// `tryParseLink`'s three forms at a `[`: the text to emit and what
     /// follows, or nil when the renderer would not see a link here.
     private static func link(_ remaining: Substring, pairs: InlineSyntaxScanner.PairTable,
-                             definitions: [String: String]) -> (String, Substring)? {
+                             sources: Sources) -> (String, Substring)? {
+        let definitions = sources.definitions
         guard let closeBracket = InlineSyntaxScanner.closingBracket(in: remaining, pairs: pairs) else { return nil }
         let afterBracket = remaining.index(after: closeBracket)
         let linkText = String(remaining[remaining.index(after: remaining.startIndex)..<closeBracket])
@@ -115,7 +136,7 @@ enum ReferenceLinks {
             // The renderer parses a link's text only when it holds an image
             // (and then with links disabled) — rewrite it under the same rule.
             let text = linkText.contains("![")
-                ? inlinedLine(linkText, definitions: definitions, linksDisabled: true) : linkText
+                ? inlinedLine(linkText, sources: sources, linksDisabled: true) : linkText
             return ("[\(text)](\(destination))", rest)
         }
 
@@ -137,6 +158,16 @@ enum ReferenceLinks {
             return resolved(url, rest: remaining[afterBracket...])
         }
         return nil
+    }
+
+    /// `tryParseFootnoteRef` at a `[^`: the id runs to the first `]`; a known
+    /// id becomes its numbered form, anything else is left to the link scan.
+    private static func footnote(_ remaining: Substring, sources: Sources) -> (String, Substring)? {
+        let afterBracket = remaining.dropFirst(2)
+        guard let close = afterBracket.firstIndex(of: "]") else { return nil }
+        let id = String(afterBracket[..<close])
+        guard !id.isEmpty, let index = sources.footnoteIds.firstIndex(of: id) else { return nil }
+        return ("[^\(MarkdownRenderer.numberedFootnoteMarker)\(index + 1)]", afterBracket[afterBracket.index(after: close)...])
     }
 
     /// `tryParseInlineCode`'s extent at a backtick: the whole span when it

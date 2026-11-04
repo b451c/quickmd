@@ -1085,6 +1085,12 @@ struct MarkdownRenderer: Sendable {
 
     // MARK: - Footnote References
 
+    /// Opens the id of a footnote reference whose NUMBER is already known
+    /// (`[^\u{E000}2]`, written by `ReferenceLinks` into quote, alert and
+    /// table-cell markdown). A private-use code point: no document's own
+    /// footnote id starts with it in practice.
+    static let numberedFootnoteMarker: Unicode.Scalar = "\u{E000}"
+
     private func tryParseFootnoteRef(_ remaining: inout Substring) -> (AttributedString, Substring)? {
         guard remaining.hasPrefix("[^") else { return nil }
 
@@ -1094,10 +1100,15 @@ struct MarkdownRenderer: Sendable {
         let fnId = String(afterBracket[..<closeIndex])
         guard !fnId.isEmpty else { return nil }
 
-        // Find the footnote number (1-based index in definitions order)
+        // Find the footnote number (1-based index in definitions order), or
+        // the number a quote / alert / table cell already carries
+        // (`ReferenceLinks`: those are rendered without the definitions).
         let number: Int
         if let idx = footnoteDefinitions.firstIndex(where: { $0.id == fnId }) {
             number = idx + 1
+        } else if fnId.unicodeScalars.first == Self.numberedFootnoteMarker,
+                  let numbered = Int(String(fnId.unicodeScalars.dropFirst())), numbered > 0 {
+            number = numbered
         } else {
             return nil // Unknown footnote reference, don't parse
         }
