@@ -331,7 +331,7 @@ private struct CodeTextView: NSViewRepresentable {
 /// measured the text and pushed it into SwiftUI `@State` (`.frame(height:)`)
 /// on the next runloop turn, so every freshly created block changed size after
 /// appearing. See constraints.md ("Block heights are synchronous").
-class SelfSizingTextView: NSTextView {
+class SelfSizingTextView: DocumentCellTextView {
     /// Identity reference to the last-applied attributed string. Lets the wrapper
     /// short-circuit `updateNSView` work when SwiftUI hands us the same instance.
     var cachedAttributed: NSAttributedString?

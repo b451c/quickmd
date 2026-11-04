@@ -470,6 +470,9 @@ final class VerticalRhythmTests: XCTestCase {
         /// A layout switch is under way (`isSwitchingLayout`): from the
         /// style toggle to the install of the table for the new width.
         var switching = false
+        /// The style toggle pins the anchor until the install (false: the
+        /// rules of 4f67351, sticky anchor without the pin).
+        var pinsLayoutSwitch = true
 
         var rects: [NSRect] {
             var y: CGFloat = 0
@@ -565,7 +568,7 @@ final class VerticalRhythmTests: XCTestCase {
             let delta = newInset - inset
             inset = newInset
             place(captured.row, captured.offset - delta)
-            switching = current
+            switching = current && pinsLayoutSwitch
         }
         /// Something other than the list moves the clip origin.
         mutating func clipMoved(by dy: CGFloat) { contentTop += dy }
@@ -646,6 +649,165 @@ final class VerticalRhythmTests: XCTestCase {
                 XCTAssertEqual(list.screenY(textAfterFormulas) - seen, 37.5, accuracy: 1)
             }
         }
+    }
+
+    /// fixture.md row by row as the app measures it (41 rows): the measurer's
+    /// table at `width` (819 = the window, 720 = Reading Mode), with the two
+    /// formulas as SwiftMath and the 1.14.3 fallback leave them (65 pt; a
+    /// ```latex block, 21 pt above and below) and the diagram at
+    /// `diagramEstimate` (224 = the default, 94 = seeded). It reproduces the
+    /// debug log of the round trip to the point: table 3452 / 3322 / 3492 pt,
+    /// "Second part" at 1958 / 1828 / 1998.
+    private func searchFixtureRows(width: CGFloat, diagramEstimate: CGFloat) -> [ListModel.Row] {
+        let wrapped: CGFloat = width < 800 ? 34 : 17      // the ordered items
+        var rows: [ListModel.Row] = [
+            .reported(0, 39, real: 39),                       // 0  # Rhythm fixture
+            .exact(19, 17), .exact(21, 66), .exact(21, 17),   // 1-3 intro, bash, "Features:"
+            .exact(25, 34),                                   // 4  the tight list
+            .reported(50, 33, real: 33),                      // 5  ## Quotes
+            .exact(17, 21), .exact(0, 21), .exact(0, 21),     // 6-8
+            .reported(48, 33, real: 33),                      // 9  ## Loose ordered list
+            .exact(19, wrapped),                              // 10
+        ]
+        rows += (0..<9).map { _ in .exact(25, wrapped) }      // 11-19
+        rows += [
+            .reported(50, 33, real: 33),                      // 20 ## Image and caption
+            .reported(16, 116, real: 655),                    // 21 the image (never on screen here)
+            .exact(17, 17),                                   // 22 its caption
+            .reported(50, 33, real: 33),                      // 23 ## Math
+            .exact(19, 17), .exact(13, 65), .exact(13, 17),   // 24-26
+            .exact(21, 66),                                   // 27 the formula SwiftMath refuses
+            .exact(21, 17),                                   // 28 "Text after the formulas."
+            .reported(50, 33, real: 33),                      // 29 ## Diagram
+            .reported(4, diagramEstimate, real: 94),          // 30 the diagram
+            .exact(0, 79),                                    // 31 the table
+            .reported(50, 39, real: 39),                      // 32 # Second part
+            .reported(15, 29, real: 29), .reported(16, 25, real: 25),
+            .exact(19, 17),                                   // 35
+            .reported(50, 33, real: 33),                      // 36 ## Long list
+            .exact(19, 510), .exact(0, 510), .exact(0, 170),  // 37-39
+            .exact(25, 17),                                   // 40
+        ]
+        return rows
+    }
+
+    /// A diagram placed at one zoom starts at another zoom at its height
+    /// there, scaled (fixture.md's diagram: 70 pt at 100 %, reported 77 and
+    /// 87.5 at 110 and 125 %), not at the 200 pt default; never placed, at the
+    /// default; and this block's own last height at this zoom still wins.
+    func testADiagramPlacedAtOneZoomStartsAnotherZoomScaled() throws {
+        let blocks = parse("```mermaid\nflowchart LR\n  A[Start] --> B[End]\n```")
+        guard case .mermaidDiagram(let source) = blocks[0].content else { return XCTFail("not a diagram") }
+        let chrome = 2 * BlockLayout.Mermaid.verticalPadding + 2 * BlockLayout.Document.mermaidOuterVerticalPadding
+        let cache = BlockHeightCache()
+        cache.setDiagramHeight(70, source: source, isDark: theme.isDark, fontScale: 1)
+        cache.removeAll()   // the re-parse of a zoom step
+        for (scale, diagram) in [(1.1, 77.0), (1.25, 87.5), (0.9, 63.0)] as [(CGFloat, CGFloat)] {
+            let measured = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: scale,
+                                                       contentWidth: 819, reportedHeights: cache.reportedSnapshot,
+                                                       math: math)
+            XCTAssertEqual(measured.table.heights[0], diagram + chrome, accuracy: 0.001, "at \(scale)")
+            XCTAssertEqual(ReportedHeights.diagramHeight(source: source, isDark: theme.isDark, fontScale: scale,
+                                                         in: cache.reportedSnapshot) ?? 0,
+                           diagram, accuracy: 0.001)
+        }
+        let unplaced = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1.25,
+                                                   contentWidth: 819, math: math)
+        XCTAssertEqual(unplaced.table.heights[0], BlockLayout.Mermaid.defaultHeight + chrome)
+        let ownSeed = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1.25, contentWidth: 720,
+                                                  heightSeeds: [blocks[0].id: 80],
+                                                  reportedHeights: cache.reportedSnapshot, math: math)
+        XCTAssertEqual(ownSeed.table.heights[0], 80 + chrome)
+    }
+
+    /// The failing GUI run (f1dbg.log), step by step: ⌘F "Second part" and a
+    /// zoom round trip left the anchor on the H1 at -351.5 with the diagram
+    /// still at its default; it reports 94 and the content top shifts to
+    /// 1476.5. Reading Mode on (1452.5), the 720 table (1622.5), Reading Mode
+    /// off (1646.5) — then, before the 819 table, the latex row's text view
+    /// re-lays out under the top inset and AppKit scrolls the document by
+    /// -24.5 pt (now prevented: `DocumentCellTextView`). The pin must hold
+    /// whatever moves the clip. The reader must come
+    /// back to row 32 at -351.5, the very point it left.
+    func testReadingModeRoundTripFromASearchJumpLandsWhereItLeft() {
+        let secondPart = 32
+        for pins in [true, false] {
+            var list = ListModel(rows: searchFixtureRows(width: 819, diagramEstimate: 224), contentTop: 0)
+            list.pinsLayoutSwitch = pins
+            list.contentTop = list.blockTop(secondPart) - 351.5
+            list.anchor = (secondPart, -351.5, -351.5)
+            XCTAssertEqual(list.contentTop, 1606.5)
+            list.settle()
+            XCTAssertEqual(list.contentTop, 1476.5)
+            let seen = list.screenY(secondPart)
+
+            list.toggleStyle(inset: 48)
+            XCTAssertEqual(list.contentTop, 1452.5)
+            list.install(searchFixtureRows(width: 720, diagramEstimate: 94))
+            XCTAssertEqual(list.contentTop, 1622.5)
+            list.toggleStyle(inset: 24)
+            XCTAssertEqual(list.contentTop, 1646.5)
+            list.clipMoved(by: -24.5)
+            list.install(searchFixtureRows(width: 819, diagramEstimate: 94))
+
+            if pins {
+                XCTAssertEqual(list.anchor?.row, secondPart)
+                XCTAssertEqual(list.anchor?.offset, -351.5)
+                XCTAssertEqual(list.contentTop, 1476.5)
+                XCTAssertEqual(list.screenY(secondPart), seen, accuracy: 0.001)
+            } else {
+                // The log, to the point: re-captured by geometry as "row 27 +
+                // 38" in the 720 table and restored at 1452.0, 24.5 pt off.
+                XCTAssertEqual(list.anchor?.row, 27)
+                XCTAssertEqual(list.anchor?.offset, 38)
+                XCTAssertEqual(list.contentTop, 1452.0)
+                XCTAssertEqual(list.screenY(secondPart) - seen, 24.5, accuracy: 0.001)
+            }
+        }
+    }
+
+    /// The -24.5 / -37.5 pt itself: AppKit's NSTextView keeps its visible part
+    /// visible while it resizes (`_setFrameSize:forceScroll:` →
+    /// `scrollRectToVisible:`), and a text view lying in the list's top content
+    /// inset is visible to it but not to `scrollRectToVisible:` — every width
+    /// change scrolled the document until that text sat at the content top.
+    /// `DocumentCellTextView` (the base of `SelfSizingTextView`) never scrolls
+    /// on a frame change; a plain NSTextView in the same place still does (the
+    /// control), and an explicit request still scrolls.
+    func testATextRowUnderTheTopInsetDoesNotScrollTheDocumentWhenItResizes() {
+        final class Flipped: NSView { override var isFlipped: Bool { true } }
+        func clipMove(_ textView: NSTextView, _ change: (NSTextView) -> Void) -> CGFloat {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+            scrollView.automaticallyAdjustsContentInsets = false
+            scrollView.contentInsets = NSEdgeInsets(top: 24, left: 0, bottom: 24, right: 0)
+            let document = Flipped(frame: NSRect(x: 0, y: 0, width: 800, height: 5000))
+            scrollView.documentView = document
+            window.contentView = scrollView
+            // The latex row's text: its top 0.5 pt below the clip's top edge,
+            // all of it inside the 24 pt inset (content top 1067.5).
+            textView.configureForSelfSizing()
+            textView.frame = NSRect(x: 20, y: 1044, width: 700, height: 17)
+            textView.textStorage?.setAttributedString(NSAttributedString(string: "V(e_1) \\not\\le V(e_2)"))
+            document.addSubview(textView)
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: 1043.5))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            scrollView.layoutSubtreeIfNeeded()
+            let before = scrollView.contentView.bounds.origin.y
+            change(textView)
+            scrollView.layoutSubtreeIfNeeded()
+            return scrollView.contentView.bounds.origin.y - before
+        }
+        let wider = { (view: NSTextView) in view.setFrameSize(NSSize(width: 790, height: 17)) }
+        let reframed = { (view: NSTextView) in view.frame = NSRect(x: 20, y: 1044, width: 300, height: 34) }
+
+        XCTAssertEqual(clipMove(NSTextView(), wider), -23.5, accuracy: 0.5, "the control: AppKit scrolls")
+        XCTAssertEqual(clipMove(DocumentCellTextView(), wider), 0)
+        XCTAssertEqual(clipMove(DocumentCellTextView(), reframed), 0)
+        XCTAssertNotEqual(clipMove(DocumentCellTextView()) { _ = $0.scrollToVisible($0.bounds) }, 0)
     }
 
     /// A model list on fixture.md with every view reported, the content top

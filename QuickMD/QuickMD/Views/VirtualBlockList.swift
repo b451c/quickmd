@@ -392,10 +392,12 @@ struct VirtualBlockList: NSViewRepresentable {
         /// The layout style changed and the table measured for the new width
         /// is not installed yet. Meanwhile the cells re-lay out at the new
         /// width inside the old rows, and the clip origin can move without
-        /// this list moving it (seen: -37.5 pt between leaving Reading Mode
-        /// and the new table, which re-anchored the reader on the block
-        /// above). The anchor holds through the switch whatever the clip does;
-        /// the install puts the reader back on it.
+        /// this list moving it (seen: -24.5 and -37.5 pt between leaving
+        /// Reading Mode and the new table — a text view under the top inset
+        /// scrolling itself visible as it resized, now prevented by
+        /// `DocumentCellTextView` — which re-anchored the reader on the block
+        /// above). The anchor holds through the switch whatever moves the
+        /// clip; the install puts the reader back on it.
         private var isSwitchingLayout = false
         private var layoutSwitchGeneration = 0
         #if DEBUG

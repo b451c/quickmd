@@ -63,7 +63,13 @@ struct MermaidBlockView: View {
         self.fontScale = fontScale
         self.contentWidth = contentWidth
         self.onEnlarge = onEnlarge
-        _diagramHeight = State(initialValue: heightCache.height(for: blockId) ?? Metrics.defaultHeight)
+        // The measurer's seed, so the first frame matches the table's row and
+        // the cell does not report the 200 pt default first.
+        _diagramHeight = State(initialValue: heightCache.height(for: blockId)
+                               ?? ReportedHeights.diagramHeight(source: source, isDark: theme.isDark,
+                                                                fontScale: fontScale,
+                                                                in: heightCache.reportedSnapshot)
+                               ?? Metrics.defaultHeight)
         let cached = MermaidSnapshotStore.image(source: "\(fontScale)|\(contentWidth)|\(source)", isDark: theme.isDark)
         _snapshot = State(initialValue: cached)
         if let cached {
@@ -73,6 +79,8 @@ struct MermaidBlockView: View {
             // (zoom, theme) — which empties the cache — measures the diagram at
             // the 200 pt default again and it reports back on screen.
             heightCache.set(cached.size.height, for: blockId)
+            heightCache.setDiagramHeight(cached.size.height, source: source, isDark: theme.isDark,
+                                         fontScale: fontScale)
         }
     }
 
@@ -95,6 +103,8 @@ struct MermaidBlockView: View {
                         diagramHeight: $diagramHeight,
                         onHeight: { height in
                             heightCache.set(height, for: blockId)
+                            heightCache.setDiagramHeight(height, source: source, isDark: theme.isDark,
+                                                         fontScale: fontScale)
                         },
                         onSnapshot: { image in
                             MermaidSnapshotStore.set(image, source: snapshotKey, isDark: theme.isDark)

@@ -685,6 +685,42 @@ extension NSTextView {
     }
 }
 
+// MARK: - Document cell text view
+
+/// The base of every text view the document list hosts (`SelfSizingTextView`,
+/// `TableTextView`): a text view that never scrolls the document because it
+/// was resized.
+///
+/// NSTextView keeps the part of itself that is visible visible while it
+/// resizes: `_setFrameSize:forceScroll:` → `scrollRectToVisible:` on the
+/// enclosing clip view. A text view lying in the list's top content inset is
+/// visible to it but not to `scrollRectToVisible:`, which measures against the
+/// inset-adjusted area — so any width change (Reading Mode, a sidebar, a window
+/// resize) with a text row under the top inset scrolled the DOCUMENT until that
+/// row's text sat at the content top (seen: -24.5 and -37.5 pt on leaving
+/// Reading Mode, which moved the reader). These views are cells of the list,
+/// and the list owns the scroll position. An explicit request (VoiceOver's
+/// scroll to element) still scrolls.
+///
+/// Here rather than next to `SelfSizingTextView` so the unit tests, which
+/// compile this file, run the very class.
+class DocumentCellTextView: NSTextView {
+    /// Nesting depth of `setFrameSize` — AppKit re-enters it from inside, so a
+    /// flag would be cleared by the inner call before the outer one scrolls.
+    private var frameSizeChanges = 0
+
+    override func setFrameSize(_ newSize: NSSize) {
+        frameSizeChanges += 1
+        defer { frameSizeChanges -= 1 }
+        super.setFrameSize(newSize)
+    }
+
+    override func scrollToVisible(_ rect: NSRect) -> Bool {
+        if frameSizeChanges > 0 { return false }
+        return super.scrollToVisible(rect)
+    }
+}
+
 // MARK: - Block Height Cache
 
 /// Remembers the last measured height of each block, keyed by block id.
@@ -710,6 +746,13 @@ final class BlockHeightCache {
     /// Forgets the block-id heights (a re-parse: ids are positional). The
     /// reported heights stay — they are keyed by content.
     func removeAll() { heights.removeAll() }
+
+    /// A diagram's height as its web view (or snapshot) gave it, per unit of
+    /// zoom (`ReportedHeights.diagramHeight`).
+    func setDiagramHeight(_ height: CGFloat, source: String, isDark: Bool, fontScale: CGFloat) {
+        guard fontScale > 0, height > 0 else { return }
+        setReported(height / fontScale, forKey: ReportedHeights.diagramUnitKey(source: source, isDark: isDark))
+    }
 
     func setReported(_ height: CGFloat, forKey key: String) {
         // A live resize reports at every width it passes through: keep the
@@ -753,6 +796,25 @@ enum ReportedHeights {
         default:
             return nil
         }
+    }
+
+    /// A Mermaid diagram's height per unit of zoom, by what it shows. One that
+    /// fits its column is drawn at `fontScale` times its natural size
+    /// (mermaid-template.html), so a zoom it was never placed at starts from
+    /// the last one it was placed at, scaled — not from the 200 pt default
+    /// (which swung the table by ~120 pt on every zoom step). One wider than
+    /// its column is drawn smaller than that and reports it.
+    static func diagramUnitKey(source: String, isDark: Bool) -> String {
+        "mermaid-unit|\(isDark)|\(source)"
+    }
+
+    /// The diagram height (without the block's padding) `source` is expected
+    /// to have at `fontScale`; nil if it was never placed. Shared by the
+    /// measurer and `MermaidBlockView`'s first frame, so the two agree.
+    static func diagramHeight(source: String, isDark: Bool, fontScale: CGFloat,
+                              in reported: [String: CGFloat]) -> CGFloat? {
+        // 50: the web view's minimum (`MermaidWebView`).
+        reported[diagramUnitKey(source: source, isDark: isDark)].map { max(50, $0 * fontScale) }
     }
 }
 
@@ -1119,11 +1181,16 @@ enum BlockHeightMeasurer {
                                   + 2 * BlockLayout.Document.imageOuterVerticalPadding)
                 kinds.append(.reported)
 
-            case .mermaidDiagram:
+            case .mermaidDiagram(let source):
+                // This block's last height at this zoom (a width-only re-measure),
+                // else the diagram's height at another zoom, scaled.
+                let diagram = heightSeeds[block.id]
+                    ?? ReportedHeights.diagramHeight(source: source, isDark: theme.isDark,
+                                                     fontScale: fontScale, in: reportedHeights)
+                    ?? BlockLayout.Mermaid.defaultHeight
                 heights.append(reportedHeights[ReportedHeights.key(for: block, contentWidth: contentWidth,
                                                                    fontScale: fontScale, theme: theme) ?? ""]
-                               ?? (heightSeeds[block.id] ?? BlockLayout.Mermaid.defaultHeight)
-                                  + 2 * BlockLayout.Mermaid.verticalPadding
+                               ?? diagram + 2 * BlockLayout.Mermaid.verticalPadding
                                   + 2 * BlockLayout.Document.mermaidOuterVerticalPadding)
                 kinds.append(.reported)
             }
