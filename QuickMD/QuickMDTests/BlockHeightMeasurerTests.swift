@@ -926,6 +926,39 @@ extension BlockHeightMeasurerTests {
         }
     }
 
+    /// A formula that PARSES but draws nothing — only spacing, empty groups,
+    /// an accent over nothing, `\color` (which this SwiftMath parses but its
+    /// typesetter declines) — took the formula path and drew an empty row. It
+    /// now falls back like an unparseable one: the same substitution, which
+    /// screen and print share. The production verdict
+    /// (`MathInk.typesetsToSomething`, in the app target: SwiftMath loads its
+    /// fonts from the main bundle, which the test runner is not) agreed with
+    /// SwiftMath's own rendering on 36 formulas in a headless check; its
+    /// verdicts for these drive the engine here. (`$$ $$` and `$$\n$$` never
+    /// become a block at all.)
+    func testAFormulaThatDrawsNothingBecomesALatexCodeBlock() {
+        let drawsNothing: Set<String> = [#"\,"#, #"\color{red}{x}"#, #"{}^{}_{}"#, #"\hat{}"#]
+        let engine = MathRendering(inlineImage: { _, _, _ in nil }, displayHeight: { _, _, _ in 40 },
+                                   typesets: { !drawsNothing.contains($0) })
+        let document = "$$\n\\,\n$$\n\n$$\\color{red}{x}$$\n\n$$\n{}^{}_{}\n$$\n\n$$\\hat{}$$\n\n$$x$$"
+        let parsed = parse(document)
+        let blocks = engine.substitutingUntypesettableMath(in: parsed)
+        XCTAssertEqual(blocks.map(\.id), parsed.map(\.id))
+        XCTAssertEqual(blocks.count, 5)
+        for (index, latex) in [#"\,"#, #"\color{red}{x}"#, #"{}^{}_{}"#, #"\hat{}"#].enumerated() {
+            guard case .codeBlock(let code, let language) = blocks[index].content else {
+                XCTFail("\(latex) is still \(blocks[index].content)")
+                continue
+            }
+            XCTAssertEqual(code, latex, "the source, verbatim")
+            XCTAssertEqual(language, "latex")
+        }
+        guard case .mathBlock(let working) = blocks[4].content else {
+            return XCTFail("a formula that draws stays display math")
+        }
+        XCTAssertEqual(working, "x")
+    }
+
     func testDocumentWithoutDisplayMathNeverConsultsTheEngine() {
         let parsed = parse("Text with $x$ inline only.\n\n```latex\n\\not\\le\n```")
         let engine = MathRendering(inlineImage: { _, _, _ in nil }, displayHeight: { _, _, _ in 0 },

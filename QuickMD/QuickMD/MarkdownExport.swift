@@ -921,7 +921,8 @@ enum PrintableMath {
         var mathImage = MathImage(latex: latex, fontSize: 14, textColor: .black,
                                   labelMode: .text, textAlignment: .left)
         let (error, image, info) = mathImage.asImage()
-        guard error == nil, let image else { return nil }
+        // Nothing drawn: the italic literal, as on screen (`MathInk`).
+        guard error == nil, let image, MathInk.drawsSomething(latex, image: image) else { return nil }
         return (image, info?.descent ?? 0)
     }
 
