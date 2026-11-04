@@ -900,6 +900,40 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertFalse(again.converted[paragraph.id] === first.converted[paragraph.id])
     }
 
+    // MARK: - Tables
+
+    /// A block start ends a table's body (GFM: GitHub closes the table for
+    /// any of them — a fence, a quote, an ATX heading, a list item, an HTML
+    /// block; gfm/h2_*.html — and `$$` opens a formula here). The body took
+    /// every line with a `|`: a fence line with one became a row while the
+    /// definition pre-pass read it as a fence, and the fence's closing line
+    /// then opened a fence that ran to the end of the document.
+    func testABlockStartEndsATablesBody() throws {
+        let table = "| a |\n|---|\n| 1 |\n"
+        func bodyRows(_ markdown: String) throws -> [Int] {
+            try XCTUnwrap(parseReturning(markdown)).compactMap { block in
+                guard case .table(_, let rows, _, _) = block.content else { return nil }
+                return rows.count
+            }
+        }
+        XCTAssertEqual(try quoteShape(table + "```x|\ncode\n```\nafter\n"), ["table", "c:code", "t:after"])
+        XCTAssertEqual(try quoteShape(table + "~~~ |\ncode\n~~~\n"), ["table", "c:code"])
+        XCTAssertEqual(try quoteShape(table + "> q | r\n"), ["table", "q1:q | r"])
+        XCTAssertEqual(try quoteShape(table + "# H | x\n"), ["table", "h:H | x"])
+        XCTAssertEqual(try quoteShape(table + "- b | c\n"), ["table", "t:• b | c"])
+        XCTAssertEqual(try quoteShape(table + "2. b | c\n"), ["table", "t:2. b | c"])
+        XCTAssertEqual(try bodyRows(table + "<div>|</div>\n"), [1])
+        XCTAssertEqual(try bodyRows(table + "$$ |\nx\n$$\n\n[x]: http://e.com\n\n[x]\n"), [1])
+        XCTAssertEqual(try quoteShape(table + "$$ |\nx\n$$\n\n[x]: http://e.com\n\n[x]\n").last, "t:x")
+        // A row stays a row.
+        XCTAssertEqual(try bodyRows(table + "b | c\n| 3 |\n"), [3])
+        // In a quote too: the item's paragraph goes on lazily, a heading's
+        // does not (gfm/h2_quote_table_*_lazy.html).
+        let quoted = "> | a |\n> |---|\n> | 1 |\n"
+        XCTAssertEqual(try quoteShape(quoted + "> - b | c\nlazy\n"), ["q1:| a |\n|---|\n| 1 |\n- b | c\nlazy"])
+        XCTAssertEqual(try quoteShape(quoted + "> # H | x\nlazy\n"), ["q1:| a |\n|---|\n| 1 |\n# H | x", "t:lazy"])
+    }
+
     /// The lines a quote absorbed are the quote's: its source line is its
     /// first, the next block starts after them, the tint spans them, search
     /// finds and copy reads them in the quote — and a long hard-wrapped quote

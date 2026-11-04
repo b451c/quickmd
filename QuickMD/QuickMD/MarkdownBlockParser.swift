@@ -345,7 +345,8 @@ struct MarkdownBlockParser: Sendable {
                     var rows: [[String]] = []
                     i += 2 // Skip header and separator
 
-                    while i < lines.count && lines[i].contains("|") && !isTableSeparator(lines[i]) {
+                    while i < lines.count && lines[i].contains("|") && !isTableSeparator(lines[i])
+                            && !Self.interruptsTable(lines[i]) {
                         rows.append(parseTableRow(lines[i]))
                         i += 1
                     }
@@ -1183,7 +1184,8 @@ struct MarkdownBlockParser: Sendable {
                 inTable = false
                 return
             }
-            if inTable, content.contains("|") {
+            // A row; a block start ends the table (`interruptsTable`).
+            if inTable, content.contains("|"), !MarkdownBlockParser.interruptsTable(content) {
                 endsInParagraph = false
                 return
             }
@@ -1223,6 +1225,15 @@ struct MarkdownBlockParser: Sendable {
         guard !htmlImageLine, Self.startsNoBlock(line) else { return false }
         if InlineSyntaxScanner.standaloneImages(in: line[...], references: references) != nil { return false }
         return true
+    }
+
+    /// Whether a block starts on `line`, which ends a table's body: GitHub
+    /// closes a table for any block start — a fence, a quote, an ATX
+    /// heading, a list item, an HTML block (gfm/h2_*.html) — and `$$` opens
+    /// a formula here. A fence or `$$` line taken as a row disagreed with the
+    /// definition pre-pass (`VerbatimRegions`), which reads it as a block.
+    static func interruptsTable(_ line: String) -> Bool {
+        !startsNoBlock(line) || markerLine(line).hasPrefix(">")
     }
 
     /// CommonMark's part of `continuesQuoteLazily`: not blank, and no block
