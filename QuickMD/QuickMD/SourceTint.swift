@@ -78,7 +78,8 @@ enum SourceTint {
         func isBlank(_ line: Int) -> Bool {
             let start = lineStarts[line]
             let range = NSRange(location: start, length: max(0, contentEnd(line) - start))
-            // The parser's notion of blank: nothing but `.whitespaces`.
+            // The parser's notion of blank (`MarkdownRenderer.isBlankLine`):
+            // nothing but spaces and tabs.
             return text.rangeOfCharacter(from: nonWhitespace, options: [], range: range).location == NSNotFound
         }
 
@@ -112,8 +113,9 @@ enum SourceTint {
         return spans
     }
 
-    /// Non-blank characters, by the parser's `.whitespaces` trimming rule.
-    private static let nonWhitespace = CharacterSet.whitespaces.inverted
+    /// Non-blank characters, by the parser's blank-line rule: anything but a
+    /// space or a tab (a no-break space is text).
+    private static let nonWhitespace = MarkdownRenderer.markerWhitespace.inverted
 
     static func kind(of block: MarkdownBlock) -> Kind? {
         switch block.content {
@@ -138,6 +140,6 @@ enum SourceTint {
                                  lineStarts: [Int]) -> Bool {
         let start = lineStarts[line]
         let content = text.substring(with: NSRange(location: start, length: max(0, contentEnd - start)))
-        return content.trimmingCharacters(in: .whitespaces) == title
+        return MarkdownBlockParser.markerLine(content) == title
     }
 }
