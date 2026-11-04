@@ -381,7 +381,9 @@ final class VerticalRhythmTests: XCTestCase {
     }
 
     func testNestedQuoteGroupsJoinTheirQuote() {
-        let blocks = parse("Text.\n\n> outer\n>> inner\n> outer again\n\n> separate quote")
+        // The empty `>` line closes the inner quote's paragraph: without it
+        // `> outer again` would continue that paragraph lazily (CommonMark).
+        let blocks = parse("Text.\n\n> outer\n>> inner\n>\n> outer again\n\n> separate quote")
         XCTAssertEqual(blocks.count, 5)
         XCTAssertEqual(blocks.map(\.joinsPrevious), [false, false, true, true, false])
         let measured = measure(blocks)
@@ -532,10 +534,12 @@ final class VerticalRhythmTests: XCTestCase {
             let name = String(format: "U+%04X", space.unicodeScalars.first!.value)
             let blocks = try XCTUnwrap(parseReturning("Intro\n\n\(space)> quoted\n"), name)
             XCTAssertEqual(blocks.map(plain), ["Intro", "\(space)> quoted"], name)
-            // Inside a quote run too: the run ends there, and the parser goes on.
+            // Inside a quote run too: no marker, so the line is the quote
+            // paragraph's lazy continuation, text and all (GitHub:
+            // `<blockquote><p>a  &gt; b</p></blockquote>`), and the parser goes on.
             let inside = try XCTUnwrap(parseReturning("> a\n\(space)> b\n\nAfter."), name)
             if case .blockquote(let content, _) = inside.first?.content {
-                XCTAssertEqual(content, "a", name)
+                XCTAssertEqual(content, "a\n\(space)> b", name)
             } else {
                 XCTFail("\(name): \(String(describing: inside.first?.content))")
             }
@@ -604,6 +608,106 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertTrue(MarkdownRenderer.isListItem(" - item"))
         XCTAssertTrue(MarkdownRenderer.isListItem("1.\tone"))
         XCTAssertTrue(MarkdownRenderer.isThematicBreak(" ---\t"))
+    }
+
+    // MARK: - Quote laziness
+
+    /// The parse in short: `q<level>:<content>` for a quote, `alert:<kind>:<body>`,
+    /// `t:<shown text>`, `c:<code>`, `h:<title>`, `img`, `table`.
+    private func quoteShape(_ markdown: String, file: StaticString = #filePath,
+                            line: UInt = #line) throws -> [String] {
+        try XCTUnwrap(parseReturning(markdown, file: file, line: line), file: file, line: line).map { block in
+            switch block.content {
+            case .blockquote(let content, let level): return "q\(level):\(content)"
+            case .alert(let kind, let content): return "alert:\(kind.rawValue):\(content)"
+            case .text(let attributed): return "t:" + String(attributed.characters)
+            case .codeBlock(let code, _): return "c:\(code)"
+            case .heading(_, let title, _): return "h:\(title)"
+            case .image: return "img"
+            case .table: return "table"
+            default: return "other"
+            }
+        }
+    }
+
+    /// CommonMark laziness: a line without the quote marker that would be a
+    /// paragraph's continuation continues the paragraph the quote ends in —
+    /// in a nested quote, a list item or an alert too, and on a line with
+    /// fewer markers than the quote. Our parser ended the quote and made the
+    /// line a paragraph of its own. Every expected shape is GitHub's
+    /// (`gh api markdown`, scratchpad/audit/gfm/lazy_*.html).
+    func testALazyLineContinuesTheParagraphAQuoteEndsIn() throws {
+        // Continues: a plain line, a hard-wrapped quote, `===`, an indented
+        // line, an item that may not start a list here (none may: a lazy
+        // line is checked against the document, not the paragraph).
+        XCTAssertEqual(try quoteShape("> a\nb\n"), ["q1:a\nb"])
+        XCTAssertEqual(try quoteShape("> line one\nline two\nline three\n\nAfter\n"),
+                       ["q1:line one\nline two\nline three", "t:After"])
+        XCTAssertEqual(try quoteShape("> a\n===\n"), ["q1:a\n==="])
+        XCTAssertEqual(try quoteShape("> a\n    b\n"), ["q1:a\n    b"])
+        XCTAssertEqual(try quoteShape("> a\n<span>x</span>\n").first, "q1:a\n<span>x</span>")
+        XCTAssertEqual(try quoteShape("> a\nb\n> c\n"), ["q1:a\nb\nc"])
+        // In a list item, a nested quote, an alert; and with fewer markers.
+        XCTAssertEqual(try quoteShape("> - a\nb\n"), ["q1:- a\nb"])
+        XCTAssertEqual(try quoteShape("> > a\nb\n"), ["q2:a\nb"])
+        XCTAssertEqual(try quoteShape("> > a\n> b\n"), ["q2:a\nb"])
+        XCTAssertEqual(try quoteShape("> > > a\n> b\n"), ["q3:a\nb"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> text\nlazy\n"), ["alert:note:text\nlazy"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\nlazy\n"), ["alert:note:lazy"])
+
+        // Ends the quote: a blank line, an empty quote line, a block start.
+        XCTAssertEqual(try quoteShape("> a\n\nb\n"), ["q1:a", "t:b"])
+        XCTAssertEqual(try quoteShape("> a\n>\nb\n"), ["q1:a", "t:b"])
+        XCTAssertEqual(try quoteShape("> a\n```\ncode\n```\n"), ["q1:a", "c:code"])
+        XCTAssertEqual(try quoteShape("> a\n~~~\ncode\n~~~\n"), ["q1:a", "c:code"])
+        XCTAssertEqual(try quoteShape("> a\n# H\n"), ["q1:a", "h:H"])
+        XCTAssertEqual(try quoteShape("> a\n---\n").count, 2)
+        XCTAssertEqual(try quoteShape("> a\n***\n").count, 2)
+        XCTAssertEqual(try quoteShape("> a\n- b\n"), ["q1:a", "t:• b"])
+        XCTAssertEqual(try quoteShape("> a\n2. b\n").first, "q1:a")
+        XCTAssertEqual(try quoteShape("> a\n2. b\n").count, 2)
+        XCTAssertEqual(try quoteShape("> a\n<div>x</div>\n").first, "q1:a")
+        XCTAssertEqual(try quoteShape("> a\n<!-- c -->\n").first, "q1:a")
+        XCTAssertEqual(try quoteShape("> > a\n> - b\n"), ["q2:a", "q1:- b"])
+        // Our own block starts end it too: a picture line, `$$` (GitHub reads
+        // both as the paragraph's text; here they stay the picture and the
+        // formula they are everywhere else).
+        XCTAssertEqual(try quoteShape("> a\n![img](x.png)\n"), ["q1:a", "img"])
+        XCTAssertEqual(try quoteShape("> a\n$$\nx\n$$\n").first, "q1:a")
+
+        // Nothing to continue: the quote does not end in a paragraph.
+        XCTAssertEqual(try quoteShape("> ```\n> code\nb\n"), ["q1:```\ncode", "t:b"])
+        XCTAssertEqual(try quoteShape("> # H\nb\n"), ["q1:# H", "t:b"])
+        XCTAssertEqual(try quoteShape("> a\n> ===\nb\n"), ["q1:a\n===", "t:b"])
+        XCTAssertEqual(try quoteShape("> | x | y |\n> |---|---|\n> | 1 | 2 |\nlazy\n"),
+                       ["q1:| x | y |\n|---|---|\n| 1 | 2 |", "t:lazy"])
+    }
+
+    /// The lines a quote absorbed are the quote's: its source line is its
+    /// first, the next block starts after them, the tint spans them, search
+    /// finds and copy reads them in the quote — and a long hard-wrapped quote
+    /// with a marker on its first line only parses (the hang guard) into one
+    /// quote row.
+    func testTheLinesAQuoteAbsorbedAreTheQuotes() throws {
+        let markdown = "Intro\n\n> Quoted start\nlazy middle word\nlazy end\n\nAfter\n"
+        let blocks = try XCTUnwrap(parseReturning(markdown))
+        XCTAssertEqual(blocks.count, 3)
+        XCTAssertEqual(blocks.map(\.sourceLine), [0, 2, 6])
+        let ns = markdown as NSString
+        let spans = SourceTint.spans(for: blocks, lineStarts: SourceEditSupport.lineStarts(in: ns), in: ns)
+        XCTAssertEqual(spans.map { ns.substring(with: $0.range) }, ["> Quoted start\nlazy middle word\nlazy end"])
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "middle").matchBlockIds, [blocks[1].id])
+        let measured = measure(blocks)
+        XCTAssertEqual(measured.converted[blocks[1].id].map(\.string), "Quoted start lazy middle word lazy end")
+
+        let long = "> first\n" + String(repeating: "a hard-wrapped line of the quote\n", count: 5_000) + "\nAfter\n"
+        let longBlocks = try XCTUnwrap(parseReturning(long, within: 10))
+        XCTAssertEqual(longBlocks.count, 2)
+        if case .blockquote(let content, _) = longBlocks[0].content {
+            XCTAssertEqual(content.components(separatedBy: "\n").count, 5_001)
+        } else {
+            XCTFail("\(longBlocks[0].content)")
+        }
     }
 
     // MARK: - Anchor signatures

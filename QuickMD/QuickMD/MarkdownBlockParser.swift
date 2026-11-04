@@ -13,7 +13,7 @@ struct MarkdownBlockParser: Sendable {
     private let renderer: MarkdownRenderer
 
     // Static precompiled regex (avoid recompilation per parse call)
-    private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
+    static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
     private static let refLinkDefRegex = try! NSRegularExpression(pattern: MarkdownTheme.referenceLinkDefinitionPattern)
     private static let footnoteDefRegex = try! NSRegularExpression(pattern: MarkdownTheme.footnoteDefinitionPattern)
 
@@ -284,9 +284,13 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
-            // Setext headers (underlined headers)
+            // Setext headers (underlined headers). The title is paragraph
+            // text: a quote line or a list item never is one (GitHub: `> a`
+            // or `- a` over `---` is the quote or list, then a rule; over
+            // `===`, the quote's or item's text goes on).
             let trimmed = trimmedLine
-            if i + 1 < lines.count && !trimmed.isEmpty && !trimmed.contains("|") {
+            if i + 1 < lines.count && !trimmed.isEmpty && !trimmed.contains("|")
+                && !trimmed.hasPrefix(">") && !MarkdownRenderer.isListItem(line) {
                 let nextLine = Self.markerLine(lines[i + 1])
 
                 if nextLine.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil {
@@ -377,11 +381,24 @@ struct MarkdownBlockParser: Sendable {
                     let groupSourceLine = lineMap[i]
                     let groupLevel = level
                     var groupLines = [String(scanner)]
+                    var tip = QuoteTip()
+                    tip.take(groupLines[0])
                     i += 1
 
                     while i < lines.count {
                         let nextLine = Self.markerLine(lines[i])
-                        guard nextLine.hasPrefix(">") else { break }
+                        guard nextLine.hasPrefix(">") else {
+                            // No marker: a lazy continuation of the paragraph
+                            // the group ends in (CommonMark), or the quote's end.
+                            guard tip.endsInParagraph,
+                                  continuesQuoteLazily(lines[i], htmlImageLine: htmlImageLine(lines, at: i) != nil,
+                                                       references: referenceDefinitions)
+                            else { break }
+                            groupLines.append(lines[i])
+                            tip.take(lines[i])
+                            i += 1
+                            continue
+                        }
 
                         var nextLevel = 0
                         var nextScanner = nextLine[...]
@@ -393,8 +410,23 @@ struct MarkdownBlockParser: Sendable {
                             }
                         }
 
-                        guard nextLevel == groupLevel else { break }
+                        if nextLevel != groupLevel {
+                            // Fewer markers than the group: what follows them may
+                            // continue the group's paragraph lazily (`> > a` then
+                            // `> b` is one paragraph of the inner quote).
+                            let content = String(nextScanner)
+                            guard nextLevel < groupLevel, tip.endsInParagraph,
+                                  continuesQuoteLazily(content,
+                                                       htmlImageLine: HTMLImageSyntax.scan(content[...]) != nil,
+                                                       references: referenceDefinitions)
+                            else { break }
+                            groupLines.append(content)
+                            tip.take(content)
+                            i += 1
+                            continue
+                        }
                         groupLines.append(String(nextScanner))
+                        tip.take(groupLines[groupLines.count - 1])
                         i += 1
                     }
 
@@ -958,6 +990,121 @@ struct MarkdownBlockParser: Sendable {
         }
         flushRow()
     }
+
+    // MARK: - Quote laziness
+
+    /// What a quote group's lines end in, as CommonMark reads them: an OPEN
+    /// paragraph (a paragraph's or a list item's text) is the one block a
+    /// lazy line may continue. A blank or empty quote line closes it, as do a
+    /// fenced code block (open or just closed), an ATX heading, a Setext
+    /// underline, a rule and a table.
+    struct QuoteTip {
+        private(set) var endsInParagraph = false
+        private var fence: (marker: Character, length: Int)?
+        private var inTable = false
+        private var previousHadPipe = false
+
+        mutating func take(_ content: String) {
+            let marker = MarkdownBlockParser.markerLine(content)
+            if let open = fence {
+                // Inside the quote's fence: only its closing line matters.
+                if marker.hasPrefix(String(repeating: open.marker, count: open.length)),
+                   MarkdownRenderer.isBlankLine(marker.drop(while: { $0 == open.marker })) {
+                    fence = nil
+                }
+                endsInParagraph = false
+                return
+            }
+            defer { previousHadPipe = content.contains("|") }
+            if MarkdownRenderer.isBlankLine(content) {
+                endsInParagraph = false
+                inTable = false
+                return
+            }
+            if let first = marker.first, first == "`" || first == "~" {
+                let length = marker.prefix(while: { $0 == first }).count
+                if length >= 3 {
+                    fence = (first, length)
+                    endsInParagraph = false
+                    inTable = false
+                    return
+                }
+            }
+            if inTable, content.contains("|") {
+                endsInParagraph = false
+                return
+            }
+            inTable = false
+            if endsInParagraph, previousHadPipe,
+               marker.range(of: MarkdownTheme.tableSeparatorPattern, options: .regularExpression) != nil {
+                inTable = true
+                endsInParagraph = false
+                return
+            }
+            let nsRange = NSRange(content.startIndex..., in: content)
+            if MarkdownBlockParser.headerRegex.firstMatch(in: content, range: nsRange) != nil
+                || MarkdownRenderer.isThematicBreak(content) {
+                endsInParagraph = false
+                return
+            }
+            if endsInParagraph,
+               marker.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil
+                || marker.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
+                endsInParagraph = false
+                return
+            }
+            endsInParagraph = true
+        }
+    }
+
+    /// Whether `line` — a line without a quote marker, or what follows fewer
+    /// markers than the quote has — continues the paragraph a quote ends in
+    /// (CommonMark laziness): it is not blank and starts no block. Checked as
+    /// cmark does, against the DOCUMENT, not the paragraph: any list item ends
+    /// the quote (`2. b` too), and so does a lone HTML tag; `===`, an indented
+    /// line, a pipe row or `<span>` text continue it (GitHub, gh api markdown).
+    /// Our own block starts end it as well: a picture line (Markdown or HTML)
+    /// and `$$` stay the picture and the formula they are everywhere else.
+    private func continuesQuoteLazily(_ line: String, htmlImageLine: Bool,
+                                      references: [String: String]) -> Bool {
+        guard !Self.isBlank(line), !htmlImageLine else { return false }
+        let marker = Self.markerLine(line)
+        if marker.hasPrefix("```") || marker.hasPrefix("~~~") || marker.hasPrefix("$$") { return false }
+        let nsRange = NSRange(line.startIndex..., in: line)
+        if Self.headerRegex.firstMatch(in: line, range: nsRange) != nil { return false }
+        if MarkdownRenderer.isThematicBreak(line) || MarkdownRenderer.isListItem(line) { return false }
+        if ["-", "*", "+"].contains(marker) { return false }   // an empty item
+        if Self.startsHTMLBlock(marker) { return false }
+        if InlineSyntaxScanner.standaloneImages(in: line[...], references: references) != nil { return false }
+        return true
+    }
+
+    /// CommonMark's HTML block starts (kinds 1-7), as far as a lazy line needs
+    /// them: `<!…`/`<?…`, a block-level or raw tag (`<div`, `</p>`, `<pre`),
+    /// or a line that is one complete tag. `<span>text` is inline HTML.
+    static func startsHTMLBlock(_ marker: String) -> Bool {
+        guard marker.hasPrefix("<") else { return false }
+        if marker.hasPrefix("<!") || marker.hasPrefix("<?") { return true }
+        let afterBracket = marker.dropFirst().drop(while: { $0 == "/" })
+        let name = afterBracket.prefix(while: { $0.isLetter || $0.isNumber || $0 == "-" }).lowercased()
+        guard !name.isEmpty, name.first!.isLetter else { return false }
+        let rest = afterBracket.dropFirst(name.count)
+        let ends = rest.isEmpty || rest.first == " " || rest.first == "\t" || rest.first == ">" || rest.hasPrefix("/>")
+        if ends, htmlBlockTags.contains(name) { return true }
+        return marker.range(of: #"^</?[A-Za-z][A-Za-z0-9-]*(\s[^<>]*)?/?>[ \t]*$"#,
+                            options: .regularExpression) != nil
+    }
+
+    /// CommonMark HTML block kinds 1 and 6.
+    private static let htmlBlockTags: Set<String> = [
+        "pre", "script", "style", "textarea",
+        "address", "article", "aside", "base", "basefont", "blockquote", "body", "caption", "center",
+        "col", "colgroup", "dd", "details", "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption",
+        "figure", "footer", "form", "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head",
+        "header", "hr", "html", "iframe", "legend", "li", "link", "main", "menu", "menuitem", "nav",
+        "noframes", "ol", "optgroup", "option", "p", "param", "search", "section", "summary", "table",
+        "tbody", "td", "tfoot", "th", "thead", "title", "tr", "track", "ul",
+    ]
 
     /// A text row waiting for `renderPendingRows`: its soft-break joined lines
     /// and where its block sits in the block list.
