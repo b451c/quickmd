@@ -71,7 +71,9 @@ enum MarkdownZoom {
     /// Bigger / Smaller step from wherever the window is; Actual Size (⌘0)
     /// goes back to `defaultScale` — the user's default, not a fixed 100%
     /// (Safari's Actual Size does the same with its default page zoom).
-    func applied(to current: Double, defaultScale: Double = 1.0) -> Double {
+    /// `defaultScale` is required on purpose: a defaulted 1.0 would let a new
+    /// caller silently bring back "⌘0 = 100%".
+    func applied(to current: Double, defaultScale: Double) -> Double {
         guard self != .actualSize else { return defaultScale }
         // Snap to the nearest rung first so we never get stuck between steps.
         let index = Self.steps.enumerated()

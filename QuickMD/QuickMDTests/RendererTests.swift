@@ -661,13 +661,13 @@ final class RendererTests: XCTestCase {
 
     func testZoomStepsClampAtBothEnds() {
         let steps = MarkdownZoom.steps
-        XCTAssertEqual(MarkdownZoom.bigger.applied(to: steps.last!), steps.last!)
-        XCTAssertEqual(MarkdownZoom.smaller.applied(to: steps.first!), steps.first!)
-        XCTAssertEqual(MarkdownZoom.bigger.applied(to: 1.0), 1.1)
-        XCTAssertEqual(MarkdownZoom.smaller.applied(to: 1.0), 0.9)
-        XCTAssertEqual(MarkdownZoom.actualSize.applied(to: 2.5), 1.0)
+        XCTAssertEqual(MarkdownZoom.bigger.applied(to: steps.last!, defaultScale: 1.0), steps.last!)
+        XCTAssertEqual(MarkdownZoom.smaller.applied(to: steps.first!, defaultScale: 1.0), steps.first!)
+        XCTAssertEqual(MarkdownZoom.bigger.applied(to: 1.0, defaultScale: 1.0), 1.1)
+        XCTAssertEqual(MarkdownZoom.smaller.applied(to: 1.0, defaultScale: 1.0), 0.9)
+        XCTAssertEqual(MarkdownZoom.actualSize.applied(to: 2.5, defaultScale: 1.0), 1.0)
         // An off-ladder value snaps to the nearest rung instead of getting stuck
-        XCTAssertEqual(MarkdownZoom.bigger.applied(to: 1.04), 1.1)
+        XCTAssertEqual(MarkdownZoom.bigger.applied(to: 1.04, defaultScale: 1.0), 1.1)
     }
 
     // MARK: Default zoom (#48)
