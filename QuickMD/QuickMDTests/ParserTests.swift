@@ -462,6 +462,38 @@ final class ParserTests: XCTestCase {
         XCTAssertNil(width); XCTAssertNil(linkedWidth)
     }
 
+    /// After the vertical-rhythm merge (rows rendered at the end of the
+    /// parse, ordered hangs over the whole document), checked against GitHub
+    /// (`gh api markdown`): a linked image indented under a list stands in
+    /// like a plain image and keeps the list going (`10.` hangs the items
+    /// above it); a line of `&nbsp;` is a paragraph (`<p>&nbsp;</p>`), not a
+    /// blank line; `&#49;. x` is paragraph text "1. x", never a list item
+    /// (references are decoded after block parsing).
+    func testMergedRowRenderingWithLinkedImagesAndReferences() {
+        func hangs(_ md: String) -> [CGFloat] {
+            parse(md).compactMap { block -> CGFloat? in
+                guard case .text(let attributed) = block.content,
+                      let style = attributed.runs.first?[AttributeScopes.AppKitAttributes.ParagraphStyleAttribute.self]
+                else { return nil }
+                return style.headIndent
+            }
+        }
+        let linked = "1. one\n2. two\n\n   [![b](b.png)](https://x)\n\n10. ten"
+        let plain = "1. one\n2. two\n\n   ![b](b.png)\n\n10. ten"
+        let linkedHangs = hangs(linked)
+        XCTAssertEqual(linkedHangs.count, 2)
+        XCTAssertEqual(linkedHangs, hangs(plain), "a linked image stands in like a plain image")
+        XCTAssertEqual(linkedHangs[0], linkedHangs[1], accuracy: 0.01, "one list: 1. and 10. share the widest hang")
+        let split = hangs("1. one\n2. two\n\n[![b](b.png)](https://x)\n\n10. ten")
+        XCTAssertNotEqual(split[0], split[1], "control: an unindented picture ends the list")
+
+        let blocks = parse("a\n\n&nbsp;\n\n&#49;. x")
+        XCTAssertEqual(blocks.compactMap(plainText), ["a", "\u{00A0}", "1. x"])
+        guard case .text(let item) = blocks[2].content else { return XCTFail("text") }
+        XCTAssertNil(item.runs.first?[AttributeScopes.AppKitAttributes.ParagraphStyleAttribute.self]?.headIndent
+                        .nonZero, "no list hang")
+    }
+
     // MARK: - Reference links in quotes, alerts and table cells
 
     /// Quotes, alerts and table cells keep their markdown and are rendered
@@ -1334,4 +1366,8 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(gapBlocks.count, 2, "\(gapBlocks.map(\.id))")
         XCTAssertEqual(gapBlocks[1].sourceLine, 81)
     }
+}
+
+private extension CGFloat {
+    var nonZero: CGFloat? { self == 0 ? nil : self }
 }
