@@ -116,6 +116,10 @@ struct MarkdownBlockParser: Sendable {
         // Each buffered line keeps the index it had in `allLines` so a flushed
         // chunk can report the ORIGINAL first line, not its position in `lines`.
         var textBuffer: [(line: String, originalIndex: Int)] = []
+        // Text rows are rendered once the whole document is parsed
+        // (`renderPendingRows`): an ordered list's items hang under the
+        // LIST's widest marker, and a list goes on past a block nested in it.
+        var pendingRows: [PendingTextRow] = []
 
         while i < lines.count {
             let line = lines[i]
@@ -127,7 +131,7 @@ struct MarkdownBlockParser: Sendable {
 
             // Fenced code block — check BEFORE math to protect $$ inside code blocks
             if trimmedLine.hasPrefix("```") || trimmedLine.hasPrefix("~~~") {
-                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
 
                 // Store the fence characters (just the backticks/tildes prefix)
                 guard let fenceChar = trimmedLine.first else { i += 1; continue }
@@ -169,7 +173,7 @@ struct MarkdownBlockParser: Sendable {
 
             // Display math block $$...$$ — after code block check to protect $$ inside code
             if trimmedLine.hasPrefix("$$") {
-                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
 
                 let afterDollar = String(trimmedLine.dropFirst(2)).trimmingCharacters(in: .whitespaces)
 
@@ -212,7 +216,7 @@ struct MarkdownBlockParser: Sendable {
             if let match = Self.headerRegex.firstMatch(in: line, range: nsRange),
                let hashRange = Range(match.range(at: 1), in: line),
                let contentRange = Range(match.range(at: 2), in: line) {
-                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                 let level = min(max(line[hashRange].count, 1), 6)
                 let title = Self.withoutClosingSequence(
                     String(line[contentRange]).trimmingCharacters(in: .whitespaces))
@@ -226,7 +230,7 @@ struct MarkdownBlockParser: Sendable {
             // becomes its own `.image` block, all on this line's `sourceLine`
             // (`![a](x.png) ![b](y.png)` is two pictures, not one bogus url).
             if let images = InlineSyntaxScanner.standaloneImages(in: line[...], references: referenceDefinitions) {
-                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                 for image in images {
                     blocks.append(.image(index: blockIndex, url: image.url, alt: image.alt, width: nil, sourceLine: sourceLine))
                     blockIndex += 1
@@ -256,7 +260,7 @@ struct MarkdownBlockParser: Sendable {
                         textBuffer[last].line += "  "
                     }
                 } else {
-                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                     for tag in html.images {
                         blocks.append(.image(index: blockIndex, url: tag.url, alt: tag.alt, width: tag.width,
                                              sourceLine: lineMap[i + tag.lineOffset]))
@@ -273,7 +277,7 @@ struct MarkdownBlockParser: Sendable {
                 let nextLine = lines[i + 1].trimmingCharacters(in: .whitespaces)
 
                 if nextLine.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil {
-                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                     // Setext: the TEXT line owns the heading, not the `===` underline.
                     blocks.append(.heading(index: blockIndex, level: 1, title: trimmed, sourceLine: sourceLine))
                     blockIndex += 1
@@ -288,7 +292,7 @@ struct MarkdownBlockParser: Sendable {
                 // separator can't match setextH2Pattern anyway, so the guard
                 // added nothing. (Caught by ParserTests.testSetextHeadings.)
                 if nextLine.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
-                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                     blocks.append(.heading(index: blockIndex, level: 2, title: trimmed, sourceLine: sourceLine))
                     blockIndex += 1
                     i += 2
@@ -299,7 +303,7 @@ struct MarkdownBlockParser: Sendable {
             // Table detection
             if line.filter({ $0 == "|" }).count >= 2 && !trimmed.isEmpty {
                 if !isTableSeparator(trimmed) && i + 1 < lines.count && isTableSeparator(lines[i + 1]) {
-                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
 
                     var alignments = parseTableAlignments(lines[i + 1])
                     // The separator row is authoritative for column count: a header row
@@ -330,7 +334,7 @@ struct MarkdownBlockParser: Sendable {
 
             // Blockquote detection - group consecutive > lines by nesting level
             if trimmed.hasPrefix(">") {
-                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                 // A later nesting group of this run continues the quote row
                 // before it (`MarkdownBlock.joinsPrevious`): `> a` then `>> b`
                 // is one quote on the page, drawn as two rows.
@@ -418,7 +422,7 @@ struct MarkdownBlockParser: Sendable {
                 // term line is NOT part of it (PHP Markdown Extra reads
                 // "para line\n: def" as term + definition).
                 var preceding = Array(textBuffer[..<run.bufferStart])
-                flushTextBuffer(&preceding, to: &blocks, index: &blockIndex, using: activeRenderer)
+                flushTextBuffer(&preceding, to: &blocks, index: &blockIndex, pending: &pendingRows)
                 let termSourceLine = textBuffer[run.bufferStart].originalIndex
                 textBuffer.removeAll()
 
@@ -437,7 +441,8 @@ struct MarkdownBlockParser: Sendable {
             i += 1
         }
 
-        flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+        flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+        renderPendingRows(pendingRows, in: &blocks, allLines: allLines, using: activeRenderer)
 
         // Append footnotes block at end of document if any definitions exist
         if !footnoteDefinitions.isEmpty {
@@ -867,18 +872,17 @@ struct MarkdownBlockParser: Sendable {
     /// is `BlockLayout.Spacing`'s, the same whether the source has a blank line
     /// there or not.
     ///
-    /// Soft breaks are joined and the ordered-list hangs computed over the WHOLE
-    /// run before it is cut, so a list split into several rows (a loose list,
-    /// or one past the line cap) keeps one text edge.
-    private func flushTextBuffer(_ buffer: inout [(line: String, originalIndex: Int)], to blocks: inout [MarkdownBlock], index: inout Int, using renderer: MarkdownRenderer) {
+    /// Soft breaks are joined over the WHOLE run before it is cut. The rows are
+    /// rendered at the end of the parse (`renderPendingRows`), so a list split
+    /// into several rows (a loose list, one past the line cap, one whose items
+    /// hold a code block or a picture) keeps one text edge.
+    private func flushTextBuffer(_ buffer: inout [(line: String, originalIndex: Int)], to blocks: inout [MarkdownBlock], index: inout Int, pending: inout [PendingTextRow]) {
         guard !buffer.isEmpty else { return }
         defer { buffer = [] }
 
         let joined = MarkdownRenderer.joinSoftBreaksIndexed(buffer.map(\.line))
-        let hangs = renderer.widestOrderedPrefixes(joined.map(\.line))
 
         var row: [String] = []
-        var rowHangs: [String?] = []
         var rowSourceLine = 0
         var rowJoinsPrevious = false
         // The current block is a list: an item started it or continues it.
@@ -886,17 +890,18 @@ struct MarkdownBlockParser: Sendable {
 
         func flushRow() {
             guard !row.isEmpty else { return }
-            blocks.append(.text(index: index, renderer.render(joined: row, hangs: rowHangs),
-                                sourceLine: rowSourceLine, joinsPrevious: rowJoinsPrevious))
+            pending.append(PendingTextRow(position: blocks.count, index: index, lines: row,
+                                          sourceLine: rowSourceLine, joinsPrevious: rowJoinsPrevious))
+            // Its place in the block list; `renderPendingRows` fills it in.
+            blocks.append(.text(index: index, AttributedString(), sourceLine: rowSourceLine,
+                                joinsPrevious: rowJoinsPrevious))
             index += 1
             row = []
-            rowHangs = []
             rowJoinsPrevious = false
         }
         func append(_ position: Int) {
             if row.isEmpty { rowSourceLine = buffer[joined[position].first].originalIndex }
             row.append(joined[position].line)
-            rowHangs.append(hangs[position])
         }
 
         for position in joined.indices {
@@ -928,5 +933,54 @@ struct MarkdownBlockParser: Sendable {
             if startsList { inList = true }
         }
         flushRow()
+    }
+
+    /// A text row waiting for `renderPendingRows`: its soft-break joined lines
+    /// and where its block sits in the block list.
+    struct PendingTextRow {
+        let position: Int
+        let index: Int
+        let lines: [String]
+        let sourceLine: Int
+        let joinsPrevious: Bool
+    }
+
+    /// Stands in for a non-text block when the ordered-list hangs are worked
+    /// out: not blank, not a list item — so it continues a list exactly when
+    /// its first line is indented under the list's items (a step's code
+    /// block, a picture under an item), as a nested paragraph would.
+    private static let blockStandIn = "\u{FFFC}"
+
+    /// Renders the text rows, every ordered item hanging under the widest
+    /// marker of ITS list (`MarkdownRenderer.widestOrderedPrefixes`), worked
+    /// out over the whole document: the rows' lines in order, each other
+    /// block standing in as one line with its indentation. Until 1.14.4 the
+    /// widest marker was each row's own, so a list cut into rows had two text
+    /// edges, and the steps of a list whose items hold code blocks each hung
+    /// under their own number ("1. " is narrower than "10. ").
+    private func renderPendingRows(_ pending: [PendingTextRow], in blocks: inout [MarkdownBlock],
+                                   allLines: [String], using renderer: MarkdownRenderer) {
+        guard !pending.isEmpty else { return }
+        var lines: [String] = []
+        var starts: [Int] = []
+        starts.reserveCapacity(pending.count)
+        var next = 0
+        for (position, block) in blocks.enumerated() {
+            if next < pending.count, pending[next].position == position {
+                starts.append(lines.count)
+                lines.append(contentsOf: pending[next].lines)
+                next += 1
+            } else {
+                let first = block.sourceLine >= 0 && block.sourceLine < allLines.count ? allLines[block.sourceLine] : ""
+                lines.append(String(first.prefix(while: { $0 == " " || $0 == "\t" })) + Self.blockStandIn)
+            }
+        }
+        let hangs = renderer.widestOrderedPrefixes(lines)
+        for (row, start) in zip(pending, starts) {
+            blocks[row.position] = .text(index: row.index,
+                                         renderer.render(joined: row.lines,
+                                                         hangs: Array(hangs[start..<(start + row.lines.count)])),
+                                         sourceLine: row.sourceLine, joinsPrevious: row.joinsPrevious)
+        }
     }
 }

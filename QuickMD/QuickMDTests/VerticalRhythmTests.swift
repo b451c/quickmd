@@ -417,6 +417,61 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(headIndents.first, tightIndent)
     }
 
+    /// The paragraph head indent of every ordered item in the text rows, in
+    /// reading order — where each item's text starts.
+    private func orderedItemIndents(_ blocks: [MarkdownBlock]) throws -> [CGFloat] {
+        var indents: [CGFloat] = []
+        for block in blocks {
+            guard case .text(let attributed) = block.content else { continue }
+            let string = try NSAttributedString(attributed, including: \.appKit)
+            let text = string.string as NSString
+            text.enumerateSubstrings(in: NSRange(location: 0, length: text.length), options: .byParagraphs) {
+                paragraph, range, _, _ in
+                guard let paragraph, paragraph.range(of: #"^\s*\d+\.\s"#, options: .regularExpression) != nil
+                else { return }
+                let style = string.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+                indents.append((style as? NSParagraphStyle)?.headIndent ?? -1)
+            }
+        }
+        return indents
+    }
+
+    /// A list longer than a text row may be (`textChunkLineLimit`) is cut into
+    /// rows; 1.14.4 measured the widest marker per ROW, so items 1–8 above
+    /// the cut hung under "8. " and items 9–12 below it under "12. " — two
+    /// text edges in one list. The widest marker is the LIST's.
+    func testAnOrderedListCutIntoRowsKeepsOneTextEdge() throws {
+        let items = (1...12).map { n in
+            "\(n). item \(n)\n   - sub a\n   - sub b\n   - sub c"
+        }
+        let blocks = parse(items.joined(separator: "\n"))
+        XCTAssertEqual(blocks.count, 2)
+        XCTAssertEqual(blocks.map(\.joinsPrevious), [false, true])
+        let indents = try orderedItemIndents(blocks)
+        XCTAssertEqual(indents.count, 12)
+        XCTAssertEqual(Set(indents).count, 1, "\(indents)")
+    }
+
+    /// The steps of a list whose items each hold a code block: every step is
+    /// a row of its own between two code blocks, and 1.14.4 hung each under
+    /// its OWN number — the digits are proportional, so "1. " to "9. " each
+    /// started the text at a different x and "10. " further right still.
+    func testOrderedStepsWithCodeBlocksKeepOneTextEdge() throws {
+        let steps = (1...11).map { "\($0). Step \($0)\n   ```sh\n   run \($0)\n   ```" }
+        let blocks = parse(steps.joined(separator: "\n"))
+        XCTAssertEqual(blocks.filter { if case .codeBlock = $0.content { return true }; return false }.count, 11)
+        let indents = try orderedItemIndents(blocks)
+        XCTAssertEqual(indents.count, 11)
+        XCTAssertEqual(Set(indents).count, 1, "\(indents)")
+
+        // A block NOT under the list (not indented) ends it: the list after
+        // it hangs on its own.
+        let separate = try orderedItemIndents(parse("1. a\n2. b\n\n```\ncode\n```\n\n10. c"))
+        XCTAssertEqual(separate.count, 3)
+        XCTAssertEqual(separate[0], separate[1])
+        XCTAssertNotEqual(separate[1], separate[2])
+    }
+
     // MARK: - Partial re-measures carry the column
 
     @MainActor
