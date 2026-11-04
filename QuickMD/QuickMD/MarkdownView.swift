@@ -1220,7 +1220,8 @@ struct MarkdownView: View {
                            let section = SectionExtractor.extractSection(from: currentText, entry: entry, headings: headings) {
                             copyToClipboard(section)
                         }
-                    }
+                    },
+                    isReadingMode: isReadingMode
                 )
 
             case .mathBlock(let latex):

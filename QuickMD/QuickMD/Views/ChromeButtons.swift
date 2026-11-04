@@ -33,6 +33,9 @@ struct HeadingBlockView: View {
     let focusedOccurrence: Int?
     let onLink: (URL) -> Void
     let onCopySection: () -> Void
+    /// Reading Mode: no copy button; the title keeps its reserved strip
+    /// (`Metrics.titleTrailingPadding`), so nothing re-wraps.
+    var isReadingMode: Bool = false
     @State private var isHovered = false
     @State private var hideWorkItem: DispatchWorkItem?
 
@@ -63,36 +66,38 @@ struct HeadingBlockView: View {
             cacheScope: "\(level)|\(title)",
             onLink: onLink
         )
-        .padding(.trailing, Metrics.copyButtonReservedWidth)
+        .padding(.trailing, Metrics.titleTrailingPadding(isReadingMode: isReadingMode))
         .padding(.top, geometry.titleTopInset)
         .frame(minHeight: geometry.minimumHeight, alignment: .top)
         .overlay {
             // The reader only reads the row width the cell already gave this
             // view; nothing here sizes the row. Its empty area is not hittable,
             // so drags on the title still reach the text view.
-            GeometryReader { proxy in
-                // `buttonTopInset` puts the icon's baseline on the title's first
-                // baseline, as the old `.firstTextBaseline` HStack did.
-                Button {
-                    onCopySection()
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: Metrics.copyButtonIconFontSize))
-                        .foregroundColor(.secondary.opacity(0.7))
-                        .padding(Metrics.copyButtonIconPadding)
-                        .contentShape(Rectangle())
+            if Metrics.showsCopyButton(isReadingMode: isReadingMode) {
+                GeometryReader { proxy in
+                    // `buttonTopInset` puts the icon's baseline on the title's first
+                    // baseline, as the old `.firstTextBaseline` HStack did.
+                    Button {
+                        onCopySection()
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: Metrics.copyButtonIconFontSize))
+                            .foregroundColor(.secondary.opacity(0.7))
+                            .padding(Metrics.copyButtonIconPadding)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Copy section")
+                    // The button lies on the title's text view, whose I-beam would
+                    // otherwise show over the icon; re-set on every move, as the
+                    // text view updates its cursor on mouse moves too.
+                    .onContinuousHover { phase in
+                        if case .active = phase { NSCursor.arrow.set() }
+                    }
+                    .opacity(isHovered ? 1 : 0)
+                    .padding(.top, geometry.buttonTopInset)
+                    .padding(.leading, copyButtonLeading(rowWidth: proxy.size.width, headingAttr: headingAttr))
                 }
-                .buttonStyle(.plain)
-                .help("Copy section")
-                // The button lies on the title's text view, whose I-beam would
-                // otherwise show over the icon; re-set on every move, as the
-                // text view updates its cursor on mouse moves too.
-                .onContinuousHover { phase in
-                    if case .active = phase { NSCursor.arrow.set() }
-                }
-                .opacity(isHovered ? 1 : 0)
-                .padding(.top, geometry.buttonTopInset)
-                .padding(.leading, copyButtonLeading(rowWidth: proxy.size.width, headingAttr: headingAttr))
             }
         }
         .contentShape(Rectangle())

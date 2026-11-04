@@ -234,6 +234,14 @@ enum BlockLayout {
         /// title at the same reduced width.
         static let copyButtonReservedWidth: CGFloat = copyButtonSpacing + copyButtonWidth
 
+        /// Reading Mode hides the copy button (no chrome while reading)…
+        static func showsCopyButton(isReadingMode: Bool) -> Bool { !isReadingMode }
+
+        /// …but NOT its strip: the title is padded by the same width in both
+        /// modes, so its wrap width, this measurer's heights and the row
+        /// heights do not change when the mode toggles.
+        static func titleTrailingPadding(isReadingMode: Bool) -> CGFloat { copyButtonReservedWidth }
+
         // MARK: Horizontal placement of the copy button
 
         /// The width the title wraps at inside a heading row `rowWidth` wide —
