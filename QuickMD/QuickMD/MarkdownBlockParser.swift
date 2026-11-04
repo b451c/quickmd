@@ -84,9 +84,9 @@ struct MarkdownBlockParser: Sendable {
         // Headings carry the original line number so section copy can slice the
         // raw text without re-detecting headings itself.
         var lineMap: [Int] = []
-        // Indices in `lines` of quote lines a link definition was taken out
-        // of: kept as markers without text, so the block loop knows the
-        // quote's paragraph they open (`DefinitionPlacement.linkDefinition`).
+        // Indices in `lines` of quote lines a link or footnote definition was
+        // taken out of: kept as markers without text, so the block loop knows
+        // the quote's paragraph they open (`DefinitionPlacement.definitionTaken`).
         var definitionLines = Set<Int>()
         // Fenced code and `$$` blocks, read as the block loop reads them: a
         // definition inside one is that block's text (GitHub).
@@ -113,12 +113,24 @@ struct MarkdownBlockParser: Sendable {
                 footnoteDefinitions.append((id: fnId, content: fnContent))
                 if !footnoteIds.contains(fnId) { footnoteIds.append(fnId) }
                 placement.definition()
+            } else if let text = placement.footnoteDefinitionText(trimmed),
+                      let match = Self.footnoteDefRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                      let idRange = Range(match.range(at: 1), in: text),
+                      let contentRange = Range(match.range(at: 2), in: text) {
+                // A quote's footnote: before the link pattern here too.
+                let fnId = String(text[idRange])
+                footnoteDefinitions.append((id: fnId, content: String(text[contentRange])))
+                if !footnoteIds.contains(fnId) { footnoteIds.append(fnId) }
+                _ = placement.definitionTaken(trimmed)
+                lines.append(line)
+                lineMap.append(originalIndex)
+                definitionLines.insert(lines.count - 1)
             } else if let text = placement.linkDefinitionText(trimmed),
                       let match = Self.refLinkDefRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
                       let idRange = Range(match.range(at: 1), in: text),
                       let urlRange = Range(match.range(at: 2), in: text) {
                 referenceDefinitions[String(text[idRange]).lowercased()] = String(text[urlRange])
-                if placement.linkDefinition(trimmed) {
+                if placement.definitionTaken(trimmed) {
                     lines.append(line)
                     lineMap.append(originalIndex)
                     definitionLines.insert(lines.count - 1)
@@ -1329,6 +1341,11 @@ struct MarkdownBlockParser: Sendable {
         if MarkdownRenderer.isThematicBreak(line) || MarkdownRenderer.isListItem(line) { return false }
         if ["-", "*", "+"].contains(marker) { return false }   // an empty item
         if startsHTMLBlock(marker) { return false }
+        // A footnote definition starts a block (GFM): `> > a` then
+        // `> [^m]: note` is the outer quote's footnote, not lazy text.
+        if footnoteDefRegex.firstMatch(in: marker, range: NSRange(marker.startIndex..., in: marker)) != nil {
+            return false
+        }
         return true
     }
 
@@ -1390,13 +1407,26 @@ struct MarkdownBlockParser: Sendable {
             }
         }
 
-        /// A LINK definition taken out of `marker` (a `markerLine`). Out of a
-        /// quote line, it opens a paragraph of that quote — of definitions
-        /// only, which draws nothing and which a lazy line continues in the
-        /// quote (GitHub) — and the line stays for the block loop as a
-        /// marker: true. A lazy definition after such a paragraph goes on
-        /// with it; any other definition ends what came before.
-        mutating func linkDefinition(_ marker: String) -> Bool {
+        /// What a FOOTNOTE definition on a quote line (its `markerLine`)
+        /// would be read from: what follows its markers. A footnote
+        /// definition may interrupt a paragraph (GitHub), so anywhere in the
+        /// quote but in its fence. Nil for any other line: the pre-pass
+        /// reads a line without markers whole.
+        func footnoteDefinitionText(_ marker: String) -> String? {
+            guard marker.hasPrefix(">") else { return nil }
+            let (level, content) = Self.quoteMarkers(of: marker)
+            if let tip = quote, tip.inFence, level >= quoteLevel { return nil }
+            return MarkdownBlockParser.markerLine(String(content))
+        }
+
+        /// A link or footnote definition taken out of `marker` (a
+        /// `markerLine`). Out of a quote line, it opens a paragraph of that
+        /// quote — of definitions only, which draws nothing and which a lazy
+        /// line continues in the quote (GitHub) — and the line stays for the
+        /// block loop as a marker: true. A lazy link definition after such a
+        /// paragraph goes on with it; any other definition ends what came
+        /// before.
+        mutating func definitionTaken(_ marker: String) -> Bool {
             if marker.hasPrefix(">") {
                 let (level, content) = Self.quoteMarkers(of: marker)
                 var tip = quote ?? QuoteTip()
