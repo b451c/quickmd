@@ -195,6 +195,20 @@ final class SectionExtractorTests: XCTestCase {
                        "One  \nTwo\\\nThree\n---")
     }
 
+    /// A line break inside a code span is a space (CommonMark), so a code
+    /// span across a Setext title's break keeps one in the id: `code-span`.
+    /// Outside a code span the break is dropped, also between two spans
+    /// (GitHub, gfm/h6_*.html). The span kept the break, which the slug
+    /// dropped: `codespan`.
+    func testACodeSpanAcrossASetextBreakKeepsASpaceInTheId() {
+        let md = "`code\nspan`\n===\n\n`code`\n`span`\n===\n\n``a\nb``\n===\n\nUse `a\nb` and\nmore\n---\n"
+        let anchors = anchorHeadings(of: md)
+        XCTAssertEqual(HeadingAnchors.ids(for: anchors.map(\.text)),
+                       ["code-span", "codespan", "a-b", "use-a-b-andmore"])
+        XCTAssertEqual(HeadingAnchors.target(forFragment: "code-span", in: anchors), .heading(anchors[0].id))
+        XCTAssertEqual(headings(of: md).map(\.title), ["`code span`", "`code` `span`", "``a b``", "Use `a b` and more"])
+    }
+
     func testFragmentFindsItsHeading() {
         let headings = anchorHeadings(of: """
         # Guide

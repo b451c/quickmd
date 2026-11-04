@@ -840,7 +840,10 @@ struct MarkdownRenderer: Sendable {
             }
         }
 
-        var code = String(afterOpening[..<closeRange.lowerBound])
+        // A line break inside a code span is a space (CommonMark). Only a
+        // Setext title's anchor text still has one here
+        // (`headingAnchorText`): `code⏎span` is `code-span` on GitHub.
+        var code = String(afterOpening[..<closeRange.lowerBound]).replacingOccurrences(of: "\n", with: " ")
 
         // Strip one leading and one trailing space for double-backtick (CommonMark spec)
         if backtickCount == 2 && code.hasPrefix(" ") && code.hasSuffix(" ") && code.count > 1 {
