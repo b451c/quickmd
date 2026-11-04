@@ -798,14 +798,25 @@ enum BlockHeightMeasurer {
     /// container height, `ensureLayout`, `ceil(usedRect.height)`. Anything else
     /// here breaks parity.
     static func exactHeight(text ns: NSAttributedString, width: CGFloat) -> CGFloat {
-        let (layoutManager, container, storage) = laidOut(ns, width: width)
-        return withExtendedLifetime(storage) { ceil(layoutManager.usedRect(for: container).height) }
+        autoreleasepool {
+            let (layoutManager, container, storage) = laidOut(ns, width: width)
+            return withExtendedLifetime(storage) { ceil(layoutManager.usedRect(for: container).height) }
+        }
     }
 
     /// `exactHeight`, plus where the text's ink starts and ends — the edges
     /// `BlockLayout.Spacing` measures optical gaps from. ONE layout pass: the
     /// baselines are read from the layout `exactHeight` computes anyway.
+    ///
+    /// Both run in their own autorelease pool: TextKit autoreleases parts of
+    /// every stack it lays out, and one measure pass lays out every text row —
+    /// thousands in a prose document, whose peak memory grew with the row
+    /// count (5000 paragraphs: 37.7 MB → 26.1 MB, no time cost).
     static func textInk(text ns: NSAttributedString, width: CGFloat) -> BlockLayout.Spacing.TextInk {
+        autoreleasepool { textInkInPool(text: ns, width: width) }
+    }
+
+    private static func textInkInPool(text ns: NSAttributedString, width: CGFloat) -> BlockLayout.Spacing.TextInk {
         let (layoutManager, container, storage) = laidOut(ns, width: width)
         return withExtendedLifetime(storage) {
             let height = ceil(layoutManager.usedRect(for: container).height)

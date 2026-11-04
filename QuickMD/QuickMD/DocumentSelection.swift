@@ -347,12 +347,13 @@ enum DocumentCopyBuilder {
 
     static func build(parts: [Part]) -> DocumentCopyOutput {
         let result = NSMutableAttributedString()
+        let rowBreak = NSAttributedString(string: rowSeparator)
+        let lineBreak = NSAttributedString(string: continuationSeparator)
         for part in parts {
             let text = attributed(for: part.piece)
             guard text.length > 0 else { continue }
             if result.length > 0 {
-                result.append(NSAttributedString(string: part.continuesPrevious ? continuationSeparator
-                                                                                  : rowSeparator))
+                result.append(part.continuesPrevious ? lineBreak : rowBreak)
             }
             result.append(text)
         }
