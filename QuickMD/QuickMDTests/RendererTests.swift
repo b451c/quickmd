@@ -810,4 +810,21 @@ final class RendererTests: XCTestCase {
         }
     }
 
+
+    /// Review R5: CommonMark lets a backslash escape ANY ASCII punctuation
+    /// (`\&amp;` is the text "&amp;"); expected from `gh api markdown`. `\$`
+    /// is the one exception (keeps its backslash: inline math is found in the
+    /// rendered text). The Contents sidebar shows exactly the heading's text.
+    func testEveryASCIIPunctuationEscapesAndTheToCShowsTheHeadingText() {
+        XCTAssertEqual(rendered("a \\&amp; \\< \\~x\\~ \\\" \\@ \\^ \\, b"), "a &amp; < ~x~ \" @ ^ , b")
+        XCTAssertEqual(rendered("\\$5"), "\\$5", "no bare $ that inline math would take")
+        let heading = String(renderer.renderHeader("\\&amp; `&lt;x&gt;`", level: 1).characters)
+        XCTAssertEqual(heading, "&amp; &lt;x&gt;")
+
+        let entry = ToCEntry(id: "heading-0", level: 1, title: "\\&amp; `&lt;x&gt;` **Q&amp;A**", sourceLine: 0)
+        XCTAssertEqual(entry.shownTitle(renderer: renderer), "&amp; &lt;x&gt; Q&A", "the ToC row = the heading")
+        XCTAssertEqual(entry.shownTitle(renderer: renderer),
+                       String(renderer.renderHeader(entry.title, level: 1).characters))
+    }
+
 }

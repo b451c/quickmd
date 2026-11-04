@@ -307,8 +307,15 @@ struct MarkdownTheme: Sendable, Identifiable {
     // MARK: - Escape Characters
 
     /// Characters that can be escaped with backslash in markdown
-    /// Example: \* renders as literal asterisk instead of italic marker
-    static let escapableChars: Set<Character> = ["\\", "`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", ".", "!", "|"]
+    /// Example: \* renders as literal asterisk instead of italic marker.
+    /// CommonMark's full list — every ASCII punctuation character (`\&amp;`
+    /// shows "&amp;", `\<` shows "<", as on GitHub) — EXCEPT `$`: inline math
+    /// is found in the RENDERED text (`InlineMathSegmenter`), so a `\$` that
+    /// rendered as a bare `$` would open a formula; it keeps its backslash.
+    static let escapableChars: Set<Character> = [
+        "!", "\"", "#", "%", "&", "'", "(", ")", "*", "+", ",", "-", ".", "/", ":", ";", "<", "=", ">",
+        "?", "@", "[", "\\", "]", "^", "_", "`", "{", "|", "}", "~",
+    ]
 
     // MARK: - Reference Link Definitions
 

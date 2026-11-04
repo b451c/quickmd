@@ -11,6 +11,13 @@ struct ToCEntry: Identifiable, Sendable {
     let level: Int
     let title: String
     let sourceLine: Int
+
+    /// What the Contents sidebar lists: exactly the text the heading shows
+    /// (`renderHeader`'s characters — markup gone, references decoded, a code
+    /// span's `&lt;` kept), the same text the heading's id is made from.
+    func shownTitle(renderer: MarkdownRenderer) -> String {
+        String(renderer.renderHeader(title, level: level).characters)
+    }
 }
 
 // MARK: - Contents Depth

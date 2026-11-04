@@ -104,8 +104,8 @@ private struct ToCEntryRow: View {
             Button {
                 onSelect()
             } label: {
-                // Character references as the heading shows them (`Q&amp;A` → `Q&A`).
-                Text(HTMLEntities.decode(entry.title))
+                // The text the heading shows (markup gone, `Q&amp;A` → `Q&A`).
+                Text(entry.shownTitle(renderer: MarkdownRenderer(theme: theme)))
                     .font(.system(size: fontSize(for: entry.level), weight: fontWeight(for: entry.level)))
                     .foregroundColor(theme.textColor)
                     .lineLimit(2)
