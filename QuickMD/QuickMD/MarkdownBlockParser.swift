@@ -134,6 +134,9 @@ struct MarkdownBlockParser: Sendable {
             } else if let text = placement.linkDefinitionText(trimmed),
                       let match = Self.refLinkDefRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
                       let idRange = Range(match.range(at: 1), in: text),
+                      // A label of whitespace only defines nothing (CommonMark):
+                      // the line is text.
+                      !ReferenceLabel.normalized(text[idRange]).isEmpty,
                       let urlRange = Range(match.range(at: 2), in: text) {
                 // Character references in the destination are decoded, as in
                 // an inline link's (`InlineSyntaxScanner.unescaped`). The FIRST

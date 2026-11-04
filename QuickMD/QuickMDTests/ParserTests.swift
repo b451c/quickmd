@@ -717,6 +717,22 @@ final class ParserTests: XCTestCase {
         XCTAssertFalse(listed.contains("Dup two"), listed)
     }
 
+    /// R21b: a label of whitespace only (`[ ]:`, `[\t]:`) defines nothing —
+    /// the line is paragraph text and `[ ]` / `[x][ ]` stay literal (GitHub,
+    /// `gh api markdown`, 2026-11-04). It was taken out as a definition of "".
+    func testWhitespaceOnlyLabelDefinesNothing() {
+        let blocks = parse("[ ] and [x][ ] and [y][\t]\n\n[ ]: https://empty\n\n[\t]: https://tab\n")
+        let texts = blocks.compactMap { block -> AttributedString? in
+            guard case .text(let text) = block.content else { return nil }
+            return text
+        }
+        XCTAssertEqual(texts.map { String($0.characters) },
+                       ["[ ] and [x][ ] and [y][\t]", "[ ]: https://empty", "[\t]: https://tab"])
+        // Only the bare URLs link (autolinks, as on GitHub).
+        XCTAssertEqual(texts.map { text in text.runs.compactMap { $0.link?.absoluteString } },
+                       [[], ["https://empty"], ["https://tab"]])
+    }
+
     /// R19: reference labels match as CommonMark's (`ReferenceLabel`) in
     /// every lookup — whitespace runs (tab, line break) are one space, the
     /// ends trimmed, Unicode case folding (`ẞ` = `SS`, `straße` = `STRASSE`,
