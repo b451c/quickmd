@@ -197,11 +197,7 @@ enum ImageLoader {
         }
     }
 
-    private static let failureCache: NSCache<NSString, FailureEntry> = {
-        let cache = NSCache<NSString, FailureEntry>()
-        cache.countLimit = 512
-        return cache
-    }()
+    private static let failureCache = ImageCache<FailureEntry>(countLimit: 512)
 
     static let networkFailureLifetime: TimeInterval = 60
 
@@ -235,13 +231,21 @@ enum ImageLoader {
         printCache.removeAllObjects()
     }
 
-    private static func makeCache() -> NSCache<NSString, Entry> {
-        let cache = NSCache<NSString, Entry>()
-        cache.totalCostLimit = 256 * 1024 * 1024
-        return cache
+    #if DEBUG
+    /// Unit tests only: see `ImageCache.retainEntriesForTesting`. Starts every
+    /// cache empty, in both directions.
+    static func retainCachedEntriesForTesting(_ retain: Bool) {
+        displayCache.retainEntriesForTesting(retain)
+        printCache.retainEntriesForTesting(retain)
+        failureCache.retainEntriesForTesting(retain)
+    }
+    #endif
+
+    private static func makeCache() -> ImageCache<Entry> {
+        ImageCache<Entry>(totalCostLimit: 256 * 1024 * 1024)
     }
 
-    private static func cache(for maxPixel: Int) -> NSCache<NSString, Entry>? {
+    private static func cache(for maxPixel: Int) -> ImageCache<Entry>? {
         switch maxPixel {
         case displayMaxPixel: return displayCache
         case printMaxPixel: return printCache
@@ -528,6 +532,83 @@ enum ImageLoader {
         let cost = max(1, pixels > 0 ? pixels * 4 : Int(size.width) * Int(size.height) * 4)
         cache.setObject(entry, forKey: key, cost: cost)
     }
+}
+
+// MARK: - Cache
+
+/// The loader's caches: an `NSCache` keyed by `NSString` (why NSString: see
+/// `ImageLoader.displayCache`) behind a forwarder whose only purpose is a
+/// Debug-build test seam. In Release every method is a plain forward to the
+/// NSCache — same keys, same costs, same limits, same eviction.
+///
+/// Why the seam exists: `NSCache` may evict ANY object at any moment under
+/// system memory pressure, whatever its limits, so a unit test asserting "the
+/// second lookup is a cache hit" failed on a loaded machine (2026-10-22). Tests
+/// switch the caches to a store that holds strong references until switched
+/// back; the loader code they exercise is the code that ships.
+final class ImageCache<Value: AnyObject> {
+    private let cache = NSCache<NSString, Value>()
+
+    /// 0 = no limit, NSCache's own default.
+    init(totalCostLimit: Int = 0, countLimit: Int = 0) {
+        cache.totalCostLimit = totalCostLimit
+        cache.countLimit = countLimit
+    }
+
+    func object(forKey key: NSString) -> Value? {
+        #if DEBUG
+        if let retained { return retained.object(forKey: key) }
+        #endif
+        return cache.object(forKey: key)
+    }
+
+    func setObject(_ object: Value, forKey key: NSString, cost: Int = 0) {
+        #if DEBUG
+        if let retained { return retained.setObject(object, forKey: key) }
+        #endif
+        cache.setObject(object, forKey: key, cost: cost)
+    }
+
+    func removeAllObjects() {
+        #if DEBUG
+        if let retained { return retained.removeAll() }
+        #endif
+        cache.removeAllObjects()
+    }
+
+    #if DEBUG
+    private var retained: RetainingStore?
+
+    /// `true`: from now on entries live in a fresh dictionary that never
+    /// evicts (keys compare like NSCache's: `hash` / `isEqual:` of the
+    /// NSString); `false`: back to the NSCache, emptied. Switch only while no
+    /// load is in flight (test `setUp` / `tearDown`).
+    func retainEntriesForTesting(_ retain: Bool) {
+        cache.removeAllObjects()
+        retained = retain ? RetainingStore() : nil
+    }
+
+    /// Locked: the loader stores from detached decode tasks.
+    private final class RetainingStore {
+        private let lock = NSLock()
+        private var entries: [NSString: Value] = [:]
+
+        func object(forKey key: NSString) -> Value? {
+            lock.lock(); defer { lock.unlock() }
+            return entries[key]
+        }
+
+        func setObject(_ object: Value, forKey key: NSString) {
+            lock.lock(); defer { lock.unlock() }
+            entries[key] = object
+        }
+
+        func removeAll() {
+            lock.lock(); defer { lock.unlock() }
+            entries.removeAll()
+        }
+    }
+    #endif
 }
 
 // MARK: - Labels
