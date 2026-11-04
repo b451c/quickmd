@@ -5,6 +5,19 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.1] - 2026-11-04
+
+A default zoom level, a title bar that matches your theme, and a few fixes. Thanks to [@jb614](https://github.com/jb614) (#48)!
+
+### Added
+- **Default zoom** in Settings ▸ Fonts (90% to 200%): every document opens at that size. ⌘+ and ⌘− still zoom one window, and ⌘0 (View ▸ Actual Size, or the zoom pill) goes back to the default. A window still at the default follows a change of the setting; one you zoomed keeps its size. Print and PDF export stay at 100%. Asked for by [@jb614](https://github.com/jb614) (#48).
+
+### Fixed
+- A light theme on a dark Mac, or a dark theme on a light one: the window title, the window buttons and the top-right buttons now match the theme. They followed the system appearance and could be white on white or black on black.
+- Search counts what quotes, alerts, headings and formulas show: a term found only in Markdown markup, a link address or a formula's LaTeX is no longer counted without being highlighted, and ⌘G steps through the highlighted matches in order (tables got the same fix in 1.13).
+- Search results stay current when the document is redrawn with the find bar open (reload, zoom, theme or font change), and the document does not move.
+- PDF export and print: table headers are semibold, as on screen.
+
 ## [1.14.0] - 2026-10-29
 
 Links to headings, a Contents sidebar as deep as you want it, and tables that keep an escaped pipe. Thanks to [@rinh](https://github.com/rinh) (#44) and [@SteveHigham](https://github.com/SteveHigham) (#42, #43)!

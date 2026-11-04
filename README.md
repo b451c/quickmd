@@ -60,7 +60,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - CommonMark soft breaks; Windows (CRLF) and legacy line endings; UTF-16 and Latin-1 files
 
 ### Navigation & Search
-- Zoom the whole document (`⌘+` / `⌘-` / `⌘0`) — per window, everything scales
+- Zoom the whole document (`⌘+` / `⌘-` / `⌘0`) — per window, everything scales; set the size every document opens at in Settings → Fonts
 - Find in document (`⌘F`) with match count and per-word navigation
 - Word-level highlighting across all block types (text, code, tables, blockquotes)
 - Table of Contents sidebar (`⌘⇧T`) — auto-generated from headings; right-click it to list every level or stop at H2, H3 or H4
@@ -72,7 +72,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 ### Custom Themes & Fonts
 - 7 built-in themes: Auto, Solarized Light/Dark, Dracula, GitHub, Gruvbox Dark, Nord
 - **User themes from disk** — drop a JSON file into `~/Library/Application Support/QuickMD/Themes/` (GitHub and Homebrew builds; the Mac App Store build keeps the same folder inside its container, `~/Library/Containers/pl.falami.studio.QuickMD/Data/`), or use the **Import Theme…** button in Settings. Live reload, no restart. See [docs/themes/](docs/themes/) for the schema and examples.
-- **Custom font families** — pick any installed font for body text and another for code in Settings → Fonts (JetBrains Mono for code, a serif for reading…). Applies to the document, print and PDF; size and zoom are unaffected. Themes can set their own with `bodyFontFamily` / `codeFontFamily`.
+- **Custom font families** — pick any installed font for body text and another for code in Settings → Fonts (JetBrains Mono for code, a serif for reading…). Applies to the document, print and PDF. Themes can set their own with `bodyFontFamily` / `codeFontFamily`.
 - Settings panel (`⌘,`) with color and font previews
 - Dark mode follows the system, or pick a fixed theme; theme and fonts persist across restarts
 
@@ -167,7 +167,7 @@ Now all your Markdown files will open instantly with QuickMD!
 | `⌘⇧E` | Export to PDF |
 | `⌘P` | Print |
 | `⌘,` | Settings (themes, fonts, external editor) |
-| `⌘+` / `⌘-` / `⌘0` | Zoom in / out / actual size |
+| `⌘+` / `⌘-` / `⌘0` | Zoom in / out / back to the default size |
 
 ## Under the Hood
 
