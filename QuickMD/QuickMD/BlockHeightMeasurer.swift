@@ -432,6 +432,12 @@ enum BlockLayout {
 
     enum Mermaid {
         static let verticalPadding: CGFloat = 8
+        /// Space between the diagram's box and its first ink, at 1.0: the
+        /// `diagramPadding` Mermaid puts around a flowchart, class or state
+        /// graph inside its SVG (8 px), drawn at the diagram's scale — the
+        /// zoom, for a diagram narrower than the column. The diagram has no
+        /// frame, so this is where the eye sees it start (measured: 8–9 pt).
+        static let inkInset: CGFloat = 8
         /// Height a diagram starts at when nothing has measured it yet.
         static let defaultHeight: CGFloat = 200
         static let cornerRadius: CGFloat = 6
@@ -912,8 +918,10 @@ enum BlockHeightMeasurer {
 
         for (row, block) in blocks.enumerated() {
             // Text and headings have their edges measured below; every other
-            // kind's are fixed by its view (`boxRhythm`).
+            // kind's are fixed by its view (`boxRhythm`) — a quote's from its
+            // text's ink.
             var textEdges: BlockLayout.Spacing.Edges?
+            var quoteInk: BlockLayout.Spacing.TextInk?
             switch block.content {
 
             case .text(let attributed):
@@ -947,8 +955,9 @@ enum BlockHeightMeasurer {
                     theme: theme, fontScale: fontScale, math: engine)
                 converted[block.id] = ns
                 let width = BlockLayout.Quote.bodyWidth(contentWidth: contentWidth, level: level)
-                heights.append(exactHeight(text: ns, width: width)
-                               + 2 * BlockLayout.Quote.verticalPadding)
+                let ink = textInk(text: ns, width: width)
+                quoteInk = ink
+                heights.append(ink.height + 2 * BlockLayout.Quote.verticalPadding)
                 kinds.append(.exact)
 
             case .alert(_, let content):
@@ -1024,7 +1033,8 @@ enum BlockHeightMeasurer {
                                + 2 * BlockLayout.Document.mermaidOuterVerticalPadding)
                 kinds.append(.reported)
             }
-            rhythm.append(textEdges.map { rhythmRow(block, edges: $0) } ?? boxRhythm(block))
+            rhythm.append(textEdges.map { rhythmRow(block, edges: $0) }
+                          ?? boxRhythm(block, fontScale: fontScale, quoteInk: quoteInk))
         }
 
         #if DEBUG
@@ -1057,24 +1067,37 @@ enum BlockHeightMeasurer {
     }
 
     /// The rhythm input of a row whose edges its view fixes: the vertical
-    /// padding between the row's edge and the visible box (or the picture).
-    /// Front matter (either form) is the parser's call: `isFrontMatter`.
-    private static func boxRhythm(_ block: MarkdownBlock) -> BlockLayout.Spacing.Row {
+    /// padding between the row's edge and the visible box (or the picture) —
+    /// where the eye sees the block start. Two blocks have no visible box: a
+    /// quote is read by its text (`quoteInk`, its edges are a paragraph's,
+    /// `Edges.text(_:padding:)`), a diagram by its first ink
+    /// (`Mermaid.inkInset`). A display formula's picture IS its ink (measured:
+    /// within 1.5 pt). Front matter (either form) is the parser's call.
+    private static func boxRhythm(_ block: MarkdownBlock, fontScale: CGFloat,
+                                  quoteInk: BlockLayout.Spacing.TextInk? = nil) -> BlockLayout.Spacing.Row {
         typealias Document = BlockLayout.Document
+        let role: BlockLayout.Spacing.Role = block.isFrontMatter ? .frontMatter : .box
         let pad: CGFloat
         switch block.content {
-        case .blockquote: pad = BlockLayout.Quote.verticalPadding
+        case .blockquote:
+            pad = BlockLayout.Quote.verticalPadding
+            if let quoteInk {
+                return BlockLayout.Spacing.Row(role: role, edges: .text(quoteInk, padding: pad),
+                                               joinsPrevious: block.joinsPrevious)
+            }
         case .alert: pad = Document.alertOuterVerticalPadding
         case .codeBlock: pad = Document.codeOuterVerticalPadding
         case .table:
             pad = Document.tableOuterVerticalPadding
         case .mathBlock: pad = Document.mathOuterVerticalPadding + BlockLayout.Math.verticalPadding
-        case .mermaidDiagram: pad = Document.mermaidOuterVerticalPadding + BlockLayout.Mermaid.verticalPadding
+        case .mermaidDiagram:
+            pad = Document.mermaidOuterVerticalPadding + BlockLayout.Mermaid.verticalPadding
+                + BlockLayout.Mermaid.inkInset * fontScale
         case .image, .svgImage: pad = Document.imageOuterVerticalPadding
         case .text, .heading: pad = 0  // measured, never here
         }
-        return BlockLayout.Spacing.Row(role: block.isFrontMatter ? .frontMatter : .box,
-                                       edges: .box(top: pad, bottom: pad), joinsPrevious: block.joinsPrevious)
+        return BlockLayout.Spacing.Row(role: role, edges: .box(top: pad, bottom: pad),
+                                       joinsPrevious: block.joinsPrevious)
     }
 
     /// One `.codeBlock` row: the code laid out at `codeWidth` plus `chrome`
@@ -1152,7 +1175,7 @@ enum BlockHeightMeasurer {
         // guard only keeps a mismatched call from trapping.
         var rhythm = measured.rhythm.count == blocks.count
             ? measured.rhythm
-            : blocks.map { boxRhythm($0) }
+            : blocks.map { boxRhythm($0, fontScale: fontScale) }
         let textWidth = BlockLayout.clampedWidth(contentWidth)
 
         for index in pending {
@@ -1196,7 +1219,7 @@ enum BlockHeightMeasurer {
                     codeWidth: BlockLayout.clampedWidth(contentWidth - 2 * BlockLayout.Code.horizontalPadding),
                     chrome: BlockLayout.Code.verticalChrome(hasLanguage: !language.isEmpty, fontScale: fontScale))
                 kinds[index] = .exact
-                rhythm[index] = boxRhythm(block)
+                rhythm[index] = boxRhythm(block, fontScale: fontScale)
 
             default:
                 continue

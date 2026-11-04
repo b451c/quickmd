@@ -97,6 +97,18 @@ extension BlockLayout {
                 Edges(inkAbove: top, inkBelow: bottom, boxAbove: top, boxBelow: bottom)
             }
 
+            /// Text set `padding` points inside the row on both sides, with no
+            /// visible box around it: a quote, whose bars span the text's line
+            /// boxes — the eye reads the TEXT. Optical edges on its ink, box
+            /// edges on its line boxes, exactly as a paragraph's, so a quote's
+            /// text sits where a paragraph's would, under a heading and
+            /// between blocks.
+            static func text(_ ink: TextInk, padding: CGFloat) -> Edges {
+                Edges(inkAbove: padding + ink.firstBaseline - ink.firstCapHeight,
+                      inkBelow: padding + ink.height - ink.lastBaseline,
+                      boxAbove: padding, boxBelow: padding)
+            }
+
             /// Text laid out as `ink` describes, `top` points below the row's
             /// top edge, in a row `rowHeight` tall (default: the text's own
             /// height plus `top`). Its line boxes are the row's edges.
@@ -311,7 +323,13 @@ enum PrintRhythm {
     /// alert, table, image, diagram) prints its background or its picture from
     /// its frame's edge; a display formula has its vertical padding.
     /// Front matter (either form) is the parser's call: `isFrontMatter`.
-    static func row(for block: MarkdownBlock, renderer: MarkdownRenderer, width: CGFloat) -> BlockLayout.Spacing.Row {
+    ///
+    /// A printed quote has a background, so unlike the screen's it keeps its
+    /// box edge. A diagram printed as a picture (`diagramIsPicture`; without
+    /// one it prints its source as a code block) starts where its ink does,
+    /// `Mermaid.inkInset` inside the picture, as on screen.
+    static func row(for block: MarkdownBlock, renderer: MarkdownRenderer, width: CGFloat,
+                    diagramIsPicture: Bool = false) -> BlockLayout.Spacing.Row {
         typealias Spacing = BlockLayout.Spacing
         let role: Spacing.Role
         let edges: Spacing.Edges
@@ -326,6 +344,9 @@ enum PrintRhythm {
         case .mathBlock:
             role = .box
             edges = .box(top: BlockLayout.Math.verticalPadding, bottom: BlockLayout.Math.verticalPadding)
+        case .mermaidDiagram where diagramIsPicture:
+            role = .box
+            edges = .box(top: BlockLayout.Mermaid.inkInset, bottom: BlockLayout.Mermaid.inkInset)
         case .table, .codeBlock, .blockquote, .alert, .image, .svgImage, .mermaidDiagram:
             role = .box
             edges = .box(top: 0, bottom: 0)

@@ -744,8 +744,15 @@ class PDFExportManager {
         // The screen's vertical rhythm (`BlockLayout.Spacing`), from the edges
         // of the PRINTED views, at 1.0 zoom — print never follows the window's.
         let printRenderer = MarkdownRenderer(colorScheme: .light)
-        let rhythm = measuredBlocks.enumerated().map { index, measured in
-            PrintRhythm.row(for: measured.block, renderer: printRenderer, width: contentWidth)
+        let rhythm = measuredBlocks.map { measured in
+            let isPicture: Bool
+            if case .mermaidDiagram(let source) = measured.block.content {
+                isPicture = mermaidImages[source] != nil
+            } else {
+                isPicture = false
+            }
+            return PrintRhythm.row(for: measured.block, renderer: printRenderer, width: contentWidth,
+                                   diagramIsPicture: isPicture)
         }
         let spacing = BlockLayout.Spacing.column(rhythm, fontScale: 1)
 

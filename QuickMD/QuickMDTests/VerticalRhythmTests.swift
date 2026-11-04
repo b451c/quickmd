@@ -207,6 +207,55 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertFalse(parse("# Notes\n\n---\ntitle: x\n---")[1...].contains { $0.isFrontMatter })
     }
 
+    /// Where the eye sees a block start under a heading: the heading's last
+    /// baseline to the next block's first ink — measured independently of
+    /// the rhythm's own edges.
+    private func eyeGapUnderHeading(_ follower: String, fontScale: CGFloat,
+                                    firstInk: (MarkdownBlock, MeasuredBlocks) -> CGFloat) -> CGFloat {
+        let blocks = parse("## Heading\n\n" + follower, fontScale: fontScale)
+        let measured = measure(blocks, fontScale: fontScale)
+        return measured.rhythm[0].edges.inkBelow + measured.table.spacingAbove[1] + firstInk(blocks[1], measured)
+    }
+
+    /// The owner's measurement: `## Quotes` → the quote's first line read
+    /// 35 pt, `## Loose ordered list` → its first line 30.5 pt. The quote's
+    /// bar starts above its text; the eye reads the text.
+    func testAQuoteUnderAHeadingSitsWhereAParagraphWould() {
+        for scale: CGFloat in [1, 1.5] {
+            let capTop = { (block: MarkdownBlock, measured: MeasuredBlocks, padding: CGFloat, width: CGFloat) in
+                let ink = BlockHeightMeasurer.textInk(text: measured.converted[block.id]!, width: width)
+                return padding + ink.firstBaseline - ink.firstCapHeight
+            }
+            let paragraph = eyeGapUnderHeading("Some paragraph text.", fontScale: scale) {
+                capTop($0, $1, 0, BlockLayout.clampedWidth(640))
+            }
+            let quote = eyeGapUnderHeading("> Some quoted text.", fontScale: scale) {
+                capTop($0, $1, BlockLayout.Quote.verticalPadding,
+                       BlockLayout.Quote.bodyWidth(contentWidth: 640, level: 1))
+            }
+            XCTAssertEqual(quote, paragraph, accuracy: 1, "at \(scale)")
+            // …and above a heading, from the quote's last baseline.
+            assertEveryGapOnTarget("> A quote.\n\n## Next", fontScale: scale)
+        }
+    }
+
+    /// A diagram has no frame: the eye sees it start at its first ink,
+    /// Mermaid's padding inside the picture.
+    func testADiagramUnderAHeadingStartsWhereAParagraphWould() {
+        for scale: CGFloat in [1, 1.5] {
+            let paragraph = eyeGapUnderHeading("Some paragraph text.", fontScale: scale) { block, measured in
+                let ink = BlockHeightMeasurer.textInk(text: measured.converted[block.id]!,
+                                                      width: BlockLayout.clampedWidth(640))
+                return ink.firstBaseline - ink.firstCapHeight
+            }
+            let diagram = eyeGapUnderHeading("```mermaid\ngraph TD; A-->B\n```", fontScale: scale) { _, _ in
+                BlockLayout.Document.mermaidOuterVerticalPadding + BlockLayout.Mermaid.verticalPadding
+                    + BlockLayout.Mermaid.inkInset * scale
+            }
+            XCTAssertEqual(diagram, paragraph, accuracy: 1, "at \(scale)")
+        }
+    }
+
     // MARK: - Between other blocks
 
     func testNonHeadingPairsAreOneMarginApart() {
