@@ -33,16 +33,41 @@ final class FrontMatterTests: XCTestCase {
     func testBlockSequencesIndentedOrAtColumnZero() {
         XCTAssertEqual(properties("tags:\n  - a\n  - b"), ["tags=a, b"])
         XCTAssertEqual(properties("tags:\n- a\n- b\nnext: x"), ["tags=a, b", "next=x"])
-        XCTAssertEqual(properties("tags:\n    - \"quoted, item\"\n    - 'it''s'"), ["tags=quoted, item, it's"])
+        XCTAssertEqual(properties("tags:\n    - \"quoted, item\"\n    - 'it''s'"), ["tags=quoted, item\u{2028}it's"])
         XCTAssertEqual(properties("tags:\n  - a\n  # between items\n\n  - b"), ["tags=a, b"])
     }
 
     func testFlowSequences() {
         XCTAssertEqual(properties("aliases: [Review 45]"), ["aliases=Review 45"])
-        XCTAssertEqual(properties("tags: [a, b, \"c, d\"]"), ["tags=a, b, c, d"])
+        XCTAssertEqual(properties("tags: [a, b, \"c, d\"]"), ["tags=a\u{2028}b\u{2028}c, d"])
         XCTAssertEqual(properties("tags: ['x', y ]  "), ["tags=x, y"])
         XCTAssertEqual(properties("tags: []"), ["tags="])
         XCTAssertEqual(properties("tags: [ ]"), ["tags="])
+    }
+
+    /// An item that itself contains a comma would read as two items in a
+    /// ", " list: then (and only then) every item of THAT list gets its own
+    /// line — U+2028 inside the cell's one paragraph.
+    func testListWithACommaInAnItemShowsOneItemPerLine() throws {
+        XCTAssertEqual(properties("authors:\n  - \"Doe, Jane\"\n  - Smith\ntags: [x, y]\nplaces: ['Paris, FR', Rome]"),
+                       ["authors=Doe, Jane\u{2028}Smith", "tags=x, y", "places=Paris, FR\u{2028}Rome"])
+        XCTAssertEqual(properties("a:\n  - 1,5\n  - 2"), ["a=1,5\u{2028}2"], "any comma, not only \", \"")
+        XCTAssertEqual(properties("note: one, two"), ["note=one, two"], "a scalar is not a list")
+
+        // The table cell keeps it as one paragraph with a line break inside.
+        let blocks = parse("---\nauthors: [\"Doe, Jane\", Smith]\n---\n")
+        guard case .table(let headers, let rows, let alignments, let style) = blocks.first?.content else {
+            return XCTFail("expected a properties table")
+        }
+        let table = TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments, style: style,
+                                           theme: MarkdownTheme.cached(for: .light), fontScale: 1)
+        let valueRange = table.layout.cellRanges[0][1]
+        XCTAssertEqual((table.string.string as NSString).substring(with: valueRange), "Doe, Jane\u{2028}Smith")
+        let wide = TableTextBuilder.height(of: table.string, width: 600)
+        let oneLine = TableTextBuilder.build(headers: [], rows: [["authors", "Doe Jane, Smith"]],
+                                             alignments: alignments, style: style,
+                                             theme: MarkdownTheme.cached(for: .light), fontScale: 1)
+        XCTAssertGreaterThan(wide, TableTextBuilder.height(of: oneLine.string, width: 600) + 10, "two lines")
     }
 
     func testQuotedScalars() {
