@@ -367,4 +367,190 @@ final class SearchTests: XCTestCase {
                                                        theme: theme, fontScale: 1.5)
         XCTAssertEqual(otherScale.matchBlockIds.count, 1)
     }
+
+    // MARK: - Text kinds (1.14.1): count on the RENDERED string == what is highlighted
+
+    /// Stand-in for SwiftMath (not compiled into the test bundle): every
+    /// formula typesets, as the real engine does for valid LaTeX.
+    private let typesettingMath = MathRendering(
+        inlineImage: { _, _, _ in NSImage(size: NSSize(width: 24, height: 12)) },
+        displayHeight: { _, _, _ in 40 })
+
+    /// The string `block`'s view installs, built the way the VIEW builds it —
+    /// independently of `DocumentSearch`: quote and alert bodies through
+    /// `renderQuotedBody`, headings through `renderHeader` (HeadingBlockView),
+    /// paragraphs as parsed, all through the converter, inline math with a
+    /// typesetting engine. Nil for kinds without a TextBlockView.
+    private func viewString(of block: MarkdownBlock, theme: MarkdownTheme, fontScale: CGFloat = 1) -> NSAttributedString? {
+        let renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
+        func convert(_ attributed: AttributedString, math hasMath: Bool) -> NSAttributedString {
+            BlockTextConverter.makeNSAttributedString(from: attributed, hasInlineMath: hasMath, theme: theme,
+                                                      fontScale: fontScale, math: typesettingMath)
+        }
+        switch block.content {
+        case .text(let attributed):
+            return convert(attributed, math: BlockTextConverter.containsInlineMath(String(attributed.characters)))
+        case .blockquote(let content, _):
+            return convert(renderer.renderQuotedBody(content), math: false)
+        case .alert(_, let content):
+            return content.isEmpty ? nil : convert(renderer.renderQuotedBody(content), math: false)
+        case .heading(let level, let title, _):
+            return convert(renderer.renderHeader(title, level: level), math: false)
+        default:
+            return nil
+        }
+    }
+
+    private let renderedFixtures = [
+        // Blockquote: emphasis, code, a link, an autolink, a footnote ref, an
+        // escaped character, HTML entities, a nested quote marker.
+        "> **needle** and `needle` and [needle](https://needle.example.com/x) <https://auto.example.org>"
+            + " see[^1] a\\*b &amp; &copy; x\n>\n> > deeper needle",
+        // Alert body with the same markup.
+        "> [!NOTE]\n> **needle** `code` [link](https://needle.example.com) a\\*b &amp; ~~gone~~ needle",
+        // Headings.
+        "# **needle** `code` [link](https://needle.example.com) a\\*b &amp; *x*",
+        "## Install with `brew` — see [the guide](https://example.com/guide#needle)",
+        // Paragraph with inline math: terms inside and outside the formula.
+        "x outside $x^2 + y$ and x again, $\\frac{a}{b}$ then y",
+        // Paragraph: markup and a footnote ref.
+        "**needle** in [text](https://needle.example) and `needle`[^n]\n\n[^n]: needle def",
+    ]
+
+    private let renderedTerms = ["needle", "**", "`", "https", "example", "auto", "*", "\\", "&amp;", "&",
+                                 "©", "[^1]", "[", "]", "(", ">", "~~", "gone", "x", "x^2", "$", "y",
+                                 "frac", "{", "code", "link", "guide", "1", "brew", "#"]
+
+    /// The invariant, per block and term: `computeMatches` counts exactly the
+    /// occurrences the block's highlight draws on the string its view shows —
+    /// with the measurer's strings AND with the fallback (no measured
+    /// strings, as before the first layout); the fallback string IS the view
+    /// string; and every focused occurrence paints the k-th highlight.
+    func testTextKindsCountEqualsHighlightsOnTheViewString() {
+        for theme in [MarkdownTheme.cached(for: .light), MarkdownTheme.cached(for: .dark)] {
+            for markdown in renderedFixtures {
+                let blocks = MarkdownBlockParser(theme: theme).parse(markdown)
+                let measured = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1,
+                                                           contentWidth: 600, math: typesettingMath)
+                let renderer = MarkdownRenderer(theme: theme, fontScale: 1)
+                for block in blocks {
+                    guard let shown = viewString(of: block, theme: theme) else { continue }
+                    XCTAssertEqual(DocumentSearch.displayedString(of: block, converted: [:], renderer: renderer),
+                                   shown.string, "fallback == view string: \(block.id) in \(markdown)")
+                    XCTAssertEqual(DocumentSearch.displayedString(of: block, converted: measured.converted,
+                                                                  renderer: renderer),
+                                   shown.string, "measured == view string: \(block.id) in \(markdown)")
+
+                    let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 600, height: 10))
+                    textView.textStorage?.setAttributedString(shown)
+                    for term in renderedTerms {
+                        let tag = "\(block.id) term \(term) in \(markdown)"
+                        let drawn = searchMatchRanges(in: textView.string, term: term)
+                        for converted in [[:], measured.converted] {
+                            let counted = DocumentSearch.computeMatches(in: [block], term: term, converted: converted,
+                                                                        theme: theme, fontScale: 1)
+                            XCTAssertEqual(counted.matchBlockIds.count, drawn.count, tag)
+                        }
+                        // What the highlight paints (adjacent runs merge, so
+                        // compare total length) and where the orange one is.
+                        for focused in 0..<drawn.count {
+                            applyNSSearchHighlight(in: textView, term: term, focusedOccurrence: focused)
+                            let painted = highlights(in: textView)
+                            XCTAssertEqual(painted.map(\.range.length).reduce(0, +),
+                                           drawn.map(\.length).reduce(0, +), tag)
+                            let orange = painted.filter(\.focused).map(\.range)
+                            XCTAssertEqual(orange, [drawn[focused]], "focused \(focused): \(tag)")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The concrete 1.14.0 bugs: markup, URLs and LaTeX were counted although
+    /// nothing is drawn there; the shown text still counts.
+    func testMarkupURLsAndFormulasAreNotCountedInTextKinds() {
+        let quote = "> **bold** `code` [label](https://hidden.example/path) a\\*b &amp; done"
+        XCTAssertEqual(count("**", in: quote), 0, "emphasis markers")
+        XCTAssertEqual(count("`", in: quote), 0, "code markers")
+        XCTAssertEqual(count("hidden", in: quote), 0, "link URL")
+        XCTAssertEqual(count("\\", in: quote), 0, "escape")
+        XCTAssertEqual(count("bold code label a*b", in: quote), 1, "rendered text across styles")
+        // HTML entities are drawn as written (the renderer does not decode
+        // them), so the source IS what shows — counted and highlighted alike.
+        XCTAssertEqual(count("&amp;", in: quote), 1)
+
+        let alert = "> [!WARNING]\n> **bold** [label](https://hidden.example)"
+        XCTAssertEqual(count("**", in: alert), 0)
+        XCTAssertEqual(count("hidden", in: alert), 0)
+        XCTAssertEqual(count("warning", in: alert), 0, "the alert title is chrome, never highlighted")
+        XCTAssertEqual(count("bold label", in: alert), 1)
+
+        let heading = "## **Bold** and [label](https://hidden.example)"
+        XCTAssertEqual(count("**", in: heading), 0)
+        XCTAssertEqual(count("hidden", in: heading), 0)
+        XCTAssertEqual(count("bold and label", in: heading), 1)
+
+        let math = "x before $x^2 + y$ and x after"
+        XCTAssertEqual(count("x", in: math), 2, "only the drawn x's — the formula is an attachment")
+        XCTAssertEqual(count("x^2", in: math), 0)
+        XCTAssertEqual(count("$", in: math), 0)
+        XCTAssertEqual(count("\u{FFFC}", in: math), 1, "the attachment character the view draws")
+    }
+
+    /// The focused block occurrence after a match in markup: 1.14.0 counted
+    /// the quote's URL hit first, so ⌘G's second step pointed at an
+    /// occurrence the highlight does not have.
+    func testFocusedOccurrenceInAQuoteFollowsTheDrawnMatches() {
+        let blocks = parse("> [one](https://needle.example) needle and needle")
+        let ids = DocumentSearch.computeMatches(in: blocks, term: "needle").matchBlockIds
+        XCTAssertEqual(ids.count, 2)
+        XCTAssertEqual(DocumentSearch.focus(in: ids, at: 1)?.occurrence, 1)
+        XCTAssertNil(DocumentSearch.focus(in: ids, at: 2), "no third occurrence to focus")
+    }
+
+    // MARK: - Re-run after a re-parse (1.14.1)
+
+    func testFocusAfterRerunKeepsOrClampsAndNeverScrollsOnReparse() {
+        // Typing: first match, scroll when there is one.
+        XCTAssertEqual(DocumentSearch.focusedIndex(after: .termChanged, previous: 4, matchCount: 9), 0)
+        XCTAssertTrue(DocumentSearch.scrollsToFocus(after: .termChanged, matchCount: 9))
+        XCTAssertFalse(DocumentSearch.scrollsToFocus(after: .termChanged, matchCount: 0))
+        // Re-parse: same index while it exists, the last match otherwise, 0
+        // with none — and the document never moves.
+        XCTAssertEqual(DocumentSearch.focusedIndex(after: .reparsed, previous: 4, matchCount: 9), 4)
+        XCTAssertEqual(DocumentSearch.focusedIndex(after: .reparsed, previous: 4, matchCount: 5), 4)
+        XCTAssertEqual(DocumentSearch.focusedIndex(after: .reparsed, previous: 4, matchCount: 3), 2)
+        XCTAssertEqual(DocumentSearch.focusedIndex(after: .reparsed, previous: 4, matchCount: 0), 0)
+        XCTAssertEqual(DocumentSearch.focusedIndex(after: .reparsed, previous: -1, matchCount: 3), 0)
+        XCTAssertFalse(DocumentSearch.scrollsToFocus(after: .reparsed, matchCount: 9))
+    }
+
+    func testFocusMapsMatchIndexToBlockOccurrence() {
+        let ids = ["a", "a", "b", "a", "b"]
+        XCTAssertEqual(DocumentSearch.focus(in: ids, at: 0)?.blockId, "a")
+        XCTAssertEqual(DocumentSearch.focus(in: ids, at: 0)?.occurrence, 0)
+        XCTAssertEqual(DocumentSearch.focus(in: ids, at: 3)?.blockId, "a")
+        XCTAssertEqual(DocumentSearch.focus(in: ids, at: 3)?.occurrence, 2)
+        XCTAssertEqual(DocumentSearch.focus(in: ids, at: 4)?.blockId, "b")
+        XCTAssertEqual(DocumentSearch.focus(in: ids, at: 4)?.occurrence, 1)
+        XCTAssertNil(DocumentSearch.focus(in: ids, at: 5))
+        XCTAssertNil(DocumentSearch.focus(in: ids, at: -1))
+        XCTAssertNil(DocumentSearch.focus(in: [], at: 0))
+    }
+
+    /// A zoom re-parse renders the same characters, so a re-run finds the
+    /// same matches and keeps the focus; an edit on disk that removes matches
+    /// clamps it.
+    func testRerunOverANewParseOfTheSameTerm() {
+        let markdown = "> **needle** one\n\nneedle two needle\n\n# needle"
+        let before = DocumentSearch.computeMatches(in: parse(markdown), term: "needle").matchBlockIds
+        let zoomed = MarkdownBlockParser(theme: theme, fontScale: 1.5).parse(markdown)
+        let after = DocumentSearch.computeMatches(in: zoomed, term: "needle", theme: theme, fontScale: 1.5).matchBlockIds
+        XCTAssertEqual(after, before)
+        XCTAssertEqual(DocumentSearch.focusedIndex(after: .reparsed, previous: 3, matchCount: after.count), 3)
+
+        let edited = DocumentSearch.computeMatches(in: parse("needle"), term: "needle").matchBlockIds
+        XCTAssertEqual(DocumentSearch.focusedIndex(after: .reparsed, previous: 3, matchCount: edited.count), 0)
+    }
 }

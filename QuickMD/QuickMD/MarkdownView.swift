@@ -72,6 +72,11 @@ struct MarkdownView: View {
     /// Monotonic token so stale background search results are dropped (the user
     /// may have typed again while a previous computation was still running).
     @State private var searchGeneration: Int = 0
+    /// What the background run that `searchGeneration` currently names was
+    /// started for; nil when none is in flight. A re-parse that supersedes a
+    /// typing run must keep that run's "focus the first match and scroll"
+    /// landing — the reader's last action was typing, not the reload.
+    @State private var searchInFlight: DocumentSearch.Trigger?
     @AppStorage("selectedTheme") private var selectedThemeName: String = "Auto"
     /// Settings → Fonts. "" = system. Merged into the theme below (a custom
     /// theme's own families win) and part of `DocumentIdentity`, because font
@@ -648,6 +653,9 @@ struct MarkdownView: View {
             if let target = landing.blocksInstalled(parsed.blocks) {
                 requestScroll(to: target, anchor: .top, animated: false)
             }
+            // The find bar's matches index the PREVIOUS parse's blocks: count
+            // again over these (and the measured strings just installed).
+            rerunSearchAfterReparse()
             isParsing = false
         }
         .task(id: HeightsIdentity(contentVersion: contentVersion, contentWidth: contentWidth)) {
@@ -663,6 +671,10 @@ struct MarkdownView: View {
             let scale = CGFloat(renderedFontScale)
             let width = contentWidth
             let version = contentVersion
+            // The first table for this parse (it was parsed before the list had
+            // a width): the search ran on fallback strings, re-count it on the
+            // measured ones. A width-only re-measure changes no character.
+            let firstTableForParse = measured.table.count != cachedBlocks.count
             // Mermaid rows: seed from the heights the WebViews actually reported,
             // so a re-measure doesn't send every diagram back to the 200 pt default.
             let seeds = heightCache.snapshot
@@ -685,15 +697,21 @@ struct MarkdownView: View {
                                                           fontScale: scale, contentWidth: width,
                                                           math: .swiftMath,
                                                           reusing: reusableStrings)
+            if firstTableForParse { rerunSearchAfterReparse() }
         }
         .onChange(of: searchText) { newValue in
             searchDebounce?.cancel()
             // Empty search is cheap and the user expects instant clear
             if newValue.isEmpty {
-                updateMatchResults(for: newValue)
+                searchDebounce = nil
+                updateMatchResults(for: newValue, trigger: .termChanged)
                 return
             }
-            let work = DispatchWorkItem { updateMatchResults(for: newValue) }
+            let work = DispatchWorkItem {
+                // Nil = no keystroke waiting (`rerunSearchAfterReparse` reads it).
+                searchDebounce = nil
+                updateMatchResults(for: newValue, trigger: .termChanged)
+            }
             searchDebounce = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
         }
@@ -1308,18 +1326,9 @@ struct MarkdownView: View {
 
     /// Recompute focusedBlockId and focusedOccInBlock from currentMatchIndex
     private func updateFocusState() {
-        guard !matchBlockIds.isEmpty, currentMatchIndex >= 0, currentMatchIndex < matchBlockIds.count else {
-            focusedBlockId = nil
-            focusedOccInBlock = nil
-            return
-        }
-        let blockId = matchBlockIds[currentMatchIndex]
-        var count = 0
-        for i in 0..<currentMatchIndex {
-            if matchBlockIds[i] == blockId { count += 1 }
-        }
-        focusedBlockId = blockId
-        focusedOccInBlock = count
+        let focus = DocumentSearch.focus(in: matchBlockIds, at: currentMatchIndex)
+        focusedBlockId = focus?.blockId
+        focusedOccInBlock = focus?.occurrence
     }
 
     private func navigateMatch(forward: Bool) {
@@ -1337,9 +1346,23 @@ struct MarkdownView: View {
         }
     }
 
-    private func updateMatchResults(for term: String) {
+    /// A new parse landed (or its first height table): re-count the current
+    /// term over the new blocks without moving the document. Nothing to do
+    /// when the find bar is empty, or when a keystroke is still debounced —
+    /// that run reads `cachedBlocks` when it fires, so it already searches
+    /// this parse, and it keeps its own "first match + scroll" landing. A
+    /// typing run already in flight is superseded here (its blocks are
+    /// stale), so this run inherits its landing.
+    private func rerunSearchAfterReparse() {
+        guard !searchText.isEmpty, searchDebounce == nil else { return }
+        updateMatchResults(for: searchText,
+                           trigger: searchInFlight == .termChanged ? .termChanged : .reparsed)
+    }
+
+    private func updateMatchResults(for term: String, trigger: DocumentSearch.Trigger) {
         searchGeneration += 1
         guard !term.isEmpty else {
+            searchInFlight = nil
             matchBlockIds = []
             currentMatchIndex = 0
             focusedBlockId = nil
@@ -1352,22 +1375,32 @@ struct MarkdownView: View {
         // changed meanwhile. (Per-block highlight painting happens in the
         // NSTextView wrappers via temporary attributes.)
         let generation = searchGeneration
+        searchInFlight = trigger
         let blocks = cachedBlocks
-        // Tables are counted on the strings their views show; the measurer's
-        // are reused (no table rebuilt per keystroke) when they belong to
-        // these blocks — `computeMatches` checks that per table.
+        // Every block is counted on the string its view shows; the measurer's
+        // strings are reused (nothing rebuilt per keystroke) when they belong
+        // to these blocks. `measured` is replaced in the same transaction as
+        // `cachedBlocks` (or by the version-checked heights task), so a table
+        // of the same length is this parse's; `computeMatches` additionally
+        // checks each table string against its block.
         let measuredBlocks = measured
+        let converted = measuredBlocks.table.count == blocks.count ? measuredBlocks.converted : [:]
         let currentTheme = theme
         let scale = CGFloat(renderedFontScale)
         Task.detached(priority: .userInitiated) {
-            let results = DocumentSearch.computeMatches(in: blocks, term: term, tables: measuredBlocks.tables,
+            let results = DocumentSearch.computeMatches(in: blocks, term: term, converted: converted,
+                                                        tables: measuredBlocks.tables,
                                                         theme: currentTheme, fontScale: scale)
             await MainActor.run {
                 guard generation == searchGeneration else { return }
+                searchInFlight = nil
+                let count = results.matchBlockIds.count
                 matchBlockIds = results.matchBlockIds
-                currentMatchIndex = 0
+                // Read at landing, not at dispatch: ⌘G may have moved it.
+                currentMatchIndex = DocumentSearch.focusedIndex(after: trigger, previous: currentMatchIndex,
+                                                                matchCount: count)
                 updateFocusState()
-                if !results.matchBlockIds.isEmpty {
+                if DocumentSearch.scrollsToFocus(after: trigger, matchCount: count) {
                     scrollTrigger += 1
                 }
             }
