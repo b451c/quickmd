@@ -731,6 +731,30 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(try quoteShape("> a\n> ===\nb\n"), ["q1:a\n===", "t:b"])
     }
 
+    // MARK: - Link and footnote definitions
+
+    /// A definition inside a fenced code block is the block's text: the
+    /// pre-pass took it out wherever it stood, so the code block came out
+    /// EMPTY and the definition linked `[x]` in the rest of the document.
+    /// GitHub (gfm/def_fence*.html, def_fn_fence.html) keeps it as code —
+    /// `~~~`, a longer opening fence and an unclosed one alike. A `$$` block
+    /// is read the way the block loop reads it.
+    func testADefinitionInsideAFencedBlockIsCode() throws {
+        XCTAssertEqual(try quoteShape("```\n[x]: https://example.com\n```\n\n[x]\n"),
+                       ["c:[x]: https://example.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("~~~~\n[x]: https://example.com\n~~~\nstill code\n~~~~\n\n[x]\n"),
+                       ["c:[x]: https://example.com\n~~~\nstill code", "t:[x]"])
+        XCTAssertEqual(try quoteShape("```\n[x]: https://example.com\n\n[x]"),   // unclosed: to the end
+                       ["c:[x]: https://example.com\n\n[x]"])
+        XCTAssertEqual(try quoteShape("Text[^1]\n\n```\n[^1]: in code\n```\n"),
+                       ["t:Text[^1]", "c:[^1]: in code"])
+        // A fence inside a `$$` block is the formula's; the definition after
+        // the block is one.
+        XCTAssertEqual(try quoteShape("$$\n```\n$$\n\n[x]: http://e.com\n\n[x]\n"), ["other", "t:x"])
+        // Outside the fence it still is one.
+        XCTAssertEqual(try quoteShape("```\ncode\n```\n\n[x]: http://e.com\n\n[x]\n"), ["c:code", "t:x"])
+    }
+
     /// The lines a quote absorbed are the quote's: its source line is its
     /// first, the next block starts after them, the tint spans them, search
     /// finds and copy reads them in the quote — and a long hard-wrapped quote

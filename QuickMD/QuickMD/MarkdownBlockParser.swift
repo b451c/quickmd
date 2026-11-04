@@ -84,9 +84,17 @@ struct MarkdownBlockParser: Sendable {
         // Headings carry the original line number so section copy can slice the
         // raw text without re-detecting headings itself.
         var lineMap: [Int] = []
+        // Fenced code and `$$` blocks, read as the block loop reads them: a
+        // definition inside one is that block's text (GitHub).
+        var verbatim = VerbatimRegions()
         for originalIndex in firstContentLine..<allLines.count {
             let line = allLines[originalIndex]
             let trimmed = Self.markerLine(line)
+            if verbatim.contains(trimmed) {
+                lines.append(line)
+                lineMap.append(originalIndex)
+                continue
+            }
             let nsRange = NSRange(trimmed.startIndex..., in: trimmed)
             // Footnote definitions must be checked BEFORE reference links
             // because [^id]: text also matches the reference link pattern [id]: url
@@ -143,16 +151,9 @@ struct MarkdownBlockParser: Sendable {
             let trimmedLine = Self.markerLine(line)
 
             // Fenced code block — check BEFORE math to protect $$ inside code blocks
-            if trimmedLine.hasPrefix("```") || trimmedLine.hasPrefix("~~~") {
+            if let opening = Self.fenceOpening(trimmedLine) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-
-                // Store the fence characters (just the backticks/tildes prefix)
-                guard let fenceChar = trimmedLine.first else { i += 1; continue }
-                var fenceLength = 0
-                for ch in trimmedLine {
-                    if ch == fenceChar { fenceLength += 1 } else { break }
-                }
-                let openingFence = String(repeating: fenceChar, count: fenceLength)
+                let fenceLength = opening.length
 
                 // Extract language after fence
                 let language = String(trimmedLine.dropFirst(fenceLength)).trimmingCharacters(in: .whitespaces)
@@ -161,8 +162,7 @@ struct MarkdownBlockParser: Sendable {
 
                 // Closing fence must be same char, same or greater length, nothing else
                 while i < lines.count {
-                    let closeLine = Self.markerLine(lines[i])
-                    if closeLine.hasPrefix(openingFence) && MarkdownRenderer.isBlankLine(closeLine.drop(while: { $0 == fenceChar })) {
+                    if Self.closesFence(Self.markerLine(lines[i]), opening) {
                         i += 1
                         break
                     }
@@ -191,7 +191,7 @@ struct MarkdownBlockParser: Sendable {
                 let afterDollar = String(trimmedLine.dropFirst(2)).trimmingCharacters(in: .whitespaces)
 
                 // Single-line: $$content$$ (must have content between delimiters)
-                if afterDollar.hasSuffix("$$") {
+                if !Self.opensMultilineMath(trimmedLine) {
                     let latex = String(afterDollar.dropLast(2)).trimmingCharacters(in: .whitespaces)
                     if !latex.isEmpty {
                         blocks.append(.mathBlock(index: blockIndex, latex: latex, sourceLine: sourceLine))
@@ -206,8 +206,7 @@ struct MarkdownBlockParser: Sendable {
                 if !afterDollar.isEmpty { mathLines.append(afterDollar) }
                 i += 1
                 while i < lines.count {
-                    let mLine = Self.markerLine(lines[i])
-                    if mLine == "$$" {
+                    if Self.closesMath(Self.markerLine(lines[i])) {
                         i += 1
                         break
                     }
@@ -991,6 +990,68 @@ struct MarkdownBlockParser: Sendable {
         flushRow()
     }
 
+    // MARK: - Fences and `$$` blocks
+
+    /// A code fence's marker character and length.
+    typealias Fence = (marker: Character, length: Int)
+
+    /// The fence `marker` (a `markerLine`) opens: three or more backticks or
+    /// tildes. THE opening test — the block loop, quote groups and the
+    /// definition pre-pass all ask it.
+    static func fenceOpening(_ marker: String) -> Fence? {
+        guard let first = marker.first, first == "`" || first == "~" else { return nil }
+        let length = marker.prefix(while: { $0 == first }).count
+        return length >= 3 ? (first, length) : nil
+    }
+
+    /// Whether `marker` closes `fence`: the same character, at least as many,
+    /// and nothing after them but spaces and tabs.
+    static func closesFence(_ marker: String, _ fence: Fence) -> Bool {
+        marker.hasPrefix(String(repeating: fence.marker, count: fence.length))
+            && MarkdownRenderer.isBlankLine(marker.drop(while: { $0 == fence.marker }))
+    }
+
+    /// Whether `marker` opens a `$$` block that runs to a `$$` line — not a
+    /// one-line `$$…$$` formula.
+    static func opensMultilineMath(_ marker: String) -> Bool {
+        marker.hasPrefix("$$")
+            && !String(marker.dropFirst(2)).trimmingCharacters(in: .whitespaces).hasSuffix("$$")
+    }
+
+    /// Whether `marker` closes a `$$` block.
+    static func closesMath(_ marker: String) -> Bool { marker == "$$" }
+
+    /// The fenced code and `$$` blocks of a document, followed line by line
+    /// the way the block loop reads them (fence first, then `$$`; inside one,
+    /// only its closing line matters). The definition pre-pass leaves their
+    /// lines alone: a definition inside one is that block's text.
+    struct VerbatimRegions {
+        private var fence: Fence?
+        private var inMath = false
+
+        /// Whether the line (its `markerLine`) opens, continues or closes
+        /// such a block.
+        mutating func contains(_ marker: String) -> Bool {
+            if let open = fence {
+                if MarkdownBlockParser.closesFence(marker, open) { fence = nil }
+                return true
+            }
+            if inMath {
+                if MarkdownBlockParser.closesMath(marker) { inMath = false }
+                return true
+            }
+            if let opening = MarkdownBlockParser.fenceOpening(marker) {
+                fence = opening
+                return true
+            }
+            if marker.hasPrefix("$$") {
+                inMath = MarkdownBlockParser.opensMultilineMath(marker)
+                return true
+            }
+            return false
+        }
+    }
+
     // MARK: - Quote laziness
 
     /// What a quote group's lines end in, as CommonMark reads them: an OPEN
@@ -1000,7 +1061,7 @@ struct MarkdownBlockParser: Sendable {
     /// underline, a rule and a table.
     struct QuoteTip {
         private(set) var endsInParagraph = false
-        private var fence: (marker: Character, length: Int)?
+        private var fence: Fence?
         private var inTable = false
         private var previousHadPipe = false
 
@@ -1018,10 +1079,7 @@ struct MarkdownBlockParser: Sendable {
             let marker = MarkdownBlockParser.markerLine(content)
             if let open = fence {
                 // Inside the quote's fence: only its closing line matters.
-                if marker.hasPrefix(String(repeating: open.marker, count: open.length)),
-                   MarkdownRenderer.isBlankLine(marker.drop(while: { $0 == open.marker })) {
-                    fence = nil
-                }
+                if MarkdownBlockParser.closesFence(marker, open) { fence = nil }
                 endsInParagraph = false
                 return
             }
@@ -1031,14 +1089,11 @@ struct MarkdownBlockParser: Sendable {
                 inTable = false
                 return
             }
-            if let first = marker.first, first == "`" || first == "~" {
-                let length = marker.prefix(while: { $0 == first }).count
-                if length >= 3 {
-                    fence = (first, length)
-                    endsInParagraph = false
-                    inTable = false
-                    return
-                }
+            if let opening = MarkdownBlockParser.fenceOpening(marker) {
+                fence = opening
+                endsInParagraph = false
+                inTable = false
+                return
             }
             if inTable, content.contains("|") {
                 endsInParagraph = false
