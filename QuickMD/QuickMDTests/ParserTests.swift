@@ -353,6 +353,21 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(rows, [["bar", ""], ["bar", "baz"]])
     }
 
+    /// A pipe followed by a combining mark is ONE Swift Character; GFM splits on
+    /// the code point, so the cell still ends there and the mark opens the next
+    /// cell. Escaped pipes before a mark stay in the cell, as before.
+    func testPipeBeforeCombiningMarkStillSplits() {
+        let md = "| a |\u{0301}b | c |\n| --- | --- | --- |\n| x |\u{0301}y | z |\n| e \\|\u{0301} f | g |"
+        guard case .table(let headers, let rows, _, .grid) = parse(md)[0].content else {
+            return XCTFail("expected table")
+        }
+        XCTAssertEqual(headers.map { Array($0.unicodeScalars) },
+                       ["a", "\u{0301}b", "c"].map { Array($0.unicodeScalars) })
+        XCTAssertEqual(rows.map { $0.map { Array($0.unicodeScalars) } },
+                       [["x", "\u{0301}y", "z"], ["e |\u{0301} f", "g", ""]]
+                        .map { $0.map { Array($0.unicodeScalars) } })
+    }
+
     func testHeaderlessTableKeepsColumnsFromSeparator() {
         let md = """
         | | |

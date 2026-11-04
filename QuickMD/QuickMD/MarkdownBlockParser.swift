@@ -297,7 +297,7 @@ struct MarkdownBlockParser: Sendable {
             }
 
             // Table detection
-            if line.filter({ $0 == "|" }).count >= 2 && !trimmed.isEmpty {
+            if Self.pipeCount(line) >= 2 && !trimmed.isEmpty {
                 if !isTableSeparator(trimmed) && i + 1 < lines.count && isTableSeparator(lines[i + 1]) {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
 
@@ -310,7 +310,7 @@ struct MarkdownBlockParser: Sendable {
                     var rows: [[String]] = []
                     i += 2 // Skip header and separator
 
-                    while i < lines.count && lines[i].contains("|") && !isTableSeparator(lines[i]) {
+                    while i < lines.count && lines[i].unicodeScalars.contains("|") && !isTableSeparator(lines[i]) {
                         rows.append(parseTableRow(lines[i]))
                         i += 1
                     }
@@ -494,6 +494,12 @@ struct MarkdownBlockParser: Sendable {
 
     // MARK: - Table Helpers
 
+    /// Unescaped and escaped pipes alike (detection counts `\\|` too, as it
+    /// always has), as unicode scalars — see `parseTableRow`.
+    private static func pipeCount(_ line: String) -> Int {
+        line.unicodeScalars.reduce(0) { $1 == "|" ? $0 + 1 : $0 }
+    }
+
     /// Check if line matches table separator pattern (e.g., |---|---|)
     private func isTableSeparator(_ line: String) -> Bool {
         line.trimmingCharacters(in: .whitespaces)
@@ -508,26 +514,30 @@ struct MarkdownBlockParser: Sendable {
     /// never splits, even after `\\`: only that one backslash is dropped, so
     /// `\\|` leaves `\|` for the inline renderer (`|` in text, `\|` in code).
     /// Other escapes stay in the text for the inline renderer.
+    ///
+    /// The scan walks unicode SCALARS, as GFM works on code points: a `|`
+    /// followed by a combining mark (U+0301…) is one Swift `Character`, and a
+    /// Character scan neither split the cell there nor counted the pipe.
     private func parseTableRow(_ line: String) -> [String] {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
         var cells: [String] = []
-        var cell = ""
-        for ch in trimmed {
-            if ch != "|" {
-                cell.append(ch)
+        var cell = String.UnicodeScalarView()
+        for scalar in trimmed.unicodeScalars {
+            if scalar != "|" {
+                cell.append(scalar)
             } else if cell.last == "\\" {
                 cell.removeLast()
-                cell.append("|")
+                cell.append(scalar)
             } else {
-                cells.append(cell)
-                cell = ""
+                cells.append(String(cell))
+                cell = String.UnicodeScalarView()
             }
         }
-        cells.append(cell)
+        cells.append(String(cell))
 
         // A leading pipe opens the row rather than ending an empty first cell
-        if trimmed.hasPrefix("|") {
+        if trimmed.unicodeScalars.first == "|" {
             cells.removeFirst()
         }
 
@@ -634,7 +644,7 @@ struct MarkdownBlockParser: Sendable {
 
         // Table rows (the table branch needs a separator to fire, but a pipe row
         // is still a table row, not a term) and separators
-        if line.filter({ $0 == "|" }).count >= 2 { return false }
+        if Self.pipeCount(line) >= 2 { return false }
         if isTableSeparator(trimmed) { return false }
 
         // Rules and setext underlines
