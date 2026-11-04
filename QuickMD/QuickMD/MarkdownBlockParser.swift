@@ -87,12 +87,15 @@ struct MarkdownBlockParser: Sendable {
         // Fenced code and `$$` blocks, read as the block loop reads them: a
         // definition inside one is that block's text (GitHub).
         var verbatim = VerbatimRegions()
+        // A link definition cannot interrupt a paragraph (`DefinitionPlacement`).
+        var placement = DefinitionPlacement()
         for originalIndex in firstContentLine..<allLines.count {
             let line = allLines[originalIndex]
             let trimmed = Self.markerLine(line)
             if verbatim.contains(trimmed) {
                 lines.append(line)
                 lineMap.append(originalIndex)
+                placement.verbatim()
                 continue
             }
             let nsRange = NSRange(trimmed.startIndex..., in: trimmed)
@@ -105,13 +108,17 @@ struct MarkdownBlockParser: Sendable {
                 let fnContent = String(trimmed[contentRange])
                 footnoteDefinitions.append((id: fnId, content: fnContent))
                 if !footnoteIds.contains(fnId) { footnoteIds.append(fnId) }
-            } else if let match = Self.refLinkDefRegex.firstMatch(in: trimmed, range: nsRange),
+                placement.definition()
+            } else if !placement.paragraphOpen,
+                      let match = Self.refLinkDefRegex.firstMatch(in: trimmed, range: nsRange),
                       let idRange = Range(match.range(at: 1), in: trimmed),
                       let urlRange = Range(match.range(at: 2), in: trimmed) {
                 referenceDefinitions[String(trimmed[idRange]).lowercased()] = String(trimmed[urlRange])
+                placement.definition()
             } else {
                 lines.append(line)
                 lineMap.append(originalIndex)
+                placement.kept(line)
             }
         }
 
@@ -1132,16 +1139,87 @@ struct MarkdownBlockParser: Sendable {
     /// and `$$` stay the picture and the formula they are everywhere else.
     private func continuesQuoteLazily(_ line: String, htmlImageLine: Bool,
                                       references: [String: String]) -> Bool {
-        guard !Self.isBlank(line), !htmlImageLine else { return false }
-        let marker = Self.markerLine(line)
-        if marker.hasPrefix("```") || marker.hasPrefix("~~~") || marker.hasPrefix("$$") { return false }
-        let nsRange = NSRange(line.startIndex..., in: line)
-        if Self.headerRegex.firstMatch(in: line, range: nsRange) != nil { return false }
-        if MarkdownRenderer.isThematicBreak(line) || MarkdownRenderer.isListItem(line) { return false }
-        if ["-", "*", "+"].contains(marker) { return false }   // an empty item
-        if Self.startsHTMLBlock(marker) { return false }
+        guard !htmlImageLine, Self.startsNoBlock(line) else { return false }
         if InlineSyntaxScanner.standaloneImages(in: line[...], references: references) != nil { return false }
         return true
+    }
+
+    /// CommonMark's part of `continuesQuoteLazily`: not blank, and no block
+    /// starts on the line (fence, `$$`, ATX heading, rule, list item, HTML
+    /// block) — checked against the document, as cmark does.
+    static func startsNoBlock(_ line: String) -> Bool {
+        guard !isBlank(line) else { return false }
+        let marker = markerLine(line)
+        if fenceOpening(marker) != nil || marker.hasPrefix("$$") { return false }
+        let nsRange = NSRange(line.startIndex..., in: line)
+        if headerRegex.firstMatch(in: line, range: nsRange) != nil { return false }
+        if MarkdownRenderer.isThematicBreak(line) || MarkdownRenderer.isListItem(line) { return false }
+        if ["-", "*", "+"].contains(marker) { return false }   // an empty item
+        if startsHTMLBlock(marker) { return false }
+        return true
+    }
+
+    /// Whether the definition pre-pass may take a LINK definition out on the
+    /// next line: not where it would continue a paragraph. CommonMark: a
+    /// link definition cannot interrupt a paragraph; GitHub keeps such a
+    /// line as the paragraph's text — a list item's, a table's (its rows run
+    /// on) and a quote's lazy line included. (A footnote definition may
+    /// interrupt one, GitHub: the pre-pass takes those wherever they stand
+    /// outside fenced code.)
+    struct DefinitionPlacement {
+        private(set) var paragraphOpen = false
+        /// The quote being read: what its lines end in (`QuoteTip`).
+        private var quote: QuoteTip?
+
+        /// A line of a fenced code or `$$` block (`VerbatimRegions`).
+        mutating func verbatim() {
+            paragraphOpen = false
+            quote = nil
+        }
+
+        /// A definition the pre-pass took out: it ends what came before.
+        mutating func definition() {
+            paragraphOpen = false
+            quote = nil
+        }
+
+        /// Any other line, kept for the block loop.
+        mutating func kept(_ line: String) {
+            if MarkdownRenderer.isBlankLine(line) {
+                paragraphOpen = false
+                quote = nil
+                return
+            }
+            let marker = MarkdownBlockParser.markerLine(line)
+            if marker.hasPrefix(">") {
+                var content = marker[...]
+                while content.hasPrefix(">") {
+                    content = content.dropFirst()
+                    if content.hasPrefix(" ") { content = content.dropFirst() }
+                }
+                var tip = quote ?? QuoteTip()
+                tip.take(String(content))
+                quote = tip
+                paragraphOpen = tip.endsInParagraph
+                return
+            }
+            if var tip = quote, tip.endsInParagraph, MarkdownBlockParser.startsNoBlock(line) {
+                tip.takeLazy()
+                quote = tip
+                paragraphOpen = true
+                return
+            }
+            quote = nil
+            let nsRange = NSRange(line.startIndex..., in: line)
+            if MarkdownBlockParser.headerRegex.firstMatch(in: line, range: nsRange) != nil
+                || MarkdownRenderer.isThematicBreak(line)
+                || (paragraphOpen && marker.range(of: MarkdownTheme.setextH1Pattern,
+                                                   options: .regularExpression) != nil) {
+                paragraphOpen = false
+                return
+            }
+            paragraphOpen = true
+        }
     }
 
     /// CommonMark's HTML block starts (kinds 1-7), as far as a lazy line needs

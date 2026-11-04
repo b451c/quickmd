@@ -755,6 +755,30 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(try quoteShape("```\ncode\n```\n\n[x]: http://e.com\n\n[x]\n"), ["c:code", "t:x"])
     }
 
+    /// A link definition cannot interrupt a paragraph (CommonMark): on a
+    /// line that would continue one — plain text, a list item's, a quote's
+    /// lazy line, a table's — it is that text, and `[x]` stays literal.
+    /// The pre-pass took it out anywhere. A footnote definition MAY
+    /// interrupt a paragraph (GitHub). Every shape: gfm/def_*.html, fn_*.html.
+    func testALinkDefinitionCannotInterruptAParagraph() throws {
+        XCTAssertEqual(try quoteShape("> a\n[x]: http://e.com\n\n[x]\n"), ["q1:a\n[x]: http://e.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("Para\n[x]: http://e.com\n\n[x]\n"), ["t:Para [x]: http://e.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("- a\n[x]: http://e.com\n\n[x]\n"), ["t:• a [x]: http://e.com", "t:[x]"])
+        XCTAssertEqual(try quoteShape("| a |\n|---|\n| 1 |\n[x]: http://e.com\n\n[x]\n").last, "t:[x]")
+        // Where no paragraph goes on, it is a definition.
+        XCTAssertEqual(try quoteShape("Para\n\n[x]: http://e.com\n\n[x]\n"), ["t:Para", "t:x"])
+        XCTAssertEqual(try quoteShape("# H\n[x]: http://e.com\n\n[x]\n"), ["h:H", "t:x"])
+        XCTAssertEqual(try quoteShape("---\n[x]: http://e.com\n\n[x]\n").last, "t:x")
+        XCTAssertEqual(try quoteShape("Title\n===\n[x]: http://e.com\n\n[x]\n"), ["h:Title", "t:x"])
+        XCTAssertEqual(try quoteShape("```\ncode\n```\n[x]: http://e.com\n\n[x]\n"), ["c:code", "t:x"])
+        XCTAssertEqual(try quoteShape("[x]: http://e.com\n[y]: http://f.com\n\n[x] [y]\n"), ["t:x y"])
+        XCTAssertEqual(try quoteShape("> a\n>\n[x]: http://e.com\n\n[x]\n"), ["q1:a", "t:x"])
+        XCTAssertEqual(try quoteShape("> ```\n> code\n[x]: http://e.com\n\n[x]\n"), ["q1:```\ncode", "t:x"])
+        // Footnote definitions interrupt a paragraph, as before.
+        XCTAssertEqual(try quoteShape("Text[^1]\n\nPara\n[^1]: note\n").prefix(2), ["t:Text¹", "t:Para"])
+        XCTAssertEqual(try quoteShape("Text[^1]\n\n> a\n[^1]: note\n").prefix(2), ["t:Text¹", "q1:a"])
+    }
+
     /// The lines a quote absorbed are the quote's: its source line is its
     /// first, the next block starts after them, the tint spans them, search
     /// finds and copy reads them in the quote — and a long hard-wrapped quote
