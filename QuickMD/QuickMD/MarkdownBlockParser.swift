@@ -114,8 +114,12 @@ struct MarkdownBlockParser: Sendable {
                       let idRange = Range(match.range(at: 1), in: text),
                       let urlRange = Range(match.range(at: 2), in: text) {
                 // Character references in the destination are decoded, as in
-                // an inline link's (`InlineSyntaxScanner.unescaped`).
-                referenceDefinitions[String(text[idRange]).lowercased()] = HTMLEntities.decode(String(text[urlRange]))
+                // an inline link's (`InlineSyntaxScanner.unescaped`). The FIRST
+                // definition of a label wins (CommonMark, GitHub).
+                let label = ReferenceLabel.normalized(text[idRange])
+                if referenceDefinitions[label] == nil {
+                    referenceDefinitions[label] = HTMLEntities.decode(String(text[urlRange]))
+                }
                 placement.definition()
             } else {
                 lines.append(line)

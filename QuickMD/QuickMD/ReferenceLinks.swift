@@ -1,5 +1,36 @@
 import Foundation
 
+// MARK: - Reference labels
+
+/// CommonMark's label matching, in ONE place for every lookup (the
+/// definition pre-pass that stores, the renderer, `InlineSyntaxScanner`,
+/// `ReferenceLinks`): runs of whitespace — line breaks included, as in a
+/// Setext title's `[link⏎text]` — become one space, the ends are trimmed,
+/// and the label is Unicode case-folded, not lowercased: GitHub (cmark's
+/// `utf8proc_case_fold`) matches `[ẞ]` to `[SS]:` and `[straße]` to
+/// `[STRASSE]:` (`gh api markdown`, 2026-11-04). Whitespace is cmark's
+/// (space, tab, line feed, line tabulation, form feed, return), so a
+/// no-break space stays a character of the label.
+enum ReferenceLabel {
+    static func normalized<S: StringProtocol>(_ label: S) -> String {
+        var collapsed = ""
+        var pendingSpace = false
+        var ascii = true
+        for scalar in label.unicodeScalars {
+            switch scalar {
+            case " ", "\t", "\n", "\u{0B}", "\u{0C}", "\r":
+                pendingSpace = !collapsed.isEmpty
+            default:
+                if pendingSpace { collapsed.append(" "); pendingSpace = false }
+                if !scalar.isASCII { ascii = false }
+                collapsed.unicodeScalars.append(scalar)
+            }
+        }
+        // ASCII labels (nearly all): lowercasing IS the fold, no bridging.
+        return ascii ? collapsed.lowercased() : collapsed.folding(options: .caseInsensitive, locale: nil)
+    }
+}
+
 // MARK: - Reference links inside quotes, alerts and table cells
 
 /// Rewrites reference-style links and images (`[text][id]`, `[text][]`,
@@ -186,7 +217,7 @@ enum ReferenceLinks {
             if afterSecondOpen < remaining.endIndex,
                let closeSecondBracket = remaining[afterSecondOpen...].firstIndex(of: "]") {
                 let refId = String(remaining[afterSecondOpen..<closeSecondBracket])
-                let effectiveId = (refId.isEmpty ? linkText : refId).lowercased()
+                let effectiveId = ReferenceLabel.normalized(refId.isEmpty ? linkText : refId)
                 if let url = definitions[effectiveId] {
                     return resolved(url, rest: remaining[remaining.index(after: closeSecondBracket)...])
                 }
@@ -194,7 +225,7 @@ enum ReferenceLinks {
         }
 
         // Shortcut reference: [text]
-        if let url = definitions[linkText.lowercased()] {
+        if let url = definitions[ReferenceLabel.normalized(linkText)] {
             return resolved(url, rest: remaining[afterBracket...])
         }
         return nil

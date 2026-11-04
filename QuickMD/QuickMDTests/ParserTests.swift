@@ -648,6 +648,49 @@ final class ParserTests: XCTestCase {
         XCTAssertFalse(quote.contains("\n\n\n"), "one paragraph break per blank run")
     }
 
+    /// R19: reference labels match as CommonMark's (`ReferenceLabel`) in
+    /// every lookup — whitespace runs (tab, line break) are one space, the
+    /// ends trimmed, Unicode case folding (`ẞ` = `SS`, `straße` = `STRASSE`,
+    /// `ΣΑΣ` = `σας`); a no-break space is no whitespace; the first
+    /// definition of a label wins. Expected links from `gh api markdown`
+    /// (2026-11-04). Lowercasing alone and exact whitespace left all of
+    /// these but `[dup]` literal, and `[dup]` took the LAST definition.
+    func testReferenceLabelsMatchLikeGitHub() {
+        let md = "Use [link\ntext] shortcut\n---\n\n"
+            + "[foo bar] [a\u{00A0}b] [dup] [x][ΣΑΣ] [y][a\n  B]\n\n"
+            + "> [straße] and [A\tB]\n\n"
+            + "| c |\n|---|\n| [a  b] |\n\n"
+            + "![ẞ]\n\n"
+            + "[  Foo   Bar ]: https://fb\n[a b]: https://ab\n[dup]: https://first\n[DUP]: https://second\n"
+            + "[SS]: https://ss.png\n[STRASSE]: https://strasse\n[σας]: https://sas\n[link text]: https://lt\n"
+        let blocks = parse(md)
+        let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))
+        func links(_ text: AttributedString) -> [String] {
+            text.runs.compactMap { run in
+                run.link.map { "\(String(text[run.range].characters))=\($0.absoluteString)" }
+            }
+        }
+        guard blocks.count == 5,
+              case .heading(let level, let title, _) = blocks[0].content,
+              case .text(let paragraph) = blocks[1].content,
+              case .blockquote(let quote, _) = blocks[2].content,
+              case .table(_, let rows, _, _) = blocks[3].content,
+              case .image(let url, let alt, _) = blocks[4].content else {
+            return XCTFail("blocks: \(blocks.map(\.content))")
+        }
+        XCTAssertEqual(links(renderer.renderHeader(title, level: level)), ["link text=https://lt"])
+        XCTAssertEqual(links(paragraph), ["foo bar=https://fb", "dup=https://first", "x=https://sas",
+                                          "y=https://ab"])
+        XCTAssertTrue(String(paragraph.characters).contains("[a\u{00A0}b]"), "a no-break space is no whitespace")
+        XCTAssertEqual(links(renderer.renderQuotedBody(quote)), ["straße=https://strasse", "A\tB=https://ab"])
+        XCTAssertEqual(links(renderer.renderInline(rows[0][0])), ["a  b=https://ab"])
+        XCTAssertEqual(url, "https://ss.png")
+        XCTAssertEqual(alt, "ẞ")
+
+        XCTAssertEqual(ReferenceLabel.normalized(" \tFoo \n\u{0C} BAR\r "), "foo bar")
+        XCTAssertEqual(ReferenceLabel.normalized("ﬀ İ Ǆ"), ReferenceLabel.normalized("FF i\u{0307} ǆ"))
+    }
+
     /// The rewrite must draw exactly what the paragraph renderer (which HAS the
     /// definitions) draws for the same line: characters and links.
     func testReferenceInliningMatchesTheDefinitionAwareRenderer() {

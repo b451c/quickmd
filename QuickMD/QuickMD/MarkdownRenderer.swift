@@ -1043,7 +1043,7 @@ struct MarkdownRenderer: Sendable {
             if afterSecondOpen < remaining.endIndex,
                let closeSecondBracket = remaining[afterSecondOpen...].firstIndex(of: "]") {
                 let refId = String(remaining[afterSecondOpen..<closeSecondBracket])
-                let effectiveId = (refId.isEmpty ? linkText : refId).lowercased()
+                let effectiveId = ReferenceLabel.normalized(refId.isEmpty ? linkText : refId)
                 if let url = referenceDefinitions[effectiveId] {
                     return makeLink(text: linkText, url: url,
                                     remaining: remaining[remaining.index(after: closeSecondBracket)...])
@@ -1052,7 +1052,7 @@ struct MarkdownRenderer: Sendable {
         }
 
         // 3. Shortcut reference: [text] where text matches a definition ID
-        if let url = referenceDefinitions[linkText.lowercased()] {
+        if let url = referenceDefinitions[ReferenceLabel.normalized(linkText)] {
             return makeLink(text: linkText, url: url, remaining: remaining[afterBracket...])
         }
 

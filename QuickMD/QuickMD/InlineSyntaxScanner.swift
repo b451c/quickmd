@@ -238,9 +238,9 @@ enum InlineSyntaxScanner {
             guard let labelClose = after.dropFirst().firstIndex(of: "]"),
                   text.index(after: labelClose) == text.endIndex else { return nil }
             let label = String(after[after.index(after: after.startIndex)..<labelClose])
-            guard references[(label.isEmpty ? String(linkText) : label).lowercased()] != nil else { return nil }
+            guard references[ReferenceLabel.normalized(label.isEmpty ? String(linkText) : label)] != nil else { return nil }
         } else {
-            guard after.isEmpty, references[linkText.lowercased()] != nil else { return nil }
+            guard after.isEmpty, references[ReferenceLabel.normalized(linkText)] != nil else { return nil }
         }
         return ImageSyntax(alt: image.alt, url: image.url, end: line.endIndex)
     }
@@ -520,13 +520,13 @@ enum InlineSyntaxScanner {
         if next < bytes.count, bytes[next] == UInt8(ascii: "["),
            let labelClose = matchLabel(bytes, open: next) {
             let labelRange = labelClose == next + 1 ? altRange : (next + 1)..<labelClose
-            guard let url = references[string(bytes, labelRange).lowercased()] else { return nil }
+            guard let url = references[ReferenceLabel.normalized(string(bytes, labelRange))] else { return nil }
             return (string(bytes, altRange), url, labelClose + 1)
         }
 
         // Shortcut reference: ![alt]
         let alt = string(bytes, altRange)
-        guard let url = references[alt.lowercased()] else { return nil }
+        guard let url = references[ReferenceLabel.normalized(alt)] else { return nil }
         return (alt, url, next)
     }
 }
