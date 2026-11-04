@@ -548,7 +548,10 @@ final class ParserTests: XCTestCase {
         ![nope][]
         """)
         XCTAssertTrue(images(blocks).isEmpty)
-        XCTAssertEqual(blocks.count, 1, "all three lines stay paragraph text")
+        // Three paragraphs, so three text rows: since the vertical rhythm a row
+        // is one block (it used to be every text line up to the 30-line cap).
+        XCTAssertEqual(blocks.count, 3, "all three lines stay paragraph text")
+        XCTAssertTrue(blocks.allSatisfy { $0.id.hasPrefix("text-") }, "\(blocks.map(\.id))")
     }
 
     func testShortcutImageWithoutAnyDefinitionsStaysText() {
@@ -922,8 +925,10 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(blocks.count, 1, "\(blocks.map(\.id))")
         XCTAssertEqual(textLines(blocks[0]), ["Apple", "fruit", "Orange", "citrus"])
         // …separated by a blank line, so the groups read apart on screen and in print.
+        // Five lines, not six: a text row no longer ends in a line break (the
+        // final "\n" laid out an empty line under every row).
         let raw = (plainText(blocks[0]) ?? "").components(separatedBy: "\n")
-        XCTAssertEqual(raw.count, 6, "\(raw)")
+        XCTAssertEqual(raw.count, 5, "\(raw)")
         XCTAssertTrue(raw[2].isEmpty, "expected a blank line between groups: \(raw)")
     }
 

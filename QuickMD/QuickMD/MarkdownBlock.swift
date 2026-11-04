@@ -110,6 +110,24 @@ struct MarkdownBlock: Identifiable, Sendable {
     /// `.heading(level:title:sourceLine:)`, which section copy (`SectionExtractor`)
     /// reads — that associated value stays the authority there.
     let sourceLine: Int
+    /// This row continues the block of the row before it: there is no block
+    /// boundary between them, only a cut the parser made. Two cases:
+    /// - a text run longer than `MarkdownBlockParser.textChunkLineLimit` lines,
+    ///   cut to keep every row cheap to lay out;
+    /// - the second and later nesting groups of ONE `>` run (`> a` then
+    ///   `>> b`), which render as separate quote rows.
+    ///
+    /// Such a row gets no space above it (`BlockLayout.Spacing`), and a copy
+    /// across the cut joins the two rows with a line break, not a blank line
+    /// (`DocumentCopyBuilder`).
+    let joinsPrevious: Bool
+
+    init(id: String, content: BlockContent, sourceLine: Int, joinsPrevious: Bool = false) {
+        self.id = id
+        self.content = content
+        self.sourceLine = sourceLine
+        self.joinsPrevious = joinsPrevious
+    }
 
     enum BlockContent: Sendable {
         case text(AttributedString)
@@ -138,8 +156,18 @@ struct MarkdownBlock: Identifiable, Sendable {
     // Every factory takes `sourceLine` WITHOUT a default: the parser is the only
     // caller and it always knows the mapped original line. A default here would
     // silently produce 0-anchored blocks the moment a new parser branch forgets it.
-    static func text(index: Int, _ attributed: AttributedString, sourceLine: Int) -> MarkdownBlock {
-        MarkdownBlock(id: "text-\(index)", content: .text(attributed), sourceLine: sourceLine)
+    /// A text row never ends in a line break: the renderer ends every line
+    /// with "\n", and a final one would lay out an extra, empty line under the
+    /// row — in the system's default font, so it would not even scale with
+    /// zoom. The space under a row is `BlockLayout.Spacing`'s job.
+    static func text(index: Int, _ attributed: AttributedString, sourceLine: Int,
+                     joinsPrevious: Bool = false) -> MarkdownBlock {
+        var text = attributed
+        while let last = text.characters.last, last == "\n" {
+            text.removeSubrange(text.characters.index(before: text.endIndex)..<text.endIndex)
+        }
+        return MarkdownBlock(id: "text-\(index)", content: .text(text), sourceLine: sourceLine,
+                             joinsPrevious: joinsPrevious)
     }
     static func table(index: Int, headers: [String], rows: [[String]], alignments: [TextAlignment],
                       style: TableStyle, sourceLine: Int) -> MarkdownBlock {
@@ -153,8 +181,10 @@ struct MarkdownBlock: Identifiable, Sendable {
     static func image(index: Int, url: String, alt: String, width: ImageWidth?, sourceLine: Int) -> MarkdownBlock {
         MarkdownBlock(id: "image-\(index)", content: .image(url: url, alt: alt, width: width), sourceLine: sourceLine)
     }
-    static func blockquote(index: Int, content: String, level: Int, sourceLine: Int) -> MarkdownBlock {
-        MarkdownBlock(id: "blockquote-\(index)", content: .blockquote(content: content, level: level), sourceLine: sourceLine)
+    static func blockquote(index: Int, content: String, level: Int, sourceLine: Int,
+                           joinsPrevious: Bool = false) -> MarkdownBlock {
+        MarkdownBlock(id: "blockquote-\(index)", content: .blockquote(content: content, level: level),
+                      sourceLine: sourceLine, joinsPrevious: joinsPrevious)
     }
     static func alert(index: Int, kind: AlertKind, content: String, sourceLine: Int) -> MarkdownBlock {
         MarkdownBlock(id: "alert-\(index)", content: .alert(kind: kind, content: content), sourceLine: sourceLine)

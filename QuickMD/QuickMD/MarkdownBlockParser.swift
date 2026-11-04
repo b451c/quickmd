@@ -330,6 +330,10 @@ struct MarkdownBlockParser: Sendable {
             // Blockquote detection - group consecutive > lines by nesting level
             if trimmed.hasPrefix(">") {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, using: activeRenderer)
+                // A later nesting group of this run continues the quote row
+                // before it (`MarkdownBlock.joinsPrevious`): `> a` then `>> b`
+                // is one quote on the page, drawn as two rows.
+                var previousGroupWasQuote = false
 
                 while i < lines.count {
                     let qLine = lines[i].trimmingCharacters(in: .whitespaces)
@@ -384,8 +388,12 @@ struct MarkdownBlockParser: Sendable {
                             let body = groupLines.dropFirst().joined(separator: "\n")
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
                             blocks.append(.alert(index: blockIndex, kind: kind, content: body, sourceLine: groupSourceLine))
+                            previousGroupWasQuote = false
                         } else {
-                            blocks.append(.blockquote(index: blockIndex, content: content, level: groupLevel, sourceLine: groupSourceLine))
+                            blocks.append(.blockquote(index: blockIndex, content: content, level: groupLevel,
+                                                      sourceLine: groupSourceLine,
+                                                      joinsPrevious: previousGroupWasQuote))
+                            previousGroupWasQuote = true
                         }
                         blockIndex += 1
                     }
@@ -833,60 +841,78 @@ struct MarkdownBlockParser: Sendable {
 
     // MARK: - Text Buffer
 
-    /// Cap on lines per text block. Large bullet/link lists (e.g. 11K-line bookmark dumps)
-    /// would otherwise coalesce into one ~10000-char Text(AttributedString) per heading
-    /// section — slow to lay out on window resize. We split at blank-line (paragraph)
-    /// boundaries so visual rendering is unaffected, but each individual block stays
-    /// small enough for SwiftUI Text to lay out quickly.
-    private static let textChunkLineLimit = 30
+    /// Cap on joined lines per text row. Large bullet/link lists (e.g. 11K-line
+    /// bookmark dumps) would otherwise become one ~10000-character row per
+    /// heading section — slow to lay out on window resize. A longer block is
+    /// cut into rows of this many lines; every row after the first is marked
+    /// `joinsPrevious`, so the cut adds no space and copies as a plain line break.
+    static let textChunkLineLimit = 30
 
+    /// Turns a run of text lines (everything between two non-text blocks) into
+    /// rows — ONE ROW PER BLOCK, as CommonMark reads the run:
+    /// - a blank line ends a block (a paragraph, an item of a loose list);
+    /// - a list item right after paragraph text starts a block (the list);
+    /// - a thematic break is a block of its own.
+    ///
+    /// Blank lines themselves never reach a row: the space between two blocks
+    /// is `BlockLayout.Spacing`'s, the same whether the source has a blank line
+    /// there or not.
+    ///
+    /// Soft breaks are joined and the ordered-list hangs computed over the WHOLE
+    /// run before it is cut, so a list split into several rows (a loose list,
+    /// or one past the line cap) keeps one text edge.
     private func flushTextBuffer(_ buffer: inout [(line: String, originalIndex: Int)], to blocks: inout [MarkdownBlock], index: inout Int, using renderer: MarkdownRenderer) {
         guard !buffer.isEmpty else { return }
-        // A buffer of nothing but blank lines (the separator between two
-        // blockquotes, a heading and a code fence, …) used to flush an EMPTY
-        // text block that rendered as a ~42 pt gap. Drop it: block spacing is
-        // the stack's job, not the parser's.
-        guard buffer.contains(where: { !$0.line.trimmingCharacters(in: .whitespaces).isEmpty }) else {
-            buffer.removeAll()
-            return
+        defer { buffer = [] }
+
+        let joined = MarkdownRenderer.joinSoftBreaksIndexed(buffer.map(\.line))
+        let hangs = renderer.widestOrderedPrefixes(joined.map(\.line))
+
+        var row: [String] = []
+        var rowHangs: [String?] = []
+        var rowSourceLine = 0
+        var rowJoinsPrevious = false
+        // The current block is a list: an item started it or continues it.
+        var inList = false
+
+        func flushRow() {
+            guard !row.isEmpty else { return }
+            blocks.append(.text(index: index, renderer.render(joined: row, hangs: rowHangs),
+                                sourceLine: rowSourceLine, joinsPrevious: rowJoinsPrevious))
+            index += 1
+            row = []
+            rowHangs = []
+            rowJoinsPrevious = false
+        }
+        func append(_ position: Int) {
+            if row.isEmpty { rowSourceLine = buffer[joined[position].first].originalIndex }
+            row.append(joined[position].line)
+            rowHangs.append(hangs[position])
         }
 
-        // Slice the buffer into chunks of ≤ textChunkLineLimit lines, preferring
-        // blank-line boundaries so we never split a paragraph.
-        var chunkStart = 0
-        while chunkStart < buffer.count {
-            let hardEnd = min(chunkStart + Self.textChunkLineLimit, buffer.count)
-            var sliceEnd = hardEnd
-
-            // If we're not at the end of the buffer, try to back up to the last blank
-            // line within this chunk so we don't split a paragraph mid-flow.
-            if hardEnd < buffer.count {
-                var probe = hardEnd - 1
-                while probe > chunkStart {
-                    if buffer[probe].line.trimmingCharacters(in: .whitespaces).isEmpty {
-                        sliceEnd = probe + 1   // include the blank line in this chunk
-                        break
-                    }
-                    probe -= 1
-                }
-                // If no blank line found inside the window, fall through with hardEnd —
-                // the chunk is one long paragraph and we just have to take the hit.
-            }
-
-            let chunk = buffer[chunkStart..<sliceEnd]
-            // Each chunk reports the original line of ITS first NON-BLANK line —
-            // the separator blank lines the previous block left behind are not
-            // content. A chunk with no content at all (a long run of blank lines
-            // sliced off on its own) is dropped for the same reason as above.
-            guard let chunkSourceLine = chunk.first(where: { !$0.line.trimmingCharacters(in: .whitespaces).isEmpty })?.originalIndex else {
-                chunkStart = sliceEnd
+        for position in joined.indices {
+            let line = joined[position].line
+            if Self.isBlank(line) {
+                flushRow()
+                inList = false
                 continue
             }
-            let slice = chunk.map(\.line).joined(separator: "\n")
-            blocks.append(.text(index: index, renderer.render(slice), sourceLine: chunkSourceLine))
-            index += 1
-            chunkStart = sliceEnd
+            if MarkdownRenderer.isThematicBreak(line) {
+                flushRow()
+                append(position)
+                flushRow()
+                inList = false
+                continue
+            }
+            let isItem = MarkdownRenderer.isListItem(line)
+            if isItem, !inList { flushRow() }
+            if row.count >= Self.textChunkLineLimit {
+                flushRow()
+                rowJoinsPrevious = true
+            }
+            append(position)
+            if isItem { inList = true }
         }
-        buffer = []
+        flushRow()
     }
 }

@@ -167,19 +167,26 @@ struct MarkdownRenderer: Sendable {
     // MARK: - Main Render
 
     func render(_ markdown: String) -> AttributedString {
-        var result = AttributedString()
-
         let lines = Self.joinSoftBreaks(markdown.components(separatedBy: "\n"))
         // Ordered items of one list line up on the WIDEST marker of that list:
         // the body font is not monospaced, so "1. " and "10. " have different
         // widths and each item's text would otherwise start at a different x.
         // The run is known before any rendering, so the widest prefix is too.
-        let hangs = widestOrderedPrefixes(lines)
+        return render(joined: lines, hangs: widestOrderedPrefixes(lines))
+    }
+
+    /// Renders lines that are ALREADY soft-break joined (`joinSoftBreaks`),
+    /// each ordered item hanging under `hangs[i]` (`widestOrderedPrefixes`).
+    ///
+    /// The parser's entry point: it joins and computes the hangs over a whole
+    /// text run, then renders the run one block at a time — so the items of a
+    /// loose list, one row each, still share their list's widest marker.
+    func render(joined lines: [String], hangs: [String?]) -> AttributedString {
+        var result = AttributedString()
         for (index, line) in lines.enumerated() {
-            result.append(renderLine(line, hangingPrefix: hangs[index]))
+            result.append(renderLine(line, hangingPrefix: index < hangs.count ? hangs[index] : nil))
             result.append(AttributedString("\n"))
         }
-
         return result
     }
 
@@ -253,13 +260,19 @@ struct MarkdownRenderer: Sendable {
     /// spaces, or a trailing backslash — still ends the visual line, and
     /// headers, rules, and blanks always keep their own line.
     static func joinSoftBreaks(_ lines: [String]) -> [String] {
-        var joined: [String] = []
+        joinSoftBreaksIndexed(lines).map(\.line)
+    }
+
+    /// `joinSoftBreaks`, with the index in `lines` of each joined line's FIRST
+    /// input line — how the parser maps a row back to its source line.
+    static func joinSoftBreaksIndexed(_ lines: [String]) -> [(line: String, first: Int)] {
+        var joined: [(line: String, first: Int)] = []
         var openParagraph = false  // last joined line can absorb a continuation
 
-        for line in lines {
+        for (index, line) in lines.enumerated() {
             let kind = classify(line)
             guard kind != .structural else {
-                joined.append(line)
+                joined.append((line, index))
                 openParagraph = false
                 continue
             }
@@ -270,9 +283,9 @@ struct MarkdownRenderer: Sendable {
             if hardBreak && text.hasSuffix("\\") { text.removeLast() }
 
             if kind == .paragraph && openParagraph {
-                joined[joined.count - 1] += " " + text.trimmingCharacters(in: .whitespaces)
+                joined[joined.count - 1].line += " " + text.trimmingCharacters(in: .whitespaces)
             } else {
-                joined.append(text)
+                joined.append((text, index))
             }
             openParagraph = !hardBreak
         }
@@ -289,6 +302,16 @@ struct MarkdownRenderer: Sendable {
         case listItem
         /// Regular paragraph text — continues an open paragraph, or opens one.
         case paragraph
+    }
+
+    /// A bullet, ordered or task list item — `renderLine` renders it as one.
+    /// The parser starts a new row at an item that follows paragraph text.
+    static func isListItem(_ line: String) -> Bool { classify(line) == .listItem }
+
+    /// A thematic break (`---`, `***`, `___`) — `renderLine` draws it as a rule.
+    static func isThematicBreak(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces)
+            .range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil
     }
 
     /// Must mirror the dispatch in `renderLine`, or a structural line could
