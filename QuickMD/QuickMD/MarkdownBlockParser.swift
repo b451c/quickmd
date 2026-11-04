@@ -389,10 +389,11 @@ struct MarkdownBlockParser: Sendable {
                     }
 
                     // Quote and alert bodies are rendered later without the
-                    // definitions, so references are resolved here (`ReferenceLinks`).
-                    let content = ReferenceLinks.inlined(groupLines.joined(separator: "\n")
-                        .trimmingCharacters(in: .whitespacesAndNewlines), definitions: referenceDefinitions,
-                        footnoteIds: footnoteDefinitions.map(\.id))
+                    // definitions, so references are resolved here, once per
+                    // body (`ReferenceLinks`, soft-break groups as one line).
+                    let content = groupLines.joined(separator: "\n")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    let footnoteIds = footnoteDefinitions.map(\.id)
                     if !content.isEmpty {
                         // GFM alert: level-1 quote whose first line is exactly
                         // `[!NOTE]` / `[!TIP]` / `[!IMPORTANT]` / `[!WARNING]` /
@@ -400,11 +401,13 @@ struct MarkdownBlockParser: Sendable {
                         if groupLevel == 1, let kind = AlertKind(markerLine: groupLines[0]) {
                             let body = ReferenceLinks.inlined(groupLines.dropFirst().joined(separator: "\n")
                                 .trimmingCharacters(in: .whitespacesAndNewlines), definitions: referenceDefinitions,
-                        footnoteIds: footnoteDefinitions.map(\.id))
+                                footnoteIds: footnoteIds, quoteBody: true)
                             blocks.append(.alert(index: blockIndex, kind: kind, content: body, sourceLine: groupSourceLine))
                             previousGroupWasQuote = false
                         } else {
-                            blocks.append(.blockquote(index: blockIndex, content: content, level: groupLevel,
+                            let body = ReferenceLinks.inlined(content, definitions: referenceDefinitions,
+                                                              footnoteIds: footnoteIds, quoteBody: true)
+                            blocks.append(.blockquote(index: blockIndex, content: body, level: groupLevel,
                                                       sourceLine: groupSourceLine,
                                                       joinsPrevious: previousGroupWasQuote))
                             previousGroupWasQuote = true

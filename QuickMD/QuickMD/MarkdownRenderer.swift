@@ -364,7 +364,7 @@ struct MarkdownRenderer: Sendable {
 
     /// Two-plus trailing spaces, or an odd run of trailing backslashes (an
     /// even run is escaped literal backslashes, e.g. `foo\\`).
-    private static func endsWithHardBreak(_ line: String) -> Bool {
+    static func endsWithHardBreak(_ line: String) -> Bool {
         if line.hasSuffix("  ") { return true }
         return line.reversed().prefix(while: { $0 == "\\" }).count % 2 == 1
     }

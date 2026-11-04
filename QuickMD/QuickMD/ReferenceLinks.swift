@@ -35,20 +35,42 @@ enum ReferenceLinks {
         let footnoteIds: [String]
     }
 
-    /// `text` with every resolvable reference inlined, line by line (the
-    /// renderers take quote bodies line by line, so a reference never spans
-    /// lines). Unchanged when there is nothing defined or no `[`.
+    /// `text` with every resolvable reference inlined. Unchanged when there is
+    /// nothing defined or no `[`.
+    ///
+    /// `quoteBody`: `text` is a blockquote / alert body, which the renderers
+    /// read through `MarkdownRenderer.joinSoftBreaks` — a paragraph's lines
+    /// are ONE logical line there, so a code span or a link may span lines.
+    /// Each soft-break group is scanned as that joined line; a group the scan
+    /// leaves alone keeps its original lines, a changed one becomes its joined
+    /// line (plus "  " when it ended in a hard break), which the renderer's
+    /// join reproduces exactly. Otherwise (a table cell: one line, no soft
+    /// breaks) every line is scanned as is.
     ///
     /// Footnote references (`[^note]`) become `[^<marker>N]`
     /// (`MarkdownRenderer.numberedFootnoteMarker` + the number): Markdown has
     /// no inline form for "footnote number N", and a definition-less renderer
     /// draws that form as the same superscript a paragraph's `[^note]` gets.
-    static func inlined(_ text: String, definitions: [String: String], footnoteIds: [String] = []) -> String {
+    static func inlined(_ text: String, definitions: [String: String], footnoteIds: [String] = [],
+                        quoteBody: Bool = false) -> String {
         guard !definitions.isEmpty || !footnoteIds.isEmpty, text.contains("[") else { return text }
         let sources = Sources(definitions: definitions, footnoteIds: footnoteIds)
-        return text.split(separator: "\n", omittingEmptySubsequences: false)
-            .map { inlinedLine(String($0), sources: sources, linksDisabled: false) }
-            .joined(separator: "\n")
+        let lines = text.components(separatedBy: "\n")
+        guard quoteBody else {
+            return lines.map { inlinedLine($0, sources: sources, linksDisabled: false) }.joined(separator: "\n")
+        }
+        let groups = MarkdownRenderer.joinSoftBreaksIndexed(lines)
+        var out: [String] = []
+        for (index, group) in groups.enumerated() {
+            let end = index + 1 < groups.count ? groups[index + 1].first : lines.count
+            let rewritten = inlinedLine(group.line, sources: sources, linksDisabled: false)
+            if rewritten == group.line {
+                out.append(contentsOf: lines[group.first..<end])
+            } else {
+                out.append(rewritten + (MarkdownRenderer.endsWithHardBreak(lines[end - 1]) ? "  " : ""))
+            }
+        }
+        return out.joined(separator: "\n")
     }
 
     private static func inlinedLine(_ line: String, sources: Sources, linksDisabled: Bool) -> String {

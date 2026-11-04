@@ -486,6 +486,41 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(String(renderer.renderInline(rows[0][0]).characters), "cell\u{00B9} [^a]", "code span kept")
     }
 
+    /// Quote and alert bodies are rendered with soft breaks joined, so a code
+    /// span or a link can span source lines: the rewrite scans each joined
+    /// group (review R1). Code must never show rewritten Markdown, and the
+    /// whole link text must be linked.
+    func testQuoteBodyReferencesSpanningLinesMatchTheDefinitionAwareRenderer() {
+        let theme = MarkdownTheme.cached(for: .light)
+        let definitions = ["d": "https://e.x/a", "img": "img/logo.png"]
+        let footnotes = [(id: "n", content: "x")]
+        let aware = MarkdownRenderer(theme: theme, referenceDefinitions: definitions, footnoteDefinitions: footnotes)
+        let plain = MarkdownRenderer(theme: theme)
+        let bodies = [
+            "Use `git log [d]\n--oneline` to list.\nRead [the\nguide][d] first.",
+            "line one [d]  \nhard break [the\nguide][d]\n\nnew paragraph ![x][img][^n]",
+            "- item [d]\n  continued [d]\n- second\n## heading [d]\nafter\\\nback [d]",
+            "no references at all\njust text",
+        ]
+        for body in bodies {
+            let inlined = ReferenceLinks.inlined(body, definitions: definitions, footnoteIds: ["n"], quoteBody: true)
+            let expected = aware.renderQuotedBody(body)
+            let actual = plain.renderQuotedBody(inlined)
+            XCTAssertEqual(String(actual.characters), String(expected.characters), body)
+            XCTAssertEqual(actual.runs.map { $0.link?.absoluteString }, expected.runs.map { $0.link?.absoluteString }, body)
+        }
+        XCTAssertEqual(ReferenceLinks.inlined(bodies[3], definitions: definitions, quoteBody: true), bodies[3],
+                       "untouched groups keep their lines")
+
+        // The parser path (the reported repro).
+        let blocks = parse("> Use `git log [d]\n> --oneline` to list.\n> Read [the\n> guide][d] first.\n\n[d]: https://e.x/a")
+        guard case .blockquote(let quote, _) = blocks[0].content else { return XCTFail("quote") }
+        let shown = plain.renderQuotedBody(quote)
+        XCTAssertEqual(String(shown.characters), "Use git log [d] --oneline to list. Read the guide first.")
+        let linked = shown.runs.filter { $0.link != nil }.map { String(shown[$0.range].characters) }
+        XCTAssertEqual(linked, ["the guide"])
+    }
+
     /// The rewrite must draw exactly what the paragraph renderer (which HAS the
     /// definitions) draws for the same line: characters and links.
     func testReferenceInliningMatchesTheDefinitionAwareRenderer() {
