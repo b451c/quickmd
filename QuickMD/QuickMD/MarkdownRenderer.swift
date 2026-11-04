@@ -981,15 +981,25 @@ struct MarkdownRenderer: Sendable {
         return nil
     }
 
+    /// Whether a link's text is inline-parsed (with links disabled) rather
+    /// than drawn as written: when it holds an image (`[![b](img)](link)`)
+    /// or a backslash escape (`[cost \$5 and \$6](u)`, `[a \* b](u)` — GitHub
+    /// shows "cost $5 and $6", "a * b"). `ReferenceLinks` follows the same
+    /// rule when it rewrites a link's text.
+    static func parsesLinkText(_ text: String) -> Bool {
+        text.contains("![") || text.contains("\\")
+    }
+
     private func makeLink(text: String, url: String, remaining: Substring) -> (AttributedString, Substring) {
         var attr: AttributedString
-        if text.contains("![") {
+        if Self.parsesLinkText(text) {
             // Link-wrapped image (`[![b](img)](link)`): the text is rendered
             // inline so the image becomes its "[Image: b]" placeholder, and the
             // whole run carries the OUTER link (set below, over the image's
-            // own). Only for text holding an image, so every other link keeps
-            // its exact plain-text rendering. Rendered with links disabled:
-            // a link inside a link is literal text (bounds the recursion).
+            // own); an escape loses its backslash (and an escaped `$` is never
+            // math). Every other link keeps its exact plain-text rendering.
+            // Rendered with links disabled: a link inside a link is literal
+            // text (bounds the recursion).
             var linkText = self
             linkText.linksDisabled = true
             attr = linkText.renderInlineFormatting(text)

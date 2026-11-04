@@ -861,6 +861,27 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(InlineMathSegmenter.pieces(of: attributed).map(\.length), [2, 5], "spans in the rendered text: $50%$")
     }
 
+    // MARK: - Escapes in link text (review R12)
+
+    /// A link's text with a backslash escape is parsed like the image case:
+    /// GitHub shows "cost $5 and $6" (no formula) and "a * b"; a link without
+    /// escapes or images keeps its exact plain text.
+    func testLinkTextEscapesAreParsed() {
+        let cost = shownParagraph("[cost \\$5 and \\$6](https://x.example)")
+        XCTAssertEqual(cost.text, "cost $5 and $6")
+        XCTAssertEqual(cost.formulas, [])
+        let star = renderer.renderInline("[a \\* b](u) and [*plain*](v)")
+        XCTAssertEqual(String(star.characters), "a * b and *plain*")
+        XCTAssertEqual(Set(star.runs.compactMap { $0.link?.absoluteString }), ["u", "v"])
+        XCTAssertTrue(star.runs.filter { String(star[$0.range].characters).contains("*") }.allSatisfy { $0.link != nil },
+                      "the whole link text stays linked")
+        // The same in a quote, through ReferenceLinks' rewrite.
+        let blocks = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light))
+            .parse("> [a \\* b][d] and [c \\$5][d]\n\n[d]: https://d.example")
+        guard case .blockquote(let quote, _) = blocks[0].content else { return XCTFail("quote") }
+        XCTAssertEqual(String(renderer.renderQuotedBody(quote).characters), "a * b and c $5")
+    }
+
     // MARK: - References in link destinations (review R10)
 
     /// A destination's character references are decoded (hrefs from

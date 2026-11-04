@@ -153,7 +153,7 @@ enum ReferenceLinks {
         if remaining[afterBracket...].hasPrefix("(") {
             guard let inline = InlineSyntaxScanner.parenthesizedDestination(remaining[afterBracket...],
                                                                            pairs: pairs) else { return nil }
-            guard linkText.contains("![") else {
+            guard MarkdownRenderer.parsesLinkText(String(linkText)) else {
                 return (String(remaining[..<inline.end]), remaining[inline.end...])
             }
             let text = inlinedLine(linkText, sources: sources, linksDisabled: true)
@@ -164,7 +164,7 @@ enum ReferenceLinks {
             let destination = inlineDestination(url)
             // The renderer parses a link's text only when it holds an image
             // (and then with links disabled) — rewrite it under the same rule.
-            let text = linkText.contains("![")
+            let text = MarkdownRenderer.parsesLinkText(String(linkText))
                 ? inlinedLine(linkText, sources: sources, linksDisabled: true) : linkText
             return ("[\(text)](\(destination))", rest)
         }
