@@ -472,6 +472,44 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertNotEqual(separate[1], separate[2])
     }
 
+    // MARK: - Anchor signatures
+
+    /// The scroll anchor is found again after a reload by the block's content
+    /// (`anchorSignature`). A table's was its row count and header: every
+    /// header-less table (blank header cells) and the front-matter properties
+    /// table (no header) of the same length had the same one, so a reload
+    /// could put the reader on the wrong table.
+    func testHeaderlessTablesAndFrontMatterHaveDistinctAnchorSignatures() {
+        let markdown = """
+        ---
+        title: Notes
+        author: Ann
+        ---
+
+        | | |
+        |---|---|
+        | alpha | 1 |
+        | beta | 2 |
+
+        Between.
+
+        | | |
+        |---|---|
+        | gamma | 3 |
+        | delta | 4 |
+        """
+        let tables = parse(markdown).filter { if case .table = $0.content { return true }; return false }
+        XCTAssertEqual(tables.count, 3)
+        XCTAssertEqual(Set(tables.map(\.anchorSignature)).count, 3, "\(tables.map(\.anchorSignature))")
+        // Stable across a re-parse, and still distinctive with an edit above.
+        let again = parse("Edited above.\n\n" + markdown)
+            .filter { if case .table = $0.content { return true }; return false }
+        XCTAssertEqual(again.map(\.anchorSignature).suffix(2), tables.map(\.anchorSignature).suffix(2))
+        // A table with a header keeps it in front.
+        let headed = parse("| Name | Value |\n|---|---|\n| a | 1 |")[0]
+        XCTAssertTrue(headed.anchorSignature.hasPrefix("b|1|Name\u{1F}Value\u{1F}a"), headed.anchorSignature)
+    }
+
     // MARK: - Partial re-measures carry the column
 
     @MainActor

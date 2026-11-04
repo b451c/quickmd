@@ -47,47 +47,6 @@ private let listLog = Logger(subsystem: "pl.falami.studio.QuickMD", category: "V
 private let listSignpost = OSSignposter(subsystem: "pl.falami.studio.QuickMD", category: "VirtualBlockList")
 #endif
 
-// MARK: - Block identity for anchor restoration
-
-/// A cheap content fingerprint of one block.
-///
-/// Used only to find the scroll anchor again after the document changed shape.
-/// Neither of the two identities a block already has can do that job:
-///
-///  * `MarkdownBlock.id` is POSITIONAL (`text-17`), so inserting one block above
-///    renumbers every block below it.
-///  * `sourceLine` moves with any edit above it.
-///
-/// The characters are what the reader was actually looking at, so they are the
-/// identity we match on. 80 characters distinguishes paragraphs without copying
-/// the document, and the kind tag in front keeps a heading from matching a
-/// paragraph with the same words.
-private func blockSignature(_ block: MarkdownBlock) -> String {
-    func head(_ text: String) -> String { String(text.prefix(80)) }
-    switch block.content {
-    case .text(let attributed):
-        return "t|" + head(String(attributed.characters))
-    case .table(let headers, let rows, _, _):
-        return "b|\(rows.count)|" + head(headers.joined(separator: "\u{1F}"))
-    case .codeBlock(let code, let language):
-        return "c|\(language)|" + head(code)
-    case .image(let url, let alt, _):
-        return "i|\(head(url))|" + head(alt)
-    case .blockquote(let content, let level):
-        return "q|\(level)|" + head(content)
-    case .alert(let kind, let content):
-        return "a|\(kind.rawValue)|" + head(content)
-    case .heading(let level, let title, _):
-        return "h|\(level)|" + head(title)
-    case .mathBlock(let latex):
-        return "m|" + head(latex)
-    case .mermaidDiagram(let source):
-        return "d|" + head(source)
-    case .svgImage(let source):
-        return "s|" + head(source)
-    }
-}
-
 struct VirtualBlockList: NSViewRepresentable {
 
     /// Where a programmatic scroll parks the target row.
@@ -689,7 +648,7 @@ struct VirtualBlockList: NSViewRepresentable {
             if preferringLastAnchor, let anchor, let row = anchoredRow(contentTop: top) {
                 return CapturedAnchor(row: row, offsetFromBlockTop: anchor.offset,
                                       sourceLine: blocks[row].sourceLine,
-                                      signature: blockSignature(blocks[row]))
+                                      signature: blocks[row].anchorSignature)
             }
             var row = tableView.row(at: NSPoint(x: 0, y: max(0, top)))
             if row < 0 {
@@ -715,7 +674,7 @@ struct VirtualBlockList: NSViewRepresentable {
                                       contentTop: top, rowRect: tableView.rect(ofRow: row),
                                       spacingAbove: table.spacing(row)),
                                   sourceLine: blocks[row].sourceLine,
-                                  signature: blockSignature(blocks[row]))
+                                  signature: blocks[row].anchorSignature)
         }
 
         /// ⌘E's target line (E-D1): the selection's first row, else the row the
@@ -824,7 +783,7 @@ struct VirtualBlockList: NSViewRepresentable {
             for (index, block) in blocks.enumerated() {
                 // Past the anchor, distance only grows: nothing left can win.
                 if index > row, index - row >= bestDistance { break }
-                guard blockSignature(block) == signature else { continue }
+                guard block.anchorSignature == signature else { continue }
                 let distance = abs(index - row)
                 if distance < bestDistance {
                     best = index

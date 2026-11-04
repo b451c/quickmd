@@ -143,6 +143,47 @@ struct MarkdownBlock: Identifiable, Sendable {
         self.substitutesFormula = substitutesFormula
     }
 
+    /// A cheap content fingerprint of the block, to find the scroll anchor
+    /// again after the document changed shape (`VirtualBlockList`). Neither
+    /// identity the block already has can do that job:
+    ///
+    ///  * `id` is POSITIONAL (`text-17`), so inserting one block above
+    ///    renumbers every block below it.
+    ///  * `sourceLine` moves with any edit above it.
+    ///
+    /// The characters are what the reader was actually looking at, so they
+    /// are the identity matched on. 80 characters distinguish paragraphs
+    /// without copying the document, and the kind tag in front keeps a
+    /// heading from matching a paragraph with the same words. A table is its
+    /// header AND first row: a header-less table (blank header cells) and the
+    /// front-matter properties table (no header) were only `b|<rows>|`, so
+    /// any two of them with as many rows matched each other.
+    var anchorSignature: String {
+        func head(_ text: String) -> String { String(text.prefix(80)) }
+        switch content {
+        case .text(let attributed):
+            return "t|" + head(String(attributed.characters))
+        case .table(let headers, let rows, _, _):
+            return "b|\(rows.count)|" + head((headers + (rows.first ?? [])).joined(separator: "\u{1F}"))
+        case .codeBlock(let code, let language):
+            return "c|\(language)|" + head(code)
+        case .image(let url, let alt, _):
+            return "i|\(head(url))|" + head(alt)
+        case .blockquote(let content, let level):
+            return "q|\(level)|" + head(content)
+        case .alert(let kind, let content):
+            return "a|\(kind.rawValue)|" + head(content)
+        case .heading(let level, let title, _):
+            return "h|\(level)|" + head(title)
+        case .mathBlock(let latex):
+            return "m|" + head(latex)
+        case .mermaidDiagram(let source):
+            return "d|" + head(source)
+        case .svgImage(let source):
+            return "s|" + head(source)
+        }
+    }
+
     enum BlockContent: Sendable {
         case text(AttributedString)
         /// `.properties` (front matter): `headers` empty, every row `[key, value]`.
