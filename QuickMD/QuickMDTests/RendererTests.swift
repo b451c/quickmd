@@ -910,6 +910,38 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(String(renderer.renderQuotedBody(quote).characters), "a * b and c $5")
     }
 
+    // MARK: - Code spans outrank brackets (review R16)
+
+    /// A `]` or `[` inside a code span pairs with nothing (CommonMark); cases
+    /// and expected output from `gh api markdown`. (A ```` ``` ```` run stays
+    /// literal in QuickMD's inline code, so that GitHub case is not here.)
+    func testCodeSpansOutrankBrackets() {
+        func check(_ markdown: String, text: String, links: [String], code: [String],
+                   file: StaticString = #filePath, line: UInt = #line) {
+            let attributed = renderer.renderInline(markdown)
+            XCTAssertEqual(String(attributed.characters), text, markdown, file: file, line: line)
+            XCTAssertEqual(Set(attributed.runs.compactMap { $0.link?.absoluteString }), Set(links), markdown,
+                           file: file, line: line)
+            let monospaced = attributed.runs.filter {
+                $0[AttributeScopes.AppKitAttributes.FontAttribute.self]?.fontDescriptor.symbolicTraits
+                    .contains(.monoSpace) ?? false
+            }.map { String(attributed[$0.range].characters) }
+            XCTAssertEqual(monospaced, code, markdown, file: file, line: line)
+        }
+        check("[a `](` b](u)", text: "a ]( b", links: ["u"], code: ["]("])
+        check("[x `]` y]", text: "[x ] y]", links: [], code: ["]"])
+        check("[a ``]`` b](u)", text: "a ] b", links: ["u"], code: ["]"])
+        check("[a ` b](u)", text: "a ` b", links: ["u"], code: [])
+        check("[a \\` b](u) c`", text: "a ` b c`", links: ["u"], code: [])
+        check("`[a](u)`", text: "[a](u)", links: [], code: ["[a](u)"])
+
+        // A standalone image whose alt holds a code span with `]`.
+        let blocks = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light)).parse("![alt `]` x](i.png)")
+        guard case .image(let url, let alt, _)? = blocks.first?.content else { return XCTFail("image") }
+        XCTAssertEqual(url, "i.png")
+        XCTAssertEqual(alt, "alt `]` x")
+    }
+
     // MARK: - Plain link text fast path (review R15)
 
     /// Link text with no inline syntax skips the inline pass; the run it gets

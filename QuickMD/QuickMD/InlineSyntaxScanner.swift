@@ -58,9 +58,26 @@ enum InlineSyntaxScanner {
             InlineSyntaxScanner.withBytes(text[...]) { bytes in
                 var brackets: [Int: Int] = [:], parens: [Int: Int] = [:]
                 var openBrackets: [Int] = [], openParens: [Int] = []
+                var codeSpans = CodeSpanScanner()
                 var i = 0
                 while i < bytes.count {
                     if isEscape(bytes, at: i, before: bytes.count) { i += 2; continue }
+                    // Code spans outrank brackets: a `]` or `[` inside one pairs
+                    // with nothing. Parens are not skipped — a destination is
+                    // not code — so only brackets look at the span.
+                    if bytes[i] == backtick, let end = codeSpans.end(bytes, at: i) {
+                        var j = i
+                        while j < end {
+                            switch bytes[j] {
+                            case UInt8(ascii: "("): openParens.append(j)
+                            case UInt8(ascii: ")"): if let open = openParens.popLast() { parens[open] = j }
+                            default: break
+                            }
+                            j += 1
+                        }
+                        i = end
+                        continue
+                    }
                     switch bytes[i] {
                     case UInt8(ascii: "["): openBrackets.append(i)
                     case UInt8(ascii: "]"): if let open = openBrackets.popLast() { brackets[open] = i }
@@ -238,6 +255,38 @@ enum InlineSyntaxScanner {
     }
 
     private static let backslash = UInt8(ascii: "\\")
+    private static let backtick = UInt8(ascii: "`")
+
+    /// Where `MarkdownRenderer.tryParseInlineCode` would end a code span
+    /// starting at a backtick — so bracket matching skips what the renderer
+    /// will draw as code (CommonMark: code spans outrank brackets;
+    /// `[a `](` b](u)` is a link whose text holds the code "](").
+    /// Its rules exactly: a run of 1 or 2 backticks closes at the FIRST later
+    /// occurrence of that many backticks (a 2-run whose closer is followed by
+    /// a third backtick opens nothing); a run of 3+ is literal and skipped
+    /// whole. No span → nil (the caller moves on one byte, as the renderer
+    /// moves on one character). A search that found no closer is remembered
+    /// per run length, so many unclosed backticks stay linear.
+    fileprivate struct CodeSpanScanner {
+        private var noCloserAfter: [Int: Int] = [:]  // run length → offset searched from
+
+        mutating func end(_ bytes: Bytes, at start: Int) -> Int? {
+            var run = 0
+            while start + run < bytes.count, bytes[start + run] == backtick { run += 1 }
+            if run > 2 { return start + run }
+            if let from = noCloserAfter[run], from <= start + run { return nil }
+            var i = start + run
+            while i + run <= bytes.count {
+                if bytes[i] == backtick, run == 1 || bytes[i + 1] == backtick {
+                    if run == 2, i + 2 < bytes.count, bytes[i + 2] == backtick { return nil }
+                    return i + run
+                }
+                i += 1
+            }
+            noCloserAfter[run] = start + run
+            return nil
+        }
+    }
     private static let ampersand = UInt8(ascii: "&")
 
     /// CommonMark whitespace for these purposes: space, tab, LF, VT, FF, CR.
@@ -274,8 +323,10 @@ enum InlineSyntaxScanner {
         if let lookup { return lookup.closingBracket(open).flatMap { $0 < bytes.count ? $0 : nil } }
         var depth = 0
         var i = open
+        var codeSpans = CodeSpanScanner()
         while i < bytes.count {
             if isEscape(bytes, at: i, before: bytes.count) { i += 2; continue }
+            if bytes[i] == backtick, let end = codeSpans.end(bytes, at: i) { i = end; continue }
             switch bytes[i] {
             case UInt8(ascii: "["): depth += 1
             case UInt8(ascii: "]"):
