@@ -495,6 +495,18 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertNil(aim.blockId)               // a new table
     }
 
+    /// An alert marker is `[!KIND]` with spaces or tabs around it (GitHub,
+    /// gh api markdown in gfm mode): a no-break space after it leaves a
+    /// plain quote; two trailing spaces still make the alert.
+    func testAnAlertMarkerTakesSpacesAndTabsOnly() throws {
+        XCTAssertEqual(try quoteShape("> [!NOTE]\u{00A0}\n> body\n"), ["q1:[!NOTE]\u{00A0}\nbody"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]  \n> body\n"), ["alert:note:body"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\t\n> body\n"), ["alert:note:body"])
+        XCTAssertEqual(try quoteShape("> [!NOTE]\n> body\n"), ["alert:note:body"])
+        XCTAssertNil(AlertKind(markerLine: "\u{2003}[!TIP]"))
+        XCTAssertEqual(AlertKind(markerLine: " [!TIP] "), .tip)
+    }
+
     // MARK: - Block markers: spaces and tabs only
 
     /// Parses on a worker thread: a parser that never returns fails the test
