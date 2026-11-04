@@ -872,3 +872,115 @@ final class BlockHeightMeasurerTests: XCTestCase {
     ![alt text](image.png)
     """
 }
+
+// MARK: - Untypesettable display math (1.14.3): the source as a ```latex block
+
+extension BlockHeightMeasurerTests {
+
+    /// Stand-in for SwiftMath's parser: refuses `\not` the way the real
+    /// `MTMathListBuilder` does ("Unsupported \not\le combination"), accepts
+    /// everything else.
+    private var refusingNot: MathRendering {
+        MathRendering(inlineImage: { _, _, _ in NSImage(size: NSSize(width: 24, height: 12)) },
+                      displayHeight: { _, _, _ in 40 },
+                      typesets: { !$0.contains("\\not") })
+    }
+
+    private static let failingFormulaDocument = """
+    Intro paragraph.
+
+    $$
+    V(e_1) \\not\\le V(e_2) \\quad \\land \\quad V(e_2) \\not\\le V(e_1)
+    $$
+
+    $$x = \\frac{1}{2}$$
+
+    Outro paragraph.
+    """
+
+    func testUntypesettableFormulaBecomesALatexCodeBlockKeepingIdAndSourceLine() {
+        let parsed = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light)).parse(Self.failingFormulaDocument)
+        let blocks = refusingNot.substitutingUntypesettableMath(in: parsed)
+
+        XCTAssertEqual(blocks.count, parsed.count)
+        XCTAssertEqual(blocks.map(\.id), parsed.map(\.id), "ids are positional and must not change")
+        XCTAssertEqual(blocks.map(\.sourceLine), parsed.map(\.sourceLine))
+
+        guard case .mathBlock(let failing) = parsed[1].content else {
+            return XCTFail("fixture: row 1 is not display math")
+        }
+        guard case .codeBlock(let code, let language) = blocks[1].content else {
+            return XCTFail("the untypesettable formula is still \(blocks[1].content)")
+        }
+        XCTAssertEqual(code, failing, "the code block shows the formula's source verbatim")
+        XCTAssertEqual(language, "latex")
+        XCTAssertEqual(blocks[1].sourceLine, 2, "the opening $$ line")
+
+        guard case .mathBlock(let working) = blocks[2].content else {
+            return XCTFail("a formula that typesets must stay display math")
+        }
+        XCTAssertEqual(working, "x = \\frac{1}{2}")
+    }
+
+    /// The default engine stubs (and `.none`) never substitute — nothing that
+    /// existed before the fallback changes behaviour.
+    func testEnginesWithoutATypesetCheckKeepEveryFormula() {
+        let parsed = parse(Self.failingFormulaDocument)
+        for engine in [math, MathRendering.none] {
+            let blocks = engine.substitutingUntypesettableMath(in: parsed)
+            XCTAssertEqual(blocks.filter { if case .mathBlock = $0.content { return true } else { return false } }.count, 2)
+        }
+    }
+
+    func testDocumentWithoutDisplayMathNeverConsultsTheEngine() {
+        let parsed = parse("Text with $x$ inline only.\n\n```latex\n\\not\\le\n```")
+        let engine = MathRendering(inlineImage: { _, _, _ in nil }, displayHeight: { _, _, _ in 0 },
+                                   typesets: { latex in
+                                       XCTFail("asked to typeset \u{201C}\(latex)\u{201D} with no display math present")
+                                       return false
+                                   })
+        XCTAssertEqual(engine.substitutingUntypesettableMath(in: parsed).map(\.id), parsed.map(\.id))
+    }
+
+    /// The production order: the off-main pass measured the ORIGINAL blocks (the
+    /// formula row deferred as math), the main actor substitutes, then
+    /// `measureMathRows` finishes. The result must equal a straight measurement
+    /// of the substituted blocks — the formula row an `.exact` code row whose
+    /// height is what the code-block view lays out.
+    @MainActor
+    func testSubstitutedFormulaRowIsMeasuredAsAnExactCodeRow() {
+        let engine = refusingNot
+        let parsed = parse(Self.failingFormulaDocument)
+        let blocks = engine.substitutingUntypesettableMath(in: parsed)
+        guard case .codeBlock(let code, let language) = blocks[1].content else {
+            return XCTFail("fixture: row 1 was not substituted")
+        }
+        for width in widths {
+            let deferred = measureWithoutMathEngine(parsed, width: width)
+            XCTAssertTrue(deferred.mathPendingRows.contains(1), "@\(width)")
+            XCTAssertEqual(deferred.table.kinds[1], .reported)
+
+            let finished = BlockHeightMeasurer.measureMathRows(
+                deferred.mathPendingRows, in: deferred, blocks: blocks, theme: theme,
+                fontScale: 1.0, contentWidth: width, math: engine)
+            let direct = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1.0,
+                                                     contentWidth: width, math: engine)
+            XCTAssertEqual(finished.table, direct.table, "@\(width)")
+            XCTAssertEqual(finished.table.kinds[1], .exact, "@\(width)")
+            XCTAssertEqual(finished.table.kinds[2], .reported, "the working formula stays a math row")
+
+            // Independent of the measurer: the string CodeBlockView installs, laid
+            // out in a live text view, plus the code chrome from BlockLayout.
+            let ns = BlockTextConverter.plainCode(code, theme: theme, fontScale: 1.0)
+            let inner = liveTextHeight(ns, width: width - 2 * BlockLayout.Code.horizontalPadding)
+            XCTAssertFalse(language.isEmpty)
+            let chrome = BlockLayout.Code.languageLabelHeight(fontScale: 1.0)
+                + BlockLayout.Code.languageLabelTopPadding
+                + BlockLayout.Code.languageLabelBottomPadding
+                + 2 * BlockLayout.Code.verticalPaddingWithLanguage
+            let expected = max(inner + chrome, BlockLayout.Code.copyButtonFloorHeight)
+                + 2 * BlockLayout.Document.codeOuterVerticalPadding
+            XCTAssertEqual(finished.table.heights[1], expected, accuracy: tolerance, "@\(width)")
+        }
+    }
+}

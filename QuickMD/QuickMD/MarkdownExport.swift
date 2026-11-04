@@ -781,6 +781,11 @@ class PDFExportManager {
             return nil
         }
 
+        // A display formula SwiftMath cannot typeset prints as the same
+        // ```latex code block the screen shows (MarkdownView's parse task makes
+        // the identical substitution). Main actor: the engine is main-only.
+        let blocks = MathRendering.swiftMath.substitutingUntypesettableMath(in: blocks)
+
         // Measure each block's size in points
         var measuredBlocks: [(block: MarkdownBlock, size: CGSize)] = []
 
