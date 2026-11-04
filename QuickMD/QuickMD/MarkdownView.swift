@@ -1402,14 +1402,8 @@ struct MarkdownView: View {
         // so a stale report can never overwrite an exact height).
         guard row < table.kinds.count, table.kinds[row] == .reported else { return }
         guard row < table.heights.count, abs(table.heights[row] - height) >= 0.5 else { return }
-        var heights = table.heights
-        heights[row] = height
-        measured = MeasuredBlocks(
-            table: BlockHeightTable(heights: heights, kinds: table.kinds,
-                                    contentWidth: table.contentWidth),
-            converted: measured.converted,
-            tables: measured.tables,
-            mathPendingRows: measured.mathPendingRows)
+        // The block's height only: its space above stays as measured.
+        measured = measured.replacingHeight(height, at: row)
     }
 
     /// Recompute focusedBlockId and focusedOccInBlock from currentMatchIndex

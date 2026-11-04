@@ -65,14 +65,14 @@ enum BlockLayout {
 
     // MARK: Document chrome (MarkdownView)
 
-    /// Padding and spacing `MarkdownView` puts around and between blocks.
+    /// Padding `MarkdownView` puts around the document and around blocks.
     /// The per-kind `…OuterVerticalPadding` values are the `.padding(.vertical:)`
     /// modifiers applied in `MarkdownView.blockView(for:)`; they are part of a
-    /// row's height because the virtualized list hosts that whole view.
+    /// row's height because the virtualized list hosts that whole view. The
+    /// space BETWEEN blocks is `BlockLayout.Spacing` (VerticalRhythm.swift).
     enum Document {
         static let contentHorizontalPadding: CGFloat = 32
         static let contentVerticalPadding: CGFloat = 24
-        static let blockSpacing: CGFloat = 8
 
         // MARK: Reading mode (v1.9)
         //
@@ -404,6 +404,10 @@ enum BlockLayout {
         /// the bitmap is decoded, so this is what a measured row starts at.
         static let placeholderHeight: CGFloat = 100
         static let maxDisplayWidth: CGFloat = 600
+        /// Between an image and its italic alt-text caption. `ImageBlockView`'s
+        /// body is a two-view tuple, flattened into the row's `VStack`, so this
+        /// is that stack's spacing (the 8 pt the 1.8.0 document stack had).
+        static let captionSpacing: CGFloat = 8
 
         /// Scale the fitted 100% width, then keep the result inside the column.
         static func displayWidth(fontScale: CGFloat, contentWidth: CGFloat) -> CGFloat {
@@ -690,15 +694,42 @@ enum RowKind: Equatable {
 
 /// One height per block, in block order, for a specific content width.
 struct BlockHeightTable: Equatable {
+    /// The BLOCK's height: what its view lays out at, what a `.reported` row
+    /// reports and what the parity tests pin. The list row is taller by
+    /// `spacingAbove` (see `rowHeight`).
     let heights: [CGFloat]
     let kinds: [RowKind]
     /// The width the heights were measured at. A row height is only valid for
     /// this width — the list re-measures when it changes.
     let contentWidth: CGFloat
+    /// The space above each block (`BlockLayout.Spacing`; row 0: 0). Part of
+    /// the block's list row, above its view.
+    let spacingAbove: [CGFloat]
 
     var count: Int { heights.count }
 
-    static let empty = BlockHeightTable(heights: [], kinds: [], contentWidth: 0)
+    /// The space above row `row`'s block; 0 outside the table.
+    func spacing(_ row: Int) -> CGFloat {
+        row >= 0 && row < spacingAbove.count ? spacingAbove[row] : 0
+    }
+
+    /// The list row's height: the space above the block, then the block.
+    func rowHeight(_ row: Int) -> CGFloat {
+        row >= 0 && row < heights.count ? spacing(row) + heights[row] : 0
+    }
+
+    /// This table with row `row`'s block height replaced — a `.reported` row
+    /// measured itself. Only the block changes: its space above, and every
+    /// other row, stay as measured.
+    func replacingHeight(_ height: CGFloat, at row: Int) -> BlockHeightTable {
+        guard row >= 0, row < heights.count else { return self }
+        var heights = heights
+        heights[row] = height
+        return BlockHeightTable(heights: heights, kinds: kinds, contentWidth: contentWidth,
+                                spacingAbove: spacingAbove)
+    }
+
+    static let empty = BlockHeightTable(heights: [], kinds: [], contentWidth: 0, spacingAbove: [])
 }
 
 /// `measure`'s output: the height table plus the NSAttributedStrings that had to
@@ -727,8 +758,20 @@ struct MeasuredBlocks: @unchecked Sendable {
     /// main actor before using the table for layout. Empty whenever `measure`
     /// got a real engine.
     let mathPendingRows: [Int]
+    /// Every row's input to `BlockLayout.Spacing` — what `table.spacingAbove`
+    /// was derived from, kept so `measureMathRows` can update the rows it
+    /// finishes and derive the column again without measuring anything else.
+    let rhythm: [BlockLayout.Spacing.Row]
 
-    static let empty = MeasuredBlocks(table: .empty, converted: [:], tables: [:], mathPendingRows: [])
+    /// This measurement with row `row`'s block height replaced (see
+    /// `BlockHeightTable.replacingHeight`).
+    func replacingHeight(_ height: CGFloat, at row: Int) -> MeasuredBlocks {
+        MeasuredBlocks(table: table.replacingHeight(height, at: row), converted: converted,
+                       tables: tables, mathPendingRows: mathPendingRows, rhythm: rhythm)
+    }
+
+    static let empty = MeasuredBlocks(table: .empty, converted: [:], tables: [:], mathPendingRows: [],
+                                      rhythm: [])
 }
 
 // MARK: - Measurer
@@ -749,6 +792,42 @@ enum BlockHeightMeasurer {
     /// container height, `ensureLayout`, `ceil(usedRect.height)`. Anything else
     /// here breaks parity.
     static func exactHeight(text ns: NSAttributedString, width: CGFloat) -> CGFloat {
+        let (layoutManager, container, storage) = laidOut(ns, width: width)
+        return withExtendedLifetime(storage) { ceil(layoutManager.usedRect(for: container).height) }
+    }
+
+    /// `exactHeight`, plus where the text's ink starts and ends — the edges
+    /// `BlockLayout.Spacing` measures optical gaps from. ONE layout pass: the
+    /// baselines are read from the layout `exactHeight` computes anyway.
+    static func textInk(text ns: NSAttributedString, width: CGFloat) -> BlockLayout.Spacing.TextInk {
+        let (layoutManager, container, storage) = laidOut(ns, width: width)
+        return withExtendedLifetime(storage) {
+            let height = ceil(layoutManager.usedRect(for: container).height)
+            let glyphCount = layoutManager.numberOfGlyphs
+            guard glyphCount > 0 else {
+                return .init(height: height, firstBaseline: 0, firstCapHeight: 0, lastBaseline: height)
+            }
+            func baseline(ofGlyph glyph: Int) -> CGFloat {
+                layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY
+                    + layoutManager.location(forGlyphAt: glyph).y
+            }
+            var firstLine = NSRange()
+            _ = layoutManager.lineFragmentRect(forGlyphAt: 0, effectiveRange: &firstLine)
+            let firstCharacters = layoutManager.characterRange(forGlyphRange: firstLine, actualGlyphRange: nil)
+            var capHeight: CGFloat = 0
+            storage.enumerateAttribute(.font, in: firstCharacters, options: []) { value, _, _ in
+                if let font = value as? NSFont { capHeight = max(capHeight, font.capHeight) }
+            }
+            return .init(height: height, firstBaseline: baseline(ofGlyph: 0), firstCapHeight: capHeight,
+                         lastBaseline: baseline(ofGlyph: glyphCount - 1))
+        }
+    }
+
+    /// The TextKit 1 stack both functions above lay `ns` out on. The storage
+    /// is returned too, and the caller must keep it alive while it reads the
+    /// layout: the layout manager does not retain it.
+    private static func laidOut(_ ns: NSAttributedString, width: CGFloat)
+        -> (NSLayoutManager, NSTextContainer, NSTextStorage) {
         let storage = NSTextStorage(attributedString: ns)
         let layoutManager = NSLayoutManager()
         let container = NSTextContainer(size: NSSize(width: max(0, width),
@@ -759,7 +838,7 @@ enum BlockHeightMeasurer {
         layoutManager.addTextContainer(container)
         storage.addLayoutManager(layoutManager)
         layoutManager.ensureLayout(for: container)
-        return ceil(layoutManager.usedRect(for: container).height)
+        return (layoutManager, container, storage)
     }
 
     /// Measures every block for one `(blocks, theme, fontScale, contentWidth)`
@@ -823,30 +902,39 @@ enum BlockHeightMeasurer {
 
         var heights: [CGFloat] = []
         var kinds: [RowKind] = []
+        var rhythm: [BlockLayout.Spacing.Row] = []
         var converted: [String: NSAttributedString] = [:]
         var tables: [String: TableText] = [:]
         var mathPendingRows: [Int] = []
         heights.reserveCapacity(blocks.count)
         kinds.reserveCapacity(blocks.count)
+        rhythm.reserveCapacity(blocks.count)
 
-        for block in blocks {
+        for (row, block) in blocks.enumerated() {
+            // Text and headings have their edges measured below; every other
+            // kind's are fixed by its view (`boxRhythm`).
+            var textEdges: BlockLayout.Spacing.Edges?
             switch block.content {
 
             case .text(let attributed):
                 let hasMath = BlockTextConverter.containsInlineMath(String(attributed.characters))
                 if hasMath, math == nil {
                     // Building the string means rendering `$…$` segments through
-                    // the math engine, which this thread may not touch.
+                    // the math engine, which this thread may not touch. The
+                    // edges are a placeholder too, until `measureMathRows`.
                     mathPendingRows.append(heights.count)
                     heights.append(pendingParagraphHeight)
                     kinds.append(.exact)
+                    textEdges = .box(top: 0, bottom: 0)
                 } else {
                     let ns = BlockTextConverter.makeNSAttributedString(
                         from: attributed, hasInlineMath: hasMath,
                         theme: theme, fontScale: fontScale, math: engine)
                     converted[block.id] = ns
-                    heights.append(exactHeight(text: ns, width: textWidth))
+                    let ink = textInk(text: ns, width: textWidth)
+                    heights.append(ink.height)
                     kinds.append(.exact)
+                    textEdges = .text(ink)
                 }
 
             case .blockquote(let content, let level):
@@ -886,9 +974,11 @@ enum BlockHeightMeasurer {
                 kinds.append(.exact)
 
             case .heading(let level, let title, _):
-                heights.append(headingEstimate(title: title, level: level,
-                                               renderer: renderer, contentWidth: contentWidth))
+                let heading = headingRow(title: title, level: level,
+                                         renderer: renderer, contentWidth: contentWidth)
+                heights.append(heading.height)
                 kinds.append(.reported)
+                textEdges = heading.edges
 
             case .table(let headers, let rows, let alignments, let style):
                 // The string `TableTextView` installs (it is handed this very
@@ -934,6 +1024,7 @@ enum BlockHeightMeasurer {
                                + 2 * BlockLayout.Document.mermaidOuterVerticalPadding)
                 kinds.append(.reported)
             }
+            rhythm.append(textEdges.map { rhythmRow(block, edges: $0) } ?? boxRhythm(block, row: row))
         }
 
         #if DEBUG
@@ -943,10 +1034,50 @@ enum BlockHeightMeasurer {
         #endif
 
         return MeasuredBlocks(
-            table: BlockHeightTable(heights: heights, kinds: kinds, contentWidth: contentWidth),
+            table: BlockHeightTable(heights: heights, kinds: kinds, contentWidth: contentWidth,
+                                    spacingAbove: BlockLayout.Spacing.column(rhythm, fontScale: fontScale)),
             converted: converted,
             tables: tables,
-            mathPendingRows: mathPendingRows)
+            mathPendingRows: mathPendingRows,
+            rhythm: rhythm)
+    }
+
+    // MARK: - Rhythm inputs
+
+    /// A text or heading row's rhythm input, from its measured edges.
+    private static func rhythmRow(_ block: MarkdownBlock, edges: BlockLayout.Spacing.Edges)
+        -> BlockLayout.Spacing.Row {
+        let role: BlockLayout.Spacing.Role
+        if case .heading(let level, _, _) = block.content {
+            role = .heading(level: level)
+        } else {
+            role = .text
+        }
+        return BlockLayout.Spacing.Row(role: role, edges: edges, joinsPrevious: block.joinsPrevious)
+    }
+
+    /// The rhythm input of a row whose edges its view fixes: the vertical
+    /// padding between the row's edge and the visible box (or the picture).
+    /// `row` decides front matter: a properties table counts as front matter
+    /// only as the document's first block.
+    private static func boxRhythm(_ block: MarkdownBlock, row: Int) -> BlockLayout.Spacing.Row {
+        typealias Document = BlockLayout.Document
+        let pad: CGFloat
+        var role = BlockLayout.Spacing.Role.box
+        switch block.content {
+        case .blockquote: pad = BlockLayout.Quote.verticalPadding
+        case .alert: pad = Document.alertOuterVerticalPadding
+        case .codeBlock: pad = Document.codeOuterVerticalPadding
+        case .table(_, _, _, let style):
+            pad = Document.tableOuterVerticalPadding
+            if style == .properties, row == 0 { role = .frontMatter }
+        case .mathBlock: pad = Document.mathOuterVerticalPadding + BlockLayout.Math.verticalPadding
+        case .mermaidDiagram: pad = Document.mermaidOuterVerticalPadding + BlockLayout.Mermaid.verticalPadding
+        case .image, .svgImage: pad = Document.imageOuterVerticalPadding
+        case .text, .heading: pad = 0  // measured, never here
+        }
+        return BlockLayout.Spacing.Row(role: role, edges: .box(top: pad, bottom: pad),
+                                       joinsPrevious: block.joinsPrevious)
     }
 
     /// One `.codeBlock` row: the code laid out at `codeWidth` plus `chrome`
@@ -1007,7 +1138,7 @@ enum BlockHeightMeasurer {
                                 reusing: [String: NSAttributedString] = [:]) -> MeasuredBlocks {
         guard !pending.isEmpty else {
             return MeasuredBlocks(table: measured.table, converted: measured.converted,
-                                  tables: measured.tables, mathPendingRows: [])
+                                  tables: measured.tables, mathPendingRows: [], rhythm: measured.rhythm)
         }
 
         #if DEBUG
@@ -1020,6 +1151,11 @@ enum BlockHeightMeasurer {
         var heights = measured.table.heights
         var kinds = measured.table.kinds
         var converted = measured.converted
+        // Row for row with `blocks` whenever `measured` came from them; the
+        // guard only keeps a mismatched call from trapping.
+        var rhythm = measured.rhythm.count == blocks.count
+            ? measured.rhythm
+            : blocks.enumerated().map { boxRhythm($0.element, row: $0.offset) }
         let textWidth = BlockLayout.clampedWidth(contentWidth)
 
         for index in pending {
@@ -1033,7 +1169,9 @@ enum BlockHeightMeasurer {
                     // this string are still the right images and only the wrap
                     // has to be recomputed.
                     converted[block.id] = existing
-                    heights[index] = exactHeight(text: existing, width: textWidth)
+                    let ink = textInk(text: existing, width: textWidth)
+                    heights[index] = ink.height
+                    rhythm[index] = rhythmRow(block, edges: .text(ink))
                     continue
                 }
                 // Re-derive the flag rather than assuming it: the row is pending
@@ -1044,7 +1182,9 @@ enum BlockHeightMeasurer {
                     from: attributed, hasInlineMath: hasMath,
                     theme: theme, fontScale: fontScale, math: math)
                 converted[block.id] = ns
-                heights[index] = exactHeight(text: ns, width: textWidth)
+                let ink = textInk(text: ns, width: textWidth)
+                heights[index] = ink.height
+                rhythm[index] = rhythmRow(block, edges: .text(ink))
 
             case .mathBlock(let latex):
                 heights[index] = math.displayHeight(latex, theme, fontScale)
@@ -1059,37 +1199,46 @@ enum BlockHeightMeasurer {
                     codeWidth: BlockLayout.clampedWidth(contentWidth - 2 * BlockLayout.Code.horizontalPadding),
                     chrome: BlockLayout.Code.verticalChrome(hasLanguage: !language.isEmpty, fontScale: fontScale))
                 kinds[index] = .exact
+                rhythm[index] = boxRhythm(block, row: index)
 
             default:
                 continue
             }
         }
 
+        // The finished rows' edges may have changed (a formula on the first
+        // line, a formula that became a code row), and with them the space
+        // around them: derive the column again — arithmetic only.
         return MeasuredBlocks(
             table: BlockHeightTable(heights: heights, kinds: kinds,
-                                    contentWidth: measured.table.contentWidth),
+                                    contentWidth: measured.table.contentWidth,
+                                    spacingAbove: BlockLayout.Spacing.column(rhythm, fontScale: fontScale)),
             converted: converted,
             tables: measured.tables,
-            mathPendingRows: [])
+            mathPendingRows: [],
+            rhythm: rhythm)
     }
 
-    // MARK: - Estimates for the reported kinds
+    // MARK: - Headings
 
-    /// `.heading` — TextKit's height for the title string at the title's width
-    /// (since v1.11 the title IS an NSTextView laid out with this string),
-    /// floored at the hover-to-copy button's own height. The view also
-    /// reproduces the old first-baseline alignment with the button
-    /// (`BlockLayout.Heading.titleGeometry`), which can add another point or
-    /// two for single-line H2–H6; the placed view corrects it (the row stays
-    /// `.reported`).
-    private static func headingEstimate(title: String, level: Int,
-                                        renderer: MarkdownRenderer,
-                                        contentWidth: CGFloat) -> CGFloat {
+    /// `.heading` — the height `HeadingBlockView` lays out at and the edges of
+    /// its title. Since v1.11 the title IS an NSTextView laid out with this
+    /// string at the title's width, pushed down by the title inset that lines
+    /// its first baseline up with the hover-to-copy button's
+    /// (`BlockLayout.Heading.titleGeometry`), and the row is at least as tall
+    /// as the button's bottom edge. The row stays `.reported`: the placed view
+    /// still has the last word.
+    private static func headingRow(title: String, level: Int, renderer: MarkdownRenderer,
+                                   contentWidth: CGFloat)
+        -> (height: CGFloat, edges: BlockLayout.Spacing.Edges) {
         let attributed = renderer.renderHeader(title, level: level)
         let ns = (try? NSAttributedString(attributed, including: \.appKit))
             ?? NSAttributedString(string: title)
-        let textWidth = BlockLayout.Heading.titleWrapWidth(rowWidth: contentWidth)
-        return max(exactHeight(text: ns, width: textWidth), BlockLayout.Heading.copyButtonHeight)
+        let geometry = BlockLayout.Heading.titleGeometry(
+            titleFirstBaseline: BlockLayout.Heading.titleFirstBaseline(font: renderer.headerAppKitFont(level: level)))
+        let ink = textInk(text: ns, width: BlockLayout.Heading.titleWrapWidth(rowWidth: contentWidth))
+        let height = max(geometry.titleTopInset + ink.height, geometry.minimumHeight)
+        return (height, .text(ink, top: geometry.titleTopInset, rowHeight: height))
     }
 
 }

@@ -126,14 +126,14 @@ struct VirtualBlockList: NSViewRepresentable {
         static let reading = LayoutStyle(maxContentWidth: Metrics.readingMaxContentWidth,
                                          verticalPadding: Metrics.readingContentVerticalPadding)
 
-        /// The scroll view's top/bottom content inset for this style.
-        ///
-        /// Not simply `verticalPadding`: `NSTableView` centres each row inside its
-        /// rect, which puts HALF the intercell spacing above the first row and
-        /// half below the last one (measured). Subtracting that half makes the
-        /// gap the reader sees exactly `verticalPadding`, and makes a `.top` jump
-        /// to any row — row 0 included — leave that same gap above its content.
-        var edgeInset: CGFloat { max(0, verticalPadding - Metrics.blockSpacing / 2) }
+        /// The scroll view's top/bottom content inset for this style: exactly
+        /// `verticalPadding`. The table has no intercell spacing (the space
+        /// between blocks is part of each row, above its block — see
+        /// `RowGeometry`), the first row has no space above its block, and a
+        /// `.top` jump to any row puts that row's BLOCK at the content top — so
+        /// the gap above the first block and above any jumped-to block is this
+        /// inset, in every style.
+        var edgeInset: CGFloat { verticalPadding }
     }
 
     /// Row content, in block order.
@@ -230,9 +230,10 @@ struct VirtualBlockList: NSViewRepresentable {
         tableView.usesAlternatingRowBackgroundColors = false
         tableView.gridStyleMask = []
         tableView.focusRingType = .none
-        // The 8 pt that `VStack(spacing:)` used to put between blocks. Row
-        // heights themselves therefore stay exactly what the measurer computed.
-        tableView.intercellSpacing = NSSize(width: 0, height: Metrics.blockSpacing)
+        // None: the space between blocks is part of each row, above its block
+        // (`BlockHeightTable.spacingAbove`, `BlockLayout.Spacing`), so a row
+        // rect is exactly the space above plus the block (`RowGeometry`).
+        tableView.intercellSpacing = NSSize(width: 0, height: 0)
         tableView.rowSizeStyle = .custom
         tableView.usesAutomaticRowHeights = false
         // The coordinator sets the single column's width to the clip view's width
@@ -262,9 +263,8 @@ struct VirtualBlockList: NSViewRepresentable {
         // The 24 pt (48 in reading mode) that used to be `.padding(.vertical:)`
         // on the stack. As content insets they scroll with the document exactly
         // as before, but AppKit — not us — owns the arithmetic (see
-        // `contentTopY`). The half-spacing correction lives in
-        // `LayoutStyle.edgeInset`; the coordinator re-applies it when the style
-        // changes.
+        // `contentTopY`). `LayoutStyle.edgeInset` is the value; the coordinator
+        // re-applies it when the style changes.
         scrollView.automaticallyAdjustsContentInsets = false
         let edgeInset = layoutStyle.edgeInset
         scrollView.contentInsets = NSEdgeInsets(top: edgeInset, left: 0,
@@ -414,6 +414,7 @@ struct VirtualBlockList: NSViewRepresentable {
             self.scrollView = scrollView
             self.tableView = tableView
             selection.attach(tableView: tableView)
+            selection.spacingAbove = { [weak self] row in self?.table.spacing(row) ?? 0 }
             tableView.selectionController = selection
             scrollView.selectionController = selection
             scrollView.onEndLiveResize = { [weak self] in
@@ -448,13 +449,18 @@ struct VirtualBlockList: NSViewRepresentable {
         // MARK: - Model installation (D7 anchor preservation)
 
         /// The whole visible geometry of one scroll position: which row was at
-        /// the top of the content area, how far into it we were, and two
-        /// identities for finding that row again after the document changed shape
-        /// — its content fingerprint (primary) and the source line it started at
-        /// (fallback, D8).
+        /// the top of the content area, how far below its BLOCK's top we were,
+        /// and two identities for finding that row again after the document
+        /// changed shape — its content fingerprint (primary) and the source line
+        /// it started at (fallback, D8).
+        ///
+        /// The offset is from the block, not from the row's top edge: the space
+        /// above a block changes with zoom (and the block's neighbours), the
+        /// reader's place in the block does not. Negative when the content top
+        /// is in the space above the block.
         private struct CapturedAnchor {
             let row: Int
-            let offsetWithinRow: CGFloat
+            let offsetFromBlockTop: CGFloat
             let sourceLine: Int
             let signature: String
         }
@@ -517,28 +523,16 @@ struct VirtualBlockList: NSViewRepresentable {
             #if DEBUG
             listSignpost.endInterval("reloadData", state)
             let elapsedMS = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
-            listLog.debug("reloadData: \(newBlocks.count) rows, version=\(newVersion), width=\(newTable.contentWidth, format: .fixed(precision: 1)), anchor=\(anchor.map { "row \($0.row)+\($0.offsetWithinRow)" } ?? "none", privacy: .public), \(elapsedMS, format: .fixed(precision: 2)) ms")
+            listLog.debug("reloadData: \(newBlocks.count) rows, version=\(newVersion), width=\(newTable.contentWidth, format: .fixed(precision: 1)), anchor=\(anchor.map { "row \($0.row)+\($0.offsetFromBlockTop)" } ?? "none", privacy: .public), \(elapsedMS, format: .fixed(precision: 2)) ms")
             #endif
         }
 
-        /// The part of a row rect the hosted view actually occupies.
-        ///
-        /// `NSTableView` centres a row's content inside `rect(ofRow:)`, splitting
-        /// `intercellSpacing.height` half above and half below (measured: a 100 pt
-        /// row at 8 pt spacing gets rect height 108 with the cell at +4).
-        ///
-        /// Used for `.center` only, where the block's visual middle is what the
-        /// reader's eye goes to. `.top` and the scroll anchor deliberately use the
-        /// FULL row rect: its `minY` sits half a spacing above the content, which
-        /// — together with the reduced content inset — is what makes every jump
-        /// leave the same gap as the top of the document.
-        private func rowContentRect(_ row: Int) -> NSRect {
-            guard let tableView else { return .zero }
-            var rect = tableView.rect(ofRow: row)
-            let spacing = tableView.intercellSpacing.height
-            rect.origin.y += spacing / 2
-            rect.size.height = max(0, rect.size.height - spacing)
-            return rect
+        /// The document y of row `row`'s BLOCK top: below the space above it.
+        /// What a `.top` jump scrolls to and what the scroll anchor is relative
+        /// to (`RowGeometry.topTarget`).
+        private func blockTopY(_ row: Int) -> CGFloat {
+            guard let tableView else { return 0 }
+            return RowGeometry.topTarget(rowRect: tableView.rect(ofRow: row), spacingAbove: table.spacing(row))
         }
 
         /// Where the reader is, or nil when that question has no answer.
@@ -604,7 +598,7 @@ struct VirtualBlockList: NSViewRepresentable {
             }
             guard row >= 0, row < blocks.count else { return nil }
             return CapturedAnchor(row: row,
-                                  offsetWithinRow: top - tableView.rect(ofRow: row).minY,
+                                  offsetFromBlockTop: top - blockTopY(row),
                                   sourceLine: blocks[row].sourceLine,
                                   signature: blockSignature(blocks[row]))
         }
@@ -649,9 +643,9 @@ struct VirtualBlockList: NSViewRepresentable {
             }
             guard row >= 0, row < tableView.numberOfRows else { return }
             #if DEBUG
-            listLog.debug("restoreAnchor: by \(matchedBy, privacy: .public), row \(anchor.row) → \(row), offset=\(anchor.offsetWithinRow, format: .fixed(precision: 1))")
+            listLog.debug("restoreAnchor: by \(matchedBy, privacy: .public), row \(anchor.row) → \(row), offset=\(anchor.offsetFromBlockTop, format: .fixed(precision: 1))")
             #endif
-            setContentTop(tableView.rect(ofRow: row).minY + anchor.offsetWithinRow, animated: false)
+            setContentTop(blockTopY(row) + anchor.offsetFromBlockTop, animated: false)
         }
 
         /// The row whose content fingerprint equals `signature`, closest to
@@ -693,11 +687,9 @@ struct VirtualBlockList: NSViewRepresentable {
 
             // The coordinator's own table is patched SYNCHRONOUSLY so that a
             // second report for the same row in the same layout pass compares
-            // against this value rather than against the estimate.
-            var heights = table.heights
-            heights[row] = height
-            table = BlockHeightTable(heights: heights, kinds: table.kinds,
-                                     contentWidth: table.contentWidth)
+            // against this value rather than against the estimate. The block's
+            // height only: the space above it stays as measured.
+            table = table.replacingHeight(height, at: row)
 
             // Everything that touches AppKit waits a turn. This runs from
             // `onPreferenceChange`, i.e. from INSIDE a SwiftUI layout pass, and
@@ -723,20 +715,23 @@ struct VirtualBlockList: NSViewRepresentable {
                 // at, not against the value this particular report replaced:
                 // several reports can coalesce into one turn, and the
                 // compensation has to cancel the shift the table view is actually
-                // about to make. `rect(ofRow:)` includes the intercell spacing
-                // (see `rowContentRect`).
-                let applied = tableView.rect(ofRow: row).height - tableView.intercellSpacing.height
+                // about to make. `rect(ofRow:)` includes the space above the
+                // block, which the report does not change.
+                let applied = tableView.rect(ofRow: row).height - self.table.spacing(row)
                 let delta = target - applied
                 guard abs(delta) >= 0.5 else {
                     self.onHeightReport(blockId, row, target)
                     return
                 }
-                // A row whose top is above the top of the content area slides the
-                // reader's content when it changes height — the row STRADDLING
-                // the viewport top included, which is why this is geometry and
-                // not `row < firstVisibleRow` (that row is "visible", yet growing
-                // it pushes everything the reader can see downwards).
-                let startsAboveViewport = tableView.rect(ofRow: row).minY < self.contentTopY()
+                // A block whose top is above the top of the content area slides
+                // the reader's content when it changes height — the block
+                // STRADDLING the viewport top included, which is why this is
+                // geometry and not `row < firstVisibleRow` (that row is
+                // "visible", yet growing it pushes everything the reader can see
+                // downwards). The BLOCK's top, not the row's: with the content
+                // top in the space above a block, the whole block is in view and
+                // grows downwards like any block below the viewport top.
+                let startsAboveViewport = self.blockTopY(row) < self.contentTopY()
 
                 NSAnimationContext.beginGrouping()
                 NSAnimationContext.current.duration = 0
@@ -766,15 +761,19 @@ struct VirtualBlockList: NSViewRepresentable {
             let target: CGFloat
             switch request.anchor {
             case .top:
-                // Full row rect: with the reduced content inset this leaves the
-                // same gap above the heading as the top of the document has.
-                target = tableView.rect(ofRow: row).minY
+                // The block's top, below the space above it: the content inset
+                // is then the gap above it, as above the document's first block.
+                target = blockTopY(row)
             case .center:
-                // Centre of the CONTENT area (between the insets), not of the
-                // clip view — with equal top/bottom insets these coincide.
+                // The BLOCK's middle (not its row's, which includes the space
+                // above it) at the centre of the CONTENT area (between the
+                // insets), not of the clip view — with equal top/bottom insets
+                // these coincide.
                 let insets = scrollView.contentInsets
                 let contentHeight = scrollView.contentView.bounds.height - insets.top - insets.bottom
-                target = rowContentRect(row).midY - contentHeight / 2
+                target = RowGeometry.centerTarget(rowRect: tableView.rect(ofRow: row),
+                                                  spacingAbove: table.spacing(row),
+                                                  visibleHeight: contentHeight)
             }
             #if DEBUG
             listLog.debug("scrollRequest: \(request.blockId, privacy: .public) row \(row) anchor=\(request.anchor == .top ? "top" : "center", privacy: .public) target=\(target, format: .fixed(precision: 1))")
@@ -914,8 +913,7 @@ struct VirtualBlockList: NSViewRepresentable {
                     // (a 24 pt jolt on every toggle); keeping the raw clip origin
                     // means restoring the document offset minus that delta.
                     let delta = layoutStyle.edgeInset - previousInset
-                    let top = tableView.map { $0.rect(ofRow: anchor.row).minY } ?? 0
-                    setContentTop(top + anchor.offsetWithinRow - delta, animated: false)
+                    setContentTop(blockTopY(anchor.row) + anchor.offsetFromBlockTop - delta, animated: false)
                 }
             }
             #if DEBUG
@@ -1027,12 +1025,12 @@ struct VirtualBlockList: NSViewRepresentable {
         /// row's height can never influence the height reported for it.
         fileprivate func rootView(for row: Int) -> AnyView {
             let block = blocks[row]
-            // `blockSpacing`, not 0: a block view whose body is a TUPLE — today
-            // only `ImageBlockView` (image + italic alt caption) — has its
+            // `captionSpacing`, not 0: a block view whose body is a TUPLE —
+            // today only `ImageBlockView` (image + italic alt caption) — has its
             // elements flattened into whatever stack contains it, and in 1.8.0
             // that stack was the document's `VStack(spacing: 8)`. Single-view
             // bodies, which is every other kind, are unaffected by the spacing.
-            let base = VStack(alignment: .leading, spacing: Metrics.blockSpacing) {
+            let base = VStack(alignment: .leading, spacing: BlockLayout.ImageBlock.captionSpacing) {
                 content(block)
             }
             // The hosting view is an environment boundary (same reason
@@ -1066,6 +1064,10 @@ struct VirtualBlockList: NSViewRepresentable {
                 .frame(maxWidth: cellCap, alignment: .topLeading)
                 .frame(maxWidth: .infinity, alignment: .center)
 
+            // The space above the block (`BlockLayout.Spacing`) is the row's
+            // top padding, OUTSIDE the height reporter: a report is the block's
+            // height alone, like every height in the table.
+            let spacing = table.spacing(row)
             let reports = row < table.kinds.count && table.kinds[row] == .reported
             if reports {
                 return AnyView(
@@ -1074,6 +1076,7 @@ struct VirtualBlockList: NSViewRepresentable {
                                                     report: { [weak self] id, height in
                                                         self?.reportHeight(blockId: id, height: height)
                                                     }))
+                        .padding(.top, spacing)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .padding(.horizontal, Metrics.contentHorizontalPadding)
                         .id(block.id)
@@ -1081,6 +1084,7 @@ struct VirtualBlockList: NSViewRepresentable {
             }
             return AnyView(
                 column
+                    .padding(.top, spacing)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .padding(.horizontal, Metrics.contentHorizontalPadding)
                     .id(block.id)
@@ -1099,6 +1103,7 @@ struct VirtualBlockList: NSViewRepresentable {
         /// the column its tint spans and whether its row is tinted right now.
         private func configureSelectionTint(_ cell: BlockHostingCell, row: Int) {
             cell.selectionTintColumnCap = cellColumnCap
+            cell.spacingAbove = table.spacing(row)
             cell.isSelectionTinted = selection.wantsTint(row: row)
         }
 
@@ -1131,8 +1136,9 @@ struct VirtualBlockList: NSViewRepresentable {
 
         func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
             guard row >= 0, row < table.heights.count else { return 1 }
-            // AppKit rejects non-positive row heights.
-            return max(1, table.heights[row])
+            // The space above the block, then the block. AppKit rejects
+            // non-positive row heights.
+            return max(1, table.rowHeight(row))
         }
 
         func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?,
@@ -1500,6 +1506,12 @@ final class BlockHostingCell: NSTableCellView {
         didSet { if selectionTintColumnCap != oldValue { needsLayout = true } }
     }
 
+    /// The row's space above its block (`BlockHeightTable.spacing(_:)`): the
+    /// tint covers the block, not the gap above it.
+    var spacingAbove: CGFloat = 0 {
+        didSet { if spacingAbove != oldValue { needsLayout = true } }
+    }
+
     init(rootView: AnyView) {
         hostingView = NSHostingView(rootView: rootView)
         super.init(frame: .zero)
@@ -1521,8 +1533,13 @@ final class BlockHostingCell: NSTableCellView {
             // padding on both sides, then the column cap, centred.
             let padding = BlockLayout.Document.contentHorizontalPadding
             let width = max(0, min(bounds.width - 2 * padding, selectionTintColumnCap))
-            tintView.frame = NSRect(x: (bounds.width - width) / 2, y: 0,
-                                    width: width, height: bounds.height)
+            // The block's part of the cell: below the space above it. The
+            // cell is not flipped, so "below" is the lower part of `bounds`.
+            var block = RowGeometry.contentRect(rowRect: NSRect(origin: .zero, size: bounds.size),
+                                                spacingAbove: spacingAbove)
+            if !isFlipped { block.origin.y = 0 }
+            tintView.frame = NSRect(x: (bounds.width - width) / 2, y: block.minY,
+                                    width: width, height: block.height)
         }
     }
 
@@ -1608,6 +1625,9 @@ final class SelectionController: NSObject {
     var selectableTable: (MarkdownBlock, Int) -> TableText? = { _, _ in nil }
     /// See `VirtualBlockList.onCopySelection`.
     var onCopy: (DocumentCopyOutput) -> Void = { _ in }
+    /// The space above row N's block — part of its row rect (`RowGeometry`).
+    /// Set once by the coordinator, which owns the height table.
+    var spacingAbove: (Int) -> CGFloat = { _ in 0 }
 
     // MARK: Model
 
@@ -1957,11 +1977,15 @@ final class SelectionController: NSObject {
     /// through the view that received the mouse-down, which a drag can scroll
     /// out of the prepared area and the table can recycle for another row.
     ///
-    /// Points between rows belong to a row (`rect(ofRow:)` includes half the
-    /// intercell spacing on each side); points above or below a row's text
-    /// (the gap, an alert's title, a code block's padding) map to the start or
-    /// the end of that text; points left or right of it to the line's start or
-    /// end. Above the first row / below the last: the document's ends.
+    /// Points between two blocks belong to the NEARER one: a row rect is the
+    /// space above its block plus the block (`RowGeometry`), and the upper half
+    /// of that space maps to the end of the row before, the lower half to the
+    /// start of this row — as when half the gap was in each row rect. Points
+    /// above or below a row's text (an alert's title, a code block's padding)
+    /// map to the start or the end of that text; points left or right of it to
+    /// the line's start or end. Above the first row (its rect starts at the
+    /// table's top; the first row has no space above) / below the last: the
+    /// document's ends.
     private func hit(atWindowPoint windowPoint: NSPoint) -> Hit? {
         guard let tableView, !blocks.isEmpty, tableView.numberOfRows == blocks.count else { return nil }
         let point = tableView.convert(windowPoint, from: nil)
@@ -1977,13 +2001,20 @@ final class SelectionController: NSObject {
                        textView: nil, pointInTextView: nil)
         }
 
-        let block = blocks[row]
         let rowRect = tableView.rect(ofRow: row)
+        let spacing = spacingAbove(row)
+        if row > 0, RowGeometry.belongsToPreviousRow(y: point.y, rowRect: rowRect, spacingAbove: spacing) {
+            return Hit(point: SelectionPoint(row: row - 1, offset: rowLength(row - 1)), isAtomic: false,
+                       textView: nil, pointInTextView: nil)
+        }
+        let block = blocks[row]
+        let upperHalf = RowGeometry.isInUpperHalf(y: point.y, rowRect: rowRect, spacingAbove: spacing)
         if SelectionRows.isAtomic(block) {
-            // Upper half = before the row, lower half = after it: dragging
-            // DOWN selects the row once the pointer is past its middle, and so
-            // does dragging UP — symmetrical, like a very tall character.
-            return Hit(point: SelectionPoint(row: row, offset: point.y < rowRect.midY ? 0 : 1),
+            // Upper half of the BLOCK = before the row, lower half = after it:
+            // dragging DOWN selects the row once the pointer is past its
+            // middle, and so does dragging UP — symmetrical, like a very tall
+            // character.
+            return Hit(point: SelectionPoint(row: row, offset: upperHalf ? 0 : 1),
                        isAtomic: true, textView: nil, pointInTextView: nil)
         }
 
@@ -1999,7 +2030,7 @@ final class SelectionController: NSObject {
 
         // A text-kind row with no registered text view to ask (not yet
         // registered): its whole string, by half.
-        return Hit(point: SelectionPoint(row: row, offset: point.y < rowRect.midY ? 0 : rowLength(row)),
+        return Hit(point: SelectionPoint(row: row, offset: upperHalf ? 0 : rowLength(row)),
                    isAtomic: false, textView: nil, pointInTextView: nil)
     }
 
