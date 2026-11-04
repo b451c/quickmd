@@ -304,11 +304,17 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
-            // A line that is only ONE linked image (`[![alt](img)](url)`, the
-            // README logo/badge form): the same `.image` block as `![alt](img)`
-            // — drawn on screen and in PDF, click = preview. The link target is
-            // dropped, as it is for `<a href><img></a>` (links on images: 1.15).
-            if let image = InlineSyntaxScanner.linkedImage(in: line[...], references: referenceDefinitions) {
+            // A PARAGRAPH that is only ONE linked image (`[![alt](img)](url)`,
+            // the README logo/badge form): the same `.image` block as
+            // `![alt](img)` — drawn on screen and in PDF, click = preview. The
+            // link target is dropped, as it is for `<a href><img></a>` (links
+            // on images: 1.15). Not a line of a longer paragraph: badges one
+            // per line are ONE paragraph on GitHub, a badge row like the one
+            // on a single line, and stay its linked placeholders (badge rows:
+            // 1.15) instead of a column of pictures.
+            if Self.noParagraphOpen(textBuffer),
+               let image = InlineSyntaxScanner.linkedImage(in: line[...], references: referenceDefinitions),
+               paragraphEnds(after: i, in: lines) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                 blocks.append(.image(index: blockIndex, url: image.url, alt: HTMLEntities.decode(image.alt),
                                      width: nil, sourceLine: sourceLine))
@@ -802,6 +808,37 @@ struct MarkdownBlockParser: Sendable {
     /// no-break spaces is text, not a separator.
     private static func isBlank(_ line: String) -> Bool {
         MarkdownRenderer.isBlankLine(line)
+    }
+
+    /// No paragraph goes on into the next line from the text buffered so
+    /// far: nothing is buffered, or it ends in a blank line or a rule (a
+    /// `---` under text never gets here: the setext branch takes it).
+    private static func noParagraphOpen(_ buffer: [(line: String, originalIndex: Int)]) -> Bool {
+        guard let last = buffer.last else { return true }
+        return isBlank(last.line) || MarkdownRenderer.isThematicBreak(last.line)
+    }
+
+    /// The paragraph line `index` is in ends with it (CommonMark, GFM): it
+    /// is the last line, or the next line is blank or starts a block that
+    /// may interrupt a paragraph — a fence or `$$`, an ATX heading, a quote,
+    /// a rule, a bullet or an item numbered 1 with text
+    /// (`canInterruptParagraph`), an HTML block of kinds 1-6, a table (row
+    /// and separator). A setext underline makes the line a heading instead.
+    private func paragraphEnds(after index: Int, in lines: [String]) -> Bool {
+        guard index + 1 < lines.count else { return true }
+        let next = lines[index + 1]
+        if Self.isBlank(next) { return true }
+        let marker = Self.markerLine(next)
+        if marker.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil
+            || marker.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
+            return false
+        }
+        if Self.fenceOpening(marker) != nil || marker.hasPrefix("$$") || marker.hasPrefix(">") { return true }
+        if Self.headerRegex.firstMatch(in: next, range: NSRange(next.startIndex..., in: next)) != nil { return true }
+        if MarkdownRenderer.isThematicBreak(next) { return true }
+        if MarkdownRenderer.isListItem(next) { return MarkdownRenderer.canInterruptParagraph(next) }
+        if Self.startsHTMLBlock(marker, interruptingParagraph: true) { return true }
+        return Self.pipeCount(next) >= 2 && index + 2 < lines.count && isTableSeparator(lines[index + 2])
     }
 
     /// Can this line be a definition-list TERM? Non-blank, not a definition
@@ -1585,7 +1622,7 @@ struct MarkdownBlockParser: Sendable {
     /// CommonMark's HTML block starts (kinds 1-7), as far as a lazy line needs
     /// them: `<!…`/`<?…`, a block-level or raw tag (`<div`, `</p>`, `<pre`),
     /// or a line that is one complete tag. `<span>text` is inline HTML.
-    static func startsHTMLBlock(_ marker: String) -> Bool {
+    static func startsHTMLBlock(_ marker: String, interruptingParagraph: Bool = false) -> Bool {
         guard marker.hasPrefix("<") else { return false }
         if marker.hasPrefix("<!") || marker.hasPrefix("<?") { return true }
         let afterBracket = marker.dropFirst().drop(while: { $0 == "/" })
@@ -1594,6 +1631,8 @@ struct MarkdownBlockParser: Sendable {
         let rest = afterBracket.dropFirst(name.count)
         let ends = rest.isEmpty || rest.first == " " || rest.first == "\t" || rest.first == ">" || rest.hasPrefix("/>")
         if ends, htmlBlockTags.contains(name) { return true }
+        // Kind 7 (a line that is one complete tag) cannot interrupt a paragraph.
+        if interruptingParagraph { return false }
         return marker.range(of: #"^</?[A-Za-z][A-Za-z0-9-]*(\s[^<>]*)?/?>[ \t]*$"#,
                             options: .regularExpression) != nil
     }

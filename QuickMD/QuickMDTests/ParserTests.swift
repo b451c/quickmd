@@ -416,17 +416,20 @@ final class ParserTests: XCTestCase {
 
     // MARK: - A line that is only one linked image (B16)
 
-    /// `[![alt](img)](url)` alone on a line is the picture, like `![alt](img)`
-    /// and `<a href><img></a>` — an `.image` block on that line (Section copy,
-    /// search of the alt and copy work as for a plain image line). The link
-    /// target is not kept (as for `<a><img>`). Text beside it, or two linked
-    /// images (a badge row), stay a paragraph.
+    /// `[![alt](img)](url)` alone in its paragraph is the picture, like
+    /// `![alt](img)` and `<a href><img></a>` — an `.image` block on that line
+    /// (Section copy, search of the alt and copy work as for a plain image
+    /// line). The link target is not kept (as for `<a><img>`). Text beside
+    /// it, or two linked images (a badge row), stay a paragraph.
     func testLineOfOneLinkedImageIsAnImageBlock() {
         let md = """
         # Title
         [![Logo](img/logo.png)](https://example.com)
+
           [![Badge][shield]][site]\u{0020}\u{0020}
+
         ![Plain](img/plain.png)
+
         text before [![a](a.png)](https://a.example)
 
         [![a](a.png)](https://a.example) text after
@@ -445,7 +448,7 @@ final class ParserTests: XCTestCase {
         }
         XCTAssertEqual(images.map(\.url), ["img/logo.png", "https://img.shields.io/x.svg", "img/plain.png"])
         XCTAssertEqual(images.map(\.alt), ["Logo", "Badge", "Plain"])
-        XCTAssertEqual(images.map(\.line), [1, 2, 3], "each on its own source line")
+        XCTAssertEqual(images.map(\.line), [1, 3, 5], "each on its own source line")
 
         let paragraphs = blocks.compactMap(plainText)
         XCTAssertEqual(paragraphs.count, 4, "\(paragraphs)")
@@ -514,6 +517,51 @@ final class ParserTests: XCTestCase {
         let small = time(5_000)
         let large = time(40_000)
         XCTAssertLessThan(large, max(small, 0.005) * 24, "5k: \(small) s, 40k: \(large) s (quadratic would be ~64×)")
+    }
+
+    /// Badges one per line are ONE paragraph on GitHub (`gh api markdown`:
+    /// `<p><a><img></a>⏎<a><img></a>…</p>`), the same as a badge row on one
+    /// line: linked placeholders, not a column of pictures (badge rows: 1.15).
+    /// So is a linked image with text on the line before or after it. One
+    /// that a blank line, a block start or the document's end closes is the
+    /// picture.
+    func testLinkedImagesOnePerLineStayOneParagraph() {
+        let readme = """
+        [![Platform](https://img.shields.io/platform.svg)](https://www.apple.com/macos)
+        [![Swift](https://img.shields.io/swift.svg)](https://swift.org)
+        [![License](https://img.shields.io/license.svg)](LICENSE)
+
+        [![Donation goal](https://qmd.app/goal.svg)](https://qmd.app/#goal)
+        """
+        let blocks = parse(readme)
+        XCTAssertEqual(images(blocks).map(\.alt), ["Donation goal"])
+        let paragraphs = blocks.compactMap(plainText)
+        XCTAssertEqual(paragraphs.count, 1, "\(paragraphs)")
+        XCTAssertEqual(paragraphs.first, "[Image: Platform] [Image: Swift] [Image: License]")
+        guard case .text(let row) = blocks[0].content else { return XCTFail("text") }
+        XCTAssertEqual(Set(row.runs.compactMap(\.link).map(\.absoluteString)),
+                       ["https://www.apple.com/macos", "https://swift.org", "LICENSE"])
+
+        // Text right before or after (no blank line): one paragraph with it.
+        XCTAssertTrue(images(parse("Built with:\n[![Swift](s.svg)](https://swift.org)")).isEmpty)
+        XCTAssertTrue(images(parse("[![Swift](s.svg)](https://swift.org)\nand more")).isEmpty)
+        // A block that may interrupt a paragraph closes it: a heading, a
+        // bullet, an item numbered 1, a fence, a quote, HTML of kinds 1-6, a
+        // rule, a table (GitHub: `<p><img></p>` and then that block).
+        for next in ["# Next", "- item", "1. item", "```", "> q", "<div>", "***", "| a | b |\n|---|---|\n| 1 | 2 |"] {
+            XCTAssertEqual(images(parse("[![Logo](l.png)](https://x)\n\(next)")).map(\.alt), ["Logo"], next)
+        }
+        // Lines that cannot interrupt a paragraph go on with it (GitHub: one
+        // `<p>`): an item not numbered 1, an empty item, a lone inline tag;
+        // a setext underline makes the line a heading.
+        for next in ["2. item", "*", "<br>", "---", "==="] {
+            XCTAssertTrue(images(parse("[![Logo](l.png)](https://x)\n\(next)")).isEmpty, next)
+        }
+        // At the end of the document, after a blank line, a heading or a rule.
+        XCTAssertEqual(images(parse("text\n\n[![Logo](l.png)](https://x)")).map(\.alt), ["Logo"])
+        XCTAssertEqual(images(parse("# Title\n[![Logo](l.png)](https://x)\n\ntext")).map(\.alt), ["Logo"])
+        XCTAssertEqual(images(parse("***\n[![Logo](l.png)](https://x)")).map(\.alt), ["Logo"])
+        XCTAssertEqual(images(parse("text\n\n---\n[![Logo](l.png)](https://x)")).map(\.alt), ["Logo"])
     }
 
     // MARK: - Reference links in quotes, alerts and table cells
