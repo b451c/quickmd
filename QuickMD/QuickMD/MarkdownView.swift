@@ -73,6 +73,12 @@ struct MarkdownView: View {
     /// may have typed again while a previous computation was still running).
     @State private var searchGeneration: Int = 0
     @AppStorage("selectedTheme") private var selectedThemeName: String = "Auto"
+    /// The system's light/dark choice, read by `SystemColorSchemeReader`
+    /// (nil until the first report). Only used to hand a window that once had
+    /// a light or dark theme back to the system — see `windowColorScheme`.
+    @State private var systemColorScheme: ColorScheme?
+    /// Set once this window has shown a light or dark (non-Auto) theme.
+    @State private var windowSchemeWasForced = false
     /// Settings → Fonts. "" = system. Merged into the theme below (a custom
     /// theme's own families win) and part of `DocumentIdentity`, because font
     /// families are baked into the AttributedStrings at parse time.
@@ -145,6 +151,17 @@ struct MarkdownView: View {
     /// `BlockHeightMeasurer`: those outer paddings are part of a block's row
     /// height, so both sides have to read the same numbers.
     typealias Metrics = BlockLayout.Document
+
+    /// The window's light/dark scheme: the theme's own for a light or dark
+    /// theme (the title bar and controls must match the background under them),
+    /// nil — the system's — for Auto. Once a window was light or dark, Auto is
+    /// passed as the system's EXPLICIT scheme: `preferredColorScheme(nil)` does
+    /// not give the window back (GitHub → Auto left an Auto document light on a
+    /// dark Mac, macOS 27). A window that was always Auto keeps plain nil.
+    private var windowColorScheme: ColorScheme? {
+        if let themed = MarkdownTheme.windowColorScheme(forThemeNamed: selectedThemeName) { return themed }
+        return windowSchemeWasForced ? systemColorScheme : nil
+    }
 
     /// Resolved theme from user selection + system color scheme + Settings fonts
     private var theme: MarkdownTheme {
@@ -515,6 +532,11 @@ struct MarkdownView: View {
             // key events addressed to OTHER windows (tabs are separate windows).
             hostWindow = window
         })
+        .preferredColorScheme(windowColorScheme)
+        .background(SystemColorSchemeReader { systemColorScheme = $0 })
+        .onChange(of: selectedThemeName) { name in
+            if MarkdownTheme.windowColorScheme(forThemeNamed: name) != nil { windowSchemeWasForced = true }
+        }
         .focusedSceneValue(\.documentText, currentText)
         .focusedSceneValue(\.exportName, exportName)
         // Print / PDF resolve relative image paths against the document folder.
@@ -698,6 +720,7 @@ struct MarkdownView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
         }
         .onAppear {
+            if MarkdownTheme.windowColorScheme(forThemeNamed: selectedThemeName) != nil { windowSchemeWasForced = true }
             configureEditSession()
             if let url = documentURL {
                 RecentDocumentsStore.shared.register(url)
@@ -1457,6 +1480,43 @@ struct MarkdownView: View {
         }
     }
 
+}
+
+// MARK: - System appearance
+
+/// Reports the SYSTEM's light/dark choice (`NSApp.effectiveAppearance`, which a
+/// window's own `preferredColorScheme` does not change) now and whenever it
+/// changes — Auto at sunset, a switch in System Settings. An NSView subclass,
+/// like `WindowConfigurator`'s, so the observation starts on the main thread
+/// on every SDK (CI builds with an older one, where a View's methods are
+/// nonisolated).
+struct SystemColorSchemeReader: NSViewRepresentable {
+    let onChange: (ColorScheme) -> Void
+
+    func makeNSView(context: Context) -> NSView { ObserverView(onChange: onChange) }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class ObserverView: NSView {
+        private let onChange: (ColorScheme) -> Void
+        private var observation: NSKeyValueObservation?
+
+        init(onChange: @escaping (ColorScheme) -> Void) {
+            self.onChange = onChange
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil, observation == nil else { return }
+            observation = NSApp.observe(\.effectiveAppearance, options: [.initial, .new]) { [weak self] _, change in
+                guard let appearance = change.newValue else { return }
+                let scheme: ColorScheme = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light
+                Task { @MainActor in self?.onChange(scheme) }
+            }
+        }
+    }
 }
 
 // MARK: - Preview

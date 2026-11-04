@@ -78,6 +78,20 @@ struct MarkdownTheme: Sendable, Identifiable {
         return colorScheme == .dark ? _autoDark : _autoLight
     }
 
+    /// The light/dark scheme a document window needs for the theme called
+    /// `name`: nil for Auto and for a name that no longer resolves (both follow
+    /// the system, exactly as `theme(named:colorScheme:)` does), otherwise the
+    /// palette's own. The document background runs under the title bar, so the
+    /// title, the window buttons, the tab bar and every control in the window
+    /// must take the theme's side — with the system's, a light theme on a dark
+    /// Mac drew a white title and dark window buttons on a light background
+    /// (and the reverse).
+    static func windowColorScheme(forThemeNamed name: String) -> ColorScheme? {
+        guard name != ThemeName.auto else { return nil }
+        guard let resolved = _builtInByName[name] ?? CustomThemeStore.shared.theme(named: name) else { return nil }
+        return resolved.isDark ? .dark : .light
+    }
+
     /// The Auto palette for a color scheme, system fonts — the neutral baseline
     /// (unit tests, and the palette half of `exportTheme(for:)`).
     static func cached(for colorScheme: ColorScheme) -> MarkdownTheme {

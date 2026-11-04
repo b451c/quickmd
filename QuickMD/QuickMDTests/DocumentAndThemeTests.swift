@@ -105,4 +105,20 @@ final class DocumentAndThemeTests: XCTestCase {
         XCTAssertEqual(MarkdownTheme.theme(named: "Auto", colorScheme: .dark).isDark, true)
         XCTAssertEqual(MarkdownTheme.theme(named: "Auto", colorScheme: .light).isDark, false)
     }
+
+    /// The window takes the theme's side (light theme on a dark Mac drew a white
+    /// title and dark window buttons on a light background); Auto and names
+    /// that no longer resolve follow the system, as `theme(named:)` does.
+    func testWindowAppearanceFollowsTheTheme() {
+        XCTAssertNil(MarkdownTheme.windowColorScheme(forThemeNamed: ThemeName.auto))
+        XCTAssertNil(MarkdownTheme.windowColorScheme(forThemeNamed: "No Such Theme 4f2a"))
+        XCTAssertEqual(MarkdownTheme.windowColorScheme(forThemeNamed: ThemeName.github), .light)
+        XCTAssertEqual(MarkdownTheme.windowColorScheme(forThemeNamed: ThemeName.solarizedLight), .light)
+        XCTAssertEqual(MarkdownTheme.windowColorScheme(forThemeNamed: ThemeName.dracula), .dark)
+        for name in ThemeName.allBuiltIn where name != ThemeName.auto {
+            let theme = MarkdownTheme.theme(named: name, colorScheme: .light)
+            XCTAssertEqual(MarkdownTheme.windowColorScheme(forThemeNamed: name),
+                           theme.isDark ? .dark : .light, name)
+        }
+    }
 }
