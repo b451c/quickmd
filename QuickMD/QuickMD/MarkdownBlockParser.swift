@@ -907,8 +907,8 @@ struct MarkdownBlockParser: Sendable {
             }
             // A list starts at an item that opens the row, or that may
             // interrupt the paragraph before it (CommonMark: a bullet, or an
-            // ordered item numbered 1). Any other item line is paragraph text
-            // the renderer draws as an item, as it always did.
+            // ordered item numbered 1). `joinSoftBreaks` has already made any
+            // other item line after paragraph text part of that text.
             let startsList = !inList && MarkdownRenderer.isListItem(line)
                 && (row.isEmpty || MarkdownRenderer.canInterruptParagraph(line))
             if startsList { flushRow() }

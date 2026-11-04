@@ -123,17 +123,25 @@ final class VerticalRhythmTests: XCTestCase {
     /// paragraph. `1984. …` after paragraph text continues the paragraph —
     /// drawn as an item as before, but no new row and no gap.
     func testOnlyAnItemThatMayInterruptAParagraphStartsARow() {
-        for line in ["- item", "* item", "+ item", "- [ ] task", "1. first"] {
+        for line in ["- item", "* item", "+ item", "- [ ] task", "1. first", "1) first"] {
             XCTAssertEqual(parse("Paragraph text.\n" + line).count, 2, line)
         }
-        for line in ["1984. A year", "2. second", "-", "1."] {
+        for line in ["1984. A year", "2. second", "2) second", "-", "1."] {
             XCTAssertEqual(parse("Paragraph text.\n" + line).count, 1, line)
         }
-        // Still drawn on its own line, as an item.
-        let year = plain(parse("Paragraph text.\n1984. A year\n1985. Another")[0])
-        XCTAssertTrue(year.contains("\n1984.") && year.contains("\n1985."), year)
-        // A list that starts a row is still a list, whatever its number.
+        // CommonMark: the rest of the paragraph, drawn as its text — no item
+        // marker, no line of its own — and searched and copied as such.
+        let blocks = parse("Paragraph text.\n1984. A year\n1985) Another")
+        XCTAssertEqual(plain(blocks[0]), "Paragraph text. 1984. A year 1985) Another")
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "text. 1984. A year 1985)").matchBlockIds.count, 1)
+        // After a hard break: a line of its own, still text.
+        XCTAssertEqual(plain(parse("Paragraph text.  \n1984. A year")[0]), "Paragraph text.\n1984. A year")
+        // A list that starts a row is still a list, whatever its number or
+        // delimiter (drawn `n.`, as GitHub draws both).
         XCTAssertEqual(parse("Text.\n\n3. third\n4. fourth").count, 2)
+        XCTAssertTrue(plain(parse("1984) A year")[0]).hasPrefix("1984. A year"), plain(parse("1984) A year")[0]))
+        // Inside a list, an item of any number is the next item.
+        XCTAssertTrue(plain(parse("1. one\n1984. two")[0]).contains("\n1984. two"))
     }
 
     // MARK: - Headings
