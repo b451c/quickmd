@@ -45,11 +45,11 @@ struct MarkdownBlockParser: Sendable {
         // this step the setext-H2 rule would promote the first frontmatter key
         // to a giant heading.
         var firstContentLine = 0
-        if allLines.first?.trimmingCharacters(in: .whitespaces) == "---" {
+        if allLines.first.map(Self.markerLine) == "---" {
             var closingIndex: Int?
             var j = 1
             while j < allLines.count {
-                let t = allLines[j].trimmingCharacters(in: .whitespaces)
+                let t = Self.markerLine(allLines[j])
                 if t == "---" || t == "..." { closingIndex = j; break }
                 j += 1
             }
@@ -86,7 +86,7 @@ struct MarkdownBlockParser: Sendable {
         var lineMap: [Int] = []
         for originalIndex in firstContentLine..<allLines.count {
             let line = allLines[originalIndex]
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let trimmed = Self.markerLine(line)
             let nsRange = NSRange(trimmed.startIndex..., in: trimmed)
             // Footnote definitions must be checked BEFORE reference links
             // because [^id]: text also matches the reference link pattern [id]: url
@@ -122,12 +122,25 @@ struct MarkdownBlockParser: Sendable {
         var pendingRows: [PendingTextRow] = []
 
         while i < lines.count {
+            // Every turn consumes at least one line. A branch that decides on a
+            // line its own loop then refuses would otherwise re-enter it for
+            // ever (a quote marker after a no-break space did, 9bbf6ae): DEBUG
+            // stops there, Release keeps the line as text and goes on.
+            let turnStart = i
+            defer {
+                if i <= turnStart {
+                    assertionFailure("MarkdownBlockParser: no line consumed at \(turnStart)")
+                    textBuffer.append((line: lines[turnStart], originalIndex: lineMap[turnStart]))
+                    i = turnStart + 1
+                }
+            }
             let line = lines[i]
             // Original-document line of the block that starts here (definition
             // lines were dropped from `lines`, so `i` alone is not the answer).
             let sourceLine = lineMap[i]
 
-            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            // What every block marker below is looked for in (`markerLine`).
+            let trimmedLine = Self.markerLine(line)
 
             // Fenced code block — check BEFORE math to protect $$ inside code blocks
             if trimmedLine.hasPrefix("```") || trimmedLine.hasPrefix("~~~") {
@@ -148,7 +161,7 @@ struct MarkdownBlockParser: Sendable {
 
                 // Closing fence must be same char, same or greater length, nothing else
                 while i < lines.count {
-                    let closeLine = lines[i].trimmingCharacters(in: .whitespaces)
+                    let closeLine = Self.markerLine(lines[i])
                     if closeLine.hasPrefix(openingFence) && MarkdownRenderer.isBlankLine(closeLine.drop(while: { $0 == fenceChar })) {
                         i += 1
                         break
@@ -193,7 +206,7 @@ struct MarkdownBlockParser: Sendable {
                 if !afterDollar.isEmpty { mathLines.append(afterDollar) }
                 i += 1
                 while i < lines.count {
-                    let mLine = lines[i].trimmingCharacters(in: .whitespaces)
+                    let mLine = Self.markerLine(lines[i])
                     if mLine == "$$" {
                         i += 1
                         break
@@ -272,9 +285,9 @@ struct MarkdownBlockParser: Sendable {
             }
 
             // Setext headers (underlined headers)
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let trimmed = trimmedLine
             if i + 1 < lines.count && !trimmed.isEmpty && !trimmed.contains("|") {
-                let nextLine = lines[i + 1].trimmingCharacters(in: .whitespaces)
+                let nextLine = Self.markerLine(lines[i + 1])
 
                 if nextLine.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
@@ -341,9 +354,9 @@ struct MarkdownBlockParser: Sendable {
                 var previousGroupWasQuote = false
 
                 while i < lines.count {
-                    // Spaces and tabs only: a quote line of no-break spaces
-                    // (`> \u{00A0}`) is text, not an empty quote line.
-                    let qLine = lines[i].trimmingCharacters(in: Self.spacesAndTabs)
+                    // The predicate the branch was entered on (`markerLine`),
+                    // so the first line is always taken.
+                    let qLine = Self.markerLine(lines[i])
                     guard qLine.hasPrefix(">") else { break }
 
                     // Count nesting level (number of leading > chars)
@@ -367,7 +380,7 @@ struct MarkdownBlockParser: Sendable {
                     i += 1
 
                     while i < lines.count {
-                        let nextLine = lines[i].trimmingCharacters(in: Self.spacesAndTabs)
+                        let nextLine = Self.markerLine(lines[i])
                         guard nextLine.hasPrefix(">") else { break }
 
                         var nextLevel = 0
@@ -503,7 +516,7 @@ struct MarkdownBlockParser: Sendable {
 
     /// Check if line matches table separator pattern (e.g., |---|---|)
     private func isTableSeparator(_ line: String) -> Bool {
-        line.trimmingCharacters(in: .whitespaces)
+        Self.markerLine(line)
             .range(of: MarkdownTheme.tableSeparatorPattern, options: .regularExpression) != nil
     }
 
@@ -615,7 +628,18 @@ struct MarkdownBlockParser: Sendable {
 
     /// CommonMark's white space around block markers: spaces and tabs, not
     /// every Unicode space separator (`isBlank`).
-    static let spacesAndTabs = CharacterSet(charactersIn: " \t")
+    static let spacesAndTabs = MarkdownRenderer.markerWhitespace
+
+    /// `line` without the spaces and tabs around it: what EVERY block marker
+    /// (fence, `$$`, quote, setext underline, table separator, front-matter
+    /// fence, link definition) is looked for in, at the branch that decides
+    /// AND in the loop that then walks the block. CommonMark indents with
+    /// spaces and tabs only — a no-break, em or ideographic space before a
+    /// marker leaves the line paragraph text, as on GitHub. Two predicates
+    /// for one decision once hung the parser (a quote marker after U+00A0).
+    static func markerLine(_ line: String) -> String {
+        line.trimmingCharacters(in: spacesAndTabs)
+    }
 
     /// CommonMark's blank line (`MarkdownRenderer.isBlankLine`): a line of
     /// no-break spaces is text, not a separator.
@@ -634,7 +658,7 @@ struct MarkdownBlockParser: Sendable {
     /// definitions: a shortcut-reference image line (`![logo]`) is an image
     /// block, so it must not be a term either.
     private func isTermCandidate(_ line: String, references: [String: String]) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        let trimmed = Self.markerLine(line)
         guard !Self.isBlank(line), Self.definitionText(of: line) == nil else { return false }
 
         // Fences, quotes, display math
@@ -643,7 +667,7 @@ struct MarkdownBlockParser: Sendable {
 
         // List items — bullets (task items included, they start `- [ ]`) and ordered
         if ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) { return false }
-        if trimmed.range(of: #"^(\d+)\.\s"#, options: .regularExpression) != nil { return false }
+        if trimmed.range(of: #"^(\d+)\.[ \t]"#, options: .regularExpression) != nil { return false }
 
         // Table rows (the table branch needs a separator to fire, but a pipe row
         // is still a table row, not a term) and separators

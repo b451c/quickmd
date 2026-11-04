@@ -472,6 +472,119 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertNotEqual(separate[1], separate[2])
     }
 
+    // MARK: - Block markers: spaces and tabs only
+
+    /// Parses on a worker thread: a parser that never returns fails the test
+    /// after `seconds` instead of stalling the suite (its thread keeps
+    /// spinning, so a failure here is worth stopping the run for).
+    private func parseReturning(_ markdown: String, within seconds: Double = 5,
+                                file: StaticString = #filePath, line: UInt = #line) -> [MarkdownBlock]? {
+        final class Box: @unchecked Sendable { var blocks: [MarkdownBlock]? }
+        let box = Box()
+        let done = DispatchSemaphore(value: 0)
+        let theme = self.theme
+        Thread.detachNewThread {
+            box.blocks = MarkdownBlockParser(theme: theme).parse(markdown)
+            done.signal()
+        }
+        guard done.wait(timeout: .now() + seconds) == .success else {
+            XCTFail("the parser did not return within \(seconds) s", file: file, line: line)
+            return nil
+        }
+        return box.blocks
+    }
+
+    private func plain(_ block: MarkdownBlock) -> String? {
+        if case .text(let attributed) = block.content { return String(attributed.characters) }
+        return nil
+    }
+
+    /// A quote marker after a no-break, em or ideographic space: the block
+    /// loop entered the quote branch on a line trimmed of EVERY Unicode
+    /// space, the quote's own loop (spaces and tabs only, 9bbf6ae) refused
+    /// the same line without consuming it, and the branch re-entered it for
+    /// ever — 100 % CPU, the document never shown. CommonMark indents with
+    /// spaces and tabs only, and GitHub shows each such line as paragraph
+    /// text (`gh api markdown`: `<p> &gt; quoted</p>`).
+    func testAQuoteMarkerAfterAUnicodeSpaceIsTextAndTheParserReturns() throws {
+        for space in ["\u{00A0}", "\u{2003}", "\u{3000}"] {
+            let name = String(format: "U+%04X", space.unicodeScalars.first!.value)
+            let blocks = try XCTUnwrap(parseReturning("Intro\n\n\(space)> quoted\n"), name)
+            XCTAssertEqual(blocks.map(plain), ["Intro", "\(space)> quoted"], name)
+            // Inside a quote run too: the run ends there, and the parser goes on.
+            let inside = try XCTUnwrap(parseReturning("> a\n\(space)> b\n\nAfter."), name)
+            if case .blockquote(let content, _) = inside.first?.content {
+                XCTAssertEqual(content, "a", name)
+            } else {
+                XCTFail("\(name): \(String(describing: inside.first?.content))")
+            }
+            XCTAssertEqual(inside.last.flatMap(plain), "After.", name)
+        }
+        // Spaces still indent a quote marker.
+        let indented = try XCTUnwrap(parseReturning("Intro\n\n   > quoted\n"))
+        if case .blockquote(let content, _) = indented.last?.content {
+            XCTAssertEqual(content, "quoted")
+        } else {
+            XCTFail("\(String(describing: indented.last?.content))")
+        }
+    }
+
+    /// Every other block marker the same way, as GitHub reads them
+    /// (`gh api markdown`, 2026-11-04): a no-break space before a fence,
+    /// `$$`, a setext underline, a table separator, a list marker, a rule or
+    /// a link definition — or after `#` — leaves the line paragraph text.
+    func testBlockMarkersAfterAUnicodeSpaceAreText() throws {
+        let nbsp = "\u{00A0}"
+        func kinds(_ markdown: String) throws -> [String] {
+            try XCTUnwrap(parseReturning(markdown)).map { block in
+                switch block.content {
+                case .text: return "text"
+                case .codeBlock: return "code"
+                case .mathBlock: return "math"
+                case .heading: return "heading"
+                case .table: return "table"
+                case .blockquote, .alert: return "quote"
+                default: return "other"
+                }
+            }
+        }
+        // A fence: `<p> ``` code</p>` then the bare ``` opens an empty one.
+        XCTAssertEqual(try kinds("\(nbsp)```\ncode\n```\n"), ["text", "code"])
+        // Not a closing fence: one before it, one with a no-break space after.
+        let closers = try XCTUnwrap(parseReturning("```\ncode\n\(nbsp)```\nmid\n```\(nbsp)\nend\n```\n"))
+        XCTAssertEqual(closers.count, 1)
+        if case .codeBlock(let code, _) = closers.first?.content {
+            XCTAssertEqual(code, "code\n\(nbsp)```\nmid\n```\(nbsp)\nend")
+        } else {
+            XCTFail("\(String(describing: closers.first?.content))")
+        }
+        XCTAssertFalse(try kinds("\(nbsp)$$\nx^2\n$$\n").contains("math"))
+        XCTAssertEqual(try kinds("Title\n\(nbsp)===\n"), ["text"])
+        XCTAssertEqual(try kinds("#\(nbsp)Title\n"), ["text"])
+        XCTAssertEqual(try kinds("| a | b |\n\(nbsp)|---|---|\n| 1 | 2 |\n"), ["text"])
+        // Text, not an item or a rule: the characters are drawn as written.
+        let blocks = try XCTUnwrap(parseReturning("\(nbsp)- item\n\npara\n\n\(nbsp)---\n\n1.\(nbsp)one\n"))
+        XCTAssertEqual(blocks.map(plain), ["\(nbsp)- item", "para", "\(nbsp)---", "1.\(nbsp)one"])
+        XCTAssertFalse(MarkdownRenderer.isListItem("\(nbsp)- item"))
+        XCTAssertFalse(MarkdownRenderer.isListItem("1.\(nbsp)one"))
+        XCTAssertFalse(MarkdownRenderer.isThematicBreak("\(nbsp)---"))
+        XCTAssertFalse(MarkdownRenderer.isThematicBreak("---\(nbsp)"))
+        // A link definition is not one: it stays in the text.
+        let definition = try XCTUnwrap(parseReturning("[x]\n\n\(nbsp)[x]: https://example.com\n"))
+        XCTAssertEqual(definition.count, 2)
+        XCTAssertEqual(definition.last.flatMap(plain), "\(nbsp)[x]: https://example.com")
+
+        // Spaces and tabs still indent every one of them.
+        XCTAssertEqual(try kinds("  ```\ncode\n  ```\n"), ["code"])
+        XCTAssertEqual(try kinds("Title\n  ===\n"), ["heading"])
+        XCTAssertEqual(try kinds("# Title\n"), ["heading"])
+        XCTAssertEqual(try kinds("#\tTitle\n"), ["heading"])
+        XCTAssertEqual(try kinds("| a | b |\n |---|---|\n| 1 | 2 |\n"), ["table"])
+        XCTAssertTrue(MarkdownRenderer.isListItem(" - item"))
+        XCTAssertTrue(MarkdownRenderer.isListItem("1.\tone"))
+        XCTAssertTrue(MarkdownRenderer.isThematicBreak(" ---\t"))
+    }
+
     // MARK: - Anchor signatures
 
     /// The scroll anchor is found again after a reload by the block's content
