@@ -942,6 +942,44 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(alt, "alt `]` x")
     }
 
+    /// The renderer's runs as "<link>text" / "`code`" pieces joined by "|".
+    private func runs(_ markdown: String) -> String {
+        let attributed = renderer.renderInline(markdown)
+        return attributed.runs.map { run in
+            let text = String(attributed[run.range].characters)
+            let mono = run[AttributeScopes.AppKitAttributes.FontAttribute.self]?.fontDescriptor.symbolicTraits
+                .contains(.monoSpace) ?? false
+            return (run.link.map { "<\($0.absoluteString)>" } ?? "") + (mono ? "`\(text)`" : text)
+        }.joined(separator: "|")
+    }
+
+    /// The renderer never starts a code span inside a link destination it
+    /// consumed, so the bracket scans must not either: a backtick in a URL
+    /// must not swallow a later link's `[` (4c0afbf did). The reviewer's
+    /// corpus; GitHub's result (`gh api markdown`) noted where QuickMD's own
+    /// inline rules differ (emphasis/strikethrough before code — 1.15, R17;
+    /// 3+ backtick code spans are literal in QuickMD).
+    func testLinkDestinationsHideBackticksFromTheBracketScan() {
+        // GitHub: two links "a" and "b `c".
+        XCTAssertEqual(runs("[a](u`x) and [b `c](v)"), "<u%60x>a| and |<v>b `c")
+        // GitHub: both links, a trailing backtick.
+        XCTAssertEqual(runs("[a](<u`>) [b](v) `"), "<u%60>a| |<v>b| `")
+        // GitHub-equal.
+        XCTAssertEqual(runs("[a `](` b](u)"), "<u>a |<u>`](`|<u> b")
+        XCTAssertEqual(runs("![a`b](i.png) [c](u) x`y"), "![a|`b](i.png) [c](u) x`|y")
+        XCTAssertEqual(runs("[x](u) `` [y]` `` [z](v)"), "<u>x| |`[y]``| |<v>z")
+        XCTAssertEqual(runs("[a ``b]`` c](u)"), "<u>a |<u>`b]`|<u> c")
+        XCTAssertEqual(runs("[a \\`b](u) c`"), "<u>a |<u>`|<u>b| c`")
+        XCTAssertEqual(runs("[^n`] [d](u) `"), "[^n|`] [d](u) `")
+        XCTAssertEqual(runs("`[` [a](u) `]`"), "`[`| |<u>a| |`]`")
+        // QuickMD's own rules (GitHub differs, not this fix): no link in
+        // either, as on GitHub, but emphasis / strikethrough win over code.
+        XCTAssertEqual(runs("***a `b*** [c` d](u)"), "a `b| [c` d](u)")
+        XCTAssertEqual(runs("~~x`~~ [y](u) z`"), "x`| [y](u) z`")
+        // GitHub: "[a " + code "b](u) c" (QuickMD keeps ``` runs literal).
+        XCTAssertEqual(runs("[a ```b](u) c```"), "<u>a ```b| c```")
+    }
+
     // MARK: - Plain link text fast path (review R15)
 
     /// Link text with no inline syntax skips the inline pass; the run it gets

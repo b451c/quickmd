@@ -54,35 +54,44 @@ enum InlineSyntaxScanner {
         fileprivate func closingBracket(atAbsolute offset: Int) -> Int? { pairs.brackets[offset] }
         fileprivate func closingParen(atAbsolute offset: Int) -> Int? { pairs.parens[offset] }
 
+        /// Two linear passes. Parens first, everywhere (a destination is not
+        /// code). Then brackets, skipping code spans (code spans outrank
+        /// brackets) and the destination after a `](` — the renderer consumes
+        /// it as the link's, so a backtick in a URL (`[a](u`x) [b](v)`) must
+        /// not open a "span" that swallows a later link's `[`.
         private static func build(_ text: String) -> (brackets: [Int: Int], parens: [Int: Int]) {
             InlineSyntaxScanner.withBytes(text[...]) { bytes in
                 var brackets: [Int: Int] = [:], parens: [Int: Int] = [:]
                 var openBrackets: [Int] = [], openParens: [Int] = []
-                var codeSpans = CodeSpanScanner()
                 var i = 0
                 while i < bytes.count {
                     if isEscape(bytes, at: i, before: bytes.count) { i += 2; continue }
-                    // Code spans outrank brackets: a `]` or `[` inside one pairs
-                    // with nothing. Parens are not skipped — a destination is
-                    // not code — so only brackets look at the span.
+                    switch bytes[i] {
+                    case UInt8(ascii: "("): openParens.append(i)
+                    case UInt8(ascii: ")"): if let open = openParens.popLast() { parens[open] = i }
+                    default: break
+                    }
+                    i += 1
+                }
+
+                var codeSpans = CodeSpanScanner()
+                i = 0
+                while i < bytes.count {
+                    if isEscape(bytes, at: i, before: bytes.count) { i += 2; continue }
                     if bytes[i] == backtick, let end = codeSpans.end(bytes, at: i) {
-                        var j = i
-                        while j < end {
-                            switch bytes[j] {
-                            case UInt8(ascii: "("): openParens.append(j)
-                            case UInt8(ascii: ")"): if let open = openParens.popLast() { parens[open] = j }
-                            default: break
-                            }
-                            j += 1
-                        }
                         i = end
                         continue
                     }
                     switch bytes[i] {
                     case UInt8(ascii: "["): openBrackets.append(i)
-                    case UInt8(ascii: "]"): if let open = openBrackets.popLast() { brackets[open] = i }
-                    case UInt8(ascii: "("): openParens.append(i)
-                    case UInt8(ascii: ")"): if let open = openParens.popLast() { parens[open] = i }
+                    case UInt8(ascii: "]"):
+                        if let open = openBrackets.popLast() {
+                            brackets[open] = i
+                            if i + 1 < bytes.count, bytes[i + 1] == UInt8(ascii: "("), let close = parens[i + 1] {
+                                i = close + 1
+                                continue
+                            }
+                        }
                     default: break
                     }
                     i += 1
@@ -332,6 +341,13 @@ enum InlineSyntaxScanner {
             case UInt8(ascii: "]"):
                 depth -= 1
                 if depth == 0 { return i }
+                // An inner link's destination is not scanned for code spans
+                // (see `PairTable.build`).
+                if i + 1 < bytes.count, bytes[i + 1] == UInt8(ascii: "("),
+                   let close = scanParenDestination(bytes, open: i + 1, nil)?.end {
+                    i = close
+                    continue
+                }
             default: break
             }
             i += 1
