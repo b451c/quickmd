@@ -272,7 +272,7 @@ Donations help renew the qmd.app domain - [see the goal on qmd.app](https://qmd.
 
 ## Roadmap
 
-What has shipped, release by release, is in the [CHANGELOG](QuickMD/CHANGELOG.md). What comes next is shaped by [issues](https://github.com/b451c/quickmd/issues) — if something is missing for you, open one.
+What has shipped, release by release, is in the [CHANGELOG](QuickMD/CHANGELOG.md). What is planned for the next version is listed in [this issue](https://github.com/b451c/quickmd/issues/54): comment there, or open a new issue if something is missing for you.
 
 ## Contributing
 
