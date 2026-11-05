@@ -5,12 +5,31 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.14.4] - 2026-11-04
+## [1.14.4] - 2026-11-05
 
-Spacing around headings is back.
+Comfortable spacing, done properly, and Markdown that reads like it does on GitHub.
+
+### Changed
+- **Spacing:** one consistent rhythm between every kind of block. Headings get clear space above and stay close to their own text; paragraphs, lists, quotes, tables, code and diagrams are evenly spaced, with or without blank lines in the source. This replaces the cramped spacing of 1.14.3. PDF export follows the same rhythm and keeps a heading on the page with its text.
+- **Reading Mode:** the column grows with zoom, so a line holds the same amount of text at any size (720 pt at 100%). The heading copy buttons are hidden there.
 
 ### Fixed
-- Headings and lists have the spacing they had before 1.14.3 again. The 1.14.3 change that dropped the blank lines around blocks left headings too close to their text, so documents looked cramped; it is withdrawn. The other 1.14.3 changes stay.
+- Read as on GitHub:
+  - character references such as `&amp;`, `&copy;` and `&nbsp;` show as characters, also in link addresses;
+  - formatting inside link text (`[**Docs**](...)`, ``[`code`](...)``) renders;
+  - a linked image that stands alone in its paragraph (a README logo or a single badge) shows the picture;
+  - reference links and footnotes work inside quotes, alerts and table cells;
+  - a quote wrapped over several lines without `>` on each line stays one quote;
+  - an alert marker with nothing under it (`> [!NOTE]` alone) is a plain quote;
+  - `1)` lists, a year like `1984.` inside a paragraph, a heading underlined over several lines, `\$5` amounts, and link definitions inside code;
+  - a fenced code block indented under a list step is no longer drawn shifted right.
+- Formulas keep their LaTeX escapes (`$50\%$`), and a formula that cannot be drawn shows its source.
+- Zoom and Reading Mode keep your reading position exactly; images and diagrams keep their size once shown, and a diagram no longer flashes empty when it scrolls back into view.
+- Search centres the match inside a tall table, code block or quote.
+- A link to a section of another document (`other.md#section`) scrolls to that section.
+- A file that cannot be read says so, instead of reporting it as missing.
+- Settings reopens on the tab you used last.
+- Faster copy and search in documents with many headings; long quotes no longer slow down scrolling and search.
 
 ## [1.14.3] - 2026-11-04
 
