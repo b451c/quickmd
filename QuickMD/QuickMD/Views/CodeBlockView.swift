@@ -137,7 +137,7 @@ struct CodeBlockView: View {
             .opacity(isHovered || justCopied ? 1 : 0)
             .padding(Metrics.copyButtonOuterPadding)
         }
-        .onHover { hovering in
+        .documentHover { hovering in
             isHovered = hovering
         }
         .task(id: cacheKey) {

@@ -146,7 +146,7 @@ struct MermaidBlockView: View {
             .padding(6)
         }
         .padding(.vertical, Metrics.verticalPadding)
-        .onHover { hovering in
+        .documentHover { hovering in
             isHovered = hovering
         }
     }

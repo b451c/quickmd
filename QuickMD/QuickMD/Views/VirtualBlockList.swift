@@ -1914,6 +1914,44 @@ extension EnvironmentValues {
     }
 }
 
+/// Hover for the buttons a block shows under the pointer (heading copy, code
+/// copy, diagram zoom). SwiftUI also reports a hover for a row that lies
+/// OUTSIDE the clip view: with the pointer resting just below the window, the
+/// rows the document scrolls past that point became "hovered", and no mouse
+/// move ever ended it — copy icons stayed on every few headings after a
+/// search jump or a keyboard scroll. So the hover counts only while the
+/// pointer is really over the visible document
+/// (`SelectionController.pointerIsOverVisibleDocument`), checked on every
+/// move (continuous hover), so a real hover after such a report still shows.
+/// Outside the document list (no `blockSelection`) it is a plain hover.
+struct DocumentHover: ViewModifier {
+    @Environment(\.blockSelection) private var blockSelection
+    let onChange: (Bool) -> Void
+    @State private var reported = false
+
+    func body(content: Content) -> some View {
+        content.onContinuousHover { phase in
+            let hovering: Bool
+            switch phase {
+            case .active:
+                hovering = blockSelection?.controller?.pointerIsOverVisibleDocument() ?? true
+            case .ended:
+                hovering = false
+            }
+            guard hovering != reported else { return }
+            reported = hovering
+            onChange(hovering)
+        }
+    }
+}
+
+extension View {
+    /// `onHover` for a block's hover buttons (`DocumentHover`).
+    func documentHover(perform action: @escaping (Bool) -> Void) -> some View {
+        modifier(DocumentHover(onChange: action))
+    }
+}
+
 /// The document's ONE selection and everything that edits, draws and copies it
 /// (S-D4). Owned by `VirtualBlockList.Coordinator`; main-thread only (every
 /// entry point is an AppKit event, a menu action or a representable update).
@@ -1967,6 +2005,21 @@ final class SelectionController: NSObject {
 
     deinit {
         keyObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+
+    /// Whether the pointer is over the part of the document the reader sees
+    /// (the clip view's bounds) in this list's window, with no other window
+    /// above it there. `DocumentHover` asks: SwiftUI also reports a hover for
+    /// a row OUTSIDE the clip view, under a pointer resting just below the
+    /// window.
+    func pointerIsOverVisibleDocument() -> Bool {
+        guard let tableView, let window = tableView.window,
+              let clipView = tableView.enclosingScrollView?.contentView else { return false }
+        let screenPoint = NSEvent.mouseLocation
+        guard NSWindow.windowNumber(at: screenPoint, belowWindowWithWindowNumber: 0)
+                == window.windowNumber else { return false }
+        let point = clipView.convert(window.convertPoint(fromScreen: screenPoint), from: nil)
+        return clipView.bounds.contains(point)
     }
 
     func attach(tableView: BlockTableView) {

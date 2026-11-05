@@ -101,7 +101,7 @@ struct HeadingBlockView: View {
             }
         }
         .contentShape(Rectangle())
-        .onHover { hovering in
+        .documentHover { hovering in
             hideWorkItem?.cancel()
             if hovering {
                 isHovered = true
