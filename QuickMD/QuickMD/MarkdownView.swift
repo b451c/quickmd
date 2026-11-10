@@ -152,6 +152,19 @@ struct MarkdownView: View {
     /// The editor's find bar height (0 = hidden): the bar sits where the pills
     /// and banners float, so they move below it (`topChromeInset`).
     @State private var editorFindBarHeight: CGFloat = 0
+    /// Source Edit as a split: editor on the left, the rendered document on
+    /// the right. Per tab; plain Edit always starts without it.
+    @State private var isSplitEdit = false
+    private var isSplitShowing: Bool { editSession.isActive && isSplitEdit }
+    /// Split view's live preview: the editor's unsaved text, shown by the
+    /// rendered side only (nil = the saved text). `currentText` stays what is
+    /// on disk, so copy, export, reload and the session never see it.
+    @State private var previewText: String?
+    /// Typing pauses before the preview re-renders. A reference, so a
+    /// keystroke never re-evaluates this body.
+    @State private var previewDebounce = PreviewDebounce()
+    /// What the rendered list shows.
+    private var renderedSource: String { previewText ?? currentText }
     /// The text `cachedBlocks` were parsed from. Block ids are positional, so a
     /// scroll by id is only meaningful against the blocks of the text it was
     /// computed for — the landing after Source Edit checks this (S-D10).
@@ -280,6 +293,12 @@ struct MarkdownView: View {
                     )
                 }
 
+                HStack(spacing: 0) {
+                // Split edit: the left half is the editor's (overlay below).
+                if isSplitShowing {
+                    Color.clear.frame(maxWidth: .infinity)
+                    Divider()
+                }
                 // Our own virtualized list (v1.9): exact row heights from
                 // `measured.table`, one layout path for every document size,
                 // nothing estimated — see VirtualBlockList.swift.
@@ -309,12 +328,14 @@ struct MarkdownView: View {
                     // survive; a remount would park at the top) but never takes
                     // the focus back while covered, and leaves the
                     // accessibility tree meanwhile (set on the AppKit view).
-                    isCovered: graphicPreview != nil || editSession.isActive,
+                    isCovered: graphicPreview != nil || (editSession.isActive && !isSplitEdit),
                     readingPosition: readingPosition,
                     column: documentColumn
                 )
+                .frame(maxWidth: .infinity)
                 .onChange(of: scrollTrigger) { _ in
                     scrollFocusedMatchIntoView()
+                }
                 }
             }
             .overlay {
@@ -325,10 +346,19 @@ struct MarkdownView: View {
                 // one). Theme, zoom and Reading Mode reach it through `style`.
                 Group {
                     if editSession.isActive {
-                        SourceEditorView(controller: editSession.editor,
-                                         style: .overDocument(theme: theme, fontScale: fontScale,
-                                                              shownFontScale: renderedFontScale,
-                                                              isReadingMode: isReadingMode))
+                        HStack(spacing: 0) {
+                            SourceEditorView(controller: editSession.editor,
+                                             style: .overDocument(theme: theme, fontScale: fontScale,
+                                                                  shownFontScale: renderedFontScale,
+                                                                  isReadingMode: isReadingMode))
+                                .frame(maxWidth: .infinity)
+                                .overlay(alignment: .topTrailing) { sourceEditPills }
+                            // Split: the right half shows the list beneath.
+                            if isSplitEdit {
+                                Divider()
+                                Color.clear.frame(maxWidth: .infinity).allowsHitTesting(false)
+                            }
+                        }
                     }
                 }
                 // An animated transaction from elsewhere (a toast, a sidebar)
@@ -466,23 +496,10 @@ struct MarkdownView: View {
     /// ⌥⌘E, ⌘⇧C) all still work, so nothing is lost except the thing
     /// hovering over the text.
     ///
-    /// Editing: ONLY Save and Done, also in Reading Mode — a mode you can only
-    /// leave by shortcut is not acceptable (S-D12).
+    /// Editing: `sourceEditPills`, drawn on the editor itself.
     @ViewBuilder
     private var chromeCluster: some View {
-        if editSession.isActive {
-            HStack(spacing: 8) {
-                SourceSaveButton(theme: theme, isEnabled: editSession.isDirty) {
-                    editSession.save()
-                }
-                SourceDoneButton(theme: theme) {
-                    editSession.requestLeave()
-                }
-            }
-            .chromeHoverCluster()
-            .padding(.top, topChromeInset)
-            .padding(.trailing, 24)
-        } else if !isReadingMode {
+        if !editSession.isActive && !isReadingMode {
             HStack(spacing: 8) {
                 // `appliedDefaultZoom`, not `defaultZoom`: no pill flash in a
                 // window that follows a Settings change (see its doc comment).
@@ -496,9 +513,9 @@ struct MarkdownView: View {
                     ReloadDocumentButton(theme: theme) {
                         reloadManually()
                     }
-                    EditSourceButton(theme: theme) {
-                        toggleSourceEdit()
-                    }
+                    EditSourceButton(theme: theme,
+                                     action: { toggleSourceEdit() },
+                                     splitAction: { toggleSplitEdit() })
                 }
                 CopySourceButton(theme: theme) {
                     copyToClipboard(currentText)
@@ -510,6 +527,26 @@ struct MarkdownView: View {
             .padding(.trailing, 24)
             .transition(.opacity)
         }
+    }
+
+    /// Editing: ONLY Split, Save and Done, also in Reading Mode — a mode you
+    /// can only leave by shortcut is not acceptable (S-D12). Top-right of the
+    /// editor, so in a split they stay on the editing side.
+    private var sourceEditPills: some View {
+        HStack(spacing: 8) {
+            SourceSplitButton(theme: theme, isSplit: isSplitEdit) {
+                toggleSplitEdit()
+            }
+            SourceSaveButton(theme: theme, isEnabled: editSession.isDirty) {
+                editSession.save()
+            }
+            SourceDoneButton(theme: theme) {
+                editSession.requestLeave()
+            }
+        }
+        .chromeHoverCluster()
+        .padding(.top, topChromeInset)
+        .padding(.trailing, 24)
     }
 
     /// S-D9: the file changed on disk while the buffer holds unsaved text. The
@@ -618,8 +655,10 @@ struct MarkdownView: View {
     private var sourceEditStack: some View {
         configuredDocumentStack
         .focusedSceneValue(\.sourceEditState,
-                           SourceEditMenuState(isEditing: editSession.isActive, isDirty: editSession.isDirty))
+                           SourceEditMenuState(isEditing: editSession.isActive, isDirty: editSession.isDirty,
+                                               isSplit: isSplitEdit))
         .focusedSceneValue(\.toggleSourceEditAction, { toggleSourceEdit() })
+        .focusedSceneValue(\.toggleSplitEditAction, { toggleSplitEdit() })
         .focusedSceneValue(\.saveSourceAction, { editSession.save() })
         .focusedSceneValue(\.discardSourceChangesAction, { editSession.discardChanges() })
         // A document can be moved or renamed while open: the session's URL
@@ -644,13 +683,13 @@ struct MarkdownView: View {
             return .handled
         })
         .frame(minWidth: 400, minHeight: 300)
-        .task(id: DocumentIdentity(text: currentText,
+        .task(id: DocumentIdentity(text: renderedSource,
                                    colorScheme: MarkdownTheme.windowColorScheme(forThemeNamed: selectedThemeName) == nil
                                        ? colorScheme : nil,
                                    themeName: selectedThemeName,
                                    fonts: DocumentFonts(body: bodyFontFamily, code: codeFontFamily),
                                    fontScale: fontScale)) {
-            let text = currentText
+            let text = renderedSource
             let currentTheme = theme
             isParsing = true
             let scale = CGFloat(fontScale)
@@ -1035,7 +1074,8 @@ struct MarkdownView: View {
             commitText: { text in
                 if !SourceEditSession.isSameText(text, currentText) { currentText = text }
             },
-            toast: { showToast($0) }
+            toast: { showToast($0) },
+            bufferChanged: { previewDebounce.schedule { updatePreview() } }
         )
         editSession.editor.onFindBarHeightChange = { height in
             // Reported from the scroll view's `tile()`, i.e. inside an AppKit
@@ -1052,12 +1092,13 @@ struct MarkdownView: View {
     /// ⌥⌘E, File ▸ Edit Source / Done Editing, the Edit pill. Entering starts
     /// at the source line being read — the selection's first row, else the
     /// top visible row (`editorLine()` is 1-based, the session 0-based).
-    private func toggleSourceEdit() {
+    private func toggleSourceEdit(split: Bool = false) {
         if editSession.isActive {
             editSession.requestLeave()
             return
         }
         guard graphicPreview == nil else { return }
+        isSplitEdit = split
         // A rendered selection whose text is literally in its source lines is
         // selected in the editor (S-D14b); otherwise the caret goes to the line.
         if let refusal = editSession.enter(atLine: readingPosition.editorLine().map { $0 - 1 },
@@ -1072,12 +1113,36 @@ struct MarkdownView: View {
         editSession.focusEditor()
     }
 
+    /// ⌥⇧⌘E, File ▸ Split View / Editor Only, the Split pill. Editing: flips
+    /// the split. Reading: enters Source Edit as a split.
+    private func toggleSplitEdit() {
+        if editSession.isActive {
+            isSplitEdit.toggle()
+            updatePreview()
+            editSession.focusEditor()
+        } else {
+            toggleSourceEdit(split: true)
+        }
+    }
+
+    /// The live preview follows the buffer while the split shows; otherwise
+    /// the rendered side is the saved text again.
+    private func updatePreview() {
+        previewDebounce.cancel()
+        let text = isSplitShowing ? editSession.editor.text : nil
+        let preview = text.flatMap { SourceEditSession.isSameText($0, currentText) ? nil : $0 }
+        if preview != previewText { previewText = preview }
+    }
+
     /// The session left (Done, Esc, the command; after Save or Don't Save).
     /// The list gets the keyboard back; if the session saved or the caret
     /// moved off the entry line, the list lands on the block holding the
     /// caret's line — against the blocks of the CURRENT text (S-D10).
     private func didLeaveSourceEdit(_ leave: SourceEditSession.LeaveInfo) {
         documentFocusRequest += 1
+        // Unsaved text is gone with the editor: back to the saved text first,
+        // so the landing below waits for (or finds) the saved parse.
+        updatePreview()
         // `==`, as `DocumentIdentity` compares: text it calls equal is never
         // re-parsed, so waiting for a parse of it would wait forever.
         let current = installedText.map { $0 == currentText } ?? false
@@ -1710,4 +1775,21 @@ struct SystemColorSchemeReader: NSViewRepresentable {
 
     [Visit Apple](https://apple.com)
     """), documentURL: nil)
+}
+
+/// Split view's live preview runs once typing pauses (`MarkdownView.previewDebounce`).
+final class PreviewDebounce {
+    private var work: DispatchWorkItem?
+
+    func schedule(after delay: TimeInterval = 0.3, _ action: @escaping () -> Void) {
+        work?.cancel()
+        let item = DispatchWorkItem(block: action)
+        work = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    func cancel() {
+        work?.cancel()
+        work = nil
+    }
 }

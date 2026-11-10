@@ -167,13 +167,15 @@ struct ToggleDocumentListCommand: View {
     }
 }
 
-/// File ▸ Edit Source / Done Editing (⌥⌘E), Save (⌘S), Discard Changes —
+/// File ▸ Edit Source / Done Editing (⌥⌘E), Split View / Editor Only
+/// (⌥⇧⌘E), Save (⌘S), Discard Changes —
 /// Source Edit for the frontmost document only, via @FocusedValue like every
 /// other per-document command (an NSEvent monitor would act on every tab).
 /// ⌘S belongs to Save only while there is something to save: the viewer has
 /// no other Save, so a disabled item costs nothing.
 struct SourceEditCommands: View {
     @FocusedValue(\.toggleSourceEditAction) var toggleSourceEditAction
+    @FocusedValue(\.toggleSplitEditAction) var toggleSplitEditAction
     @FocusedValue(\.saveSourceAction) var saveSourceAction
     @FocusedValue(\.discardSourceChangesAction) var discardSourceChangesAction
     @FocusedValue(\.sourceEditState) var sourceEditState
@@ -184,6 +186,13 @@ struct SourceEditCommands: View {
         }
         .keyboardShortcut("e", modifiers: [.command, .option])
         .disabled(toggleSourceEditAction == nil)
+
+        Button(sourceEditState?.isEditing == true && sourceEditState?.isSplit == true
+               ? "Editor Only" : "Split View") {
+            toggleSplitEditAction?()
+        }
+        .keyboardShortcut("e", modifiers: [.command, .option, .shift])
+        .disabled(toggleSplitEditAction == nil)
 
         Button("Save") {
             saveSourceAction?()

@@ -384,21 +384,42 @@ struct ReloadDocumentButton: View {
 /// buttons side by side were one too many) — it stays on ⌘E and in the File
 /// menu. One of the three ways into Source Edit, with File ▸ Edit Source and
 /// the shortcut.
+///
+/// Holding Option turns it into "Split edit" (⌥⇧⌘E), like an alternate menu
+/// item: the pill shows the split icon and an Option-click enters the split.
 struct EditSourceButton: View {
     let theme: MarkdownTheme
     let action: () -> Void
+    let splitAction: () -> Void
+
+    @State private var isOptionDown = NSEvent.modifierFlags.contains(.option)
+    @State private var flagsMonitor: Any?
 
     var body: some View {
         ChromePill(
             theme: theme,
-            title: "Edit",
-            help: "Edit source (⌥⌘E)",
-            action: action
+            title: isOptionDown ? "Split edit" : "Edit",
+            help: "Edit source (⌥⌘E) · Option-click to edit side by side (⌥⇧⌘E)",
+            action: {
+                // The flags at the click, not the last flagsChanged seen.
+                NSEvent.modifierFlags.contains(.option) ? splitAction() : action()
+            }
         ) {
-            Image(systemName: "pencil")
+            Image(systemName: isOptionDown ? "rectangle.split.2x1" : "pencil")
                 .font(.system(size: 11))
         }
         .accessibilityIdentifier("source-edit")
+        .onAppear {
+            isOptionDown = NSEvent.modifierFlags.contains(.option)
+            flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                isOptionDown = event.modifierFlags.contains(.option)
+                return event
+            }
+        }
+        .onDisappear {
+            if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
+            flagsMonitor = nil
+        }
     }
 }
 
@@ -421,6 +442,23 @@ struct SourceSaveButton: View {
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.5)
         .accessibilityIdentifier("source-save")
+    }
+}
+
+/// Toggles the split: editor left, rendered document right (per tab).
+struct SourceSplitButton: View {
+    let theme: MarkdownTheme
+    let isSplit: Bool
+    let action: () -> Void
+
+    var body: some View {
+        ChromePill(theme: theme, title: isSplit ? "Editor only" : "Split",
+                   help: isSplit ? "Show the editor only (⌥⇧⌘E)" : "Show the rendered document beside the editor (⌥⇧⌘E)",
+                   action: action) {
+            Image(systemName: isSplit ? "rectangle" : "rectangle.split.2x1")
+                .font(.system(size: 11))
+        }
+        .accessibilityIdentifier("source-split")
     }
 }
 

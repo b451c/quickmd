@@ -80,6 +80,8 @@ struct FocusedExportDocumentLocationKey: FocusedValueKey {
 struct SourceEditMenuState: Equatable {
     let isEditing: Bool
     let isDirty: Bool
+    /// The editor and the rendered document side by side (File ▸ Split View).
+    var isSplit = false
 
     var canSave: Bool { isEditing && isDirty }
 }
@@ -90,6 +92,12 @@ struct FocusedSourceEditStateKey: FocusedValueKey {
 
 /// ⌥⌘E — enter or leave Source Edit in the FOCUSED document only.
 struct FocusedToggleSourceEditKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+/// ⌥⇧⌘E — Source Edit side by side with the rendered document, or back to
+/// the editor only, in the FOCUSED document only.
+struct FocusedToggleSplitEditKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
@@ -111,6 +119,10 @@ extension FocusedValues {
     var toggleSourceEditAction: (() -> Void)? {
         get { self[FocusedToggleSourceEditKey.self] }
         set { self[FocusedToggleSourceEditKey.self] = newValue }
+    }
+    var toggleSplitEditAction: (() -> Void)? {
+        get { self[FocusedToggleSplitEditKey.self] }
+        set { self[FocusedToggleSplitEditKey.self] = newValue }
     }
     var saveSourceAction: (() -> Void)? {
         get { self[FocusedSaveSourceKey.self] }
