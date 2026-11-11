@@ -303,7 +303,7 @@ struct MarkdownBlockParser: Sendable {
                 case .images(let images, let end):
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                     if images.count == 1, let image = images.first {
-                        blocks.append(.image(index: blockIndex, url: image.url, alt: image.alt, width: nil,
+                        blocks.append(.image(index: blockIndex, url: image.url, alt: image.alt, width: image.width,
                                              link: image.link, sourceLine: sourceLine))
                     } else {
                         blocks.append(.imageRow(index: blockIndex, images: images, sourceLine: sourceLine))
@@ -877,6 +877,15 @@ struct MarkdownBlockParser: Sendable {
     /// line is a literal backslash, i.e. text. A line of text, a setext
     /// underline (the paragraph is a heading then) or any line that goes on
     /// with the paragraph and is not images → `.notImages`.
+    ///
+    /// An HTML image line (`htmlImageLine`, the whitelist unchanged) counts
+    /// as a line of images too, with each `<img>`'s width and same-line
+    /// `<a href>`: GitHub draws `<a href><img></a> <a href><img></a>` on one
+    /// line, such lines one under the other, and `![a](x)` over an `<img>`
+    /// line as one `<p>` of inline pictures. Between two tags of one line
+    /// the scanner does not keep the whitespace, so they always get a
+    /// space. A wrapper-only line (`<p align="center">`, `<br>`) is not
+    /// images: the paragraph keeps its pre-1.15 shape.
     func imageParagraph(at start: Int, in lines: [String], references: [String: String]) -> ImageParagraph {
         var images: [RowImage] = []
         var lineBreakBefore = false
@@ -891,7 +900,19 @@ struct MarkdownBlockParser: Sendable {
             let backslash = Self.endsWithBackslashBreak(line)
             guard let found = InlineSyntaxScanner.imageOnlyLine(backslash ? line.dropLast() : line[...],
                                                                 references: references) else {
-                return .notImages(checkedUntil: index)
+                guard !backslash, let html = htmlImageLine(lines, at: index), !html.images.isEmpty else {
+                    return .notImages(checkedUntil: index)
+                }
+                for (offset, tag) in html.images.enumerated() {
+                    let separator: RowImage.Separator = images.isEmpty
+                        ? .none : (offset == 0 && lineBreakBefore ? .lineBreak : .space)
+                    images.append(RowImage(url: tag.url, alt: tag.alt,
+                                           link: tag.link.flatMap { MarkdownRenderer.linkURL(for: $0) },
+                                           separator: separator, width: tag.width))
+                }
+                lineBreakBefore = lines[html.end - 1].hasSuffix("  ")
+                index = html.end
+                continue
             }
             for (offset, image) in found.enumerated() {
                 let separator: RowImage.Separator

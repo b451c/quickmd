@@ -76,7 +76,8 @@ enum ImageWidth: Sendable, Equatable {
 /// One picture of a paragraph made only of images (`BlockContent.imageRow`):
 /// README badges one per line, `![a](x) ![b](y)`, consecutive image lines.
 /// GitHub draws such a paragraph as inline pictures that wrap like words; so
-/// does `ImageRowView`. Markdown images only: they have no width syntax.
+/// does `ImageRowView`. Also `<img>` tags of HTML image lines in such a
+/// paragraph (`<a href><img></a> <a href><img></a>`), with their `width`.
 struct RowImage: Sendable, Equatable {
     /// What stands between this picture and the one before it in the source.
     enum Separator: Sendable, Equatable {
@@ -97,6 +98,8 @@ struct RowImage: Sendable, Equatable {
     /// text links' handler). Nil for a plain image (click = preview).
     let link: URL?
     let separator: Separator
+    /// HTML `<img width>` (nil for Markdown images) — `ImageWidth`.
+    var width: ImageWidth? = nil
 }
 
 // MARK: - Table Style

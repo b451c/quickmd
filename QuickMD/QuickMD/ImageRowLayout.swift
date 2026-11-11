@@ -1,12 +1,16 @@
 import SwiftUI
+import AppKit
+import CoreText
 
 // MARK: - Image rows (v1.15): a paragraph of pictures that wraps like words
 //
 // GitHub draws a paragraph made only of images (README badges one per line,
 // `![a](x) ![b](y)`) as inline pictures: side by side, a space between them
 // where the source has whitespace, wrapping onto the next line when the
-// column is full, a `<br>` where the source has a hard line break, every
-// picture sitting on the text baseline. `ImageRowView` (screen) and
+// column is full, a `<br>` where the source has a hard line break, the
+// pictures of a line sharing a baseline — here: bottom-aligned in the line
+// (a line of pictures has no text whose descent would show the difference).
+// `ImageRowView` (screen) and
 // `PrintableImageRowView` (print/PDF) lay their pictures out with
 // `ImageFlowLayout`; `BlockHeightMeasurer` sizes the row with the SAME line
 // breaking (`BlockLayout.ImageRow.lines`), so a row whose picture sizes are
@@ -22,9 +26,42 @@ extension BlockLayout {
         /// Between two lines of pictures, × zoom: GitHub's line box leaves
         /// about this much under a 20 px badge.
         static let lineSpacing: CGFloat = 4
-        /// A picture whose size is not known yet (loading): a square of this
-        /// side × zoom — a badge's height, so a badge row does not jump.
+        /// A picture whose size is not known yet — loading, failed, folder
+        /// access denied — is a CHIP of its alt text at this height × zoom: a
+        /// badge's height, so an offline README keeps its badge rows.
         static let placeholderSide: CGFloat = 20
+        /// The chip's text, × zoom (system font, one line, truncated).
+        static let chipFontSize: CGFloat = 11
+        /// Text inset left and right, × zoom.
+        static let chipHorizontalPadding: CGFloat = 6
+        static let chipCornerRadius: CGFloat = 3
+        /// The widest a chip gets, × zoom (never wider than the column).
+        static let chipMaxWidth: CGFloat = 240
+
+        /// What a chip shows: the alt text on one line, or "Image" without one.
+        static func chipLabel(alt: String) -> String {
+            let line = alt.split(whereSeparator: { $0.isNewline }).joined(separator: " ")
+                .trimmingCharacters(in: .whitespaces)
+            return line.isEmpty ? "Image" : line
+        }
+
+        static func chipFont(fontScale: CGFloat) -> NSFont {
+            NSFont.systemFont(ofSize: chipFontSize * fontScale)
+        }
+
+        /// The chip's frame: its label's width (CoreText, thread-safe — the
+        /// measurer runs off-main) plus the insets and a 2 pt allowance for
+        /// SwiftUI's own text width, capped; `placeholderSide` tall. The view
+        /// FRAMES the chip with this, so the measurer's row is exact.
+        static func chipSize(alt: String, fontScale: CGFloat, contentWidth: CGFloat) -> CGSize {
+            let label = NSAttributedString(string: chipLabel(alt: alt),
+                                           attributes: [.font: chipFont(fontScale: fontScale)])
+            let line = CTLineCreateWithAttributedString(label)
+            let text = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
+            let width = (text + 2).rounded(.up) + 2 * chipHorizontalPadding * fontScale
+            let cap = min(clampedWidth(contentWidth), chipMaxWidth * fontScale)
+            return CGSize(width: min(width, cap), height: placeholderSide * fontScale)
+        }
 
         /// One line of the row: the pictures in `range`, `height` the
         /// tallest of them.
@@ -80,27 +117,27 @@ extension BlockLayout {
         }
 
         /// The size a picture is drawn at in a row: its picture size
-        /// (`ImageBlock.pictureSize` — natural size × zoom, capped at the
-        /// column, the single image's rule) once known, else the loading
-        /// square.
-        static func itemSize(imageSize: CGSize?, fontScale: CGFloat, contentWidth: CGFloat) -> CGSize {
+        /// (`ImageBlock.pictureSize` — natural size × zoom, or the HTML
+        /// `width`, capped at the column: the single image's rule) once
+        /// known, else its chip.
+        static func itemSize(imageSize: CGSize?, htmlWidth: ImageWidth? = nil, alt: String, fontScale: CGFloat,
+                             contentWidth: CGFloat) -> CGSize {
             guard let imageSize, imageSize.width > 0, imageSize.height > 0 else {
-                let side = placeholderSide * fontScale
-                return CGSize(width: side, height: side)
+                return chipSize(alt: alt, fontScale: fontScale, contentWidth: contentWidth)
             }
-            return ImageBlock.pictureSize(imageSize: imageSize, htmlWidth: nil, fontScale: fontScale,
+            return ImageBlock.pictureSize(imageSize: imageSize, htmlWidth: htmlWidth, fontScale: fontScale,
                                           contentWidth: contentWidth)
         }
 
         /// The row as the measurer sizes it: the pictures it knows the size
-        /// of (`imageSizes`, by url as written), loading squares for the
-        /// rest, broken into lines at `contentWidth`, plus the row's
+        /// of (`imageSizes`, by url as written), chips for the rest, broken into lines at `contentWidth`, plus the row's
         /// vertical padding. Exact once every size is known; the row is
         /// `.reported`, so a picture that arrives (or fails) corrects it.
         static func rowHeight(images: [RowImage], imageSizes: [NSString: CGSize], fontScale: CGFloat,
                               contentWidth: CGFloat) -> CGFloat {
             let sizes = images.map {
-                itemSize(imageSize: imageSizes[$0.url as NSString], fontScale: fontScale, contentWidth: contentWidth)
+                itemSize(imageSize: imageSizes[$0.url as NSString], htmlWidth: $0.width, alt: $0.alt,
+                         fontScale: fontScale, contentWidth: contentWidth)
             }
             let lines = lines(sizes: sizes, separators: images.map(\.separator),
                               width: clampedWidth(contentWidth), fontScale: fontScale)
@@ -112,16 +149,23 @@ extension BlockLayout {
 // MARK: - Flow layout
 
 /// Lays out an image row's pictures (one subview per `RowImage`, in order)
-/// with `BlockLayout.ImageRow.lines`: left to right, wrapping at the proposed
-/// width, each line's pictures bottom-aligned — GitHub's inline images sit
-/// on the baseline. Every subview is offered the whole width (a failed
-/// picture's placeholder text wraps inside it) and takes its own size.
+/// with `BlockLayout.ImageRow.lines`: left to right, wrapping at
+/// `wrapWidth` (or the proposed width), each line's pictures bottom-aligned.
+/// Every subview is offered that width and takes its own size.
+///
+/// On screen `wrapWidth` is the MEASURED `contentWidth` — the width the
+/// measurer broke the lines at and the pictures are sized for — not the live
+/// cell width: during a live resize the cell is wider or narrower for a few
+/// frames until the next measure lands, and wrapping at it would rewrap and
+/// report a new row height on every frame. Print passes nil (the page).
 struct ImageFlowLayout: Layout {
     let separators: [RowImage.Separator]
     let fontScale: CGFloat
+    var wrapWidth: CGFloat? = nil
 
-    private func arrangement(width: CGFloat, subviews: Subviews)
+    private func arrangement(width proposed: CGFloat, subviews: Subviews)
         -> (sizes: [CGSize], lines: [BlockLayout.ImageRow.Line]) {
+        let width = wrapWidth ?? proposed
         let offer = ProposedViewSize(width: width.isFinite ? width : nil, height: nil)
         let sizes = subviews.map { $0.sizeThatFits(offer) }
         let lines = BlockLayout.ImageRow.lines(sizes: sizes, separators: separators, width: width,

@@ -69,8 +69,10 @@ struct ImageBlockView: View {
 /// A paragraph made only of images (`MarkdownBlock.BlockContent.imageRow`):
 /// its pictures side by side, wrapping like words (`ImageFlowLayout`), each
 /// at the single image's size rule, without captions (GitHub draws none;
-/// the alt is the accessibility label, the copy text and what search finds).
-/// Each picture loads, fails and is clicked on its own.
+/// the alt is the accessibility label and the copy text). Each picture
+/// loads, fails and is clicked on its own; until it shows, it is a chip of
+/// its alt text at badge height (`BlockLayout.ImageRow.chipSize`). Lines
+/// break at the measured `contentWidth` (see `ImageFlowLayout`).
 struct ImageRowView: View {
     let images: [RowImage]
     let theme: MarkdownTheme
@@ -82,10 +84,10 @@ struct ImageRowView: View {
     var onLink: (URL) -> Void = { _ in }
 
     var body: some View {
-        ImageFlowLayout(separators: images.map(\.separator), fontScale: fontScale) {
+        ImageFlowLayout(separators: images.map(\.separator), fontScale: fontScale, wrapWidth: contentWidth) {
             ForEach(images.indices, id: \.self) { index in
                 let image = images[index]
-                PictureView(url: image.url, alt: image.alt, width: nil, link: image.link, theme: theme,
+                PictureView(url: image.url, alt: image.alt, width: image.width, link: image.link, theme: theme,
                             documentURL: documentURL, fontScale: fontScale, contentWidth: contentWidth,
                             heightCache: heightCache, style: .inline, onEnlarge: onEnlarge, onLink: onLink)
             }
@@ -97,16 +99,18 @@ struct ImageRowView: View {
 
 /// One picture — loading, failed, access denied or shown — of an image
 /// block or of an image row. A plain picture is a button that opens the
-/// window-filling preview (PR #29). A LINKED picture is a link: a click
-/// follows it through the text links' handler, the pointer is a pointing
-/// hand, the help tag is the destination, and the preview stays one hover
-/// away — the zoom button the diagrams have, shown while the pointer is on
-/// a picture big enough to carry it (`ImageBlock.enlargeButtonMinimumSide`;
+/// window-filling preview (PR #29). A LINKED picture is a link IN EVERY
+/// STATE (a badge that cannot load is still the link it was as a 1.14
+/// placeholder): a click follows it through the text links' handler, the
+/// pointer is a pointing hand, the help tag is the destination; once shown,
+/// the preview stays one hover away — the zoom button the diagrams have,
+/// on a picture big enough to carry it (`ImageBlock.enlargeButtonMinimumSide`;
 /// a badge is not worth previewing).
 struct PictureView: View {
     /// `.block`: an image block (the 100 pt loading view while the size is
-    /// unknown). `.inline`: a picture of an image row (a loading square,
-    /// `ImageRow.placeholderSide`).
+    /// unknown, the error card, the folder-access card). `.inline`: a
+    /// picture of an image row (a chip of its alt text instead of all three,
+    /// `ImageRow.chipSize`).
     enum Style { case block, inline }
 
     let url: String
@@ -182,30 +186,98 @@ struct PictureView: View {
                 } else {
                     graphicButton(image)
                 }
-            } else if let accessDeniedURL {
-                accessDeniedView(for: accessDeniedURL)
-            } else if source == nil || failure != nil {
-                imageErrorView
-            } else if let known = heightCache?.imageSize(for: url) {
-                // Loading an image whose size this document already knows
-                // (the bitmap was evicted from `ImageLoader`'s cache): hold
-                // the picture's place, which is the row the measurer computed.
-                let size = pictureSize(for: known)
-                ProgressView()
-                    .frame(width: size.width, height: size.height)
-            } else if style == .inline {
-                let side = BlockLayout.ImageRow.placeholderSide * fontScale
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: side, height: side)
+            } else if let link {
+                linkedPlaceholder(link)
             } else {
-                ProgressView()
-                    .frame(height: Metrics.placeholderHeight)
+                placeholder
             }
         }
         .task(id: url) {
             await loadImage()
         }
+    }
+
+    /// What stands in for the picture until it shows (or for good).
+    @ViewBuilder
+    private var placeholder: some View {
+        if let accessDeniedURL {
+            if style == .inline {
+                // Unlinked: the chip asks for the folder, as the card's button does.
+                if link == nil {
+                    Button {
+                        Task { await retryWithAccess() }
+                    } label: {
+                        chip
+                    }
+                    .buttonStyle(.plain)
+                    .help("Can\u{2019}t load \u{201C}\(accessDeniedURL.lastPathComponent)\u{201D} \u{2014} click to grant folder access")
+                } else {
+                    chip
+                }
+            } else {
+                accessDeniedView(for: accessDeniedURL)
+            }
+        } else if source == nil || failure != nil {
+            if style == .inline { chip } else { imageErrorView }
+        } else if let known = heightCache?.imageSize(for: url) {
+            // Loading an image whose size this document already knows
+            // (the bitmap was evicted from `ImageLoader`'s cache): hold
+            // the picture's place, which is the row the measurer computed.
+            let size = pictureSize(for: known)
+            ProgressView()
+                .frame(width: size.width, height: size.height)
+        } else if style == .inline {
+            chip
+        } else {
+            ProgressView()
+                .frame(height: Metrics.placeholderHeight)
+        }
+    }
+
+    /// A row picture that is not showing (loading, failed, folder access
+    /// denied): its alt text in a badge-height chip, framed with exactly the
+    /// size the measurer used (`BlockLayout.ImageRow.chipSize`).
+    private var chip: some View {
+        typealias Row = BlockLayout.ImageRow
+        let size = Row.chipSize(alt: alt, fontScale: fontScale, contentWidth: contentWidth)
+        return Text(Row.chipLabel(alt: alt))
+            .font(.system(size: Row.chipFontSize * fontScale))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .foregroundColor(theme.secondaryTextColor)
+            .padding(.horizontal, Row.chipHorizontalPadding * fontScale)
+            .frame(width: size.width, height: size.height, alignment: .leading)
+            .background(theme.codeBackgroundColor)
+            .clipShape(RoundedRectangle(cornerRadius: Row.chipCornerRadius * fontScale))
+    }
+
+    /// A linked picture that is not showing is still its link: the same
+    /// click path, help tag, cursor and role as the picture. The block's
+    /// folder-access card keeps its own button (a nested button wins its
+    /// clicks), so the card takes the link through a tap instead.
+    @ViewBuilder
+    private func linkedPlaceholder(_ link: URL) -> some View {
+        if accessDeniedURL != nil && style == .block {
+            placeholder
+                .contentShape(Rectangle())
+                .onTapGesture { onLink(link) }
+                .help(Self.helpText(for: link))
+                .overlay(PointingHandCursorArea().allowsHitTesting(false))
+        } else {
+            Button {
+                onLink(link)
+            } label: {
+                placeholder.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .linkRole(link, alt: alt)
+        }
+    }
+
+    /// The help tag of a linked picture: its destination. Never a megabyte
+    /// `data:` destination in a help tag (#32).
+    fileprivate static func helpText(for link: URL) -> String {
+        DisplayString.middleTruncated(link.absoluteString, maxLength: 200)
     }
 
     private func picture(_ image: NSImage) -> some View {
@@ -247,10 +319,7 @@ struct PictureView: View {
             picture(image)
         }
         .buttonStyle(.plain)
-        // Never a megabyte `data:` destination in a help tag (#32).
-        .help(DisplayString.middleTruncated(link.absoluteString, maxLength: 200))
-        .accessibilityLabel(alt.isEmpty ? "Link" : "Link: \(alt)")
-        .overlay(PointingHandCursorArea().allowsHitTesting(false))
+        .linkRole(link, alt: alt)
         .overlay(alignment: .topTrailing) {
             if canEnlarge && isHovered {
                 Button {
@@ -409,6 +478,22 @@ struct PictureView: View {
     }
 }
 
+// MARK: - Link role
+
+private extension View {
+    /// What makes a linked picture (or its stand-in) read and feel like a
+    /// text link: the destination as help tag, the pointing hand, and a
+    /// LINK role for VoiceOver ("Link: alt"), not a button's.
+    func linkRole(_ link: URL, alt: String) -> some View {
+        self
+            .help(PictureView.helpText(for: link))
+            .accessibilityLabel(alt.isEmpty ? "Link" : "Link: \(alt)")
+            .accessibilityAddTraits(.isLink)
+            .accessibilityRemoveTraits(.isButton)
+            .overlay(PointingHandCursorArea().allowsHitTesting(false))
+    }
+}
+
 // MARK: - Pointing-hand cursor
 
 /// The pointing hand over a linked picture, as over a text link
@@ -423,10 +508,6 @@ struct PointingHandCursorArea: NSViewRepresentable {
             addCursorRect(bounds, cursor: .pointingHand)
         }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
-        override func setFrameSize(_ newSize: NSSize) {
-            super.setFrameSize(newSize)
-            window?.invalidateCursorRects(for: self)
-        }
     }
 
     func makeNSView(context: Context) -> CursorView { CursorView() }

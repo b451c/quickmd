@@ -249,9 +249,13 @@ enum DocumentSearch {
                 segments = [code]
             case .image(_, let alt, _, _):
                 segments = [alt]
-            case .imageRow(let images):
-                // Each picture's alt, as a lone image's (counted, not drawn).
-                segments = images.map(\.alt)
+            case .imageRow:
+                // Not searched: a row draws no captions, and the count must
+                // be what the views SHOW. (A picture that cannot show draws
+                // its alt in a chip — still not counted, so the count never
+                // depends on what has loaded.) A lone image keeps counting
+                // its caption.
+                segments = []
             case .mathBlock(let latex):
                 segments = [latex]
             case .mermaidDiagram(let source):

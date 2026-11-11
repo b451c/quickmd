@@ -157,7 +157,7 @@ final class ImageRowTests: XCTestCase {
         XCTAssertEqual(shape("<a href=\"https://example.com/\"><img src=\"a.png\" alt=\"x\"></a>"),
                        ["img:x→https://example.com/"])
         XCTAssertEqual(shape("<p align=\"center\"><a href='https://e.com/?a=1&amp;b=2'><img src=\"a.png\" alt=\"x\"></a> <img src=\"b.png\" alt=\"y\"></p>"),
-                       ["img:x→https://e.com/?a=1&b=2", "img:y"], "only the picture inside the <a>")
+                       ["row:x→https://e.com/?a=1&b=2_y"], "only the picture inside the <a> is linked")
         XCTAssertEqual(shape("<a href=\"https://e.com\">\n<img src=\"a.png\" alt=\"x\">\n</a>"), ["img:x"])
         XCTAssertEqual(shape("<a name=\"top\"><img src=\"a.png\" alt=\"x\"></a>"), ["img:x"], "no href, no link")
     }
@@ -168,24 +168,27 @@ final class ImageRowTests: XCTestCase {
     }
 
     /// A long run of image lines that is NOT an image paragraph (text at its
-    /// end) is scanned once, not once per line: 8× the lines may take at most
-    /// ~3× the linear share (quadratic would be ~64×).
-    func testLongImageRunWithTextAtTheEndParsesInLinearTime() {
+    /// end) is scanned once, not once per line. Structural, not timed: ONE
+    /// `imageParagraph` attempt from the first line reports the whole run
+    /// as checked (`checkedUntil` = the text line), and the parser tries
+    /// again only at or after that line (`imageParagraphSkip`) — so every
+    /// line is scanned by at most one attempt. An attempt from inside the
+    /// run reaches the same line: a skipped attempt would find nothing new.
+    func testAFailedImageParagraphIsScannedOnce() {
         let parser = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light))
-        func time(_ count: Int) -> TimeInterval {
-            let md = String(repeating: "[![b](b.svg)](https://x.example)\n", count: count) + "text"
-            _ = parser.parse(md)
-            var best = TimeInterval.infinity
-            for _ in 0..<3 {
-                let start = Date()
-                _ = parser.parse(md)
-                best = min(best, Date().timeIntervalSince(start))
-            }
-            return best
+        let count = 2_000
+        let lines = Array(repeating: "[![b](b.svg)](https://x.example)", count: count) + ["text"]
+        guard case .notImages(let checkedUntil) = parser.imageParagraph(at: 0, in: lines, references: [:]) else {
+            return XCTFail("text at the end: not an image paragraph")
         }
-        let small = time(250)
-        let large = time(2_000)
-        XCTAssertLessThan(large, max(small, 0.005) * 24, "250: \(small) s, 2000: \(large) s")
+        XCTAssertEqual(checkedUntil, count, "one attempt covers the whole run")
+        guard case .notImages(let fromInside) = parser.imageParagraph(at: count / 2, in: lines, references: [:]) else {
+            return XCTFail("from inside")
+        }
+        XCTAssertEqual(fromInside, count)
+        // And the parse is the pre-1.15 paragraph of linked placeholders.
+        let blocks = parser.parse(lines.joined(separator: "\n"))
+        XCTAssertTrue(blocks.allSatisfy { if case .text = $0.content { return true } else { return false } })
     }
 
     // MARK: - Line breaking and measurement
@@ -240,6 +243,7 @@ final class ImageRowTests: XCTestCase {
                 ImageFlowLayout(separators: images.map(\.separator), fontScale: scale) {
                     ForEach(images.indices, id: \.self) { index in
                         let size = BlockLayout.ImageRow.itemSize(imageSize: known[images[index].url as NSString],
+                                                                 alt: images[index].alt,
                                                                  fontScale: scale, contentWidth: width)
                         Color.red.frame(width: size.width, height: size.height)
                     }
@@ -251,6 +255,7 @@ final class ImageRowTests: XCTestCase {
                            "width \(width) × \(scale)")
         }
 
+        // Unknown sizes: chips of the alts, badge height, one line at 800.
         let unknown = BlockHeightMeasurer.measure(
             blocks: [MarkdownBlock.imageRow(index: 0, images: Array(images.prefix(3)), sourceLine: 0)],
             theme: theme, fontScale: 1, contentWidth: 800, math: nil)
@@ -261,13 +266,17 @@ final class ImageRowTests: XCTestCase {
     /// A picture in a row follows the single image's size rule: natural
     /// size × zoom, never wider than the column cap.
     func testRowPicturesUseTheImageSizeRule() {
-        let item = BlockLayout.ImageRow.itemSize(imageSize: CGSize(width: 2000, height: 1000), fontScale: 1,
-                                                 contentWidth: 500)
+        let item = BlockLayout.ImageRow.itemSize(imageSize: CGSize(width: 2000, height: 1000), alt: "x",
+                                                 fontScale: 1, contentWidth: 500)
         XCTAssertEqual(item, BlockLayout.ImageBlock.pictureSize(imageSize: CGSize(width: 2000, height: 1000),
                                                                 htmlWidth: nil, fontScale: 1, contentWidth: 500))
         XCTAssertEqual(item.width, 500)
-        XCTAssertEqual(BlockLayout.ImageRow.itemSize(imageSize: CGSize(width: 90, height: 20), fontScale: 2,
+        XCTAssertEqual(BlockLayout.ImageRow.itemSize(imageSize: CGSize(width: 90, height: 20), alt: "x", fontScale: 2,
                                                      contentWidth: 800), CGSize(width: 180, height: 40))
+        // An HTML `width` replaces the natural width, as for a lone `<img width>`.
+        XCTAssertEqual(BlockLayout.ImageRow.itemSize(imageSize: CGSize(width: 90, height: 20), htmlWidth: .points(45),
+                                                     alt: "x", fontScale: 1, contentWidth: 800),
+                       CGSize(width: 45, height: 10))
     }
 
     /// A lone image's row height is unchanged by the row work: picture +
@@ -287,9 +296,13 @@ final class ImageRowTests: XCTestCase {
 
     // MARK: - Search, copy, selection, tint, rhythm
 
-    func testSearchFindsEveryAltOfARow() {
-        let blocks = parse("[![build passing](b.svg)](https://ci) ![license MIT](l.svg) ![build](x.svg)")
-        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "build").matchBlockIds.count, 2)
+    /// A row draws no captions, so search does not count its alts (the
+    /// count is what the views SHOW); a lone image still counts its caption.
+    func testSearchDoesNotCountRowAlts() {
+        let row = parse("[![build passing](b.svg)](https://ci) ![license MIT](l.svg) ![build](x.svg)")
+        XCTAssertEqual(DocumentSearch.computeMatches(in: row, term: "build").matchBlockIds.count, 0)
+        let single = parse("[![build passing](b.svg)](https://ci)")
+        XCTAssertEqual(DocumentSearch.computeMatches(in: single, term: "build").matchBlockIds.count, 1)
     }
 
     func testRowCopiesItsAltsAndIsSelectedWhole() {
@@ -311,5 +324,75 @@ final class ImageRowTests: XCTestCase {
         XCTAssertEqual(measured.rhythm[1].edges, measured.rhythm[3].edges)
         XCTAssertEqual(measured.table.spacingAbove[1], measured.table.spacingAbove[3])
         XCTAssertEqual(measured.table.spacingAbove[2], measured.table.spacingAbove[4])
+    }
+
+    // MARK: - HTML image lines in a picture paragraph (review nit 8)
+
+    /// GitHub (`mode=markdown`, 2026-11-11):
+    /// - `<a href="https://e.com"><img src="a.png" alt="a"></a> <a href="https://f.com"><img …></a>`
+    ///   → `<p><a href><img></a> <a href><img></a></p>`
+    /// - the same two on consecutive lines → one `<p>`, a newline between
+    /// - `![a](a.png)⏎<img src="b.png" alt="b">` → one `<p>` of both
+    /// - `<img src="a.png"> <img src="b.png">` → one `<p>`
+    /// - inside `<p align="center">` … `</p>` lines: the pictures inline in that `<p>`
+    func testHTMLImageLinesJoinTheRow() {
+        XCTAssertEqual(shape("<a href=\"https://e.com\"><img src=\"a.png\" alt=\"a\"></a> <a href=\"https://f.com\"><img src=\"b.png\" alt=\"b\"></a>"),
+                       ["row:a→https://e.com_b→https://f.com"])
+        XCTAssertEqual(shape("<a href=\"https://e.com\"><img src=\"a.png\" alt=\"a\"></a>\n<a href=\"https://f.com\"><img src=\"b.png\" alt=\"b\"></a>"),
+                       ["row:a→https://e.com_b→https://f.com"])
+        XCTAssertEqual(shape("![a](a.png)\n<img src=\"b.png\" alt=\"b\">"), ["row:a_b"])
+        XCTAssertEqual(shape("<img src=\"a.png\" alt=\"a\"> <img src=\"b.png\" alt=\"b\">"), ["row:a_b"])
+        XCTAssertEqual(shape("<p align=\"center\">\n<img src=\"a.png\" alt=\"a\"> <img src=\"b.png\" alt=\"b\">\n</p>"),
+                       ["row:a_b"])
+        // Widths ride along; a lone `<img width>` is still the image block.
+        guard case .imageRow(let images)? = parse("![b](b.png)\n<img src=\"a.png\" width=\"50\">").first?.content
+        else { return XCTFail("row") }
+        XCTAssertEqual(images.map(\.width), [nil, .points(50)])
+        guard case .image(_, _, let width, _)? = parse("<p align=\"center\">\n<img src=\"logo.png\" width=\"200\" alt=\"Logo\">\n</p>").first?.content
+        else { return XCTFail("image") }
+        XCTAssertEqual(width, .points(200))
+        // A wrapper-only line in the paragraph: not a row (pre-1.15 shape).
+        XCTAssertFalse(shape("![a](a.png)\n<br>\n![b](b.png)").contains { $0.hasPrefix("row:") })
+    }
+
+    // MARK: - Chips and wrapping width
+
+    /// A chip is framed with `chipSize`: SwiftUI's own text must fit in it
+    /// untruncated (short alts), and a long alt is capped.
+    func testChipFitsItsLabel() {
+        typealias Row = BlockLayout.ImageRow
+        for scale in [1.0, 1.5, 2.0] as [CGFloat] {
+            for alt in ["CI", "build passing", "Downloads per month", "", "Ünïcödé ✓ 漢字"] {
+                let size = Row.chipSize(alt: alt, fontScale: scale, contentWidth: 800)
+                XCTAssertEqual(size.height, Row.placeholderSide * scale)
+                let text = NSHostingView(rootView: Text(Row.chipLabel(alt: alt))
+                    .font(.system(size: Row.chipFontSize * scale)).lineLimit(1).fixedSize()).fittingSize.width
+                XCTAssertLessThanOrEqual(text, size.width - 2 * Row.chipHorizontalPadding * scale + 0.5,
+                                         "\(alt) × \(scale)")
+            }
+        }
+        XCTAssertEqual(Row.chipLabel(alt: ""), "Image")
+        XCTAssertEqual(Row.chipLabel(alt: " two\nlines "), "two lines")
+        XCTAssertEqual(Row.chipSize(alt: String(repeating: "long ", count: 100), fontScale: 1, contentWidth: 800).width,
+                       Row.chipMaxWidth)
+        XCTAssertEqual(Row.chipSize(alt: String(repeating: "long ", count: 100), fontScale: 1, contentWidth: 100).width,
+                       100)
+    }
+
+    /// The row wraps at `wrapWidth` (the measured content width), whatever
+    /// width the cell proposes during a live resize.
+    func testRowWrapsAtTheMeasuredWidthNotTheProposal() {
+        let separators: [RowImage.Separator] = [.none, .space, .space]
+        func height(proposed: CGFloat, wrap: CGFloat?) -> CGFloat {
+            NSHostingView(rootView:
+                ImageFlowLayout(separators: separators, fontScale: 1, wrapWidth: wrap) {
+                    ForEach(0..<3, id: \.self) { _ in Color.red.frame(width: 100, height: 20) }
+                }
+                .frame(width: proposed)
+                .fixedSize(horizontal: false, vertical: true)).fittingSize.height
+        }
+        XCTAssertEqual(height(proposed: 400, wrap: nil), 20, "one line at the proposal")
+        XCTAssertEqual(height(proposed: 400, wrap: 250), 20 + 4 + 20, "two lines at the measured width")
+        XCTAssertEqual(height(proposed: 200, wrap: 400), 20, "a narrower live cell does not rewrap")
     }
 }
