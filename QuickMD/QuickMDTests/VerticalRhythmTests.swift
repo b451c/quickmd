@@ -526,6 +526,172 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertTrue(scrolls([], [.changed], -12))
     }
 
+    // MARK: - The reader's scroll stops a jump's glide (1.15)
+
+    /// ⌘G glides 0.25 s to the match. A scroll by the reader during the
+    /// glide stops it: the glide is over at once, and its animation's
+    /// completion — which AppKit still delivers — neither finishes the jump
+    /// (no aim, no second jump) nor ends a later glide. The next ⌘G glides
+    /// and lands normally.
+    func testTheReadersScrollStopsTheGlideAndItsCompletionIsIgnored() {
+        var glide = ScrollGlide()
+        XCTAssertFalse(glide.readerScrolled(), "no glide: nothing to stop")
+
+        let first = glide.start()
+        XCTAssertTrue(glide.isRunning)
+        XCTAssertTrue(glide.readerScrolled(), "a scroll during the glide stops it")
+        XCTAssertFalse(glide.isRunning)
+        XCTAssertFalse(glide.readerScrolled(), "momentum after the stop: already stopped")
+        XCTAssertFalse(glide.landed(first), "the stopped glide's completion does nothing")
+
+        let second = glide.start()
+        XCTAssertFalse(glide.landed(first), "a stale completion does not end the next glide")
+        XCTAssertTrue(glide.isRunning)
+        XCTAssertTrue(glide.landed(second), "the next glide lands and finishes its jump")
+        XCTAssertFalse(glide.isRunning)
+        XCTAssertFalse(glide.readerScrolled(), "after landing a scroll stops nothing")
+    }
+
+    /// A glide replaced by a newer one (⌘G pressed twice quickly, a height
+    /// report re-aiming the jump) — only the newest completion counts; a
+    /// non-animated placement ends the jumping state but keeps the pre-1.15
+    /// completion semantics (the glide is not stopped there).
+    func testOnlyTheNewestGlideLandsAndSettlingKeepsItsCompletion() {
+        var glide = ScrollGlide()
+        let old = glide.start()
+        let new = glide.start()
+        XCTAssertFalse(glide.landed(old))
+        XCTAssertTrue(glide.isRunning)
+        XCTAssertTrue(glide.landed(new))
+
+        let settled = glide.start()
+        glide.settle()
+        XCTAssertFalse(glide.isRunning)
+        XCTAssertFalse(glide.readerScrolled(), "settled: no glide to stop")
+        XCTAssertTrue(glide.landed(settled))
+    }
+
+    /// Only a scroll the reader STARTS during the glide stops it. A flick
+    /// whose momentum is still running when ⌘G is pressed must not: the
+    /// jump would stop after one frame and the match never show. A mostly
+    /// horizontal swipe never does (the document does not scroll sideways).
+    func testOnlyAScrollStartedDuringTheGlideStopsIt() {
+        var glide = ScrollGlide()
+        func wheel(_ phase: NSEvent.Phase, _ momentum: NSEvent.Phase,
+                   dx: CGFloat = 0, dy: CGFloat) -> Bool {
+            glide.scrollWheel(phase: phase, momentumPhase: momentum, deltaX: dx, deltaY: dy)
+        }
+
+        XCTAssertFalse(wheel([], [], dy: -3), "no glide: nothing to stop")
+
+        // A flick from before ⌘G: its momentum tail (and the fingers of a
+        // gesture already under way) are ignored; the glide lands.
+        var token = glide.start()
+        XCTAssertFalse(wheel([], [.changed], dy: -14), "momentum of an earlier flick")
+        XCTAssertFalse(wheel([], [.ended], dy: 0))
+        XCTAssertFalse(wheel([.changed], [], dy: -4), "a gesture that began before the glide")
+        XCTAssertTrue(glide.isRunning)
+        XCTAssertTrue(glide.landed(token), "the glide reaches the match")
+
+        // A mouse wheel tick (no phases) is new input: it stops the glide.
+        token = glide.start()
+        XCTAssertTrue(wheel([], [], dy: -3), "a wheel tick")
+        XCTAssertFalse(glide.isRunning)
+        XCTAssertFalse(glide.landed(token))
+
+        // A trackpad gesture that begins during the glide stops it — on its
+        // first vertical movement; its own momentum later finds it stopped.
+        token = glide.start()
+        XCTAssertFalse(wheel([.mayBegin], [], dy: 0), "fingers resting")
+        XCTAssertFalse(wheel([.began], [], dy: 0), "began, nothing moved yet")
+        XCTAssertTrue(glide.isRunning)
+        XCTAssertTrue(wheel([.changed], [], dy: -2), "the new gesture moves")
+        XCTAssertFalse(wheel([], [.began], dy: -20), "its momentum: already stopped")
+        XCTAssertFalse(glide.landed(token))
+
+        token = glide.start()
+        XCTAssertTrue(wheel([.began], [], dy: 1.5), "a began that moves stops at once")
+
+        // Horizontal: never, also not a gesture begun during the glide.
+        token = glide.start()
+        XCTAssertFalse(wheel([], [], dx: 4, dy: 0), "a sideways wheel tilt")
+        XCTAssertFalse(wheel([.began], [], dx: 6, dy: 1), "|dx| > |dy|")
+        XCTAssertFalse(wheel([.changed], [], dx: -9, dy: 2))
+        XCTAssertTrue(glide.isRunning)
+        XCTAssertTrue(wheel([.changed], [], dx: 2, dy: -5), "the same gesture turns vertical")
+
+        // The momentum flag belongs to one glide: the next one ignores a
+        // tail again.
+        token = glide.start()
+        XCTAssertFalse(wheel([], [.changed], dy: -8))
+        XCTAssertTrue(glide.landed(token))
+    }
+
+    /// The AppKit half, stopped MID-FLIGHT: an animated clip-origin scroll
+    /// stopped by `ScrollGlide.stop` after its first frames stays where it
+    /// was (between start and target, on a whole device pixel), the stopped
+    /// animation's completion is ignored by the token, a scroll after the
+    /// stop is kept, and the next glide runs to its target. Before 1.15 the
+    /// animation went on setting the origin and ended on its target.
+    /// No timing assertion: the glide is long (2 s) and the stop comes as
+    /// soon as the origin has left 0, whenever that is on this machine.
+    /// (Probe on the dev Mac at the real 0.25 s, stop after 80 ms: stopped
+    /// at 1168 of 5000 — window off screen — or 1270 — on screen — and
+    /// stayed there.)
+    func testAGlideStoppedMidFlightStaysWhereItWas() {
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 400))
+        scrollView.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 20_000))
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.contentView = scrollView
+        let clip = scrollView.contentView
+        var glide = ScrollGlide()
+
+        func animate(to y: CGFloat, duration: TimeInterval, token: Int) -> XCTestExpectation {
+            let finished = expectation(description: "glide to \(y) finished")
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = duration
+                clip.animator().setBoundsOrigin(NSPoint(x: 0, y: y))
+            }, completionHandler: {
+                XCTAssertEqual(glide.landed(token), y == 8_000, "only the unstopped glide lands")
+                finished.fulfill()
+            })
+            return finished
+        }
+
+        let target: CGFloat = 5_000
+        let stopped = animate(to: target, duration: 2, token: glide.start())
+        let giveUp = Date(timeIntervalSinceNow: 5)
+        while clip.bounds.origin.y == 0, Date() < giveUp {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
+        }
+        XCTAssertTrue(glide.scrollWheel(phase: [], momentumPhase: [], deltaX: 0, deltaY: -3))
+        ScrollGlide.stop(clip)
+        let stoppedAt = clip.bounds.origin.y
+        XCTAssertGreaterThan(stoppedAt, 0, "the animation ran in this host")
+        XCTAssertLessThan(stoppedAt, target, "stopped mid-flight")
+        let scale = window.backingScaleFactor
+        XCTAssertEqual((stoppedAt * scale).rounded(), stoppedAt * scale, "a whole device pixel")
+
+        wait(for: [stopped], timeout: 5)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
+        XCTAssertEqual(clip.bounds.origin.y, stoppedAt, "no snap to the target after the stop")
+
+        clip.scroll(to: NSPoint(x: 0, y: stoppedAt + 30))   // the reader's scroll goes on
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
+        XCTAssertEqual(clip.bounds.origin.y, stoppedAt + 30)
+
+        // The resting origin is on a device pixel: NSClipView snaps any
+        // origin it is given (so `stop` needs no rounding of its own).
+        clip.setBoundsOrigin(NSPoint(x: 0, y: 1_234.3))
+        ScrollGlide.stop(clip)
+        XCTAssertEqual(clip.bounds.origin.y, (1_234.3 * scale).rounded() / scale, "rounded to a device pixel")
+
+        let next = animate(to: 8_000, duration: 0.25, token: glide.start())
+        wait(for: [next], timeout: 5)
+        XCTAssertEqual(clip.bounds.origin.y, 8_000, "the next glide arrives")
+    }
+
     // MARK: - Block markers: spaces and tabs only
 
     /// Parses on a worker thread: a parser that never returns fails the test
