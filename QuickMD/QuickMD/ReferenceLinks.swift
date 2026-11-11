@@ -310,3 +310,164 @@ enum ReferenceLinks {
         return escaped + ">"
     }
 }
+
+// MARK: - Footnote numbering
+
+extension ReferenceLinks {
+
+    /// The labels of the DEFINED footnotes `text` references, in order, as
+    /// `MarkdownRenderer.tryParseFootnoteRef` finds them: escapes, code spans
+    /// and the spans the renderer draws without inline parsing are skipped
+    /// (`inlinedLine`'s rules), and an undefined `[^x]` moves on by one
+    /// character, as the renderer does — so `[^x [^a]` references `a`.
+    static func footnoteReferences(in text: String, defined: Set<String>) -> [String] {
+        guard !defined.isEmpty, text.contains("[^") else { return [] }
+        var labels: [String] = []
+        var remaining = text[...]
+        while let first = remaining.first {
+            if first == "\\" {
+                let next = remaining.index(after: remaining.startIndex)
+                if next < remaining.endIndex, MarkdownTheme.escapableChars.contains(remaining[next]) {
+                    remaining = remaining[remaining.index(after: next)...]
+                    continue
+                }
+            }
+            if first == "`" {
+                remaining = remaining.dropFirst(codeSpanLength(remaining))
+                continue
+            }
+            if let verbatim = unparsedSpanLength(remaining) {
+                remaining = remaining.dropFirst(verbatim)
+                continue
+            }
+            if remaining.hasPrefix("[^") {
+                let afterBracket = remaining.dropFirst(2)
+                if let close = afterBracket.firstIndex(of: "]"), close > afterBracket.startIndex {
+                    let label = ReferenceLabel.normalized(afterBracket[..<close])
+                    if defined.contains(label) {
+                        labels.append(label)
+                        remaining = afterBracket[afterBracket.index(after: close)...]
+                        continue
+                    }
+                }
+            }
+            remaining = remaining.dropFirst()
+        }
+        return labels
+    }
+}
+
+/// Footnote numbers as GitHub gives them (cmark-gfm, `gh api markdown`,
+/// 2026-11-11): by the order of each footnote's FIRST reference in the
+/// document — not by where or in which order the definitions stand. A
+/// definition's own text is read where the definition stands, so a
+/// reference inside it counts at that point (`[^a]: see[^c]` above the
+/// paragraph that first cites `[^a]` gives c the lower number), also when
+/// nothing references that definition: GitHub drops the unreferenced
+/// definition from the list but keeps the footnote it cites. A footnote
+/// that is never referenced gets no number and is not listed.
+///
+/// The parser notes every text that is drawn as Markdown, in document
+/// order, and asks for the order once all definitions are known — a
+/// reference may stand above its definition.
+struct FootnoteNumbering {
+    /// Texts that may hold references (`[^`), in document order.
+    private var texts: [String] = []
+
+    mutating func note(_ text: String) {
+        if text.contains("[^") { texts.append(text) }
+    }
+
+    /// The defined labels in the order of their first reference; labels
+    /// never referenced are left out.
+    func order(defined: Set<String>) -> [String] {
+        var seen = Set<String>()
+        var order: [String] = []
+        for text in texts {
+            for label in ReferenceLinks.footnoteReferences(in: text, defined: defined)
+            where seen.insert(label).inserted {
+                order.append(label)
+            }
+        }
+        return order
+    }
+}
+
+// MARK: - Multi-line footnote definitions
+
+/// The lines a top-level footnote definition (`[^n]: text`) goes on with,
+/// read as GitHub reads them (cmark-gfm's footnote container, `gh api
+/// markdown`, 2026-11-11):
+/// - a LAZY line — not blank, no `>`, and no block starts on it
+///   (`MarkdownBlockParser.startsNoBlock`: a fence, `$$`, an ATX heading, a
+///   rule, a list item of any number, an HTML block, another footnote
+///   definition) — continues the definition's open paragraph. So does a
+///   `[x]: url` line: a link definition cannot interrupt a paragraph, so it
+///   is footnote TEXT and defines nothing. A table row and `===` are text
+///   too. Nothing is lazy after an EMPTY `[^n]:` (no paragraph is open).
+/// - a line indented 4+ columns belongs to the definition, also after blank
+///   lines (a new paragraph of the footnote); at a paragraph's start such a
+///   line may be a link definition, which defines the link as anywhere.
+/// - anything else ends the definition: a line indented less than 4 after
+///   a blank line, or a block start.
+///
+/// Inside the footnote the text keeps paragraph rules (soft breaks join,
+/// hard breaks stay); lists, code and quotes nested in a footnote stay
+/// lines of text, not drawn as those blocks.
+struct FootnoteDefinitionBody {
+    /// The content lines, indentation removed; "" separates paragraphs.
+    private(set) var lines: [String]
+    /// The last line is paragraph text a lazy line may continue.
+    private var paragraphOpen: Bool
+
+    init(firstLine: String) {
+        let empty = MarkdownRenderer.isBlankLine(firstLine)
+        lines = empty ? [] : [firstLine]
+        paragraphOpen = !empty
+    }
+
+    /// The footnote's text, paragraphs separated by an empty line.
+    var content: String { lines.joined(separator: "\n") }
+
+    enum Step: Equatable {
+        /// The line is footnote text (`text`: what the reference scan reads).
+        case text(String)
+        /// The line defines a link inside the footnote (`text`: the line
+        /// without the footnote's indentation, for the link pattern).
+        case linkDefinition(String)
+        /// The definition ended before this line; the line is the
+        /// document's again.
+        case ended
+    }
+
+    /// Takes the next NON-blank line. `afterBlank`: blank lines stand between
+    /// it and the definition's previous line.
+    mutating func take(_ line: String, afterBlank: Bool,
+                       isLinkDefinition: (String) -> Bool) -> Step {
+        if MarkdownBlockParser.indentColumns(line) >= 4 {
+            let text = MarkdownBlockParser.removingIndentation(line, upTo: 4)
+            if afterBlank, let last = lines.last, last != "" { lines.append("") }
+            if afterBlank || !paragraphOpen, isLinkDefinition(text) {
+                paragraphOpen = false
+                return .linkDefinition(text)
+            }
+            lines.append(text)
+            paragraphOpen = true
+            return .text(text)
+        }
+        guard !afterBlank, paragraphOpen, MarkdownBlockParser.startsNoBlock(line),
+              !MarkdownBlockParser.markerLine(line).hasPrefix(">") else { return .ended }
+        lines.append(line)
+        return .text(line)
+    }
+
+    /// The footnote as the list draws it: each paragraph's lines joined by
+    /// the paragraph rules (`MarkdownRenderer.joinSoftBreaks`: a soft break
+    /// is a space, a hard break a new line), leading indentation dropped,
+    /// one entry per drawn line.
+    static func displayLines(of content: String) -> [String] {
+        MarkdownRenderer.joinSoftBreaks(content.components(separatedBy: "\n"))
+            .filter { !MarkdownRenderer.isBlankLine($0) }
+            .map { String($0.drop(while: { $0 == " " || $0 == "\t" })) }
+    }
+}
