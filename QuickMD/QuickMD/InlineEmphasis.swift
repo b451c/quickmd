@@ -66,15 +66,30 @@ struct InlineDelimiterStack {
     /// (nil = start / end of the line, which counts as white space) and
     /// pushes it. Nil when the run is no delimiter at all (`~~~`, a `~` run
     /// longer than two, is literal text in GFM) — the caller keeps it as text.
+    ///
+    /// `beforeIsCJK` / `afterIsCJK`: the neighbour is CJK (`isCJK`; before a
+    /// variation selector the caller looks at the character it modifies).
+    ///
+    /// DELIBERATE, TESTED DEVIATION FROM GITHUB — the "CJK-friendly"
+    /// amendment (markdown-cjk-friendly): next to a CJK character the
+    /// punctuation clause does not block a run. A run followed by
+    /// punctuation is left-flanking when preceded by white space,
+    /// punctuation OR CJK; one preceded by punctuation is right-flanking
+    /// when followed by white space, punctuation OR CJK. CJK text has no
+    /// spaces around emphasis, so plain CommonMark leaves `**「テスト」**と`,
+    /// `**テスト。**次`, `**加粗（括号）**文字` literal (GitHub does) — all were
+    /// bold in QuickMD before 1.15 and stay bold. Non-CJK text follows
+    /// CommonMark unchanged.
     mutating func push(character: UInt8, length: Int, node: Int,
-                       before: Unicode.Scalar?, after: Unicode.Scalar?) -> Int? {
+                       before: Unicode.Scalar?, after: Unicode.Scalar?,
+                       beforeIsCJK: Bool = false, afterIsCJK: Bool = false) -> Int? {
         if character == UInt8(ascii: "~"), length > 2 { return nil }
         let beforeSpace = before.map(Self.isWhitespace) ?? true
         let afterSpace = after.map(Self.isWhitespace) ?? true
         let beforePunct = before.map(Self.isPunctuation) ?? false
         let afterPunct = after.map(Self.isPunctuation) ?? false
-        let leftFlanking = !afterSpace && (!afterPunct || beforeSpace || beforePunct)
-        let rightFlanking = !beforeSpace && (!beforePunct || afterSpace || afterPunct)
+        let leftFlanking = !afterSpace && (!afterPunct || beforeSpace || beforePunct || beforeIsCJK)
+        let rightFlanking = !beforeSpace && (!beforePunct || afterSpace || afterPunct || afterIsCJK)
         let canOpen: Bool
         let canClose: Bool
         if character == UInt8(ascii: "_") {
@@ -94,6 +109,29 @@ struct InlineDelimiterStack {
         if top >= 0 { next[top] = index }
         top = index
         return index
+    }
+
+    /// CJK for the flanking amendment (see `push`), scoped narrowly: Han
+    /// (unified, extensions, compatibility), Hiragana, Katakana (+ phonetic
+    /// extensions), Bopomofo, Hangul (jamo, compatibility jamo, syllables),
+    /// CJK radicals, symbols and punctuation, enclosed CJK, CJK compatibility
+    /// forms, half-width and full-width forms.
+    static func isCJK(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x1100...0x11FF, 0x2E80...0x2FFF, 0x3000...0x303F, 0x3040...0x309F, 0x30A0...0x30FF,
+             0x3100...0x312F, 0x3130...0x318F, 0x3190...0x31FF, 0x3200...0x33FF, 0x3400...0x4DBF,
+             0x4E00...0x9FFF, 0xA960...0xA97F, 0xAC00...0xD7AF, 0xD7B0...0xD7FF, 0xF900...0xFAFF,
+             0xFE30...0xFE4F, 0xFF00...0xFFEF, 0x1F200...0x1F2FF, 0x20000...0x3FFFF:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Variation selectors (standard and ideographic): the character they
+    /// modify decides CJK-ness.
+    static func isVariationSelector(_ scalar: Unicode.Scalar) -> Bool {
+        (0xFE00...0xFE0F).contains(scalar.value) || (0xE0100...0xE01EF).contains(scalar.value)
     }
 
     /// CommonMark's Unicode white space: Zs, tab, line feed, form feed,

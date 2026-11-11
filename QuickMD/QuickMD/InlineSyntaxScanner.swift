@@ -187,6 +187,9 @@ enum InlineSyntaxScanner {
             return .inline(url: inline.url, end: inline.end)
         }
         guard !references.isEmpty else { return nil }
+        // Only a real label can name a definition (CommonMark): the text's
+        // own for collapsed / shortcut, the second one for a full reference.
+        let textIsLabel = isLinkLabel(label)
         if rest.utf8.first == UInt8(ascii: "[") {
             let afterOpen = rest.index(after: rest.startIndex)
             if afterOpen < rest.endIndex,
@@ -194,15 +197,42 @@ enum InlineSyntaxScanner {
                 let ref = rest[afterOpen..<close]
                 let end = rest.index(after: close)
                 if ref.isEmpty {
+                    guard textIsLabel else { return nil }
                     return references[ReferenceLabel.normalized(label)].map { .reference(url: $0, end: end) }
                 }
-                if !ReferenceLabel.normalized(ref).isEmpty {
+                if isLinkLabel(ref), !ReferenceLabel.normalized(ref).isEmpty {
                     // A real label decides: defined → the link, else no link.
                     return references[ReferenceLabel.normalized(ref)].map { .reference(url: $0, end: end) }
                 }
             }
         }
+        guard textIsLabel else { return nil }
         return references[ReferenceLabel.normalized(label)].map { .reference(url: $0, end: rest.startIndex) }
+    }
+
+    /// Whether `label` can be a link label (CommonMark): at most 999
+    /// characters and no unescaped bracket. Without the cap `[` × N + `]` × N
+    /// normalised labels of every length up to 2N whenever a definition
+    /// existed — quadratic. Looks at no more than ~1000 characters (the byte
+    /// count rules out longer text first); `work` counts what it looked at.
+    static func isLinkLabel(_ label: Substring) -> Bool {
+        var work = 0
+        return isLinkLabel(label, work: &work)
+    }
+
+    static func isLinkLabel(_ label: Substring, work: inout Int) -> Bool {
+        guard label.utf8.count <= 999 * 4 else { return false }
+        var characters = 0
+        var escaped = false
+        for character in label {
+            work += 1
+            characters += 1
+            guard characters <= 999 else { return false }
+            if escaped { escaped = false; continue }
+            if character == "\\" { escaped = true; continue }
+            if character == "[" || character == "]" { return false }
+        }
+        return true
     }
 
     /// An image at the very start of `text`: `![alt](dest)`, `![alt][ref]`,
@@ -301,8 +331,20 @@ enum InlineSyntaxScanner {
     /// (CommonMark's e-mail grammar). The address between the brackets, as
     /// written — backslashes are characters there — and the end.
     static func angleAutolink(atStartOf text: Substring) -> (address: Substring, isEmail: Bool, end: String.Index)? {
-        guard text.utf8.first == UInt8(ascii: "<"),
-              let found = withBytes(text, { scanAngleAutolink($0) }) else { return nil }
+        var reach = 0
+        return angleAutolink(atStartOf: text, reach: &reach)
+    }
+
+    /// `angleAutolink`, reporting in `reach` how many bytes past the `<`
+    /// the attempt looked at (it stops at the first white space, `<` or
+    /// `>`, so attempts at successive `<` never overlap) — for the tests.
+    static func angleAutolink(atStartOf text: Substring,
+                              reach: inout Int) -> (address: Substring, isEmail: Bool, end: String.Index)? {
+        guard text.utf8.first == UInt8(ascii: "<") else { return nil }
+        var scanned = 0
+        let found = withBytes(text) { scanAngleAutolink($0, reach: &scanned) }
+        reach = scanned
+        guard let found else { return nil }
         let utf8 = text.utf8
         let close = utf8.index(text.startIndex, offsetBy: found.close)
         return (text[utf8.index(after: text.startIndex)..<close], found.isEmail, utf8.index(after: close))
@@ -641,7 +683,7 @@ enum InlineSyntaxScanner {
     /// `angleAutolink` over bytes (`bytes[0]` is `<`): the offset of the
     /// closing `>`. Every attempt stops at the first white space, `<` or
     /// `>`, so many `<` on a line stay linear.
-    private static func scanAngleAutolink(_ bytes: Bytes) -> (close: Int, isEmail: Bool)? {
+    private static func scanAngleAutolink(_ bytes: Bytes, reach: inout Int) -> (close: Int, isEmail: Bool)? {
         let count = bytes.count
         // URI: scheme ":" then anything but white space, controls, < and >.
         if count > 1, isASCIILetter(bytes[1]) {
@@ -649,8 +691,10 @@ enum InlineSyntaxScanner {
             while i < count, i <= 33,
                   isASCIIAlphanumeric(bytes[i]) || bytes[i] == UInt8(ascii: "+")
                     || bytes[i] == UInt8(ascii: ".") || bytes[i] == UInt8(ascii: "-") { i += 1 }
+            reach = max(reach, i)
             if i >= 3, i <= 33, i < count, bytes[i] == UInt8(ascii: ":") {
                 var j = i + 1
+                defer { reach = max(reach, j) }
                 while j < count {
                     let byte = bytes[j]
                     if byte == UInt8(ascii: ">") { return (j, false) }
@@ -662,6 +706,7 @@ enum InlineSyntaxScanner {
         // E-mail: local part, "@", labels of letters/digits/hyphens (not at
         // either end, at most 63) separated by dots.
         var i = 1
+        defer { reach = max(reach, i) }
         while i < count, isASCIIAlphanumeric(bytes[i]) || localSpecials.contains(bytes[i]) { i += 1 }
         guard i > 1, i < count, bytes[i] == UInt8(ascii: "@") else { return nil }
         i += 1

@@ -155,6 +155,7 @@ enum ReferenceLinks {
         let pairs = InlineSyntaxScanner.PairTable(text)
         let codeSpans = InlineSyntaxScanner.CodeSpanTable(text)
         let closingBrackets = InlineSyntaxScanner.NextClosingBracket(text)
+        let autolinks = MarkdownRenderer.AutolinkScan()
         var out = ""
         var remaining = text[...]
         /// The open `[`s (where each one's label starts) and, as in the
@@ -164,7 +165,7 @@ enum ReferenceLinks {
 
         while let first = remaining.first {
             // Escapes first, as the renderer: `\[` never opens anything.
-            if first == "\\", remaining.count >= 2 {
+            if first == "\\", remaining.utf8.count >= 2 {  // O(1), not a Character count
                 let escaped = remaining[remaining.index(after: remaining.startIndex)]
                 if MarkdownTheme.escapableChars.contains(escaped) {
                     out += remaining.prefix(2)
@@ -184,7 +185,8 @@ enum ReferenceLinks {
                 remaining = text[autolink.end...]
                 continue
             }
-            if first == "h" || first == "w", let autolink = MarkdownRenderer.bareAutolink(remaining, in: text) {
+            if first == "h" || first == "w",
+               let autolink = MarkdownRenderer.bareAutolink(remaining, in: text, scan: autolinks) {
                 out += remaining[..<autolink.end]
                 remaining = text[autolink.end...]
                 continue

@@ -998,9 +998,15 @@ final class RendererTests: XCTestCase {
                 expected.setDualForeground(renderer.theme.linkColor)
                 expected.setDualUnderline()
                 expected.link = URL(string: "https://x.example")
-                XCTAssertEqual(renderer.renderInline("[\(text)](https://x.example)"), expected, "\(text) @\(scale)")
+                let linked = renderer.renderInline("[\(text)](https://x.example)")
+                XCTAssertEqual(linked, expected, "\(text) @\(scale)")
+                // Every run is the outer link — no e-mail (mailto:) or bare
+                // autolink of its own inside a link's text (review N6).
+                XCTAssertEqual(Set(linked.runs.map { $0.link?.absoluteString }), ["https://x.example"], text)
             }
         }
+        XCTAssertTrue(renderer.renderInline("e-mail: a@b.c").runs.contains { $0.link?.scheme == "mailto" },
+                      "outside a link the address IS linked")
     }
 
     // MARK: - Formula source in headings (review R14)
@@ -1198,11 +1204,14 @@ extension RendererTests {
 
     /// Dumped from the renderer BEFORE the 1.15 rewrite (main 53ec549):
     /// every run of the ordinary document — characters, fonts, colours,
-    /// decorations, links, tags — must stay exactly this.
+    /// decorations, links, tags — must stay exactly this. One run changed on
+    /// purpose: the heading's code span `quickmd` is bold MONOSPACED at 13/14
+    /// of the heading size (policy B, owner's board) — it was the bold body
+    /// font at full size.
     static let ordinaryDocumentDump = #"""
     h1
       "Release notes for QuickMD and " font=.AppleSystemUIFontBold 32.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
-      "quickmd" font=.AppleSystemUIFontBold 32.0 fg=0.000,0.000,0.000,1.000 bg=0.950,0.950,0.950,1.000 ui=fcb
+      "quickmd" font=.AppleSystemUIFontMonospaced-Bold 29.714285714285715 fg=0.000,0.000,0.000,1.000 bg=0.950,0.950,0.950,1.000 ui=fcb
     text
       "A paragraph with " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
       "bold" font=.AppleSystemUIFontBold 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
@@ -1348,5 +1357,129 @@ extension RendererTests {
 
     func testOrdinaryDocumentRendersExactlyAsBefore() {
         XCTAssertEqual(Self.runDump(Self.ordinaryDocument), Self.ordinaryDocumentDump)
+    }
+}
+
+// MARK: - The 1.15 inline rules, pinned as decided
+
+extension RendererTests {
+
+    /// What 1.15 changed on purpose (review S1; owner's board): nested
+    /// emphasis combines, `~` strikethrough, emphasis keeps code / links /
+    /// footnotes (policy B, headings too), CJK-friendly flanking, `www.`,
+    /// e-mail and `<…>` autolinks, escaped pipes in cells. Dumped from the
+    /// branch once the board was accepted; a later change to any of these
+    /// shows up here.
+    static let decidedDocument = #"""
+    Nested: **a *b* c**, ***x***, *a **b** c*, ~~**s**~~ and ~one~ and ~~two~~.
+    CJK: **「テスト」**と、**テスト。**次、これは**強調**です、**加粗（括号）**文字、**굵게**는.
+    Links: see www.example.org, mail a.b@c.example, <https://x.example/?a=1&amp;b=2>, https://x.example/p_(q).
+    Code: **run `make`**, *run `make`*, a footnote **a[^1]**, **see [docs](https://x.example)**.
+
+    ## Heading with **`code`**, *it* and [link](https://x.example)
+
+    | A \| B | `c \| d` | **[l](https://x.example)** |
+    |---|---|---|
+    | x \| y | *i* `c` | ~~s~~ www.x.example |
+
+    > Quote with **`code`**, a@b.example and [ref][docs].
+
+    [docs]: https://docs.example.com
+    [^1]: Note.
+    """#
+}
+
+extension RendererTests {
+    /// `decidedDocument` as the branch renders it after the owner accepted
+    /// the board (policy B, CJK-friendly flanking, 2026-11-11).
+    static let decidedDocumentDump = #"""
+    text
+      "Nested: " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "a " font=.AppleSystemUIFontBold 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "b" font=.SFNS-BoldItalic 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      " c" font=.AppleSystemUIFontBold 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      ", " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "x" font=.SFNS-BoldItalic 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      ", " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "a " font=.SFNS-RegularItalic 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "b" font=.SFNS-BoldItalic 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      " c" font=.SFNS-RegularItalic 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      ", " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "s" font=.AppleSystemUIFontBold 14.0 fg=0.000,0.000,0.000,1.000 bg=- s ui=fc-
+      " and " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "one" font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- s ui=fc-
+      " and " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "two" font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- s ui=fc-
+      ". CJK: " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "「テスト」" font=.AppleSystemUIFontBold 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "と、" font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "テスト。" font=.AppleSystemUIFontBold 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "次、これは" font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "強調" font=.AppleSystemUIFontBold 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "です、" font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "加粗（括号）" font=.AppleSystemUIFontBold 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "文字、" font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "굵게" font=.AppleSystemUIFontBold 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "는. Links: see " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "www.example.org" font=.AppleSystemUIFont 14.0 fg=0.000,0.569,1.000,1.000 bg=- u link=http://www.example.org ui=fc-
+      ", mail " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "a.b@c.example" font=.AppleSystemUIFont 14.0 fg=0.000,0.569,1.000,1.000 bg=- u link=mailto:a.b@c.example ui=fc-
+      ", " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "https://x.example/?a=1&b=2" font=.AppleSystemUIFont 14.0 fg=0.000,0.569,1.000,1.000 bg=- u link=https://x.example/?a=1&b=2 ui=fc-
+      ", " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "https://x.example/p_(q)" font=.AppleSystemUIFont 14.0 fg=0.000,0.569,1.000,1.000 bg=- u link=https://x.example/p_(q) ui=fc-
+      ". Code: " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "run " font=.AppleSystemUIFontBold 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "make" font=.AppleSystemUIFontMonospaced-Bold 13.0 fg=0.000,0.000,0.000,1.000 bg=0.950,0.950,0.950,1.000 ui=fcb
+      ", " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "run " font=.SFNS-RegularItalic 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "make" font=.AppleSystemUIFontMonospaced-RegularItalic 13.0 fg=0.000,0.000,0.000,1.000 bg=0.950,0.950,0.950,1.000 ui=fcb
+      ", a footnote " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "a" font=.AppleSystemUIFontBold 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "¹" font=.AppleSystemUIFontBold 11.0 fg=0.000,0.569,1.000,1.000 bg=- fn=1 ui=fc-
+      ", " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "see " font=.AppleSystemUIFontBold 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "docs" font=.AppleSystemUIFontBold 14.0 fg=0.000,0.569,1.000,1.000 bg=- u link=https://x.example ui=fc-
+      "." font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+    h2
+      "Heading with " font=.AppleSystemUIFontBold 26.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "code" font=.AppleSystemUIFontMonospaced-Bold 24.142857142857142 fg=0.000,0.000,0.000,1.000 bg=0.950,0.950,0.950,1.000 ui=fcb
+      ", " font=.AppleSystemUIFontBold 26.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "it" font=.SFNS-BoldItalic 26.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      " and " font=.AppleSystemUIFontBold 26.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "link" font=.AppleSystemUIFontBold 26.0 fg=0.000,0.569,1.000,1.000 bg=- u link=https://x.example ui=fc-
+    cell
+      "A | B" font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+    cell
+      "c | d" font=.AppleSystemUIFontMonospaced-Regular 13.0 fg=0.000,0.000,0.000,1.000 bg=0.950,0.950,0.950,1.000 ui=fcb
+    cell
+      "l" font=.AppleSystemUIFontBold 14.0 fg=0.000,0.569,1.000,1.000 bg=- u link=https://x.example ui=fc-
+    cell
+      "x | y" font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+    cell
+      "i" font=.SFNS-RegularItalic 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      " " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "c" font=.AppleSystemUIFontMonospaced-Regular 13.0 fg=0.000,0.000,0.000,1.000 bg=0.950,0.950,0.950,1.000 ui=fcb
+    cell
+      "s" font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- s ui=fc-
+      " " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "www.x.example" font=.AppleSystemUIFont 14.0 fg=0.000,0.569,1.000,1.000 bg=- u link=http://www.x.example ui=fc-
+    quote
+      "Quote with " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "code" font=.AppleSystemUIFontMonospaced-Bold 13.0 fg=0.000,0.000,0.000,1.000 bg=0.950,0.950,0.950,1.000 ui=fcb
+      ", " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "a@b.example" font=.AppleSystemUIFont 14.0 fg=0.000,0.569,1.000,1.000 bg=- u link=mailto:a@b.example ui=fc-
+      " and " font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+      "ref" font=.AppleSystemUIFont 14.0 fg=0.000,0.569,1.000,1.000 bg=- u link=https://docs.example.com ui=fc-
+      "." font=.AppleSystemUIFont 14.0 fg=0.000,0.000,0.000,1.000 bg=- ui=fc-
+    text
+      "────────────────────────────────
+    " font=.AppleSystemUIFont 12.0 fg=0.400,0.400,0.400,1.000 bg=- ui=fc-
+      "1. " font=.AppleSystemUIFontBold 12.0 fg=0.400,0.400,0.400,1.000 bg=- ui=fc-
+      "Note." font=.AppleSystemUIFont 12.0 fg=0.400,0.400,0.400,1.000 bg=- ui=fc-
+    """#
+
+    func testDecidedInlineRulesRenderAsPinned() {
+        XCTAssertEqual(Self.runDump(Self.decidedDocument), Self.decidedDocumentDump)
     }
 }

@@ -389,6 +389,166 @@ final class InlineSyntaxTests: XCTestCase {
         XCTAssertEqual(counts, [100_000, 100_002])
     }
 
+    // MARK: - CJK (deliberate deviation from GitHub, see InlineDelimiterStack.push)
+
+    /// Emphasis next to CJK text and CJK punctuation stays emphasis — it was
+    /// on main before 1.15 (GitHub leaves the first, second and fourth
+    /// literal). Non-CJK text is unaffected (`testFlankingRules`, spec probe).
+    func testCJKEmphasisNextToPunctuation() {
+        check([
+            ("**「テスト」**と", "B{「テスト」}と"),
+            ("**テスト。**次", "B{テスト。}次"),
+            ("これは**強調**です", "これはB{強調}です"),
+            ("これは**「強調」**です", "これはB{「強調」}です"),
+            ("**加粗（括号）**文字", "B{加粗（括号）}文字"),
+            ("**굵게**는", "B{굵게}는"),
+            ("*「斜体」*の", "I{「斜体」}の"),
+            // A variation selector after a CJK character: its base decides.
+            ("葛\u{E0100}**「a」**", "葛\u{E0100}B{「a」}"),
+            // Non-CJK neighbours: CommonMark unchanged (GitHub: literal).
+            ("a**\"foo\"**b", "a**\"foo\"**b"),
+            ("é**(x)**é", "é**(x)**é"),
+        ])
+    }
+
+    // MARK: - Headings (policy B)
+
+    /// A heading is bold throughout; code stays monospaced on its chip at
+    /// 13/14 of the heading size, italic combines, a link keeps the link
+    /// colour, a footnote number keeps 11/14 — and the characters (so the
+    /// id: GitHub `title-code-it-l`) do not change.
+    func testHeadingKeepsTheLookOfItsRuns() {
+        let renderer = MarkdownRenderer(theme: theme, footnoteDefinitions: [(id: "1", content: "n")])
+        let title = "Title `code` *it* [l](u)[^1]"
+        for level in [1, 2, 4] {
+            let heading = renderer.renderHeader(title, level: level)
+            let size = renderer.headerFontSize(level: level)
+            func run(_ text: String) -> AttributedString.Runs.Run? {
+                heading.runs.first { String(heading[$0.range].characters) == text }
+            }
+            func font(_ text: String) -> NSFont? { run(text)?[AttributeScopes.AppKitAttributes.FontAttribute.self] }
+            let code = font("code")?.fontDescriptor.symbolicTraits ?? []
+            XCTAssertTrue(code.isSuperset(of: [.bold, .monoSpace]), "\(code)")
+            XCTAssertEqual(font("code")?.pointSize ?? 0, size * 13 / 14, accuracy: 0.001)
+            XCTAssertNotNil(run("code")?[AttributeScopes.AppKitAttributes.BackgroundColorAttribute.self])
+            XCTAssertTrue(font("it")?.fontDescriptor.symbolicTraits.isSuperset(of: [.bold, .italic]) ?? false)
+            XCTAssertEqual(run("l")?[AttributeScopes.AppKitAttributes.ForegroundColorAttribute.self],
+                           NSColor(theme.linkColor))
+            XCTAssertEqual(font("\u{00B9}")?.pointSize ?? 0, size * 11 / 14, accuracy: 0.001)
+            XCTAssertEqual(font("Title "), renderer.headerAppKitFont(level: level))
+            XCTAssertNotNil(run("code")?.font, "SwiftUI scope too")
+        }
+        let blocks = MarkdownBlockParser(theme: theme).parse("## Title `code` *it* [l](u)")
+        XCTAssertEqual(HeadingAnchors.ids(for: HeadingAnchors.headings(of: blocks, renderer: MarkdownRenderer(theme: theme))
+            .map(\.text)), ["title-code-it-l"])
+    }
+
+    // MARK: - Review findings (S2, S3, N2)
+
+    /// `<…>` autolinks decode character references in the text and the URL
+    /// (GitHub: `href="https://a.example/?a=1&b=2"`, text `…&b=2`); bare
+    /// URLs keep them as written (GitHub too).
+    func testAngleAutolinkDecodesCharacterReferences() {
+        check([
+            ("<https://a.example/?a=1&amp;b=2>", "<https://a.example/?a=1&b=2>{https://a.example/?a=1&b=2}"),
+            ("https://a.example/?a=1&amp;b=2", "<https://a.example/?a=1&amp;b=2>{https://a.example/?a=1&amp;b=2}"),
+        ])
+    }
+
+    /// An address right after `/` belongs to a URL. GitHub:
+    /// `ftp://user@example.com` text, `<a href="http://user@example.com">`.
+    func testNoEmailInsideAURL() {
+        check([
+            ("see ftp://user@example.com", "see ftp://user@example.com"),
+            ("see http://user@example.com", "see <http://user@example.com>{http://user@example.com}"),
+        ])
+    }
+
+    /// The scans a long line can repeat — `www.` domains (review B1:
+    /// `_www.a.` × N + `_x_` was quadratic), `http(s)://`, e-mail local
+    /// parts and domains, `<…>` attempts, reference labels (S2) — do work
+    /// proportional to the line: N and 4N measured by counters, no clock.
+    func testRepeatedScansDoLinearWork() {
+        func autolinkWork(_ line: String) -> Int {
+            let scan = MarkdownRenderer.AutolinkScan()
+            var index = line.startIndex
+            while index < line.endIndex {
+                let byte = line.utf8[index]
+                if byte == UInt8(ascii: "h") || byte == UInt8(ascii: "w"),
+                   let link = MarkdownRenderer.bareAutolink(line[index...], in: line, scan: scan) {
+                    index = link.end
+                    continue
+                }
+                index = line.utf8.index(after: index)
+            }
+            return scan.work
+        }
+        func emailWork(_ line: String) -> Int {
+            var work = 0
+            _ = MarkdownRenderer.emailAutolinks(in: line, work: &work)
+            return work
+        }
+        func angleWork(_ line: String) -> Int {
+            var total = 0
+            var index = line.startIndex
+            while index < line.endIndex {
+                if line.utf8[index] == UInt8(ascii: "<") {
+                    var reach = 0
+                    _ = InlineSyntaxScanner.angleAutolink(atStartOf: line[index...], reach: &reach)
+                    total += reach
+                }
+                index = line.utf8.index(after: index)
+            }
+            return total
+        }
+        func labelWork(_ line: String) -> Int {
+            // Every `]` asks for the label back to its `[` (the bracket stack).
+            var work = 0
+            var openers: [String.Index] = []
+            var index = line.startIndex
+            while index < line.endIndex {
+                let byte = line.utf8[index]
+                if byte == UInt8(ascii: "[") { openers.append(line.utf8.index(after: index)) }
+                if byte == UInt8(ascii: "]"), let open = openers.popLast() {
+                    _ = InlineSyntaxScanner.isLinkLabel(line[open..<index], work: &work)
+                }
+                index = line.utf8.index(after: index)
+            }
+            return work
+        }
+        let cases: [(String, (Int) -> String, (String) -> Int)] = [
+            ("www failing", { String(repeating: "_www.a.", count: $0) + "_x_" }, autolinkWork),
+            ("www linking", { String(repeating: "www.a ", count: $0) }, autolinkWork),
+            ("http failing", { String(repeating: "(http://a_.b_", count: $0) }, autolinkWork),
+            ("https", { String(repeating: "(https://a.b/c) ", count: $0) }, autolinkWork),
+            ("e-mail local parts", { String(repeating: "a.b-c_d", count: $0) + "@" + String(repeating: "x@", count: $0) }, emailWork),
+            ("e-mail domains", { String(repeating: "a@b-c.d_", count: $0) }, emailWork),
+            ("< e-mail", { String(repeating: "<a.b@", count: $0) }, angleWork),
+            ("< scheme", { String(repeating: "<ab:cd", count: $0) }, angleWork),
+            ("labels", { String(repeating: "[", count: $0) + String(repeating: "]", count: $0) }, labelWork),
+        ]
+        let n = 2_000
+        for (name, make, work) in cases {
+            let small = make(n)
+            let large = make(4 * n)
+            let (w1, w4) = (work(small), work(large))
+            XCTAssertLessThanOrEqual(w1, 4 * small.utf8.count, "\(name): \(w1) for \(small.utf8.count) bytes")
+            XCTAssertLessThanOrEqual(w4, 4 * w1 + 2_000, "\(name): N \(w1), 4N \(w4)")
+        }
+        // The real renderers on the review's inputs (with a definition, so
+        // labels are looked up), on the small stack.
+        let renderer = MarkdownRenderer(theme: theme, referenceDefinitions: ["a": "https://a.example"])
+        let lines = [String(repeating: "_www.a.", count: 16_000) + "_x_",
+                     String(repeating: "[", count: 20_000) + "b" + String(repeating: "]", count: 20_000)]
+        var counts: [Int] = []
+        onSmallStack {
+            counts = lines.map { renderer.renderInline($0).characters.count }
+                + lines.map { ReferenceLinks.inlined($0, definitions: ["a": "https://a.example"]).count }
+        }
+        // Nothing is linked; only the final `_x_` is emphasis (its two `_` go).
+        XCTAssertEqual(counts, [lines[0].count - 2, lines[1].count, lines[0].count, lines[1].count])
+    }
+
     // MARK: - Adversarial input: linear, no deep recursion
 
     /// Runs `body` on a thread with the parse task's small (512 KB) stack, so

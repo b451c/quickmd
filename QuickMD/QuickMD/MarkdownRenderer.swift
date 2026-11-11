@@ -156,7 +156,6 @@ struct MarkdownRenderer: Sendable {
 
     // Static precompiled regex for parsing (avoid recompilation per line)
     private static let taskListRegex = try! NSRegularExpression(pattern: MarkdownTheme.taskListPattern)
-    private static let autolinkRegex = try! NSRegularExpression(pattern: MarkdownTheme.autolinkPattern)
     private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
 
     init(theme: MarkdownTheme, fontScale: CGFloat = 1.0, referenceDefinitions: [String: String] = [:], footnoteDefinitions: [(id: String, content: String)] = []) {
@@ -499,10 +498,38 @@ struct MarkdownRenderer: Sendable {
     }
 
     func renderHeader(_ text: String, level: Int) -> AttributedString {
-        var attr = Self.formulaSourceWithEscapes(renderInlineFormatting(Self.shownHeadingTitle(text)))
-        attr.setDualFont(size: headerFontSize(level: level), bold: true, fonts: theme.fonts)
-        attr.setDualForeground(theme.textColor)
-        return attr
+        headingLook(Self.formulaSourceWithEscapes(renderInlineFormatting(Self.shownHeadingTitle(text))),
+                    size: headerFontSize(level: level))
+    }
+
+    /// A heading is bold throughout, like an emphasis over its whole title,
+    /// and follows the same switch (`emphasisKeepsContentLook`):
+    /// - on (1.15): each run keeps its look and gains bold at the heading
+    ///   size — code stays monospaced on its chip at 13/14 of the heading
+    ///   size (the body ratio), a footnote number at 11/14, italic stays
+    ///   italic, colours stay (a link keeps the link colour);
+    /// - off: the whole title in the bold body font and the text colour
+    ///   (every release before 1.15).
+    /// Only attributes change, never the characters: ids, Contents and
+    /// search read the same text either way.
+    private func headingLook(_ title: AttributedString, size: CGFloat) -> AttributedString {
+        guard Self.emphasisKeepsContentLook else {
+            var attr = title
+            attr.setDualFont(size: size, bold: true, fonts: theme.fonts)
+            attr.setDualForeground(theme.textColor)
+            return attr
+        }
+        var result = AttributedString()
+        for run in title.runs {
+            var piece = AttributedString(title[run.range])
+            let isCode = run[AttributeScopes.AppKitAttributes.BackgroundColorAttribute.self] != nil
+            let ratio: CGFloat = isCode ? 13.0 / 14.0 : run[FootnoteNumberAttribute.self] != nil ? 11.0 / 14.0 : 1
+            let italic = run[AttributeScopes.AppKitAttributes.FontAttribute.self]?
+                .fontDescriptor.symbolicTraits.contains(.italic) ?? false
+            piece.setDualFont(size: size * ratio, bold: true, italic: italic, monospaced: isCode, fonts: theme.fonts)
+            result.append(piece)
+        }
+        return result
     }
 
     /// Headings typeset no inline math (the title view converts with
@@ -548,8 +575,9 @@ struct MarkdownRenderer: Sendable {
         return scaled(sizes[safeLevel - 1])
     }
 
-    /// The AppKit font `renderHeader` sets on EVERY character of a heading
-    /// (the same `DocumentFonts.appKit` call `setDualFont(bold: true)` makes).
+    /// The AppKit font `renderHeader` sets on a heading's text (the same
+    /// `DocumentFonts.appKit` call `setDualFont(bold: true)` makes; code spans
+    /// and footnote numbers are smaller, italic runs keep their slant).
     /// `HeadingBlockView` aligns its copy button to this font's first
     /// baseline; read here rather than back from the AttributedString run.
     func headerAppKitFont(level: Int) -> NSFont {
@@ -908,7 +936,7 @@ struct MarkdownRenderer: Sendable {
                     continue
                 }
             case UInt8(ascii: "h"), UInt8(ascii: "w"):
-                if let (attr, rest) = tryParseAutolink(remaining, in: text) {
+                if let (attr, rest) = tryParseAutolink(remaining, in: text, scan: parse.autolinks) {
                     parse.append(.atom(attr, .body))
                     remaining = rest
                     continue
@@ -968,6 +996,7 @@ struct MarkdownRenderer: Sendable {
         let pairs: InlineSyntaxScanner.PairTable
         let codeSpans: InlineSyntaxScanner.CodeSpanTable
         let closingBrackets: InlineSyntaxScanner.NextClosingBracket
+        let autolinks = AutolinkScan()
         private(set) var nodes: [InlineNode] = []
         private(set) var delimiters = InlineDelimiterStack()
         private(set) var links: [LinkSpan] = []
@@ -1021,10 +1050,19 @@ struct MarkdownRenderer: Sendable {
         mutating func pushDelimiter(_ byte: UInt8, length: Int, from start: String.Index, to end: String.Index) {
             flush()
             let scalars = text.unicodeScalars
-            let before = start > text.startIndex ? scalars[scalars.index(before: start)] : nil
+            let beforeIndex = start > text.startIndex ? scalars.index(before: start) : nil
+            let before = beforeIndex.map { scalars[$0] }
             let after = end < text.endIndex ? scalars[end] : nil
+            // A variation selector's base character decides CJK-ness.
+            var cjkBefore = before
+            if let selector = beforeIndex, let scalar = before, InlineDelimiterStack.isVariationSelector(scalar),
+               selector > text.startIndex {
+                cjkBefore = scalars[scalars.index(before: selector)]
+            }
             if let run = delimiters.push(character: byte, length: length, node: nodes.count,
-                                         before: before, after: after) {
+                                         before: before, after: after,
+                                         beforeIsCJK: cjkBefore.map(InlineDelimiterStack.isCJK) ?? false,
+                                         afterIsCJK: after.map(InlineDelimiterStack.isCJK) ?? false) {
                 nodes.append(.delimiter(run))
             } else {
                 nodes.append(.text(text[start..<end]))
@@ -1333,7 +1371,7 @@ struct MarkdownRenderer: Sendable {
     }
 
     private func tryParseEscape(_ remaining: inout Substring) -> (AttributedString, Substring)? {
-        guard remaining.hasPrefix("\\"), remaining.count >= 2 else { return nil }
+        guard remaining.hasPrefix("\\"), remaining.utf8.count >= 2 else { return nil }  // O(1), not a Character count
         let escaped = remaining[remaining.index(after: remaining.startIndex)]
         guard MarkdownTheme.escapableChars.contains(escaped) else { return nil }
 
@@ -1352,7 +1390,10 @@ struct MarkdownRenderer: Sendable {
     /// autolink, as on GitHub).
     private func tryParseAngleAutolink(_ remaining: Substring) -> (AttributedString, Substring)? {
         guard let autolink = InlineSyntaxScanner.angleAutolink(atStartOf: remaining) else { return nil }
-        let address = String(autolink.address)
+        // Character references are decoded in the text AND the URL, as on
+        // GitHub (`<https://a.example/?a=1&amp;b=2>` opens `?a=1&b=2`);
+        // bare autolinks keep them as written (GitHub does too).
+        let address = decodedText(String(autolink.address))
         let url = autolink.isEmail ? URL(string: "mailto:" + address) : Self.linkURL(for: address)
         return (autolinkText(address, url: url), remaining[autolink.end...])
     }
@@ -1366,15 +1407,31 @@ struct MarkdownRenderer: Sendable {
     /// then loses trailing `?!.,:*_~'"`, a `)` it has no `(` for, and a
     /// trailing entity-like `&name;`. "See https://x.example." links
     /// without the period; `*https://x.example*` is emphasis around a link.
-    private func tryParseAutolink(_ remaining: Substring, in text: String) -> (AttributedString, Substring)? {
-        guard let autolink = Self.bareAutolink(remaining, in: text) else { return nil }
+    private func tryParseAutolink(_ remaining: Substring, in text: String,
+                                  scan: AutolinkScan) -> (AttributedString, Substring)? {
+        guard let autolink = Self.bareAutolink(remaining, in: text, scan: scan) else { return nil }
         return (autolinkText(autolink.shown, url: Self.linkURL(for: autolink.url)), text[autolink.end...])
+    }
+
+    /// State of the bare-autolink attempts on ONE line (the renderer and
+    /// `ReferenceLinks` keep one per line). A `www.` attempt whose domain
+    /// failed (an `_` in its last two labels) is remembered: every later
+    /// `www.` inside that domain runs to the same end and has the same last
+    /// two labels (its own "www" label has no `_`), so it fails too —
+    /// without rescanning. Without this `_www.a.` × N + `_x_` was quadratic
+    /// (112 KB: 44 s). `work` counts the scalars examined, for the tests.
+    final class AutolinkScan {
+        fileprivate var failedDomain: Range<String.Index>?
+        private(set) var work = 0
+        fileprivate func examined(_ count: Int = 1) { work += count }
+        init() {}
     }
 
     /// `tryParseAutolink`'s grammar: for `remaining` (a suffix of `text`)
     /// the link as shown, its URL as written, and its end. Static for
     /// `ReferenceLinks`, which must skip what the renderer links.
-    static func bareAutolink(_ remaining: Substring, in text: String) -> (shown: String, url: String, end: String.Index)? {
+    static func bareAutolink(_ remaining: Substring, in text: String,
+                             scan: AutolinkScan) -> (shown: String, url: String, end: String.Index)? {
         let utf8 = remaining.utf8
         let www = utf8.starts(with: "www.".utf8)
         let hostStart: String.Index
@@ -1399,6 +1456,8 @@ struct MarkdownRenderer: Sendable {
             }
         }
 
+        if www, let failed = scan.failedDomain, failed.contains(remaining.startIndex) { return nil }
+
         // The domain (cmark-gfm `check_domain`).
         var index = www ? utf8.index(hostStart, offsetBy: 4) : hostStart
         let domainStart = index
@@ -1416,9 +1475,11 @@ struct MarkdownRenderer: Sendable {
                         || scalar.properties.generalCategory == .control {
                 break
             }
+            scan.examined()
             index = scalars.index(after: index)
         }
         guard index > domainStart, underscores.last == 0, underscores.previous == 0, periods > 0 || !www else {
+            if www { scan.failedDomain = remaining.startIndex..<index }
             return nil
         }
 
@@ -1427,14 +1488,17 @@ struct MarkdownRenderer: Sendable {
             let scalar = scalars[index]
             if InlineDelimiterStack.isWhitespace(scalar) || scalar.properties.generalCategory == .control
                 || "<>[]".unicodeScalars.contains(scalar) { break }
+            scan.examined()
             index = scalars.index(after: index)
         }
         var end = index
         var parens = (open: 0, close: 0)
         for scalar in scalars[remaining.startIndex..<end] {
+            scan.examined()
             if scalar == "(" { parens.open += 1 } else if scalar == ")" { parens.close += 1 }
         }
         trim: while end > domainStart {
+            scan.examined()
             let lastIndex = scalars.index(before: end)
             switch scalars[lastIndex] {
             case "?", "!", ".", ",", ":", "*", "_", "~", "'", "\"":
@@ -1472,6 +1536,15 @@ struct MarkdownRenderer: Sendable {
     /// dropped by the trailing trim): `a.b-c_d@a.b.` links `a.b-c_d@a.b`,
     /// `x@y.z_` and `hello@mail+xyz.example` link nothing.
     static func emailAutolinks(in text: String) -> [Range<String.Index>] {
+        var work = 0
+        return emailAutolinks(in: text, work: &work)
+    }
+
+    /// `emailAutolinks`, counting in `work` the bytes looked at around each
+    /// `@` (each byte is walked back at most once and forward at most once:
+    /// a local part never contains `@`, a domain stops at the next one) —
+    /// for the tests.
+    static func emailAutolinks(in text: String, work: inout Int) -> [Range<String.Index>] {
         let bytes = Array(text.utf8)
         func isAlnum(_ byte: UInt8) -> Bool {
             (byte >= 0x30 && byte <= 0x39) || ((byte | 0x20) >= 0x61 && (byte | 0x20) <= 0x7A)
@@ -1483,11 +1556,14 @@ struct MarkdownRenderer: Sendable {
             guard bytes[at] == UInt8(ascii: "@") else { at += 1; continue }
             var start = at
             while start > searchFrom,
-                  isAlnum(bytes[start - 1]) || ".+-_".utf8.contains(bytes[start - 1]) { start -= 1 }
+                  isAlnum(bytes[start - 1]) || ".+-_".utf8.contains(bytes[start - 1]) { start -= 1; work += 1 }
             var end = at + 1
             var periods = 0
-            var valid = start < at
+            // A local part right after `/` is part of a URL (`ftp://user@host`
+            // is text on GitHub).
+            var valid = start < at && (start == 0 || bytes[start - 1] != UInt8(ascii: "/"))
             while end < bytes.count {
+                work += 1
                 let byte = bytes[end]
                 if isAlnum(byte) || byte == UInt8(ascii: "-") || byte == UInt8(ascii: "_") {
                     end += 1

@@ -332,12 +332,6 @@ struct MarkdownTheme: Sendable, Identifiable {
     /// the text may follow the colon directly, or be empty.
     static let footnoteDefinitionPattern = #"^[ \t]*\[\^([^\] \t\r\n]+)\]:[ \t]*(.*)"#
 
-    // MARK: - URL Autolinking
-
-    /// Matches bare URLs starting with http:// or https://
-    /// Stops at whitespace, brackets, parentheses, or quotes
-    static let autolinkPattern = #"https?://[^\s<>\[\]()\"']+"#
-
     // MARK: - Setext Headers
 
     /// Matches setext H1 underline: one or more = signs
