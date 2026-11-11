@@ -364,12 +364,12 @@ struct VirtualBlockList: NSViewRepresentable {
         /// - `reportHeight`: the anchored block stays put on screen
         ///   (`RowGeometry.reportAction`).
         private var anchor: ReaderAnchor?
+        /// The animated scroll of a jump, and the reader's scroll that stops
+        /// it (`ScrollGlide`).
+        private var glide = ScrollGlide()
         /// A programmatic animated scroll is on its way to `anchor`: reports
         /// re-aim it instead of compensating a content top that is mid-flight.
-        private var isJumping = false
-        /// Bumped per animated jump, so an older animation's completion does
-        /// not end a newer one.
-        private var jumpGeneration = 0
+        private var isJumping: Bool { glide.isRunning }
         /// `.reported` blocks whose view has told this table its height: their
         /// height is no longer an estimate (`RowGeometry.anchorPlacement`).
         private var reportedBlocks: Set<String> = []
@@ -471,11 +471,11 @@ struct VirtualBlockList: NSViewRepresentable {
             scrollView.onEndLiveResize = { [weak self] in
                 self?.clipFrameChanged(afterLiveResize: true)
             }
-            scrollView.onReaderScroll = { [weak self] in self?.matchAim.readerScrolled() }
+            scrollView.onReaderScroll = { [weak self] in self?.readerScrolled() }
             liveScrollObserver = NotificationCenter.default.addObserver(
                 forName: NSScrollView.willStartLiveScrollNotification, object: scrollView, queue: nil
             ) { [weak self] _ in
-                self?.matchAim.readerScrolled()
+                self?.readerScrolled()
             }
             frameObserver = NotificationCenter.default.addObserver(
                 forName: NSView.frameDidChangeNotification,
@@ -573,7 +573,7 @@ struct VirtualBlockList: NSViewRepresentable {
             let anchor = captureAnchor()
             let previousCount = blocks.count
             self.anchor = nil
-            isJumping = false
+            glide.settle()
             isSwitchingLayout = false
             matchAim.drop()
             reportedBlocks = []
@@ -772,21 +772,36 @@ struct VirtualBlockList: NSViewRepresentable {
                     && !reportedBlocks.contains(blocks[row].id))
             var completion: (() -> Void)?
             if animated {
-                jumpGeneration += 1
-                let jump = jumpGeneration
-                isJumping = true
+                let token = glide.start()
                 completion = { [weak self] in
-                    guard let self, self.jumpGeneration == jump else { return }
-                    self.isJumping = false
+                    guard let self, self.glide.landed(token) else { return }
                     self.aimAtPendingMatch()
                 }
             } else {
-                isJumping = false
+                glide.settle()
             }
             let reached = setContentTop(blockTop + placement, animated: animated, completion: completion)
             anchor = ReaderAnchor(blockId: blocks[row].id, offset: offset, placed: reached - blockTop)
             #if DEBUG
             listLog.debug("place: row \(row) offset=\(offset, format: .fixed(precision: 1)) placed=\(reached - blockTop, format: .fixed(precision: 1))\(animated ? " (jump)" : "", privacy: .public)")
+            #endif
+        }
+
+        /// The reader scrolled (wheel, trackpad incl. momentum, scroller,
+        /// scroll keys, a drag-select at the edge): a match aim is dropped
+        /// and a glide in flight stops where the view is, so their scroll
+        /// goes on from there — no snap to the target, no second jump when
+        /// the animation would have ended (`ScrollGlide`). Runs BEFORE the
+        /// event's own scroll (`BlockScrollView.scrollWheel`,
+        /// `BlockTableView.scrollVertically`, the live-scroll notification).
+        private func readerScrolled() {
+            matchAim.readerScrolled()
+            guard glide.readerScrolled(), let scrollView else { return }
+            ScrollGlide.stop(scrollView.contentView)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            #if DEBUG
+            expectedContentTop = contentTopY()
+            listLog.debug("glide stopped by the reader at top \(self.contentTopY(), format: .fixed(precision: 1))")
             #endif
         }
 

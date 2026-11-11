@@ -526,6 +526,87 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertTrue(scrolls([], [.changed], -12))
     }
 
+    // MARK: - The reader's scroll stops a jump's glide (1.15)
+
+    /// ⌘G glides 0.25 s to the match. A scroll by the reader during the
+    /// glide stops it: the glide is over at once, and its animation's
+    /// completion — which AppKit still delivers — neither finishes the jump
+    /// (no aim, no second jump) nor ends a later glide. The next ⌘G glides
+    /// and lands normally.
+    func testTheReadersScrollStopsTheGlideAndItsCompletionIsIgnored() {
+        var glide = ScrollGlide()
+        XCTAssertFalse(glide.readerScrolled(), "no glide: nothing to stop")
+
+        let first = glide.start()
+        XCTAssertTrue(glide.isRunning)
+        XCTAssertTrue(glide.readerScrolled(), "a scroll during the glide stops it")
+        XCTAssertFalse(glide.isRunning)
+        XCTAssertFalse(glide.readerScrolled(), "momentum after the stop: already stopped")
+        XCTAssertFalse(glide.landed(first), "the stopped glide's completion does nothing")
+
+        let second = glide.start()
+        XCTAssertFalse(glide.landed(first), "a stale completion does not end the next glide")
+        XCTAssertTrue(glide.isRunning)
+        XCTAssertTrue(glide.landed(second), "the next glide lands and finishes its jump")
+        XCTAssertFalse(glide.isRunning)
+        XCTAssertFalse(glide.readerScrolled(), "after landing a scroll stops nothing")
+    }
+
+    /// A glide replaced by a newer one (⌘G pressed twice quickly, a height
+    /// report re-aiming the jump) — only the newest completion counts; a
+    /// non-animated placement ends the jumping state but keeps the pre-1.15
+    /// completion semantics (the glide is not stopped there).
+    func testOnlyTheNewestGlideLandsAndSettlingKeepsItsCompletion() {
+        var glide = ScrollGlide()
+        let old = glide.start()
+        let new = glide.start()
+        XCTAssertFalse(glide.landed(old))
+        XCTAssertTrue(glide.isRunning)
+        XCTAssertTrue(glide.landed(new))
+
+        let settled = glide.start()
+        glide.settle()
+        XCTAssertFalse(glide.isRunning)
+        XCTAssertFalse(glide.readerScrolled(), "settled: no glide to stop")
+        XCTAssertTrue(glide.landed(settled))
+    }
+
+    /// The AppKit half: an animated clip-origin scroll stopped by
+    /// `ScrollGlide.stop` stays where it was stopped, and a scroll after the
+    /// stop is kept — before 1.15 the animation went on setting the origin
+    /// and ended on its target whatever the reader did. A glide after the
+    /// stop runs to its target. No timing assertion: the stop comes before
+    /// the first animation frame, and the waits only let the run loop go.
+    func testAStoppedGlideStaysWhereTheReaderLeftIt() {
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 400))
+        scrollView.documentView = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 20_000))
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.contentView = scrollView
+        let clip = scrollView.contentView
+
+        func glide(to y: CGFloat) -> XCTestExpectation {
+            let landed = expectation(description: "glide to \(y) completed")
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.25
+                clip.animator().setBoundsOrigin(NSPoint(x: 0, y: y))
+            }, completionHandler: { landed.fulfill() })
+            return landed
+        }
+
+        let stopped = glide(to: 5_000)
+        ScrollGlide.stop(clip)
+        let stoppedAt = clip.bounds.origin.y
+        clip.scroll(to: NSPoint(x: 0, y: stoppedAt + 30))   // the reader's scroll
+        wait(for: [stopped], timeout: 5)
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.4))
+        XCTAssertEqual(clip.bounds.origin.y, stoppedAt + 30, "no snap to the target after the stop")
+
+        let next = glide(to: 8_000)
+        wait(for: [next], timeout: 5)
+        XCTAssertEqual(clip.bounds.origin.y, 8_000, "the next glide arrives")
+    }
+
     // MARK: - Block markers: spaces and tabs only
 
     /// Parses on a worker thread: a parser that never returns fails the test

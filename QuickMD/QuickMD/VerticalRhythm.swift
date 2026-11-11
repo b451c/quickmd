@@ -369,6 +369,68 @@ struct PendingMatchAim: Equatable {
     }
 }
 
+/// The animated scroll of a jump (⌘G / a search result: 0.25 s,
+/// `VirtualBlockList.setContentTop`) and the reader's scroll during it.
+///
+/// The reader wins: a wheel or trackpad scroll (momentum included), a
+/// scroller drag or a scroll key while the glide runs stops it where the view
+/// is (`stop(_:)`) and their scroll goes on from there. Until 1.15 the glide
+/// won — AppKit's animation kept setting the clip origin every frame, so the
+/// reader's scroll was undone and the view landed on the match anyway.
+///
+/// Each glide has a token; the animation's completion counts only for the
+/// glide that is still running. A stopped glide's completion still arrives
+/// (AppKit ends the replaced animation group) and must do nothing: no aim at
+/// the match, no second jump. The next glide starts afresh.
+struct ScrollGlide: Equatable {
+    /// A glide is on its way and nothing has stopped it.
+    private(set) var isRunning = false
+    private var token = 0
+
+    /// A glide starts; pass the token to `landed` from its completion.
+    mutating func start() -> Int {
+        token += 1
+        isRunning = true
+        return token
+    }
+
+    /// The glide with `token` finished animating. True only for the latest
+    /// glide the reader did not stop — the caller then finishes the jump
+    /// (aims at a match that was not on display, `PendingMatchAim`).
+    mutating func landed(_ token: Int) -> Bool {
+        guard token == self.token else { return false }
+        isRunning = false
+        return true
+    }
+
+    /// The reader scrolled. True when a glide was running: the caller stops
+    /// it now (`stop(_:)`), and its completion will be ignored.
+    mutating func readerScrolled() -> Bool {
+        guard isRunning else { return false }
+        isRunning = false
+        token += 1
+        return true
+    }
+
+    /// The scroll position was set without animation, or the table was
+    /// replaced: not jumping any more. (Unchanged pre-1.15 semantics: a
+    /// glide still in flight is not stopped here, and its completion still
+    /// finishes the jump.)
+    mutating func settle() { isRunning = false }
+
+    /// Stops an animated scroll of `clipView` where it is now: a zero-length
+    /// animation of the same property replaces the running one, and the
+    /// clip origin (which AppKit updates every frame) is its current place.
+    /// Verified headlessly: a glide stopped after 80 ms stays there, a
+    /// scroll after the stop is kept, the next glide runs normally.
+    static func stop(_ clipView: NSClipView) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            clipView.animator().setBoundsOrigin(clipView.bounds.origin)
+        }
+    }
+}
+
 // MARK: - Print / PDF
 
 /// The rhythm for print and PDF (`PDFExportManager.generateMultiPagePDF`):
