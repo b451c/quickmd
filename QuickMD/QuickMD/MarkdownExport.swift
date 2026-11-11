@@ -508,6 +508,9 @@ struct MarkdownPrintableBlockView: View {
 
             case .codeBlock(let code, let language):
                 PrintableCodeBlockView(code: code, language: language)
+                    // Print draws item text through SwiftUI `Text`, without
+                    // the on-screen gutter: the code lines up with it there.
+                    .padding(.leading, MarkdownRenderer.printedListIndent(block.listIndent))
 
             case .image(let url, let alt, let width, _):
                 PrintableImageView(url: url, alt: alt, width: width, documentURL: documentURL)

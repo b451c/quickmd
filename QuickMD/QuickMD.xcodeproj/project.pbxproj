@@ -45,8 +45,13 @@
 		A1B2C3D4010002A1 /* VerticalRhythm.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000002A0 /* VerticalRhythm.swift */; };
 		A1B2C3D401000460 /* ImageRowLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000460 /* ImageRowLayout.swift */; };
 		A1B2C3D401000461 /* ImageRowLayout.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000460 /* ImageRowLayout.swift */; };
+		A1B2C3D401000420 /* ListNesting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000420 /* ListNesting.swift */; };
+		A1B2C3D401000421 /* ListNesting.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000420 /* ListNesting.swift */; };
+		A1B2C3D401000422 /* ListContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000421 /* ListContentTests.swift */; };
 		A1B2C3D401000301 /* ReferenceLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000301 /* ReferenceLinks.swift */; };
 		A1B2C3D401000302 /* ReferenceLinks.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000301 /* ReferenceLinks.swift */; };
+		A1B2C3D4010004A3 /* Footnotes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000004A2 /* Footnotes.swift */; };
+		A1B2C3D4010004A4 /* Footnotes.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000004A2 /* Footnotes.swift */; };
 		A1B2C3D401000303 /* CrossDocumentAnchors.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000303 /* CrossDocumentAnchors.swift */; };
 		A1B2C3D401000304 /* CrossDocumentAnchors.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000303 /* CrossDocumentAnchors.swift */; };
 		A1B2C3D401000305 /* SettingsTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000305 /* SettingsTab.swift */; };
@@ -140,6 +145,7 @@
 		A1B2C3D401000463 /* LocalLinkSafety.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000463 /* LocalLinkSafety.swift */; };
 		A1B2C3D401000464 /* LocalLinkSafety.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000463 /* LocalLinkSafety.swift */; };
 		A1B2C3D401000465 /* LocalLinkSafetyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000465 /* LocalLinkSafetyTests.swift */; };
+		A1B2C3D4010004A1 /* FootnoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000004A0 /* FootnoteTests.swift */; };
 		A1B2C3D40100006B /* BlockHeightMeasurer.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000069 /* BlockHeightMeasurer.swift */; };
 		A1B2C3D40100006C /* VirtualBlockList.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000006C /* VirtualBlockList.swift */; };
 		A1B2C3D40100006D /* SVGBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000006D /* SVGBlockView.swift */; };
@@ -198,6 +204,7 @@
 		A1B2C3D400000462 /* ImageRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageRowTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000463 /* LocalLinkSafety.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLinkSafety.swift; sourceTree = "<group>"; };
 		A1B2C3D400000465 /* LocalLinkSafetyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLinkSafetyTests.swift; sourceTree = "<group>"; };
+		A1B2C3D4000004A0 /* FootnoteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FootnoteTests.swift; sourceTree = "<group>"; };
 		A1B2C3D40000006C /* VirtualBlockList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualBlockList.swift; sourceTree = "<group>"; };
 		A1B2C3D40000006D /* SVGBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SVGBlockView.swift; sourceTree = "<group>"; };
 		A1B2C3D40000006E /* SVGImageDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SVGImageDecoder.swift; sourceTree = "<group>"; };
@@ -257,7 +264,10 @@
 		A1B2C3D4000001C0 /* SelectionRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRows.swift; sourceTree = "<group>"; };
 		A1B2C3D4000002A0 /* VerticalRhythm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalRhythm.swift; sourceTree = "<group>"; };
 		A1B2C3D400000460 /* ImageRowLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageRowLayout.swift; sourceTree = "<group>"; };
+		A1B2C3D400000420 /* ListNesting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListNesting.swift; sourceTree = "<group>"; };
+		A1B2C3D400000421 /* ListContentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListContentTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000301 /* ReferenceLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceLinks.swift; sourceTree = "<group>"; };
+		A1B2C3D4000004A2 /* Footnotes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Footnotes.swift; sourceTree = "<group>"; };
 		A1B2C3D400000303 /* CrossDocumentAnchors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossDocumentAnchors.swift; sourceTree = "<group>"; };
 		A1B2C3D400000305 /* SettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTab.swift; sourceTree = "<group>"; };
 		A1B2C3D400000309 /* HTMLEntityTable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTMLEntityTable.swift; sourceTree = "<group>"; };
@@ -371,6 +381,8 @@
 				A1B2C3D4000002A1 /* VerticalRhythmTests.swift */,
 				A1B2C3D400000462 /* ImageRowTests.swift */,
 				A1B2C3D400000465 /* LocalLinkSafetyTests.swift */,
+				A1B2C3D400000421 /* ListContentTests.swift */,
+				A1B2C3D4000004A0 /* FootnoteTests.swift */,
 				A1B2C3D400000082 /* ImageLoadingTests.swift */,
 				A1B2C3D4000000E1 /* HTMLImageTests.swift */,
 				A1B2C3D4000000F0 /* HeadingLayoutTests.swift */,
@@ -419,7 +431,9 @@
 				A1B2C3D4000002A0 /* VerticalRhythm.swift */,
 				A1B2C3D400000460 /* ImageRowLayout.swift */,
 				A1B2C3D400000463 /* LocalLinkSafety.swift */,
+				A1B2C3D400000420 /* ListNesting.swift */,
 				A1B2C3D400000301 /* ReferenceLinks.swift */,
+				A1B2C3D4000004A2 /* Footnotes.swift */,
 				A1B2C3D400000303 /* CrossDocumentAnchors.swift */,
 				A1B2C3D400000305 /* SettingsTab.swift */,
 				A1B2C3D400000309 /* HTMLEntityTable.swift */,
@@ -724,7 +738,9 @@
 				A1B2C3D4010002A0 /* VerticalRhythm.swift in Sources */,
 				A1B2C3D401000460 /* ImageRowLayout.swift in Sources */,
 				A1B2C3D401000463 /* LocalLinkSafety.swift in Sources */,
+				A1B2C3D401000420 /* ListNesting.swift in Sources */,
 				A1B2C3D401000301 /* ReferenceLinks.swift in Sources */,
+				A1B2C3D4010004A3 /* Footnotes.swift in Sources */,
 				A1B2C3D401000303 /* CrossDocumentAnchors.swift in Sources */,
 				A1B2C3D401000305 /* SettingsTab.swift in Sources */,
 				A1B2C3D401000309 /* HTMLEntityTable.swift in Sources */,
@@ -773,6 +789,8 @@
 				A1B2C3D4010002A2 /* VerticalRhythmTests.swift in Sources */,
 				A1B2C3D401000462 /* ImageRowTests.swift in Sources */,
 				A1B2C3D401000465 /* LocalLinkSafetyTests.swift in Sources */,
+				A1B2C3D401000422 /* ListContentTests.swift in Sources */,
+				A1B2C3D4010004A1 /* FootnoteTests.swift in Sources */,
 				A1B2C3D40100006B /* BlockHeightMeasurer.swift in Sources (Tests) */,
 				A1B2C3D4010001B1 /* TableTextBuilder.swift in Sources (Tests) */,
 				A1B2C3D401000221 /* FrontMatter.swift in Sources (Tests) */,
@@ -787,7 +805,9 @@
 				A1B2C3D4010002A1 /* VerticalRhythm.swift in Sources (Tests) */,
 				A1B2C3D401000461 /* ImageRowLayout.swift in Sources (Tests) */,
 				A1B2C3D401000464 /* LocalLinkSafety.swift in Sources (Tests) */,
+				A1B2C3D401000421 /* ListNesting.swift in Sources (Tests) */,
 				A1B2C3D401000302 /* ReferenceLinks.swift in Sources (Tests) */,
+				A1B2C3D4010004A4 /* Footnotes.swift in Sources (Tests) */,
 				A1B2C3D401000304 /* CrossDocumentAnchors.swift in Sources (Tests) */,
 				A1B2C3D401000306 /* SettingsTab.swift in Sources (Tests) */,
 				A1B2C3D40100030A /* HTMLEntityTable.swift in Sources (Tests) */,

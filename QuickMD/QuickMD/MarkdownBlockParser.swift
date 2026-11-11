@@ -77,8 +77,27 @@ struct MarkdownBlockParser: Sendable {
 
         // Pre-pass: collect reference link definitions and footnote definitions, filter them out
         var referenceDefinitions: [String: String] = [:]
+        // In DEFINITION order here; renumbered by first reference after the
+        // pre-pass (`FootnoteNumbering`).
         var footnoteDefinitions: [(id: String, content: String)] = []
-        var footnoteIds: [String] = [] // ordered by first appearance
+        var footnoteIds = Set<String>()
+        // Every text drawn as Markdown, in document order, for the numbering.
+        var footnoteNumbering = FootnoteNumbering()
+        // The list items open at each line (`ListNesting`, fed as the block
+        // loop reads the lines, near enough for these two questions): where a
+        // footnote definition's continuation lines start (the item's content
+        // column), and which lines are an item's indented code — verbatim,
+        // so a `[x]: url` in it stays code (GitHub).
+        var definitionNesting = ListNesting()
+        // The columns an item's indented code takes off its lines, while in it.
+        var indentedCodeColumns: Int?
+        // The footnote definition whose lines may go on
+        // (`FootnoteDefinitionBody`): its id (nil for a duplicate, whose text
+        // is not shown), its line, and the blank lines read since its last
+        // line, which are the document's again if the definition ends after
+        // them.
+        var openFootnote: (id: String?, line: Int, body: FootnoteDefinitionBody)?
+        var blanksAfterFootnote: [Int] = []
         var lines: [String] = []
         // Maps index in the filtered `lines` back to the index in `allLines`.
         // Headings carry the original line number so section copy can slice the
@@ -93,13 +112,108 @@ struct MarkdownBlockParser: Sendable {
         var verbatim = VerbatimRegions()
         // A link definition cannot interrupt a paragraph (`DefinitionPlacement`).
         var placement = DefinitionPlacement()
+        // A link definition: the FIRST of a label wins (CommonMark, GitHub),
+        // character references in the destination decoded, as in an inline
+        // link's (`InlineSyntaxScanner.unescaped`). False when `text` is none.
+        func defineLink(_ text: String) -> Bool {
+            guard let match = Self.refLinkDefRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let idRange = Range(match.range(at: 1), in: text),
+                  let urlRange = Range(match.range(at: 2), in: text) else { return false }
+            // A label of whitespace only defines nothing (CommonMark): the line is text.
+            let label = ReferenceLabel.normalized(text[idRange])
+            guard !label.isEmpty else { return false }
+            if referenceDefinitions[label] == nil {
+                referenceDefinitions[label] = HTMLEntities.decode(String(text[urlRange]))
+            }
+            return true
+        }
+        // The open footnote definition is complete: store its text (first
+        // definition of an id only; every one's references count), give the
+        // blank lines after it back. `ending`: the line that ended it.
+        func closeFootnote(ending: String?) {
+            guard let open = openFootnote else { return }
+            if let id = open.id {
+                footnoteDefinitions.append((id: id, content: open.body.content))
+            }
+            for drawn in FootnoteDefinitionBody.displayLines(of: open.body.content) {
+                footnoteNumbering.note(drawn)
+            }
+            openFootnote = nil
+            // A definition that interrupted a paragraph ends it (GitHub): the
+            // line after it must not continue that paragraph as a Setext
+            // underline (`---`), an item that cannot interrupt one
+            // (`1984. y`), or text after an empty `[^n]:`. A blank line
+            // where the definition stood says so to the block loop.
+            if blanksAfterFootnote.isEmpty, let ending, let previous = lines.last,
+               !MarkdownRenderer.isBlankLine(previous), Self.wouldContinueParagraph(ending) {
+                blanksAfterFootnote.append(open.line)
+            }
+            for blank in blanksAfterFootnote {
+                lines.append(blank == open.line ? "" : allLines[blank])
+                lineMap.append(blank)
+                placement.kept("")
+                footnoteNumbering.keep("")
+                definitionNesting.blank()
+            }
+            blanksAfterFootnote.removeAll()
+        }
+        // A footnote definition starts: the FIRST definition of an id wins
+        // (GitHub drops a later one from the list too).
+        func startFootnote(id: String, firstLine: String, at index: Int) {
+            closeFootnote(ending: allLines[index])
+            let isNew = footnoteIds.insert(id).inserted
+            definitionNesting.block(startingAt: allLines[index])
+            let column = definitionNesting.items.last?.contentColumn ?? 0
+            openFootnote = (id: isNew ? id : nil, line: index,
+                            body: FootnoteDefinitionBody(firstLine: firstLine, containerColumn: column))
+        }
         for originalIndex in firstContentLine..<allLines.count {
             let line = allLines[originalIndex]
+            // The lines a footnote definition goes on with are its text, read
+            // before anything else (an indented fence in it opens no code).
+            if var open = openFootnote {
+                if MarkdownRenderer.isBlankLine(line) {
+                    blanksAfterFootnote.append(originalIndex)
+                    continue
+                }
+                let step = open.body.take(line, afterBlank: !blanksAfterFootnote.isEmpty,
+                                          isLinkDefinition: { defineLink($0) })
+                openFootnote = open
+                if step != .ended {
+                    blanksAfterFootnote.removeAll()
+                    continue
+                }
+                closeFootnote(ending: line)
+            }
             let trimmed = Self.markerLine(line)
+            // Indented code under a list item, read as the block loop reads
+            // it (`ListNesting.indentedCode`): its lines are code, a definition
+            // in them too. Not inside a fence or `$$` block.
+            if !verbatim.isOpen {
+                if let columns = indentedCodeColumns,
+                   !(MarkdownRenderer.isBlankLine(line) || Self.indentColumns(line) >= columns) {
+                    indentedCodeColumns = nil
+                }
+                if indentedCodeColumns == nil, let code = definitionNesting.indentedCode(line) {
+                    definitionNesting.block(startingAt: line)
+                    indentedCodeColumns = code.columns
+                }
+                if indentedCodeColumns != nil {
+                    lines.append(line)
+                    lineMap.append(originalIndex)
+                    placement.verbatim()
+                    footnoteNumbering.note("")
+                    continue
+                }
+            }
+            let opensVerbatim = !verbatim.isOpen
             if verbatim.contains(trimmed) {
                 lines.append(line)
                 lineMap.append(originalIndex)
                 placement.verbatim()
+                footnoteNumbering.note("")
+                // Only the opening line starts a block; the rest is its text.
+                if opensVerbatim { definitionNesting.block(startingAt: line) }
                 continue
             }
             let nsRange = NSRange(trimmed.startIndex..., in: trimmed)
@@ -109,42 +223,33 @@ struct MarkdownBlockParser: Sendable {
                       let idRange = Range(match.range(at: 1), in: trimmed),
                       let contentRange = Range(match.range(at: 2), in: trimmed) {
                 // Ids are normalised labels (`ReferenceLabel`): `[^Note]` finds
-                // `[^note]:`. The FIRST definition of an id wins (GitHub
-                // drops a later one from the list too).
-                let fnId = ReferenceLabel.normalized(trimmed[idRange])
-                if !footnoteIds.contains(fnId) {
-                    footnoteDefinitions.append((id: fnId, content: String(trimmed[contentRange])))
-                    footnoteIds.append(fnId)
-                }
+                // `[^note]:`. Its text goes on in the lines that follow
+                // (`FootnoteDefinitionBody`), so the trailing white space the
+                // marker line dropped comes back: two spaces are a hard break.
+                let trailing = line.reversed().prefix(while: { $0 == " " || $0 == "\t" })
+                startFootnote(id: ReferenceLabel.normalized(trimmed[idRange]),
+                              firstLine: String(trimmed[contentRange]) + String(trailing), at: originalIndex)
                 placement.definition()
             } else if let text = placement.footnoteDefinitionText(trimmed),
                       let match = Self.footnoteDefRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
                       let idRange = Range(match.range(at: 1), in: text),
                       let contentRange = Range(match.range(at: 2), in: text) {
-                // A quote's footnote: before the link pattern here too.
+                // A quote's footnote: before the link pattern here too. One
+                // line (its lazy lines stay the quote's).
                 let fnId = ReferenceLabel.normalized(text[idRange])
-                if !footnoteIds.contains(fnId) {
+                if footnoteIds.insert(fnId).inserted {
                     footnoteDefinitions.append((id: fnId, content: String(text[contentRange])))
-                    footnoteIds.append(fnId)
                 }
+                footnoteNumbering.note(String(text[contentRange]))
+                definitionNesting.block(startingAt: line)
                 _ = placement.definitionTaken(trimmed)
                 lines.append(line)
                 lineMap.append(originalIndex)
                 definitionLines.insert(lines.count - 1)
-            } else if let text = placement.linkDefinitionText(trimmed),
-                      let match = Self.refLinkDefRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-                      let idRange = Range(match.range(at: 1), in: text),
-                      // A label of whitespace only defines nothing (CommonMark):
-                      // the line is text.
-                      !ReferenceLabel.normalized(text[idRange]).isEmpty,
-                      let urlRange = Range(match.range(at: 2), in: text) {
-                // Character references in the destination are decoded, as in
-                // an inline link's (`InlineSyntaxScanner.unescaped`). The FIRST
-                // definition of a label wins (CommonMark, GitHub).
-                let label = ReferenceLabel.normalized(text[idRange])
-                if referenceDefinitions[label] == nil {
-                    referenceDefinitions[label] = HTMLEntities.decode(String(text[urlRange]))
-                }
+            } else if let text = placement.linkDefinitionText(trimmed), defineLink(text) {
+                footnoteNumbering.note("")
+                // A definition starts a block: at the margin it ends a list.
+                definitionNesting.block(startingAt: line)
                 if placement.definitionTaken(trimmed) {
                     lines.append(line)
                     lineMap.append(originalIndex)
@@ -154,7 +259,20 @@ struct MarkdownBlockParser: Sendable {
                 lines.append(line)
                 lineMap.append(originalIndex)
                 placement.kept(line)
+                footnoteNumbering.keep(line)
+                definitionNesting.read(line, sourceLine: originalIndex)
             }
+        }
+        closeFootnote(ending: nil)
+
+        // Footnotes are numbered by their first reference, and only those
+        // referenced are listed (`FootnoteNumbering`, GitHub): the renderers
+        // number a reference by its definition's position in this list.
+        if !footnoteDefinitions.isEmpty {
+            let order = footnoteNumbering.order(defined: footnoteIds)
+            let contents = Dictionary(footnoteDefinitions.map { ($0.id, $0.content) },
+                                      uniquingKeysWith: { first, _ in first })
+            footnoteDefinitions = order.compactMap { id in contents[id].map { (id: id, content: $0) } }
         }
 
         // Use reference-aware renderer if definitions were found
@@ -172,6 +290,12 @@ struct MarkdownBlockParser: Sendable {
         var pendingRows: [PendingTextRow] = []
         // `imageParagraph` is not tried again before this line (see there).
         var imageParagraphSkip = 0
+        // Which list item owns what (`ListNesting`): the item line (original
+        // index) of a paragraph's first line, and of a code block (by its
+        // position in `blocks`). `renderPendingRows` lines them up with it.
+        var nesting = ListNesting()
+        var paragraphOwners: [Int: Int] = [:]
+        var blockOwners: [Int: Int] = [:]
 
         while i < lines.count {
             // Every turn consumes at least one line. A branch that decides on a
@@ -190,13 +314,53 @@ struct MarkdownBlockParser: Sendable {
             // Original-document line of the block that starts here (definition
             // lines were dropped from `lines`, so `i` alone is not the answer).
             let sourceLine = lineMap[i]
+            // Definitions the pre-pass took out of the lines before this one
+            // started blocks there: at the margin they end a list (GitHub).
+            let firstRemoved = i > 0 ? lineMap[i - 1] + 1 : firstContentLine
+            if firstRemoved < sourceLine {
+                for removed in firstRemoved..<sourceLine where !Self.isBlank(allLines[removed]) {
+                    nesting.block(startingAt: allLines[removed])
+                }
+            }
 
             // What every block marker below is looked for in (`markerLine`).
             let trimmedLine = Self.markerLine(line)
 
+            // Indented code under a list item (CommonMark): four columns past
+            // the item's content column, not after paragraph text. FIRST: such
+            // a line is code whatever it looks like (a fence, `#`, `- x`).
+            // Blank lines inside it are code; trailing ones are not.
+            if let code = nesting.indentedCode(line) {
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                nesting.block(startingAt: line)
+                var codeLines: [String] = []
+                var end = i
+                var j = i
+                while j < lines.count {
+                    if Self.isBlank(lines[j]) {
+                        codeLines.append(Self.removingIndentation(lines[j], upTo: code.columns))
+                    } else if Self.indentColumns(lines[j]) >= code.columns {
+                        codeLines.append(Self.removingIndentation(lines[j], upTo: code.columns))
+                        end = j + 1
+                    } else {
+                        break
+                    }
+                    j += 1
+                }
+                codeLines.removeLast(j - end)
+                blockOwners[blocks.count] = code.owner
+                blocks.append(.codeBlock(index: blockIndex, code: codeLines.joined(separator: "\n"), language: "",
+                                         sourceLine: sourceLine))
+                blockIndex += 1
+                i = end
+                continue
+            }
+
             // Fenced code block — check BEFORE math to protect $$ inside code blocks
             if let opening = Self.fenceOpening(trimmedLine) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                // A fence indented under a list item is that item's.
+                let owner = nesting.block(startingAt: line)
                 let fenceLength = opening.length
                 // CommonMark: a fence indented N columns drops up to N columns
                 // of indentation from each of its lines (a fence under a list
@@ -226,6 +390,9 @@ struct MarkdownBlockParser: Sendable {
                 } else if language.lowercased() == "svg" {
                     blocks.append(.svgImage(index: blockIndex, source: codeContent, sourceLine: sourceLine))
                 } else {
+                    // Only a code block is drawn at the item's text; a diagram
+                    // or a picture under an item stays at the margin.
+                    if let owner { blockOwners[blocks.count] = owner }
                     blocks.append(.codeBlock(index: blockIndex, code: codeContent, language: language, sourceLine: sourceLine))
                 }
                 blockIndex += 1
@@ -235,6 +402,7 @@ struct MarkdownBlockParser: Sendable {
             // Display math block $$...$$ — after code block check to protect $$ inside code
             if trimmedLine.hasPrefix("$$") {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                nesting.block(startingAt: line)
 
                 let afterDollar = String(trimmedLine.dropFirst(2)).trimmingCharacters(in: .whitespaces)
 
@@ -277,6 +445,7 @@ struct MarkdownBlockParser: Sendable {
                let hashRange = Range(match.range(at: 1), in: line),
                let contentRange = Range(match.range(at: 2), in: line) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                nesting.block(startingAt: line)
                 let level = min(max(line[hashRange].count, 1), 6)
                 let title = Self.withoutClosingSequence(
                     String(line[contentRange]).trimmingCharacters(in: .whitespaces))
@@ -302,6 +471,11 @@ struct MarkdownBlockParser: Sendable {
                 switch imageParagraph(at: i, in: lines, references: referenceDefinitions) {
                 case .images(let images, let end):
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                    // Paragraph text for the list nesting, as an image line
+                    // always was (an item's paragraph; the picture or row is
+                    // drawn at the margin, like a lone image). Its other lines
+                    // continue that paragraph: nothing more to tell.
+                    _ = nesting.text(line, sourceLine: sourceLine)
                     if images.count == 1, let image = images.first {
                         blocks.append(.image(index: blockIndex, url: image.url, alt: image.alt, width: image.width,
                                              link: image.link, sourceLine: sourceLine))
@@ -327,6 +501,8 @@ struct MarkdownBlockParser: Sendable {
             // or after it): the pre-1.15 behaviour, kept.
             if let images = InlineSyntaxScanner.standaloneImages(in: line[...], references: referenceDefinitions) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                // Paragraph text in CommonMark: an item's paragraph goes on.
+                _ = nesting.text(line, sourceLine: sourceLine)
                 for image in images {
                     // The alt is caption text: references decoded like any inline
                     // text (an `<img alt>` is decoded by `HTMLImageSyntax`).
@@ -360,6 +536,8 @@ struct MarkdownBlockParser: Sendable {
                     }
                 } else {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                    // Inline HTML in a paragraph for CommonMark: as an image line.
+                    _ = nesting.text(line, sourceLine: sourceLine)
                     for tag in html.images {
                         // `<a href="…"><img></a>` on one line: the picture is the link.
                         blocks.append(.image(index: blockIndex, url: tag.url, alt: tag.alt, width: tag.width,
@@ -402,6 +580,7 @@ struct MarkdownBlockParser: Sendable {
                     var preceding = Array(textBuffer[..<start])
                     textBuffer.removeAll()
                     flushTextBuffer(&preceding, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                    nesting.block(startingAt: line)
                     blocks.append(.heading(index: blockIndex, level: level,
                                            title: ReferenceLinks.inlinedHeading(title, definitions: referenceDefinitions,
                                                                                 footnoteIds: footnoteDefinitions.map(\.id)),
@@ -416,6 +595,7 @@ struct MarkdownBlockParser: Sendable {
             if Self.pipeCount(line) >= 2 && !trimmed.isEmpty {
                 if !isTableSeparator(trimmed) && i + 1 < lines.count && isTableSeparator(lines[i + 1]) {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                    nesting.block(startingAt: line)
 
                     var alignments = parseTableAlignments(lines[i + 1])
                     // The separator row is authoritative for column count: a header row
@@ -454,6 +634,7 @@ struct MarkdownBlockParser: Sendable {
             // Blockquote detection - group consecutive > lines by nesting level
             if trimmed.hasPrefix(">") {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                nesting.block(startingAt: line)
                 // A later nesting group of this run continues the quote row
                 // before it (`MarkdownBlock.joinsPrevious`): `> a` then `>> b`
                 // is one quote on the page, drawn as two rows.
@@ -606,6 +787,7 @@ struct MarkdownBlockParser: Sendable {
                 // "para line\n: def" as term + definition).
                 var preceding = Array(textBuffer[..<run.bufferStart])
                 flushTextBuffer(&preceding, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                nesting.block(startingAt: line)
                 let termSourceLine = textBuffer[run.bufferStart].originalIndex
                 textBuffer.removeAll()
 
@@ -620,12 +802,18 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
+            if Self.isBlank(line) {
+                nesting.blank()
+            } else if let owner = nesting.text(line, sourceLine: sourceLine) {
+                paragraphOwners[sourceLine] = owner
+            }
             textBuffer.append((line: line, originalIndex: sourceLine))
             i += 1
         }
 
         flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-        renderPendingRows(pendingRows, in: &blocks, allLines: allLines, using: activeRenderer)
+        renderPendingRows(pendingRows, in: &blocks, allLines: allLines, using: activeRenderer,
+                          owners: ListOwners(paragraphs: paragraphOwners, blocks: blockOwners))
 
         // Append footnotes block at end of document if any definitions exist
         if !footnoteDefinitions.isEmpty {
@@ -643,7 +831,13 @@ struct MarkdownBlockParser: Sendable {
                 prefix.setDualFont(size: renderer.scaled(12), bold: true, fonts: theme.fonts)
                 prefix.setDualForeground(theme.secondaryTextColor)
 
-                var content = activeRenderer.renderInline(def.content)
+                // A multi-line definition: one drawn line per paragraph or
+                // hard break (`FootnoteDefinitionBody.displayLines`).
+                var content = AttributedString()
+                for (lineIndex, line) in FootnoteDefinitionBody.displayLines(of: def.content).enumerated() {
+                    if lineIndex > 0 { content.append(AttributedString("\n")) }
+                    content.append(activeRenderer.renderInline(line))
+                }
                 content.setDualFont(size: renderer.scaled(12), fonts: theme.fonts)
                 content.setDualForeground(theme.secondaryTextColor)
 
@@ -1200,6 +1394,8 @@ struct MarkdownBlockParser: Sendable {
         let joined = MarkdownRenderer.joinSoftBreaksIndexed(buffer.map(\.line))
 
         var row: [String] = []
+        // The original line each of the row's lines starts on (`ListOwners`).
+        var rowSources: [Int] = []
         var rowSourceLine = 0
         var rowJoinsPrevious = false
         // The current block is a list: an item started it or continues it.
@@ -1207,18 +1403,20 @@ struct MarkdownBlockParser: Sendable {
 
         func flushRow() {
             guard !row.isEmpty else { return }
-            pending.append(PendingTextRow(position: blocks.count, index: index, lines: row,
+            pending.append(PendingTextRow(position: blocks.count, index: index, lines: row, sources: rowSources,
                                           sourceLine: rowSourceLine, joinsPrevious: rowJoinsPrevious))
             // Its place in the block list; `renderPendingRows` fills it in.
             blocks.append(.text(index: index, AttributedString(), sourceLine: rowSourceLine,
                                 joinsPrevious: rowJoinsPrevious))
             index += 1
             row = []
+            rowSources = []
             rowJoinsPrevious = false
         }
         func append(_ position: Int) {
             if row.isEmpty { rowSourceLine = buffer[joined[position].first].originalIndex }
             row.append(joined[position].line)
+            rowSources.append(buffer[joined[position].first].originalIndex)
         }
 
         for position in joined.indices {
@@ -1390,6 +1588,9 @@ struct MarkdownBlockParser: Sendable {
         private var fence: Fence?
         private var inMath = false
 
+        /// Inside such a block: the next line is its text or its closing line.
+        var isOpen: Bool { fence != nil || inMath }
+
         /// Whether the line (its `markerLine`) opens, continues or closes
         /// such a block.
         mutating func contains(_ marker: String) -> Bool {
@@ -1531,6 +1732,22 @@ struct MarkdownBlockParser: Sendable {
     /// definition pre-pass (`VerbatimRegions`), which reads it as a block.
     static func interruptsTable(_ line: String) -> Bool {
         !startsNoBlock(line) || markerLine(line).hasPrefix(">")
+    }
+
+    /// Whether `line`, right under paragraph text, would go on with that
+    /// paragraph in the block loop: a Setext underline, a list item that
+    /// may not interrupt a paragraph (`1984. y`), or plain text. Where a
+    /// footnote definition stood between the two, GitHub starts afresh
+    /// (the definition ended the paragraph), so the pre-pass leaves a blank
+    /// line there.
+    static func wouldContinueParagraph(_ line: String) -> Bool {
+        let marker = markerLine(line)
+        if marker.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil
+            || marker.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
+            return true
+        }
+        if MarkdownRenderer.isListItem(line) { return !MarkdownRenderer.canInterruptParagraph(line) }
+        return startsNoBlock(line) && !marker.hasPrefix(">")
     }
 
     /// CommonMark's part of `continuesQuoteLazily`: not blank, and no block
@@ -1753,8 +1970,18 @@ struct MarkdownBlockParser: Sendable {
         let position: Int
         let index: Int
         let lines: [String]
+        /// The original line each of `lines` starts on.
+        let sources: [Int]
         let sourceLine: Int
         let joinsPrevious: Bool
+    }
+
+    /// What `ListNesting` found, by original line: the item line that owns a
+    /// paragraph starting on a line, and the item line that owns the code
+    /// block at a position in the block list.
+    struct ListOwners {
+        let paragraphs: [Int: Int]
+        let blocks: [Int: Int]
     }
 
     /// Stands in for a non-text block when the ordered-list hangs are worked
@@ -1770,16 +1997,29 @@ struct MarkdownBlockParser: Sendable {
     /// widest marker was each row's own, so a list cut into rows had two text
     /// edges, and the steps of a list whose items hold code blocks each hung
     /// under their own number ("1. " is narrower than "10. ").
+    ///
+    /// The same pass lines a list item's own blocks up with the item's text
+    /// (`owners`, from `ListNesting`): a paragraph of the item hangs where the
+    /// item's text starts, a code block is indented to it — both known only
+    /// now, once the item's hang (its list's widest marker) is.
     private func renderPendingRows(_ pending: [PendingTextRow], in blocks: inout [MarkdownBlock],
-                                   allLines: [String], using renderer: MarkdownRenderer) {
+                                   allLines: [String], using renderer: MarkdownRenderer,
+                                   owners: ListOwners) {
         guard !pending.isEmpty else { return }
         var lines: [String] = []
         var starts: [Int] = []
         starts.reserveCapacity(pending.count)
+        // Where an item line (by original line) landed in `lines`.
+        var itemLines: [Int: Int] = [:]
         var next = 0
         for (position, block) in blocks.enumerated() {
             if next < pending.count, pending[next].position == position {
                 starts.append(lines.count)
+                if !owners.paragraphs.isEmpty || !owners.blocks.isEmpty {
+                    for (offset, source) in pending[next].sources.enumerated() {
+                        itemLines[source] = lines.count + offset
+                    }
+                }
                 lines.append(contentsOf: pending[next].lines)
                 next += 1
             } else {
@@ -1788,11 +2028,24 @@ struct MarkdownBlockParser: Sendable {
             }
         }
         let hangs = renderer.widestOrderedPrefixes(lines)
+        /// The text column of the item on original line `itemLine`.
+        func column(ofItem itemLine: Int) -> MarkdownRenderer.ListItemColumn? {
+            guard let k = itemLines[itemLine] else { return nil }
+            return renderer.listItemColumn(itemLine: lines[k], hang: hangs[k])
+        }
         for (row, start) in zip(pending, starts) {
+            let columns = owners.paragraphs.isEmpty ? [] : row.sources.map { source in
+                owners.paragraphs[source].flatMap(column(ofItem:))
+            }
             blocks[row.position] = .text(index: row.index,
                                          renderer.render(joined: row.lines,
-                                                         hangs: Array(hangs[start..<(start + row.lines.count)])),
+                                                         hangs: Array(hangs[start..<(start + row.lines.count)]),
+                                                         itemColumns: columns),
                                          sourceLine: row.sourceLine, joinsPrevious: row.joinsPrevious)
+        }
+        for (position, owner) in owners.blocks {
+            guard let column = column(ofItem: owner) else { continue }
+            blocks[position] = blocks[position].withListIndent(column.textIndent)
         }
     }
 }

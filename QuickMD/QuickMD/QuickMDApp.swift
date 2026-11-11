@@ -21,8 +21,12 @@ struct QuickMDApp: App {
         // Split View. Overrides the system-wide "Prefer tabs when opening
         // documents" preference for our app only; AppKit does the tabbing as
         // each window is ordered in. Must run before the first window exists.
-        NSWindow.allowsAutomaticWindowTabbing = true
-        WindowTabbing.preferTabsAlways()
+        //
+        // Settings ▸ General ▸ "Open documents in separate windows" writes
+        // "manual" instead (macOS's own "Never"). AppKit reads the value once
+        // per process, so a change in Settings goes through
+        // `WindowTabbing.applyWindowPreference()` instead.
+        WindowTabbing.applyWindowPreferenceAtLaunch()
     }
 
     var body: some Scene {

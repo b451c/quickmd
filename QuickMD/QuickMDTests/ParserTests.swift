@@ -294,11 +294,15 @@ final class ParserTests: XCTestCase {
 
     // MARK: - Footnotes before reference links (constraint)
 
+    /// The blank line keeps `[ref]:` out of the footnote: right under a
+    /// `[^1]:` line it is the footnote's lazy TEXT on GitHub
+    /// (`testALinkDefinitionRightUnderAFootnoteIsItsText`).
     func testFootnoteDefinitionsBeforeReferenceLinkDefinitions() {
         let md = """
         Uses a footnote[^1] and a [link][ref].
 
         [^1]: The footnote text
+
         [ref]: https://example.com
         """
         let blocks = parse(md)
@@ -621,7 +625,9 @@ final class ParserTests: XCTestCase {
     }
 
     /// Footnote references in quotes, alerts and table cells drew `[^note]`
-    /// literally; they now draw the paragraph's superscript number.
+    /// literally; they now draw the paragraph's superscript number — by
+    /// first reference since 1.15 (GitHub: `Body{b=1}`, `Quoted{a=2}`,
+    /// `Tip{b=1}`, `cell{a=2}`).
     func testFootnoteReferencesResolveInQuotesAlertsAndTableCells() {
         let md = """
         Body[^b].
@@ -641,13 +647,13 @@ final class ParserTests: XCTestCase {
         let blocks = parse(md)
         let renderer = MarkdownRenderer(theme: MarkdownTheme.cached(for: .light))  // no definitions
         guard case .text(let body) = blocks[0].content else { return XCTFail("paragraph") }
-        XCTAssertEqual(String(body.characters), "Body\u{00B2}.", "the paragraph's numbering (definition order)")
+        XCTAssertEqual(String(body.characters), "Body\u{00B9}.", "numbered by first reference")
         guard case .blockquote(let quote, _) = blocks[1].content,
               case .alert(_, let alert) = blocks[2].content,
               case .table(_, let rows, _, .grid) = blocks[3].content else { return XCTFail("blocks") }
-        XCTAssertEqual(String(renderer.renderQuotedBody(quote).characters), "Quoted\u{00B9} and [^missing].")
-        XCTAssertEqual(String(renderer.renderQuotedBody(alert).characters), "Tip\u{00B2}.")
-        XCTAssertEqual(String(renderer.renderInline(rows[0][0]).characters), "cell\u{00B9} [^a]", "code span kept")
+        XCTAssertEqual(String(renderer.renderQuotedBody(quote).characters), "Quoted\u{00B2} and [^missing].")
+        XCTAssertEqual(String(renderer.renderQuotedBody(alert).characters), "Tip\u{00B9}.")
+        XCTAssertEqual(String(renderer.renderInline(rows[0][0]).characters), "cell\u{00B2} [^a]", "code span kept")
     }
 
     /// Quote and alert bodies are rendered with soft breaks joined, so a code
@@ -701,7 +707,8 @@ final class ParserTests: XCTestCase {
             run.link.map { "\(String(shown[run.range].characters))=\($0.absoluteString)" }
         }
         XCTAssertEqual(links, ["q=https://e.x/a&b", "the guide=https://e.x/d&e", "q=https://e.x/a&b"])
-        XCTAssertTrue(String(shown.characters).contains("guide\u{00B2}."), String(shown.characters))
+        // First reference of the document: footnote 1 (GitHub `guide{b=1}`).
+        XCTAssertTrue(String(shown.characters).contains("guide\u{00B9}."), String(shown.characters))
         XCTAssertFalse(quote.contains("\n\n\n"), "one paragraph break per blank run")
     }
 
