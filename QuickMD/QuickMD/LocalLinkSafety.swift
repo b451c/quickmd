@@ -180,8 +180,10 @@ enum LocalLinkSafety {
 /// (the document's folder when the target is in its subtree; even after an
 /// earlier decline), and opens on success. Before, `NSWorkspace.open` failed
 /// silently there — the panel's own text promises "open linked files". A
-/// target that does not exist, a declined panel and a failed open each say
-/// so in a toast (`message(for:name:)`) instead of nothing.
+/// target that does not exist (known without access: `existence`), a
+/// declined panel and a failed open each say so in a toast
+/// (`message(for:name:)`) instead of nothing — and only what is known: a
+/// decline never claims the file exists.
 enum LocalLinkOpening {
     enum Step: Equatable {
         /// Sandboxed and not readable yet: ask for folder access first.
@@ -198,14 +200,39 @@ enum LocalLinkOpening {
         case openFailed
     }
 
-    /// `accessAvailable`: the access step is behind us (granted), so only
-    /// existence is left to check.
+    /// Whether a path exists, from `stat`'s answer: `ENOENT`/`ENOTDIR` say
+    /// it does not; any other refusal (`EPERM`, `EACCES`: a folder above it
+    /// we may not search, a privacy-protected location) says nothing.
+    enum Existence: Equatable {
+        case exists
+        case missing
+        case unknown
+    }
+
+    /// `stat` is file METADATA, which the App Sandbox allows everywhere
+    /// (`application.sb`: `(allow file-read-metadata)`; probed under
+    /// Seatbelt with `file-read-data` denied: `stat` succeeds, `access(R_OK)`
+    /// — `isReadableFile` — fails). So a missing file is known as missing
+    /// before any folder access, in both builds.
+    static func existence(atPath path: String) -> Existence {
+        var info = stat()
+        if stat(path, &info) == 0 { return .exists }
+        return errno == ENOENT || errno == ENOTDIR ? .missing : .unknown
+    }
+
+    /// Missing → `.notFound` straight away (no panel for a file that is not
+    /// there). Sandboxed and not readable (`isReadableFile` is `access(2)`,
+    /// which the sandbox answers) → `.askForAccess`. `accessAvailable`: the
+    /// access step is behind us (granted). Existence we cannot tell goes on
+    /// to the open, whose failure is said truthfully ("Couldn't open").
     static func step(for target: URL, isSandboxed: Bool, accessAvailable: Bool = false,
-                     fileManager: FileManager = .default) -> Step {
+                     fileManager: FileManager = .default,
+                     existence: (String) -> Existence = LocalLinkOpening.existence(atPath:)) -> Step {
+        if existence(target.path) == .missing { return .notFound }
         if isSandboxed, !accessAvailable, !fileManager.isReadableFile(atPath: target.path) {
             return .askForAccess
         }
-        return fileManager.fileExists(atPath: target.path) ? .open : .notFound
+        return .open
     }
 
     /// The toast for a failure, naming the target (cleaned for display).

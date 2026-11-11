@@ -192,4 +192,66 @@ final class FolderAccessBrokerTests: XCTestCase {
         XCTAssertTrue(granted)
         XCTAssertEqual(world.prompts.count, 1)
     }
+
+    /// Final review N6: an automatic panel is up (or waiting for the app to
+    /// become active) when the reader clicks — the click's explicit request
+    /// takes that panel's answer: one click, one panel. A later click asks.
+    func testExplicitRequestSharesAnAutomaticPanelsAnswer() async {
+        let world = World()
+        world.holdPanels = true
+        let access = broker(world)
+        async let automatic = access.requestAccess(forFileAt: file("docs/badges/a.svg"), documentURL: document,
+                                                   explicit: false)
+        for _ in 0..<50 { await Task.yield() }
+        async let click = access.requestAccess(forFileAt: file("docs/other.md"), documentURL: document,
+                                               explicit: true)
+        for _ in 0..<50 { await Task.yield() }
+        world.holdPanels = false
+        world.gates.forEach { $0.resume() }
+        world.gates.removeAll()
+        let results = await [automatic, click]
+        XCTAssertEqual(results, [false, false])
+        XCTAssertEqual(world.prompts.count, 1, "the click shared the declined panel")
+        let again = await access.requestAccess(forFileAt: file("docs/other.md"), documentURL: document,
+                                               explicit: true)
+        XCTAssertFalse(again)
+        XCTAssertEqual(world.prompts.count, 2, "a new click is a new question")
+    }
+
+    /// Final review N7: paths are compared as the disk spells them — a
+    /// missing file under a symlinked folder (`/var` → `/private/var`) and,
+    /// on a case-insensitive volume, `DOCS/` for `docs/`.
+    func testCanonicalPathIsTheDiskSpelling() throws {
+        let docs = FolderAccessBroker.canonicalPath(file("docs"))
+        let missing = FolderAccessBroker.canonicalPath(file("docs/badges/none.svg"))
+        XCTAssertTrue(FolderAccessBroker.covers(docs, missing), "\(docs) vs \(missing)")
+        XCTAssertTrue(missing.hasSuffix("/badges/none.svg"))
+        let caseSensitive = try file("docs").resourceValues(forKeys: [.volumeSupportsCaseSensitiveNamesKey])
+            .volumeSupportsCaseSensitiveNames ?? true
+        if !caseSensitive {
+            XCTAssertEqual(FolderAccessBroker.canonicalPath(file("DOCS/Badges")),
+                           FolderAccessBroker.canonicalPath(file("docs/badges")))
+            XCTAssertTrue(FolderAccessBroker.covers(docs, FolderAccessBroker.canonicalPath(file("DOCS/x.png"))))
+        }
+    }
+
+    /// Final review N1: the editing mark is ended by the window's token, not
+    /// by the URL it reports at the end (a renamed/moved document).
+    func testSourceEditRegistryEndsByToken() {
+        var registry = SourceEditRegistry()
+        let old = file("docs/README.md"), renamed = file("docs/INTRO.md")
+        let window = UUID(), other = UUID()
+        registry.set(old, window: window, active: true)
+        XCTAssertTrue(registry.isEditing(old))
+        registry.set(renamed, window: window, active: false)
+        XCTAssertFalse(registry.isEditing(old), "renamed while editing: the old path is free again")
+        XCTAssertFalse(registry.isEditing(renamed))
+        registry.set(old, window: window, active: true)
+        registry.set(old, window: other, active: true)
+        registry.set(old, window: window, active: false)
+        XCTAssertTrue(registry.isEditing(old), "another window still edits it")
+        registry.set(old, window: other, active: false)
+        XCTAssertFalse(registry.isEditing(old))
+        XCTAssertFalse(registry.isEditing(nil))
+    }
 }

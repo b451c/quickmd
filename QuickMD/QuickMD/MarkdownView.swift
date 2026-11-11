@@ -1927,8 +1927,9 @@ struct MarkdownView: View {
             }
         }
 
-        // Open the resolved file URL — access first (sandbox), then existence,
-        // then the program check; every failure says so (`LocalLinkOpening`).
+        // Open the resolved file URL — a missing file is said at once, then
+        // access (sandbox), then the program check; every failure says so
+        // (`LocalLinkOpening`).
         let target = finalURL
         Task { @MainActor in await openLocalTarget(target, link: url) }
     }

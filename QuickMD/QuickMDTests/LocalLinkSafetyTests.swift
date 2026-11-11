@@ -174,14 +174,40 @@ final class LocalLinkSafetyTests: XCTestCase {
         XCTAssertEqual(Opening.step(for: doc, isSandboxed: false), .open)
         XCTAssertEqual(Opening.step(for: missing, isSandboxed: false), .notFound)
         XCTAssertEqual(Opening.step(for: locked, isSandboxed: false), .open)
-        // Sandboxed: what cannot be read asks first (a missing file too —
-        // the sandbox hides whether it exists), then existence decides.
+        // Sandboxed: a missing file is said at once (`stat` is metadata,
+        // which the sandbox allows) — no panel for nothing; what exists but
+        // cannot be read asks first.
         XCTAssertEqual(Opening.step(for: doc, isSandboxed: true), .open)
         XCTAssertEqual(Opening.step(for: locked, isSandboxed: true), .askForAccess)
-        XCTAssertEqual(Opening.step(for: missing, isSandboxed: true), .askForAccess)
+        XCTAssertEqual(Opening.step(for: missing, isSandboxed: true), .notFound)
+        XCTAssertEqual(Opening.step(for: folder.appendingPathComponent("nodir/missing.md"), isSandboxed: true),
+                       .notFound, "a missing parent: no panel at a folder that does not exist")
         XCTAssertEqual(Opening.step(for: missing, isSandboxed: true, accessAvailable: true), .notFound)
         XCTAssertEqual(Opening.step(for: locked, isSandboxed: true, accessAvailable: true), .open)
+        // Existence that `stat` cannot tell: ask in the sandbox (after a
+        // grant, the open's own failure is said); never claim "not found".
+        let unknown: (String) -> Opening.Existence = { _ in .unknown }
+        XCTAssertEqual(Opening.step(for: missing, isSandboxed: true, existence: unknown), .askForAccess)
+        XCTAssertEqual(Opening.step(for: missing, isSandboxed: true, accessAvailable: true, existence: unknown), .open)
+        XCTAssertEqual(Opening.step(for: missing, isSandboxed: false, existence: unknown), .open)
         XCTAssertEqual(Opening.step(for: folder, isSandboxed: false), .open, "a folder link opens (Finder)")
+    }
+
+    /// `existence(atPath:)` from `stat`'s errno: missing (ENOENT, ENOTDIR)
+    /// vs. cannot tell (EACCES: a folder above it we may not search).
+    func testExistenceFromStat() throws {
+        let doc = try file("a.md")
+        XCTAssertEqual(LocalLinkOpening.existence(atPath: doc.path), .exists)
+        XCTAssertEqual(LocalLinkOpening.existence(atPath: folder.path), .exists)
+        XCTAssertEqual(LocalLinkOpening.existence(atPath: folder.appendingPathComponent("none.md").path), .missing)
+        XCTAssertEqual(LocalLinkOpening.existence(atPath: doc.appendingPathComponent("under-a-file.md").path),
+                       .missing, "ENOTDIR")
+        let closed = try directory("closed")
+        let inside = closed.appendingPathComponent("x.md")
+        try Data("x".utf8).write(to: inside)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: closed.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: closed.path) }
+        XCTAssertEqual(LocalLinkOpening.existence(atPath: inside.path), .unknown, "EACCES says nothing")
     }
 
     func testLocalLinkFailureMessages() {
