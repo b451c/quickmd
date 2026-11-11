@@ -22,9 +22,10 @@ struct QuickMDApp: App {
         // documents" preference for our app only; AppKit does the tabbing as
         // each window is ordered in. Must run before the first window exists.
         //
-        // Settings ▸ General ▸ "Open each document in its own window" flips
-        // this (each document then gets its own window); the same helper
-        // re-applies it live when the setting is toggled.
+        // Settings ▸ General ▸ "Open documents in separate windows" writes
+        // "manual" instead (macOS's own "Never"). AppKit reads the value once
+        // per process, so a change in Settings goes through
+        // `WindowTabbing.applyWindowPreference()` instead.
         WindowTabbing.applyWindowPreferenceAtLaunch()
     }
 

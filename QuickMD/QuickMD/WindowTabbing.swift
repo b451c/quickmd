@@ -11,18 +11,14 @@ import AppKit
 /// DocumentGroup windows one shared `tabbingIdentifier`, so it must be left as
 /// is. This callback can't do the tabbing: on macOS 26 it fires only after the
 /// window is on screen (and, in full screen, already in a Space of its own).
+/// For the same reason it never sets the window's `tabbingMode` — AppKit has
+/// already decided by then (see `WindowTabbing.applyWindowPreference`).
 struct WindowConfigurator: NSViewRepresentable {
     let configure: (NSWindow) -> Void
 
     func makeNSView(context: Context) -> NSView {
         let view = TabAwareView()
         view.onWindowAttached = { window in
-            // "Open each document in its own window": the window itself
-            // refuses to join a tab group. AppKit decides when a window is
-            // shown, and by then this can already be too late — the global
-            // switch in WindowTabbing is what decides in practice — but it
-            // keeps a window that is shown later on the right track.
-            window.tabbingMode = WindowTabbing.documentTabbingMode
             configure(window)
             WindowTabbing.registerDocumentWindow(window)
             let merged = WindowTabbing.joinExistingTabs(window, among: WindowTabbing.documentWindows)
@@ -50,15 +46,32 @@ struct WindowConfigurator: NSViewRepresentable {
 
 // MARK: - Window Tabbing
 
+/// How document windows are grouped: as tabs of one window (default, PR #36)
+/// or one window per document (Settings ▸ General, PR #57).
+///
+/// The levers, and what was measured about them (macOS 27, headless probe
+/// with invisible windows; full screen is not covered by it):
+/// - `AppleWindowTabbingMode` in the argument domain becomes
+///   `NSWindow.userTabbingPreference`. AppKit reads it ONCE per process and
+///   keeps that value: rewriting the domain later changes neither the class
+///   property nor what a newly shown window does. So it is a launch-time
+///   lever only.
+/// - A window's own `tabbingMode = .disallowed` (or `.preferred`) works only
+///   if it is set BEFORE the window is ordered in. `WindowConfigurator` runs
+///   after that, so it cannot use this lever.
+/// - `NSWindow.allowsAutomaticWindowTabbing = false` stops automatic tabbing
+///   for every window shown afterwards, and is read live. It also takes the
+///   tab items out of the Window menu (WWDC 2016; not measurable headless —
+///   the E2E checks it).
+/// - `addTabbedWindow` (our fallback merge) ignores both the global flag and
+///   the windows' `tabbingMode`.
 enum WindowTabbing {
     /// The defaults key behind `NSWindow.userTabbingPreference` (System
     /// Settings ▸ Desktop & Dock ▸ "Prefer tabs when opening documents").
     static let preferenceKey = "AppleWindowTabbingMode"
 
-    /// Settings ▸ General ▸ Windows ▸ "Open each document in its own window".
-    /// Off by default (every document shares one window, as a tab); when on,
-    /// each document gets its own window and nothing is ever merged into
-    /// another window's tab group.
+    /// Settings ▸ General ▸ "Open documents in separate windows". Off by
+    /// default: every document opens as a tab of the frontmost window.
     static let separateWindowsKey = "separateDocumentWindows"
 
     /// Whether each document should open in its own window.
@@ -74,12 +87,10 @@ enum WindowTabbing {
         setTabbingMode("always", in: defaults)
     }
 
-    /// The opposite of `preferTabsAlways()`: documents never join a tab group,
-    /// whatever the system-wide "Prefer tabs when opening documents" setting
-    /// says. Set in the argument domain too, for the same reasons.
-    ///
-    /// "manual" is the value AppKit reads as "never tab" — "never" is an old
-    /// alias for "inFullScreen".
+    /// The opposite of `preferTabsAlways()`: AppKit never tabs a new document
+    /// on its own, whatever the system-wide setting. "manual" is the value
+    /// macOS's own "Never" choice writes; an unknown value (e.g. "never")
+    /// reads as the system default, "In Full Screen" (measured).
     static func preferTabsNever(in defaults: UserDefaults = .standard) {
         setTabbingMode("manual", in: defaults)
     }
@@ -92,52 +103,58 @@ enum WindowTabbing {
         defaults.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
     }
 
-    /// The tabbing mode a document window must use.
-    ///
-    /// `.disallowed` is the per-window lever: it needs no global state and
-    /// can be changed while the app runs. The alternative,
-    /// `NSWindow.userTabbingPreference`, cannot be: AppKit reads it once per
-    /// process and caches it, so changing the defaults domain after the first
-    /// window exists has no effect.
-    static var documentTabbingMode: NSWindow.TabbingMode {
-        separateWindowsEnabled() ? .disallowed : .automatic
+    /// At launch, before the first window exists. Separate windows = macOS's
+    /// native "Never": "manual" only. Automatic tabbing stays ALLOWED, so the
+    /// Window menu keeps Merge All Windows, Move Tab to New Window and Show
+    /// Tab Bar — a reader can still put documents together on purpose (owner
+    /// decision, review of #57). Our fallback merge is skipped
+    /// (`joinExistingTabs`).
+    static func applyWindowPreferenceAtLaunch(in defaults: UserDefaults = .standard) {
+        NSWindow.allowsAutomaticWindowTabbing = true
+        if separateWindowsEnabled(in: defaults) {
+            preferTabsNever(in: defaults)
+        } else {
+            preferTabsAlways(in: defaults)
+        }
     }
 
-    /// Applies the "separate windows" setting at launch, before the first
-    /// window exists: the global tabbing switch, the preference AppKit reads
-    /// for every window it shows, and the mode of the windows already open.
-    static func applyWindowPreferenceAtLaunch(in defaults: UserDefaults = .standard) {
+    /// The setting was toggled while the app runs. Windows and tab groups
+    /// already open are never touched; only documents opened from now on
+    /// follow the new value.
+    ///
+    /// The argument domain is rewritten to match (it costs nothing and is what
+    /// a reader of the defaults sees), but AppKit keeps the preference it read
+    /// at launch, so the process behaves by that cached value:
+    /// - Launched with tabs ("always"), switched ON: a new window would still
+    ///   be tabbed as AppKit orders it in, before any of our code sees it, so
+    ///   the only lever left is the global `allowsAutomaticWindowTabbing =
+    ///   false` (a per-window `.disallowed` from `WindowConfigurator` lands
+    ///   too late). Cost until the next launch: the Window menu's tab items
+    ///   go away (existing groups still work by dragging tabs).
+    /// - Switched OFF again in that process: the flag comes back, AppKit tabs
+    ///   again — in full screen too.
+    /// - Launched with separate windows ("manual"), switched ON again: nothing
+    ///   to do — AppKit does not tab on its own.
+    /// - Launched with separate windows, switched OFF: AppKit still does not
+    ///   tab. Outside full screen our fallback merge moves the new window into
+    ///   the frontmost group right after it appears (a brief flash of its own
+    ///   window first). In full screen the fallback must not run (black half
+    ///   of a Space), so the document opens in its own window. Real tabs
+    ///   everywhere need a relaunch — the Settings caption says so.
+    ///
+    /// `tabbingPreference` is the value AppKit cached (injected by tests).
+    static func applyWindowPreference(
+        in defaults: UserDefaults = .standard,
+        tabbingPreference: NSWindow.UserTabbingPreference? = nil
+    ) {
         let separate = separateWindowsEnabled(in: defaults)
-        NSWindow.allowsAutomaticWindowTabbing = !separate
         if separate {
             preferTabsNever(in: defaults)
         } else {
             preferTabsAlways(in: defaults)
         }
-        applyTabbingModeToOpenWindows()
-    }
-
-    /// Applies the "separate windows" setting while the app is running.
-    ///
-    /// The tabbing *preference* is not touched: AppKit reads
-    /// `NSWindow.userTabbingPreference` once per process and caches it, so
-    /// rewriting the defaults domain now would have no effect. The two levers
-    /// that do work at runtime are `NSWindow.allowsAutomaticWindowTabbing`
-    /// (global) and `NSWindow.tabbingMode` (per window, read when the window
-    /// is shown).
-    static func applyWindowPreference() {
-        NSWindow.allowsAutomaticWindowTabbing = !separateWindowsEnabled()
-        applyTabbingModeToOpenWindows()
-    }
-
-    /// Gives every open document window the tabbing mode the setting asks
-    /// for. Windows that are already on screen keep the tab group they are in
-    /// — a tab group is not something AppKit lets an app take apart — but a
-    /// document opened from now on honours the new mode.
-    private static func applyTabbingModeToOpenWindows() {
-        for window in documentWindows {
-            window.tabbingMode = documentTabbingMode
-        }
+        let cached = tabbingPreference ?? NSWindow.userTabbingPreference
+        NSWindow.allowsAutomaticWindowTabbing = !(separate && cached != .manual)
     }
 
     /// Every document window, registered as it attaches (WindowConfigurator
@@ -159,16 +176,23 @@ enum WindowTabbing {
     /// ordinary windows only: in full screen the window already has its own
     /// Space, and moving it into another window's tab group then leaves a
     /// half-empty black full-screen Space without a menu bar.
+    ///
+    /// A window that is already in a tab group counts as merged in BOTH modes
+    /// (checked first): it must never resize the group to the remembered size
+    /// — e.g. a tab group brought back by state restoration, or one the
+    /// reader made with Merge All Windows. Separate windows only skip the
+    /// fallback merge.
     @discardableResult
-    static func joinExistingTabs(_ newWindow: NSWindow, among documentWindows: [NSWindow]) -> Bool {
-        // "Open each document in its own window": never merge. The check comes
-        // before the tabbed-windows test on purpose — a window that AppKit
-        // already grouped must still count as standalone, so it also gets the
-        // remembered size (see WindowConfigurator).
-        guard !separateWindowsEnabled() else { return false }
+    static func joinExistingTabs(
+        _ newWindow: NSWindow,
+        among documentWindows: [NSWindow],
+        in defaults: UserDefaults = .standard
+    ) -> Bool {
         if (newWindow.tabbedWindows?.count ?? 0) > 1 { return true }
-        let candidates = documentWindows.filter { $0 !== newWindow && $0.isVisible }
-        guard let host = candidates.first else { return false }
+        guard !separateWindowsEnabled(in: defaults) else { return false }
+        guard let host = documentWindows.first(where: { other in
+            other !== newWindow && other.isVisible
+        }) else { return false }
         if host.styleMask.contains(.fullScreen) || newWindow.styleMask.contains(.fullScreen) {
             return false
         }

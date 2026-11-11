@@ -37,27 +37,51 @@ final class WindowTabbingTests: XCTestCase {
 
     private var savedArguments: [String: Any] = [:]
     private var savedSize: (Any?, Any?)
-    private var savedSeparateWindows: Bool = false
     private var savedAllowsAutomaticTabbing: Bool = true
+    /// The separate-windows setting lives here, never in the test runner's
+    /// saved defaults: a crash mid-test must not leave it on for later runs.
+    private var suiteName = ""
+    private var defaults: UserDefaults!
 
     override func setUp() {
         super.setUp()
-        let defaults = UserDefaults.standard
-        savedArguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
-        savedSize = (defaults.object(forKey: "lastWindowFrameWidth"),
-                     defaults.object(forKey: "lastWindowFrameHeight"))
-        savedSeparateWindows = defaults.bool(forKey: WindowTabbing.separateWindowsKey)
+        let standard = UserDefaults.standard
+        savedArguments = standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        savedSize = (standard.object(forKey: "lastWindowFrameWidth"),
+                     standard.object(forKey: "lastWindowFrameHeight"))
         savedAllowsAutomaticTabbing = NSWindow.allowsAutomaticWindowTabbing
+        suiteName = "WindowTabbingTests.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
     }
 
     override func tearDown() {
-        let defaults = UserDefaults.standard
-        defaults.setVolatileDomain(savedArguments, forName: UserDefaults.argumentDomain)
-        defaults.set(savedSize.0, forKey: "lastWindowFrameWidth")
-        defaults.set(savedSize.1, forKey: "lastWindowFrameHeight")
-        defaults.set(savedSeparateWindows, forKey: WindowTabbing.separateWindowsKey)
+        let standard = UserDefaults.standard
+        // The argument domain is process-wide (a suite writes the same one).
+        standard.setVolatileDomain(savedArguments, forName: UserDefaults.argumentDomain)
+        restore(savedSize.0, forKey: "lastWindowFrameWidth", in: standard)
+        restore(savedSize.1, forKey: "lastWindowFrameHeight", in: standard)
         NSWindow.allowsAutomaticWindowTabbing = savedAllowsAutomaticTabbing
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults = nil
         super.tearDown()
+    }
+
+    /// Puts a value back, or removes the key when there was none (an explicit
+    /// write would leave a value the runner never had).
+    private func restore(_ value: Any?, forKey key: String, in defaults: UserDefaults) {
+        if let value {
+            defaults.set(value, forKey: key)
+        } else {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
+    private func setSeparateWindows(_ on: Bool) {
+        defaults.set(on, forKey: WindowTabbing.separateWindowsKey)
+    }
+
+    private var argumentTabbingMode: String? {
+        UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)[WindowTabbing.preferenceKey] as? String
     }
 
     // MARK: - Preference
@@ -95,18 +119,18 @@ final class WindowTabbingTests: XCTestCase {
         let host = FakeWindow()
         let new = FakeWindow()
         new.fakeTabs = [host, new]
-        XCTAssertTrue(WindowTabbing.joinExistingTabs(new, among: [host, new]))
+        XCTAssertTrue(WindowTabbing.joinExistingTabs(new, among: [host, new], in: defaults))
     }
 
     func testFirstWindowIsStandalone() {
         let new = FakeWindow()
-        XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [new]))
+        XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [new], in: defaults))
     }
 
     func testHiddenWindowsAreNotHosts() {
         let hidden = FakeWindow()
         let new = FakeWindow()
-        XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [hidden, new]))
+        XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [hidden, new], in: defaults))
         XCTAssertTrue(hidden.addedTabs.isEmpty)
     }
 
@@ -129,7 +153,7 @@ final class WindowTabbingTests: XCTestCase {
         host.tabbingIdentifier = "SwiftUI-1"
         let new = FakeWindow()
         new.tabbingIdentifier = "SwiftUI-2"
-        XCTAssertTrue(WindowTabbing.joinExistingTabs(new, among: [host, new]))
+        XCTAssertTrue(WindowTabbing.joinExistingTabs(new, among: [host, new], in: defaults))
         XCTAssertTrue(host.addedTabs.count == 1 && host.addedTabs.first === new)
     }
 
@@ -140,7 +164,7 @@ final class WindowTabbingTests: XCTestCase {
         host.fakeVisible = true
         host.fakeFullScreen = true
         let new = FakeWindow()
-        XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [host, new]))
+        XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [host, new], in: defaults))
         XCTAssertTrue(host.addedTabs.isEmpty)
     }
 
@@ -149,7 +173,7 @@ final class WindowTabbingTests: XCTestCase {
         host.fakeVisible = true
         let new = FakeWindow()
         new.fakeFullScreen = true
-        XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [host, new]))
+        XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [host, new], in: defaults))
         XCTAssertTrue(host.addedTabs.isEmpty)
     }
 
@@ -195,104 +219,100 @@ final class WindowTabbingTests: XCTestCase {
         XCTAssertEqual(UserDefaults.standard.double(forKey: "lastWindowFrameHeight"), window.frame.height)
     }
 
-    // MARK: - Separate windows (one window per document)
+    // MARK: - Separate windows (#57)
 
-    /// AppKit reads `NSWindow.userTabbingPreference` ONCE per process and
-    /// caches it — proven by this file's very first test, which is the one
-    /// that sees "always"; every later read in the same process still sees
-    /// "always" no matter what the defaults domain says. So the preference is
-    /// only a launch-time lever, and the runtime levers are
-    /// `allowsAutomaticWindowTabbing` and the per-window `tabbingMode`.
-    func testPreferTabsNeverWritesTheValueAppKitReadsAsManual() {
-        WindowTabbing.preferTabsNever()
-        let after = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
-        XCTAssertEqual(after[WindowTabbing.preferenceKey] as? String, "manual")
+    /// Stored value only: what `NSWindow.userTabbingPreference` then reports
+    /// cannot be tested in this process — AppKit reads the preference once per
+    /// process and keeps it (measured with a standalone probe; whichever test
+    /// reads it first decides for the whole run).
+    func testPreferTabsNeverStoresManualInTheArgumentDomain() {
+        WindowTabbing.preferTabsNever(in: defaults)
+        XCTAssertEqual(argumentTabbingMode, "manual")
     }
 
-    func testSeparateWindowsTurnsAutomaticTabbingOff() {
-        UserDefaults.standard.set(true, forKey: WindowTabbing.separateWindowsKey)
-        WindowTabbing.applyWindowPreference()
-        XCTAssertFalse(NSWindow.allowsAutomaticWindowTabbing)
-    }
-
-    func testDefaultKeepsTabsAndAutomaticTabbingOn() {
-        UserDefaults.standard.set(false, forKey: WindowTabbing.separateWindowsKey)
-        WindowTabbing.applyWindowPreference()
+    /// Native "Never": "manual" only, automatic tabbing stays allowed so the
+    /// Window menu keeps Merge All Windows / Move Tab to New Window.
+    func testLaunchWithSeparateWindowsIsManualAndKeepsTabCommands() {
+        setSeparateWindows(true)
+        NSWindow.allowsAutomaticWindowTabbing = false
+        WindowTabbing.applyWindowPreferenceAtLaunch(in: defaults)
+        XCTAssertEqual(argumentTabbingMode, "manual")
         XCTAssertTrue(NSWindow.allowsAutomaticWindowTabbing)
-    }
-
-    /// At launch the preference AppKit will read is written to match the
-    /// setting: "manual" (never tab) with separate windows on.
-    func testLaunchWritesThePreferenceAppKitWillRead() {
-        UserDefaults.standard.set(true, forKey: WindowTabbing.separateWindowsKey)
-        WindowTabbing.applyWindowPreferenceAtLaunch()
-        let after = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
-        XCTAssertEqual(after[WindowTabbing.preferenceKey] as? String, "manual")
-        XCTAssertFalse(NSWindow.allowsAutomaticWindowTabbing)
     }
 
     func testLaunchKeepsTheAlwaysPreferenceByDefault() {
-        UserDefaults.standard.set(false, forKey: WindowTabbing.separateWindowsKey)
-        WindowTabbing.applyWindowPreferenceAtLaunch()
-        let after = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
-        XCTAssertEqual(after[WindowTabbing.preferenceKey] as? String, "always")
+        setSeparateWindows(false)
+        NSWindow.allowsAutomaticWindowTabbing = false
+        WindowTabbing.applyWindowPreferenceAtLaunch(in: defaults)
+        XCTAssertEqual(argumentTabbingMode, "always")
         XCTAssertTrue(NSWindow.allowsAutomaticWindowTabbing)
     }
 
-    /// The manual merge is what actually forces a second document into the
-    /// first window's tab group — with separate windows on, it must not run.
-    func testSeparateWindowsNeverMergesIntoAnExistingWindow() {
-        UserDefaults.standard.set(true, forKey: WindowTabbing.separateWindowsKey)
-        let host = FakeWindow()
-        host.fakeVisible = true
-        let new = FakeWindow()
-        XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [host, new]))
-        XCTAssertTrue(host.addedTabs.isEmpty)
-    }
-
-    /// Even a window AppKit already tabbed must count as standalone, so it
-    /// gets the remembered size instead of inheriting the tab group's frame.
-    func testSeparateWindowsTreatsAnAppKitTabGroupAsStandalone() {
-        UserDefaults.standard.set(true, forKey: WindowTabbing.separateWindowsKey)
-        let host = FakeWindow()
-        let new = FakeWindow()
-        new.fakeTabs = [host, new]
-        XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [host, new]))
-    }
-
     func testSeparateWindowsKeepsOtherLaunchArguments() {
-        let defaults = UserDefaults.standard
         var arguments = savedArguments
         arguments["QuickMDTestArgument"] = "kept"
-        defaults.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
 
-        UserDefaults.standard.set(true, forKey: WindowTabbing.separateWindowsKey)
-        WindowTabbing.applyWindowPreferenceAtLaunch()
+        setSeparateWindows(true)
+        WindowTabbing.applyWindowPreferenceAtLaunch(in: defaults)
 
-        let after = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        let after = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
         XCTAssertEqual(after["QuickMDTestArgument"] as? String, "kept")
         XCTAssertEqual(after[WindowTabbing.preferenceKey] as? String, "manual")
     }
 
-    /// The per-window mode is the lever that survives a running app: AppKit
-    /// caches `userTabbingPreference` for the whole process, so the window's
-    /// own mode is what really decides whether it joins a tab group.
-    func testSeparateWindowsDisallowsTabbingForTheWindow() {
-        UserDefaults.standard.set(true, forKey: WindowTabbing.separateWindowsKey)
-        XCTAssertEqual(WindowTabbing.documentTabbingMode, .disallowed)
+    /// Launched with tabs, switched on: AppKit still holds "always" and would
+    /// tab the next window before our code sees it, so automatic tabbing must
+    /// go off for new windows.
+    func testSwitchingOnInATabsProcessStopsAutomaticTabbing() {
+        setSeparateWindows(true)
+        WindowTabbing.applyWindowPreference(in: defaults, tabbingPreference: .always)
+        XCTAssertFalse(NSWindow.allowsAutomaticWindowTabbing)
+        XCTAssertEqual(argumentTabbingMode, "manual")
     }
 
-    func testDefaultLeavesTheWindowTabbingModeAutomatic() {
-        UserDefaults.standard.set(false, forKey: WindowTabbing.separateWindowsKey)
-        XCTAssertEqual(WindowTabbing.documentTabbingMode, .automatic)
-    }
-
-    /// Toggling the setting off again must restore the tabbing behaviour.
-    func testTurningSeparateWindowsOffRestoresTabs() {
-        UserDefaults.standard.set(true, forKey: WindowTabbing.separateWindowsKey)
-        WindowTabbing.applyWindowPreference()
-        UserDefaults.standard.set(false, forKey: WindowTabbing.separateWindowsKey)
-        WindowTabbing.applyWindowPreference()
+    /// Launched with separate windows ("manual"): AppKit never tabs on its own,
+    /// so switching on again needs no global lever and keeps the tab commands.
+    func testSwitchingOnInAManualProcessKeepsTabCommands() {
+        setSeparateWindows(true)
+        WindowTabbing.applyWindowPreference(in: defaults, tabbingPreference: .manual)
         XCTAssertTrue(NSWindow.allowsAutomaticWindowTabbing)
+    }
+
+    /// Switched off again (either launch mode): automatic tabbing is back and
+    /// the argument domain asks for tabs.
+    func testSwitchingOffRestoresAutomaticTabbing() {
+        for cached in [NSWindow.UserTabbingPreference.always, .manual] {
+            setSeparateWindows(true)
+            WindowTabbing.applyWindowPreference(in: defaults, tabbingPreference: cached)
+            setSeparateWindows(false)
+            WindowTabbing.applyWindowPreference(in: defaults, tabbingPreference: cached)
+            XCTAssertTrue(NSWindow.allowsAutomaticWindowTabbing, "cached \(cached.rawValue)")
+            XCTAssertEqual(argumentTabbingMode, "always", "cached \(cached.rawValue)")
+        }
+    }
+
+    /// The manual merge is what forces a second document into the first
+    /// window's tab group outside full screen — with separate windows on, it
+    /// must not run. Same host as `testVisibleDocumentHostMergesWhateverItsIdentifier`.
+    func testSeparateWindowsNeverMergesIntoAVisibleHost() {
+        setSeparateWindows(true)
+        let host = FakeWindow()
+        host.fakeVisible = true
+        let new = FakeWindow()
+        XCTAssertFalse(WindowTabbing.joinExistingTabs(new, among: [host, new], in: defaults))
+        XCTAssertTrue(host.addedTabs.isEmpty)
+    }
+
+    /// A window that is already in a tab group (state restoration, or Merge
+    /// All Windows) counts as merged with separate windows on too, so
+    /// `WindowSizeMemory.apply` never resizes the group.
+    func testSeparateWindowsStillCountsAnAppKitTabGroupAsMerged() {
+        setSeparateWindows(true)
+        let host = FakeWindow()
+        let new = FakeWindow()
+        new.fakeTabs = [host, new]
+        XCTAssertTrue(WindowTabbing.joinExistingTabs(new, among: [host, new], in: defaults))
+        XCTAssertTrue(host.addedTabs.isEmpty)
     }
 }

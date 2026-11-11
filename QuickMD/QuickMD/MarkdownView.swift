@@ -565,7 +565,7 @@ struct MarkdownView: View {
         }
         .background(theme.backgroundColor)
         .background(WindowConfigurator { window in
-            // Tabbing is set up app-wide (WindowTabbing.preferTabsAlways); the
+            // Tabbing is set up app-wide (WindowTabbing.applyWindowPreferenceAtLaunch); the
             // window keeps SwiftUI's shared tabbingIdentifier.
             // Remembered so the process-global key monitor below can ignore
             // key events addressed to OTHER windows (tabs are separate windows).
