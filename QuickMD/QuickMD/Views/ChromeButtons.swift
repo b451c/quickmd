@@ -385,17 +385,20 @@ struct ReloadDocumentButton: View {
 /// menu. One of the three ways into Source Edit, with File ▸ Edit Source and
 /// the shortcut.
 ///
-/// Holding Option turns it into "Side by Side" (⌥⇧⌘E), like an alternate
-/// menu item: the pill shows the two-column icon and an Option-click enters
-/// Source Edit side by side. The Option state comes from a local
-/// `flagsChanged` monitor — one per tab, so every tab relabels its own pill
-/// (display only; the click itself reads the flags at the click).
+/// Holding Option over it turns it into "Side by Side" (⌥⇧⌘E), like an
+/// alternate menu item: the pill shows the two-column icon and an
+/// Option-click enters Source Edit side by side. Only while the pointer is
+/// over THIS pill: the `flagsChanged` monitor exists only then (Option-letters
+/// typed elsewhere — ą, ę on a Polish keyboard — relabel nothing, in no tab),
+/// and the label resets when the app or a window resigns, where no hover exit
+/// arrives. A chrome pill, outside the document rows: a plain `.onHover` is
+/// right here (constraints "Block hover buttons").
 struct EditSourceButton: View {
     let theme: MarkdownTheme
     let action: () -> Void
     let sideBySideAction: () -> Void
 
-    @State private var isOptionDown = NSEvent.modifierFlags.contains(.option)
+    @State private var isOptionDown = false
     @State private var flagsMonitor: Any?
 
     var body: some View {
@@ -412,17 +415,33 @@ struct EditSourceButton: View {
                 .font(.system(size: 11))
         }
         .accessibilityIdentifier("source-edit")
-        .onAppear {
-            isOptionDown = NSEvent.modifierFlags.contains(.option)
-            flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-                isOptionDown = event.modifierFlags.contains(.option)
-                return event
-            }
+        .onHover { hovering in
+            if hovering { startWatchingOption() } else { stopWatchingOption() }
         }
-        .onDisappear {
-            if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
-            flagsMonitor = nil
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            stopWatchingOption()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            stopWatchingOption()
+        }
+        .onDisappear { stopWatchingOption() }
+    }
+
+    @MainActor
+    private func startWatchingOption() {
+        isOptionDown = NSEvent.modifierFlags.contains(.option)
+        guard flagsMonitor == nil else { return }
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            isOptionDown = event.modifierFlags.contains(.option)
+            return event
+        }
+    }
+
+    @MainActor
+    private func stopWatchingOption() {
+        if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
+        flagsMonitor = nil
+        if isOptionDown { isOptionDown = false }
     }
 }
 

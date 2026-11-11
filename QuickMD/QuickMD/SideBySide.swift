@@ -110,6 +110,13 @@ struct SideBySidePreview: Equatable {
 ///   END of the last parse: while typing, the preview keeps a core busy about
 ///   half of the time at most.
 ///
+/// - Hiding never waits: leaving side by side clears the preview at once
+///   (`hide`), even while a parse runs — a reset deferred to the parse's end
+///   came BACK when side by side was turned on again meanwhile.
+/// - The window's parse task itself waits for a running parse to finish
+///   (`waitUntilIdle`): toggling or leaving changes the list's text while a
+///   parse runs, and a second detached parse must not start next to it.
+///
 /// Per keystroke: one timer re-armed (`bufferChanged`), nothing read or
 /// copied. Main-thread by convention, like `SourceEditSession`.
 final class PreviewRefreshScheduler {
@@ -138,6 +145,8 @@ final class PreviewRefreshScheduler {
     /// Something must be published once no parse runs.
     private var publishWhenIdle = false
     private var timer: DispatchWorkItem?
+    /// Run once no parse is in flight (`whenIdle`).
+    private var idleWaiters: [() -> Void] = []
 
     /// The buffer changed (typing, undo, replaceAll). `length` is its UTF-16
     /// length (O(1) from the text storage).
@@ -163,6 +172,36 @@ final class PreviewRefreshScheduler {
         publish()
     }
 
+    /// Side by side is gone (toggled off, the session left): publish NOW,
+    /// whatever runs — the view's rule then says "no preview". Clearing never
+    /// waits for a parse; only showing a new buffer does.
+    func hide() {
+        cancel()
+        publish()
+    }
+
+    /// `body` runs once no parse of this window is in flight: now, or right
+    /// after the last one finished — re-checked then, as another may have
+    /// started first.
+    func whenIdle(_ body: @escaping () -> Void) {
+        guard parsesInFlight > 0 else { return body() }
+        idleWaiters.append { [weak self] in
+            guard let self else { return body() }
+            self.whenIdle(body)
+        }
+    }
+
+    /// `whenIdle` for the view's parse task: at most one detached parse per
+    /// window at any time. A task cancelled while it waits still wakes (when
+    /// the running parse ends) and then returns without parsing.
+    func waitUntilIdle() async {
+        repeat {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                whenIdle { continuation.resume() }
+            }
+        } while parsesInFlight > 0
+    }
+
     /// A parse of this window started (the view's parse task).
     func parseStarted() {
         parsesInFlight += 1
@@ -182,6 +221,9 @@ final class PreviewRefreshScheduler {
             publishWhenIdle = false
             publish()
         }
+        let waiters = idleWaiters
+        idleWaiters.removeAll()
+        waiters.forEach { $0() }
     }
 
     /// Nothing pending survives (the view disappeared, the session left).
@@ -257,6 +299,17 @@ enum SideBySideLayout {
         minimumDocumentWidth + max(sidebars, 0)
     }
 
+    /// The window's minimum content width while side by side shows, decided
+    /// right after `fit` was applied (`contentWidth`: the window's content
+    /// width THEN, grown or not): what side by side needs when the window has
+    /// it, otherwise never more than the window already has — a minimum above
+    /// that would push the window off the screen or clip the content (full
+    /// screen, a Split View tile, a small screen); the halves just get
+    /// narrower. Never below the window's usual floor.
+    static func minimumContentWidth(required: CGFloat, contentWidth: CGFloat) -> CGFloat {
+        max(min(required, contentWidth), standardMinimumWidth)
+    }
+
     /// What entering side by side does to a window whose frame is
     /// `windowFrame` with `contentWidth` points of content. Grows to the right
     /// and keeps the top edge; moves left only as far as the screen's visible
@@ -273,5 +326,49 @@ enum SideBySideLayout {
         if frame.maxX > screen.maxX { frame.origin.x = screen.maxX - frame.width }
         if frame.minX < screen.minX { frame.origin.x = screen.minX }
         return .grow(to: frame)
+    }
+}
+
+// MARK: - Giving the grown width back
+
+/// A window side by side grew (`SideBySideLayout.fit`): the frame it had
+/// before and the frame it got. The grown size is OURS, not a size the user
+/// chose — leaving side by side gives the width back, and `WindowSizeMemory`
+/// never remembers it. Once the user resized or moved the window, its frame
+/// is theirs: nothing is restored and the current size is what counts.
+struct SideBySideGrowth: Equatable {
+    /// Before the first growth of this side-by-side stretch.
+    let original: NSRect
+    /// What the window got (its frame right after `setFrame`).
+    let grown: NSRect
+
+    /// Another growth while one is in effect (a sidebar shown side by side):
+    /// the ORIGINAL frame stays the one before the first.
+    func regrown(to frame: NSRect) -> SideBySideGrowth {
+        SideBySideGrowth(original: original, grown: frame)
+    }
+
+    /// The window is still exactly as side by side left it.
+    func isUntouched(_ current: NSRect) -> Bool {
+        Self.same(current, grown)
+    }
+
+    /// The frame to restore on leaving side by side; nil when the user
+    /// changed the window meanwhile (keep it).
+    func frameToRestore(current: NSRect) -> NSRect? {
+        isUntouched(current) ? original : nil
+    }
+
+    /// The size `WindowSizeMemory` may remember for a window whose frame is
+    /// `current`: the pre-growth size while the growth is in effect.
+    static func sizeToPersist(current: NSRect, growth: SideBySideGrowth?) -> NSSize {
+        guard let growth, growth.isUntouched(current) else { return current.size }
+        return growth.original.size
+    }
+
+    /// AppKit may round a frame it was given by a fraction of a point.
+    private static func same(_ a: NSRect, _ b: NSRect) -> Bool {
+        abs(a.minX - b.minX) < 1 && abs(a.minY - b.minY) < 1
+            && abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
     }
 }

@@ -572,4 +572,196 @@ final class SideBySideTests: XCTestCase {
     func testNoLayoutChangeWhenNotEditing() {
         XCTAssertFalse(SourceEditSession().mayChangeLayout())
     }
+
+    // MARK: - Giving the grown width back (second review, should-fix 1)
+
+    private let before = NSRect(x: 100, y: 200, width: 800, height: 600)
+    private let grown = NSRect(x: 100, y: 200, width: 1150, height: 600)
+
+    func testUntouchedGrownWindowGetsItsFrameBack() {
+        let growth = SideBySideGrowth(original: before, grown: grown)
+        XCTAssertEqual(growth.frameToRestore(current: grown), before)
+        XCTAssertEqual(growth.frameToRestore(current: grown.insetBy(dx: 0.2, dy: 0)), before,
+                       "AppKit's sub-point rounding is not a user resize")
+    }
+
+    func testUserResizedOrMovedWindowIsLeftAlone() {
+        let growth = SideBySideGrowth(original: before, grown: grown)
+        var resized = grown; resized.size.width = 1000
+        var moved = grown; moved.origin.x += 40
+        XCTAssertNil(growth.frameToRestore(current: resized))
+        XCTAssertNil(growth.frameToRestore(current: moved))
+        XCTAssertEqual(SideBySideGrowth.sizeToPersist(current: resized, growth: growth), resized.size,
+                       "the user's own size is remembered")
+    }
+
+    func testAGrownWindowRemembersItsSizeFromBefore() {
+        let growth = SideBySideGrowth(original: before, grown: grown)
+        XCTAssertEqual(SideBySideGrowth.sizeToPersist(current: grown, growth: growth), before.size)
+        XCTAssertEqual(SideBySideGrowth.sizeToPersist(current: grown, growth: nil), grown.size)
+    }
+
+    func testGrowingAgainKeepsTheFirstOriginal() {
+        let again = SideBySideGrowth(original: before, grown: grown).regrown(to: grown.insetBy(dx: -50, dy: 0))
+        XCTAssertEqual(again.original, before)
+        XCTAssertEqual(again.frameToRestore(current: grown.insetBy(dx: -50, dy: 0)), before)
+    }
+
+    /// Closed while grown (`willClose` → `persist`): the size from before.
+    func testWindowSizeMemoryNeverRemembersTheGrownSize() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1150, height: 600),
+                              styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        windows.append(window)
+        let growth = SideBySideGrowth(original: NSRect(x: 0, y: 0, width: 800, height: window.frame.height),
+                                      grown: window.frame)
+        WindowSizeMemory.setSideBySideGrowth(growth, for: [window])
+        XCTAssertEqual(WindowSizeMemory.sizeToRemember(window)?.width, 800)
+        WindowSizeMemory.setSideBySideGrowth(nil, for: [window])
+        XCTAssertEqual(WindowSizeMemory.sizeToRemember(window)?.width, window.frame.width)
+    }
+
+    // MARK: - Minimum width (second review, finding 4)
+
+    func testTheMinimumNeverExceedsWhatTheWindowHas() {
+        // Room (or grown): what side by side needs.
+        XCTAssertEqual(SideBySideLayout.minimumContentWidth(required: 921, contentWidth: 1000), 921)
+        // A sidebar shown in full screen / on a small screen: no more than
+        // the window has — the halves get narrower, nothing is clipped.
+        XCTAssertEqual(SideBySideLayout.minimumContentWidth(required: 1427, contentWidth: 1200), 1200)
+        XCTAssertEqual(SideBySideLayout.minimumContentWidth(required: 700, contentWidth: 300),
+                       SideBySideLayout.standardMinimumWidth)
+    }
+
+    // MARK: - No left-over preview, one parse (second review, should-fix 3)
+
+    /// MarkdownView's preview plumbing without SwiftUI: the list's text is
+    /// `renderedSource`; when it changes, the running "task" is cancelled
+    /// and a new one waits for the scheduler's idle gate, as the view's
+    /// `.task(id:)` does. Parses finish when the test says so.
+    private final class ListSim {
+        let clock = Clock()
+        let scheduler: PreviewRefreshScheduler
+        var disk = "disk\n"
+        var buffer = "disk\n"
+        var isActive = true
+        var isSideBySide = true
+        var preview = SideBySidePreview()
+        private var taskText: String?
+        private var taskToken = 0
+        /// Detached parses running: (token, text).
+        var running: [(token: Int, text: String)] = []
+        var maximumRunning = 0
+        /// Every text a parse INSTALLED, in order.
+        var installed: [String] = []
+
+        init() {
+            scheduler = clock.make()
+            scheduler.publish = { [unowned self] in
+                self.preview.refresh(isShowing: self.isShowing, buffer: { self.buffer }, rendered: self.disk)
+            }
+        }
+
+        var isShowing: Bool { isActive && isSideBySide }
+        var listText: String {
+            SideBySidePreview.renderedSource(isShowing: isShowing, preview: preview.text, current: disk)
+        }
+
+        /// The body re-evaluates: a new list text restarts the task.
+        func update() {
+            let text = listText
+            guard text != taskText else { return }
+            taskText = text
+            taskToken += 1
+            let token = taskToken
+            scheduler.whenIdle { [unowned self] in
+                guard token == self.taskToken else { return }  // superseded: cancelled
+                self.scheduler.parseStarted()
+                self.running.append((token, text))
+                self.maximumRunning = max(self.maximumRunning, self.running.count)
+            }
+        }
+
+        func finishParse() {
+            let parse = running.removeFirst()
+            if parse.token == taskToken { installed.append(parse.text) }
+            scheduler.parseFinished(duration: 1)
+            update()
+        }
+
+        func type(_ text: String) {
+            buffer = text
+            if isShowing { scheduler.bufferChanged(length: text.utf16.count) }
+            clock.advance(to: clock.time + 2)
+            update()
+        }
+    }
+
+    func testTogglingOffAndOnDuringAParseNeverBringsTheOldTextBack() {
+        let sim = ListSim()
+        sim.update()
+        sim.finishParse()                        // the disk
+        sim.type("A\n")                          // published → parse of A starts
+        XCTAssertEqual(sim.running.map(\.text), ["A\n"])
+        // ⌥⇧⌘E: editor only — what `toggleSideBySide` does.
+        sim.isSideBySide = false
+        sim.scheduler.hide()
+        sim.update()
+        XCTAssertNil(sim.preview.text, "cleared at once, not after the parse")
+        sim.type("B\n")
+        // ⌥⇧⌘E again while A is still parsing.
+        sim.isSideBySide = true
+        sim.scheduler.flush()
+        sim.update()
+        XCTAssertNotEqual(sim.listText, "A\n", "the left-over text never returns")
+        while !sim.running.isEmpty { sim.finishParse() }
+        XCTAssertEqual(sim.listText, "B\n")
+        XCTAssertEqual(sim.installed.last, "B\n")
+        XCTAssertFalse(sim.installed.dropFirst().contains("A\n"), "a parse started for older text never lands")
+        XCTAssertEqual(sim.maximumRunning, 1, "never two detached parses")
+    }
+
+    func testDontSaveThenReenteringDuringAParseShowsTheDisk() {
+        let sim = ListSim()
+        sim.update()
+        sim.finishParse()
+        sim.type("discarded\n")
+        XCTAssertEqual(sim.running.map(\.text), ["discarded\n"])
+        // Esc → Don't Save: the session leaves, the buffer is gone — what
+        // `didLeaveSourceEdit` does.
+        sim.isActive = false
+        sim.buffer = sim.disk
+        sim.scheduler.hide()
+        sim.update()
+        XCTAssertNil(sim.preview.text)
+        // ⌥⇧⌘E while the discarded text is still parsing: the buffer is
+        // loaded from disk (`bufferReplaced` → flush).
+        sim.isActive = true
+        sim.scheduler.flush()
+        sim.update()
+        XCTAssertEqual(sim.listText, "disk\n")
+        while !sim.running.isEmpty { sim.finishParse() }
+        XCTAssertEqual(sim.listText, "disk\n")
+        XCTAssertEqual(sim.installed.last, "disk\n")
+        XCTAssertFalse(sim.installed.contains("discarded\n"))
+        XCTAssertEqual(sim.maximumRunning, 1)
+    }
+
+    func testIdleWaitersRunAfterTheLastParseAndRecheck() {
+        let clock = Clock()
+        let scheduler = clock.make()
+        var ran: [String] = []
+        scheduler.whenIdle { ran.append("now") }
+        XCTAssertEqual(ran, ["now"])
+        scheduler.parseStarted()
+        scheduler.whenIdle {
+            ran.append("first")
+            scheduler.parseStarted()   // starts a parse itself
+        }
+        scheduler.whenIdle { ran.append("second") }
+        scheduler.parseFinished(duration: 0.1)
+        XCTAssertEqual(ran, ["now", "first"], "the second waits for the parse the first started")
+        scheduler.parseFinished(duration: 0.1)
+        XCTAssertEqual(ran, ["now", "first", "second"])
+    }
 }

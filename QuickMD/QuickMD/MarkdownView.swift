@@ -164,6 +164,17 @@ struct MarkdownView: View {
     /// Paces the preview's re-parse (debounce, maximum wait, one parse at a
     /// time). A reference, so a keystroke never re-evaluates this body.
     @State private var previewScheduler = PreviewRefreshScheduler()
+    /// The window side by side grew, and its frame before: given back on
+    /// leaving unless the user changed the window meanwhile.
+    @State private var sideBySideGrowth: SideBySideGrowth?
+    /// The minimum content width while side by side shows — decided with the
+    /// growing (`SideBySideLayout.minimumContentWidth`), never more than the
+    /// window can have.
+    @State private var sideBySideMinimum = SideBySideLayout.standardMinimumWidth
+    /// "Rendering…" on the preview half only once it has been pending a
+    /// moment (not on every step of a live resize or a sidebar drag).
+    @State private var showsPreviewPending = false
+    @State private var previewPendingWork: DispatchWorkItem?
     /// What the rendered list shows: the preview only while side by side.
     private var renderedSource: String {
         SideBySidePreview.renderedSource(isShowing: isSideBySideShowing, preview: preview.text,
@@ -341,7 +352,7 @@ struct MarkdownView: View {
                         // Side by side, the preview half says when it is being
                         // re-laid out (a toggle re-measures the whole document
                         // at the new width; until then it draws the old one).
-                        if isSideBySideShowing && isPreviewPending {
+                        if showsPreviewPending && isSideBySideShowing && isPreviewPending {
                             renderingPill
                         }
                     }
@@ -413,12 +424,12 @@ struct MarkdownView: View {
                 // once (a change the buffer has not acknowledged, then the file
                 // goes): stacked, never on top of each other.
                 VStack(spacing: 8) {
-                    // While editing they sit BELOW the Side by Side / Save /
-                    // Done row: side by side those pills are at the window's
-                    // centre, exactly where a centred banner goes, and in a
-                    // narrow window the editor's pills meet it too. The
-                    // reserved row is a hidden pill — the pills' own height.
-                    if editSession.isActive && (fileMissing || editSession.externalChange) {
+                    // Side by side they sit BELOW the Side by Side / Save /
+                    // Done row: those pills are at the window's centre then,
+                    // exactly where a centred banner goes. The reserved row
+                    // is a hidden pill — the pills' own height. Reading and
+                    // the editor alone: where they always were (1.14.4).
+                    if isSideBySideShowing && (fileMissing || editSession.externalChange) {
                         ChromePillLabel(theme: theme, title: "") {
                             Image(systemName: "checkmark").font(.system(size: 11))
                         }
@@ -736,14 +747,39 @@ struct MarkdownView: View {
         })
         // Side by side keeps the width it needs while it shows (entering grew
         // the window to it); leaving restores the floor, never shrinks.
-        .frame(minWidth: isSideBySideShowing ? sideBySideRequiredWidth : SideBySideLayout.standardMinimumWidth,
+        .frame(minWidth: isSideBySideShowing ? sideBySideMinimum : SideBySideLayout.standardMinimumWidth,
                minHeight: 300)
+        // A sidebar shown, hidden or dragged side by side: the same decision
+        // again — grow if the screen allows, otherwise narrower halves.
+        .onChange(of: visibleSidebarsWidth) { _ in
+            guard isSideBySideShowing else { return }
+            applySideBySideFit(sideBySideFit())
+        }
+        .onChange(of: isSideBySideShowing && isPreviewPending) { pending in
+            previewPendingWork?.cancel()
+            previewPendingWork = nil
+            guard pending else {
+                showsPreviewPending = false
+                return
+            }
+            let work = DispatchWorkItem {
+                guard !(hostWindow?.inLiveResize ?? false), isSideBySideShowing, isPreviewPending else { return }
+                showsPreviewPending = true
+            }
+            previewPendingWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+        }
         .task(id: DocumentIdentity(text: renderedSource,
                                    colorScheme: MarkdownTheme.windowColorScheme(forThemeNamed: selectedThemeName) == nil
                                        ? colorScheme : nil,
                                    themeName: selectedThemeName,
                                    fonts: DocumentFonts(body: bodyFontFamily, code: codeFontFamily),
                                    fontScale: fontScale)) {
+            // One detached parse per window at a time: a toggle or a leave
+            // changes the list's text while one runs, and that one cannot be
+            // cancelled. A task superseded while it waits never parses.
+            await previewScheduler.waitUntilIdle()
+            guard !Task.isCancelled else { return }
             let text = renderedSource
             let currentTheme = theme
             isParsing = true
@@ -1210,7 +1246,14 @@ struct MarkdownView: View {
             applySideBySideFit(fit)
         }
         isSideBySide.toggle()
-        previewScheduler.flush()
+        if isSideBySide {
+            // Recomputed from the buffer now (or when the running parse lands).
+            previewScheduler.flush()
+        } else {
+            // Cleared at once, never after a running parse.
+            previewScheduler.hide()
+            endSideBySideGrowth()
+        }
         editSession.focusEditor()
     }
 
@@ -1232,20 +1275,53 @@ struct MarkdownView: View {
         SideBySideLayout.requiredContentWidth(sidebars: visibleSidebarsWidth)
     }
 
+    private static func contentWidth(of window: NSWindow) -> CGFloat {
+        window.contentView?.frame.width ?? window.frame.width
+    }
+
     /// Does this window have room for side by side (`SideBySideLayout.fit`)?
     /// No window yet: nothing to measure, nothing to grow.
     private func sideBySideFit() -> SideBySideLayout.Fit {
         guard let window = hostWindow else { return .fits }
         return SideBySideLayout.fit(windowFrame: window.frame,
-                                    contentWidth: window.contentView?.frame.width ?? window.frame.width,
+                                    contentWidth: Self.contentWidth(of: window),
                                     requiredContentWidth: sideBySideRequiredWidth,
                                     screenFrame: (window.screen ?? NSScreen.main)?.visibleFrame,
                                     isFullScreen: window.styleMask.contains(.fullScreen))
     }
 
+    /// Grows the window when `fit` says so (remembering the frame before the
+    /// FIRST growth; a tab group grows as one), then sets the minimum from
+    /// what the window has now.
     private func applySideBySideFit(_ fit: SideBySideLayout.Fit) {
-        guard case .grow(let frame) = fit, let window = hostWindow else { return }
-        window.setFrame(frame, display: true, animate: false)
+        guard let window = hostWindow else {
+            sideBySideMinimum = SideBySideLayout.standardMinimumWidth
+            return
+        }
+        if case .grow(let frame) = fit {
+            let before = window.frame
+            window.setFrame(frame, display: true, animate: false)
+            let growth = sideBySideGrowth.map { $0.regrown(to: window.frame) }
+                ?? SideBySideGrowth(original: before, grown: window.frame)
+            sideBySideGrowth = growth
+            WindowSizeMemory.setSideBySideGrowth(growth, for: window.tabbedWindows ?? [window])
+        }
+        sideBySideMinimum = SideBySideLayout.minimumContentWidth(required: sideBySideRequiredWidth,
+                                                                 contentWidth: Self.contentWidth(of: window))
+    }
+
+    /// Side by side ended (toggled off, the session left): the width it took
+    /// goes back — unless the user resized or moved the window meanwhile.
+    /// On the next turn, once the minimum is back at the usual floor.
+    private func endSideBySideGrowth() {
+        guard let growth = sideBySideGrowth else { return }
+        sideBySideGrowth = nil
+        guard let window = hostWindow else { return }
+        WindowSizeMemory.setSideBySideGrowth(nil, for: window.tabbedWindows ?? [window])
+        guard let frame = growth.frameToRestore(current: window.frame) else { return }
+        DispatchQueue.main.async {
+            window.setFrame(frame, display: true, animate: false)
+        }
     }
 
     /// The ONE place the preview is decided (`SideBySidePreview`), reached
@@ -1267,10 +1343,13 @@ struct MarkdownView: View {
     private func didLeaveSourceEdit(_ leave: SourceEditSession.LeaveInfo) {
         documentFocusRequest += 1
         // Unsaved text is gone with the editor: back to the saved text first,
-        // so the landing below waits for (or finds) the saved parse. (The
-        // list already renders `currentText` — `renderedSource` ignores the
+        // so the landing below waits for (or finds) the saved parse. Cleared
+        // at once, never after a running parse: re-entering side by side
+        // while it runs must not bring the left-over text back. (The list
+        // already renders `currentText` — `renderedSource` ignores the
         // preview once the session is inactive.)
-        previewScheduler.flush()
+        previewScheduler.hide()
+        endSideBySideGrowth()
         // `==`, as `DocumentIdentity` compares: text it calls equal is never
         // re-parsed, so waiting for a parse of it would wait forever.
         let current = installedText.map { $0 == currentText } ?? false

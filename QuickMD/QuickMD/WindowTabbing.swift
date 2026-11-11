@@ -123,11 +123,31 @@ enum WindowSizeMemory {
         return NSSize(width: w, height: h)
     }
 
+    /// Windows (a whole tab group: they share the frame) that side by side
+    /// grew and that still have that size — `persist` remembers the size
+    /// from before the growth instead (`SideBySideGrowth.sizeToPersist`).
+    private static let growths = NSMapTable<NSWindow, GrowthBox>.weakToStrongObjects()
+    private final class GrowthBox { let growth: SideBySideGrowth; init(_ g: SideBySideGrowth) { growth = g } }
+
+    /// Side by side grew `windows` (nil: the growth ended).
+    static func setSideBySideGrowth(_ growth: SideBySideGrowth?, for windows: [NSWindow]) {
+        for window in windows {
+            if let growth { growths.setObject(GrowthBox(growth), forKey: window) } else { growths.removeObject(forKey: window) }
+        }
+    }
+
+    /// The size `persist` remembers for `window`, nil for none: a full-screen
+    /// (or Split View) frame is the screen's size, not one the user chose —
+    /// saving it would open later standalone windows screen-sized; a window
+    /// side by side grew remembers its size from before.
+    static func sizeToRemember(_ window: NSWindow) -> NSSize? {
+        guard !window.styleMask.contains(.fullScreen) else { return nil }
+        return SideBySideGrowth.sizeToPersist(current: window.frame,
+                                              growth: growths.object(forKey: window)?.growth)
+    }
+
     private static func persist(_ window: NSWindow) {
-        // A full-screen (or Split View) frame is the screen's size, not one the
-        // user chose; saving it would open later standalone windows screen-sized.
-        guard !window.styleMask.contains(.fullScreen) else { return }
-        let size = window.frame.size
+        guard let size = sizeToRemember(window) else { return }
         guard size.width >= minSize.width, size.height >= minSize.height else { return }
         let defaults = UserDefaults.standard
         defaults.set(Double(size.width), forKey: widthKey)
