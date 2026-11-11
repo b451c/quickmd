@@ -1194,6 +1194,10 @@ struct MarkdownView: View {
                 CodeBlockView(code: code, language: language, theme: theme,
                               fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc,
                               onCopy: { copyToClipboard($0) })
+                    // Under a list item: at the item's text (the measurer
+                    // narrows the code by the same amount, same width).
+                    .padding(.leading, BlockLayout.Code.leadingInset(listIndent: block.listIndent,
+                                                                     contentWidth: measured.table.contentWidth))
                     .padding(.vertical, Metrics.codeOuterVerticalPadding)
 
             case .image(let url, let alt, let width):

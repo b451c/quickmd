@@ -185,6 +185,22 @@ enum BlockLayout {
             BlockLayout.singleLineHeight(for: languageLabelFont(fontScale: fontScale))
         }
 
+        /// How far the code box is moved in under a list item: the item's
+        /// text x (`MarkdownBlock.listIndent`), but never more than half the
+        /// column — a deep item at high zoom in a narrow window would
+        /// otherwise leave the box no width (or a negative one). The view pads
+        /// by exactly this, computed from the width the table was measured at.
+        static func leadingInset(listIndent: CGFloat, contentWidth: CGFloat) -> CGFloat {
+            max(0, min(listIndent, contentWidth / 2))
+        }
+
+        /// The width the code text wraps at: the column, less the block's
+        /// `leadingInset` and the horizontal padding on both sides.
+        static func textWidth(contentWidth: CGFloat, listIndent: CGFloat) -> CGFloat {
+            BlockLayout.clampedWidth(contentWidth - leadingInset(listIndent: listIndent, contentWidth: contentWidth)
+                                     - 2 * horizontalPadding)
+        }
+
         /// Fixed vertical chrome around the code text, language label included.
         static func verticalChrome(hasLanguage: Bool, fontScale: CGFloat) -> CGFloat {
             guard hasLanguage else { return 2 * verticalPaddingWithoutLanguage }
@@ -1325,7 +1341,6 @@ enum BlockHeightMeasurer {
 
         // Derived widths, clamped once (see `BlockLayout.clampedWidth`).
         let textWidth = BlockLayout.clampedWidth(contentWidth)
-        let codeWidth = BlockLayout.clampedWidth(contentWidth - 2 * BlockLayout.Code.horizontalPadding)
         let alertBodyWidth = BlockLayout.clampedWidth(contentWidth - 2 * BlockLayout.Alert.horizontalPadding)
 
         // `makeNSAttributedString` takes an engine even for strings that have no
@@ -1405,7 +1420,8 @@ enum BlockHeightMeasurer {
 
             case .codeBlock(let code, let language):
                 heights.append(codeRowHeight(code: code, theme: theme, fontScale: fontScale,
-                                             codeWidth: codeWidth,
+                                             codeWidth: BlockLayout.Code.textWidth(contentWidth: contentWidth,
+                                                                                   listIndent: block.listIndent),
                                              chrome: language.isEmpty ? codeChromeWithoutLanguage
                                                                       : codeChromeWithLanguage))
                 kinds.append(.exact)
@@ -1660,7 +1676,7 @@ enum BlockHeightMeasurer {
                 // never pending). Rare, so the chrome is computed per row.
                 heights[index] = codeRowHeight(
                     code: code, theme: theme, fontScale: fontScale,
-                    codeWidth: BlockLayout.clampedWidth(contentWidth - 2 * BlockLayout.Code.horizontalPadding),
+                    codeWidth: BlockLayout.Code.textWidth(contentWidth: contentWidth, listIndent: block.listIndent),
                     chrome: BlockLayout.Code.verticalChrome(hasLanguage: !language.isEmpty, fontScale: fontScale))
                 kinds[index] = .exact
                 rhythm[index] = boxRhythm(block, fontScale: fontScale)
