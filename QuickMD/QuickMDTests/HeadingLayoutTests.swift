@@ -187,6 +187,44 @@ final class HeadingLayoutTests: XCTestCase {
         }
     }
 
+    /// Since 1.15 a title's code span is monospaced at 13/14 of the heading
+    /// size, so the copy button aligns to the baseline of the fonts the title
+    /// is really set in (`titleFirstBaseline(of:headerFont:)`): it equals
+    /// TextKit's laid-out first baseline for code-only, mixed and plain
+    /// titles, and a plain title gives exactly the heading font's value as
+    /// before (review 2, N2).
+    func testTitleFirstBaselineFollowsTheFontsOfTheTitle() {
+        let theme = MarkdownTheme.cached(for: .light)
+        for scale in [1.0, 1.5] as [CGFloat] {
+            let renderer = MarkdownRenderer(theme: theme, fontScale: scale)
+            for level in [1, 3, 6] {
+                let headerFont = renderer.headerAppKitFont(level: level)
+                for title in ["`make`", "Use `make` now", "Plain title", "*Italic* and `code`"] {
+                    let attributed = renderer.renderHeader(title, level: level)
+                    let ns = BlockTextConverter.makeNSAttributedString(from: attributed, hasInlineMath: false,
+                                                                       theme: theme, fontScale: scale, math: .none)
+                    let storage = NSTextStorage(attributedString: ns)
+                    let layoutManager = NSLayoutManager()
+                    storage.addLayoutManager(layoutManager)
+                    let container = NSTextContainer(size: NSSize(width: 2000, height: CGFloat.greatestFiniteMagnitude))
+                    container.lineFragmentPadding = 0
+                    layoutManager.addTextContainer(container)
+                    layoutManager.ensureLayout(for: container)
+                    let fragment = layoutManager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil)
+                    let laidOut = fragment.minY + layoutManager.location(forGlyphAt: 0).y
+                    let computed = Metrics.titleFirstBaseline(of: attributed, headerFont: headerFont)
+                    XCTAssertEqual(computed, laidOut, accuracy: 0.01, "H\(level) @\(scale) \(title)")
+                    if title == "Plain title" {
+                        XCTAssertEqual(computed, Metrics.titleFirstBaseline(font: headerFont), "unchanged")
+                    }
+                }
+                XCTAssertLessThan(Metrics.titleFirstBaseline(of: renderer.renderHeader("`make`", level: level),
+                                                             headerFont: headerFont),
+                                  Metrics.titleFirstBaseline(font: headerFont), "a code-only title sits higher")
+            }
+        }
+    }
+
     func testTitleGeometryReproducesTheBaselineUnion() {
         let b = Metrics.copyButtonBaselineOffset
         // Large title: the button moves down, the title stays at the top.

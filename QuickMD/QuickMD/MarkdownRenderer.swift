@@ -515,25 +515,26 @@ struct MarkdownRenderer: Sendable {
     }
 
     func renderHeader(_ text: String, level: Int) -> AttributedString {
-        headingLook(Self.formulaSourceWithEscapes(renderInlineFormatting(Self.shownHeadingTitle(text))),
-                    size: headerFontSize(level: level))
+        boldLook(Self.formulaSourceWithEscapes(renderInlineFormatting(Self.shownHeadingTitle(text))),
+                 size: headerFontSize(level: level), recolors: true)
     }
 
-    /// A heading is bold throughout, like an emphasis over its whole title,
-    /// and follows the same switch (`emphasisKeepsContentLook`):
-    /// - on (1.15): each run keeps its look and gains bold at the heading
-    ///   size — code stays monospaced on its chip at 13/14 of the heading
-    ///   size (the body ratio), a footnote number at 11/14, italic stays
-    ///   italic, colours stay (a link keeps the link colour);
-    /// - off: the whole title in the bold body font and the text colour
-    ///   (every release before 1.15).
+    /// A BOLD CONTEXT — a heading title, a definition-list term — is bold
+    /// throughout, like an emphasis over all of it, and follows the same
+    /// switch (`emphasisKeepsContentLook`); the one function for both:
+    /// - on (1.15): each run keeps its look and gains bold at `size` — code
+    ///   stays monospaced on its chip at 13/14 of `size` (the body ratio), a
+    ///   footnote number at 11/14, italic stays italic, colours stay (a link
+    ///   keeps the link colour);
+    /// - off: everything in the bold body font at `size`, and in the text
+    ///   colour when `recolors` (headings did, terms did not — before 1.15).
     /// Only attributes change, never the characters: ids, Contents and
     /// search read the same text either way.
-    private func headingLook(_ title: AttributedString, size: CGFloat) -> AttributedString {
+    private func boldLook(_ title: AttributedString, size: CGFloat, recolors: Bool) -> AttributedString {
         guard Self.emphasisKeepsContentLook else {
             var attr = title
             attr.setDualFont(size: size, bold: true, fonts: theme.fonts)
-            attr.setDualForeground(theme.textColor)
+            if recolors { attr.setDualForeground(theme.textColor) }
             return attr
         }
         var result = AttributedString()
@@ -883,12 +884,9 @@ struct MarkdownRenderer: Sendable {
 
     /// A term: body size, semibold, at the text margin.
     private func renderDefinitionTerm(_ text: String) -> AttributedString {
-        var attr = renderInlineFormatting(text)
-        // The weight is stamped over the whole line (as `renderHeader` does for
-        // headings) so the term reads as a label whatever its inline runs came
-        // back as. Colors and links are deliberately left alone.
-        attr.setDualFont(size: scaled(14), bold: true, fonts: theme.fonts)
-        return attr
+        // Bold over the whole line (as for headings, `boldLook`) so the term
+        // reads as a label; code keeps its face, colours and links stay.
+        boldLook(renderInlineFormatting(text), size: scaled(14), recolors: false)
     }
 
     /// One visual line of a definition body: the plain-text indent, the inline
@@ -993,8 +991,7 @@ struct MarkdownRenderer: Sendable {
                 continue
             case UInt8(ascii: "]"):
                 let afterClose = utf8.index(after: remaining.startIndex)
-                if let end = parse.closeBracket(at: remaining.startIndex, rest: text[afterClose...],
-                                                references: referenceDefinitions) {
+                if let end = parse.closeBracket(at: remaining.startIndex, references: referenceDefinitions) {
                     remaining = text[end...]
                 } else {
                     parse.addPlain(remaining.startIndex..<afterClose)
@@ -1079,15 +1076,12 @@ struct MarkdownRenderer: Sendable {
         private struct Opener {
             /// The "[" text node (emptied when the link is made).
             let node: Int
-            let labelStart: String.Index
             /// The delimiter stack's size at the "[": emphasis inside the
             /// link text is processed above it, never across it.
             let delimiterBottom: Int
         }
-        private var openers: [Opener] = []
-        /// Openers below this stack position are inactive: a link closed
-        /// after them, and links never contain links.
-        private var activeFrom = 0
+        /// Which `]` closes a link: the shared rule.
+        private var brackets = InlineSyntaxScanner.LinkBrackets<Opener>()
 
         init(text: String) {
             self.text = text
@@ -1143,21 +1137,16 @@ struct MarkdownRenderer: Sendable {
 
         mutating func openBracket(labelStart: String.Index) {
             flush()
-            openers.append(Opener(node: nodes.count, labelStart: labelStart, delimiterBottom: delimiters.count))
+            brackets.open(labelStart: labelStart, Opener(node: nodes.count, delimiterBottom: delimiters.count))
             nodes.append(.text("["))
         }
 
         /// A `]` at `close`: the end of the link it completes, or nil (the
-        /// `]` is text). CommonMark: the nearest opener; an inactive one is
-        /// dropped; else `InlineSyntaxScanner.linkTail` decides, and a link
-        /// deactivates every opener before it.
-        mutating func closeBracket(at close: String.Index, rest: Substring,
+        /// `]` is text) — `InlineSyntaxScanner.LinkBrackets` decides.
+        mutating func closeBracket(at close: String.Index,
                                    references: [String: String]) -> String.Index? {
-            guard let opener = openers.popLast() else { return nil }
-            defer { activeFrom = min(activeFrom, openers.count) }
-            guard openers.count >= activeFrom,
-                  let tail = InlineSyntaxScanner.linkTail(after: rest, label: text[opener.labelStart..<close],
-                                                          references: references, pairs: pairs) else { return nil }
+            guard let (opener, tail) = brackets.close(at: close, in: text, references: references,
+                                                      pairs: pairs) else { return nil }
             flush()
             delimiters.process(above: opener.delimiterBottom)
             nodes[opener.node] = .text("")
@@ -1168,7 +1157,6 @@ struct MarkdownRenderer: Sendable {
             case .reference(let destination, let tailEnd): (url, end) = (destination, tailEnd)
             }
             links.append(LinkSpan(start: opener.node + 1, end: nodes.count, url: MarkdownRenderer.linkURL(for: url)))
-            activeFrom = openers.count
             return end
         }
 
@@ -1487,11 +1475,15 @@ struct MarkdownRenderer: Sendable {
 
     /// State of the bare-autolink attempts on ONE line (the renderer and
     /// `ReferenceLinks` keep one per line). A `www.` attempt whose domain
-    /// failed (an `_` in its last two labels) is remembered: every later
-    /// `www.` inside that domain runs to the same end and has the same last
-    /// two labels (its own "www" label has no `_`), so it fails too —
-    /// without rescanning. Without this `_www.a.` × N + `_x_` was quadratic
-    /// (112 KB: 44 s). `work` counts the scalars examined, for the tests.
+    /// failed (an `_` in its last two labels) is remembered, and a later
+    /// `www.` inside that domain — it runs to the same end — fails without
+    /// rescanning when it must: always if the LAST label has the `_`; if only
+    /// the second-to-last has it, only a `www.` whose domain still includes
+    /// that label (one starting before `lastDot − 3`) — the `www.` right
+    /// before the last label has just "www" + the last label and links
+    /// (`www._www.example` → `www._` + link `www.example`, GitHub). Without
+    /// this `_www.a.` × N + `_x_` was quadratic (112 KB: 44 s). `work`
+    /// counts the scalars examined, for the tests.
     final class AutolinkScan {
         fileprivate var failedDomain: Range<String.Index>?
         private(set) var work = 0
@@ -1535,10 +1527,12 @@ struct MarkdownRenderer: Sendable {
         let domainStart = index
         var periods = www ? 1 : 0
         var underscores = (last: 0, previous: 0)
+        var lastDot: String.Index?
         while index < text.endIndex {
             let scalar = scalars[index]
             if scalar == "." {
                 periods += 1
+                lastDot = index
                 underscores = (0, underscores.last)
             } else if scalar == "_" {
                 underscores.last += 1
@@ -1551,7 +1545,16 @@ struct MarkdownRenderer: Sendable {
             index = scalars.index(after: index)
         }
         guard index > domainStart, underscores.last == 0, underscores.previous == 0, periods > 0 || !www else {
-            if www { scan.failedDomain = remaining.startIndex..<index }
+            if www {
+                if underscores.last == 0, let lastDot {
+                    // Only the second-to-last label is bad: the `www.` that
+                    // ends at `lastDot + 1` (domain = the last label) may link.
+                    let limit = utf8.index(lastDot, offsetBy: -3, limitedBy: remaining.startIndex) ?? remaining.startIndex
+                    scan.failedDomain = remaining.startIndex..<max(limit, remaining.startIndex)
+                } else {
+                    scan.failedDomain = remaining.startIndex..<index
+                }
+            }
             return nil
         }
 
@@ -1631,9 +1634,10 @@ struct MarkdownRenderer: Sendable {
                   isAlnum(bytes[start - 1]) || ".+-_".utf8.contains(bytes[start - 1]) { start -= 1; work += 1 }
             var end = at + 1
             var periods = 0
-            // A local part right after `/` is part of a URL (`ftp://user@host`
-            // is text on GitHub).
-            var valid = start < at && (start == 0 || bytes[start - 1] != UInt8(ascii: "/"))
+            // GitHub refuses the address only in an `ftp://` URL
+            // (`ftp://user@host` is text); after any other `/` it links
+            // (`sales/support@x.example`, `ssh://git@github.com`).
+            var valid = start < at && !(start >= 6 && bytes[(start - 6)..<start].elementsEqual("ftp://".utf8))
             while end < bytes.count {
                 work += 1
                 let byte = bytes[end]

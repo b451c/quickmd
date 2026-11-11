@@ -158,10 +158,8 @@ enum ReferenceLinks {
         let autolinks = MarkdownRenderer.AutolinkScan()
         var out = ""
         var remaining = text[...]
-        /// The open `[`s (where each one's label starts) and, as in the
-        /// renderer, the stack position below which they are inactive.
-        var openers: [String.Index] = []
-        var activeFrom = 0
+        /// Which `]` closes a link: the renderer's own rule.
+        var brackets = InlineSyntaxScanner.LinkBrackets<Void>()
 
         while let first = remaining.first {
             // Escapes first, as the renderer: `\[` never opens anything.
@@ -215,18 +213,15 @@ enum ReferenceLinks {
             }
             if first == "[" {
                 let labelStart = utf8.index(after: remaining.startIndex)
-                openers.append(labelStart)
+                brackets.open(labelStart: labelStart, ())
                 out.append("[")
                 remaining = text[labelStart...]
                 continue
             }
-            if first == "]", let opener = openers.popLast() {
+            if first == "]" {
                 let afterClose = utf8.index(after: remaining.startIndex)
-                let active = openers.count >= activeFrom
-                activeFrom = min(activeFrom, openers.count)
-                if active, let tail = InlineSyntaxScanner.linkTail(after: text[afterClose...],
-                                                                    label: text[opener..<remaining.startIndex],
-                                                                    references: definitions, pairs: pairs) {
+                if let (_, tail) = brackets.close(at: remaining.startIndex, in: text, references: definitions,
+                                                  pairs: pairs) {
                     switch tail {
                     case .inline(_, let end):
                         out += text[remaining.startIndex..<end]  // the `](…)` as written
@@ -235,7 +230,6 @@ enum ReferenceLinks {
                         out += "](\(inlineDestination(url)))"
                         remaining = text[end...]
                     }
-                    activeFrom = openers.count
                     continue
                 }
                 out.append("]")
