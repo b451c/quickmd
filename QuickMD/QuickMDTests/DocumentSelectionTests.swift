@@ -574,3 +574,72 @@ final class DocumentSelectionTests: XCTestCase {
         XCTAssertEqual(SelectionAutoCopy.defaultsKey, "autoCopySelection")
     }
 }
+
+// MARK: - Registry: several views attached to one row (E2E 2026-11-11)
+
+extension DocumentSelectionTests {
+
+    private final class FakeView {
+        var inTable: Bool
+        init(inTable: Bool) { self.inTable = inTable }
+    }
+
+    /// With a visible window, more than one hosting view can be attached to a
+    /// row's block id at once (a queued cell still holding the row, a cell
+    /// prepared ahead of the scroll). Until 1.15 the registry kept ONE view
+    /// per id: the last to attach won, and when it left (dismantled, freed,
+    /// or simply not in the table) the view on screen was lost for good — its
+    /// `attachSelection` short-circuits on an unchanged id — so its link
+    /// clicks went nowhere ("reg none" in the E2E log) and the selection fell
+    /// back to the whole row. Every order must leave the view ON DISPLAY
+    /// findable. (`SelectionController` asks `displayed(for:where:)` with
+    /// "in this table, visible, mine"; `inTable` stands in for that here.)
+    func testEveryAttachedViewOfARowStaysFindable() {
+        var registry = AttachedViewRegistry<FakeView>()
+        func displayed() -> FakeView? { registry.displayed(for: "text-4") { $0.inTable } }
+
+        // 1. The shown view attaches, then a view OUTSIDE the table (a queued
+        //    cell) attaches to the same row.
+        let shown = FakeView(inTable: true)
+        registry.add(shown, for: "text-4")
+        let queued = FakeView(inTable: false)
+        registry.add(queued, for: "text-4")
+        XCTAssertTrue(displayed() === shown, "a queued view does not hide it")
+
+        // 2. A second shown view attaches (it wins), then leaves.
+        let other = FakeView(inTable: true)
+        registry.add(other, for: "text-4")
+        XCTAssertTrue(displayed() === other, "the latest shown one wins")
+        other.inTable = false
+        registry.remove(other, for: "text-4")
+        XCTAssertTrue(displayed() === shown, "its leaving keeps the shown one")
+
+        // 3. One attaches and is freed without leaving.
+        do {
+            let transient = FakeView(inTable: true)
+            registry.add(transient, for: "text-4")
+            XCTAssertTrue(displayed() === transient)
+        }
+        XCTAssertTrue(displayed() === shown, "a freed view keeps it too")
+
+        // 4. Other order: the shown view attaches LAST; the earlier one leaves.
+        registry.remove(queued, for: "text-4")
+        let later = FakeView(inTable: true)
+        registry.add(later, for: "text-4")
+        shown.inTable = false
+        registry.remove(shown, for: "text-4")
+        XCTAssertTrue(displayed() === later)
+        XCTAssertFalse(registry.contains("text-4") { $0 === shown }, "a removed view is gone")
+        registry.remove(later, for: "text-4")
+        XCTAssertNil(displayed())
+        XCTAssertTrue(registry.allViews.isEmpty)
+
+        // Other ids are untouched; re-adding moves a view to the end.
+        let a = FakeView(inTable: true), b = FakeView(inTable: true)
+        registry.add(a, for: "text-5")
+        registry.add(b, for: "text-5")
+        registry.add(a, for: "text-5")
+        XCTAssertTrue(registry.displayed(for: "text-5") { $0.inTable } === a)
+        XCTAssertEqual(registry.allViews.count, 2)
+    }
+}

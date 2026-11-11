@@ -2045,15 +2045,11 @@ final class SelectionController: NSObject {
 
     private weak var tableView: BlockTableView?
 
-    private final class WeakTextView {
-        weak var view: SelfSizingTextView?
-        init(_ view: SelfSizingTextView) { self.view = view }
-    }
-
-    /// blockId → the text view currently showing that block. Only MATERIALIZED
-    /// rows are here, which is what bounds every redraw to the rows on (or
-    /// just off) screen.
-    private var registry: [String: WeakTextView] = [:]
+    /// blockId → every text view attached to that block
+    /// (`AttachedViewRegistry`, several per id). Only MATERIALIZED rows are
+    /// here, which is what bounds every redraw to the rows on (or just off)
+    /// screen.
+    private var registry = AttachedViewRegistry<SelfSizingTextView>()
     private var keyObservers: [NSObjectProtocol] = []
 
     deinit {
@@ -2121,8 +2117,7 @@ final class SelectionController: NSObject {
     // MARK: - Registry (S-D5)
 
     func register(_ view: SelfSizingTextView, blockId: String) {
-        if registry.count > 256 { registry = registry.filter { $0.value.view != nil } }
-        registry[blockId] = WeakTextView(view)
+        registry.add(view, for: blockId)
         // The row may have been tinted while it had no view to draw in. With
         // nothing selected no cell is tinted, so the table is not even asked —
         // this runs inside SwiftUI updates that the table's own tiling drives.
@@ -2130,8 +2125,8 @@ final class SelectionController: NSObject {
     }
 
     func unregister(_ view: SelfSizingTextView, blockId: String) {
-        guard registry[blockId]?.view === view else { return }
-        registry[blockId] = nil
+        guard registry.contains(blockId, where: { $0 === view }) else { return }
+        registry.remove(view, for: blockId)
         if hasSelection, let row = rowForBlockId[blockId] { refreshTint(row: row) }
     }
 
@@ -2153,7 +2148,7 @@ final class SelectionController: NSObject {
         guard let selection, !selection.isEmpty, row >= 0, row < blocks.count else { return false }
         let block = blocks[row]
         if SelectionRows.isAtomic(block) { return selection.range(inRow: row, rowLength: 1) != nil }
-        if let view = registry[block.id]?.view, view.selectionController === self { return false }
+        if hasAttachedView(for: block.id) { return false }
         return selection.range(inRow: row, rowLength: rowLength(row)) != nil
     }
 
@@ -2170,8 +2165,7 @@ final class SelectionController: NSObject {
     /// did not change does not redraw (`selectionCoveredRange.didSet`), so a
     /// drag repaints only the rows whose coverage actually moved.
     private func refreshTextViews() {
-        for box in registry.values {
-            guard let view = box.view else { continue }
+        for view in registry.allViews {
             view.selectionCoveredRange = coveredRange(for: view)
         }
     }
@@ -2203,8 +2197,8 @@ final class SelectionController: NSObject {
 
     private func redrawForKeyChange() {
         guard hasSelection else { return }
-        for box in registry.values where box.view?.selectionCoveredRange != nil {
-            box.view?.needsDisplay = true
+        for view in registry.allViews where view.selectionCoveredRange != nil {
+            view.needsDisplay = true
         }
         forEachMaterializedCell { cell, _ in cell.redrawSelectionTint() }
     }
@@ -2495,13 +2489,21 @@ final class SelectionController: NSObject {
         registeredTextView(for: blockId, in: tableView)
     }
 
-    /// The registered view for `blockId` — if it is really on display in THIS
-    /// table (a recycled view can outlive its registration by a layout pass).
+    /// Of the views attached to `blockId`, the one really on display in THIS
+    /// table (a recycled view can outlive its registration by a layout pass,
+    /// and several can be attached at once — `AttachedViewRegistry`).
     private func registeredTextView(for blockId: String, in tableView: NSTableView) -> SelfSizingTextView? {
-        guard let view = registry[blockId]?.view, view.selectionController === self,
-              view.window === tableView.window, !view.isHiddenOrHasHiddenAncestor,
-              view.isDescendant(of: tableView) else { return nil }
-        return view
+        registry.displayed(for: blockId) { view in
+            view.selectionController === self && view.window === tableView.window
+                && !view.isHiddenOrHasHiddenAncestor && view.isDescendant(of: tableView)
+        }
+    }
+
+    /// Whether any live view is attached to `blockId` — the row draws its
+    /// own selection then (`wantsTint`); asked while a cell is being
+    /// configured, before its view is in the table.
+    private func hasAttachedView(for blockId: String) -> Bool {
+        registry.contains(blockId) { $0.selectionController === self }
     }
 
     // MARK: - Mouse (S-D6)
