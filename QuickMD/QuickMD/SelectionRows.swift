@@ -10,6 +10,65 @@ import AppKit
 // for rows that were never materialized and is unit-tested directly. Compiled
 // into the app AND the test target (no view code).
 
+/// Which text views are attached to which row (`SelectionController`'s
+/// registry, S-D5): blockId → EVERY view attached to that block, weakly.
+///
+/// Several views per id, not one: with a visible window, AppKit and SwiftUI
+/// keep more than one hosting view alive for a row's content at a time (a
+/// cell back in the reuse queue that still holds the row, a cell prepared
+/// ahead of the scroll), and each of them attaches. With one slot per id
+/// (1.11–1.15) the LAST to attach won; when that view was dismantled, freed
+/// or simply not in the table, the view on screen — whose `attachSelection`
+/// short-circuits on an unchanged id — was lost for good: its link clicks
+/// went nowhere and the selection fell back to "whole row by half" (E2E
+/// 2026-11-11, "reg none"). A view leaves only by its own `remove`; the one
+/// ON DISPLAY is picked when asked (`displayed(for:where:)`). Generic so the
+/// contract is unit-tested without the view classes.
+struct AttachedViewRegistry<View: AnyObject> {
+    private final class Box {
+        weak var view: View?
+        init(_ view: View) { self.view = view }
+    }
+    private var entries: [String: [Box]] = [:]
+
+    /// `view` is attached to `blockId` (again: it moves to the end).
+    mutating func add(_ view: View, for blockId: String) {
+        if entries.count > 256 {
+            entries = entries.compactMapValues { boxes in
+                let live = boxes.filter { $0.view != nil }
+                return live.isEmpty ? nil : live
+            }
+        }
+        var boxes = entries[blockId, default: []].filter { $0.view != nil && $0.view !== view }
+        boxes.append(Box(view))
+        entries[blockId] = boxes
+    }
+
+    /// `view` leaves `blockId`; the other views attached to it stay.
+    mutating func remove(_ view: View, for blockId: String) {
+        guard let boxes = entries[blockId], boxes.contains(where: { $0.view === view }) else { return }
+        let rest = boxes.filter { $0.view != nil && $0.view !== view }
+        entries[blockId] = rest.isEmpty ? nil : rest
+    }
+
+    /// The latest attached live view of `blockId` that `isShown` accepts — a
+    /// cell taking over a row wins over the cell that showed it before.
+    func displayed(for blockId: String, where isShown: (View) -> Bool) -> View? {
+        for box in (entries[blockId] ?? []).reversed() {
+            if let view = box.view, isShown(view) { return view }
+        }
+        return nil
+    }
+
+    /// Whether any live view attached to `blockId` passes `test`.
+    func contains(_ blockId: String, where test: (View) -> Bool) -> Bool {
+        displayed(for: blockId, where: test) != nil
+    }
+
+    /// Every live attached view.
+    var allViews: [View] { entries.values.joined().compactMap { $0.view } }
+}
+
 enum SelectionRows {
 
     /// Rows selected whole, with no text of their own to select (S-D3). A
