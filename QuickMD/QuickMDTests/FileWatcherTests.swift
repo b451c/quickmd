@@ -7,6 +7,12 @@ import XCTest
 /// the main run loop during wait(for:) so DispatchQueue.main callbacks fire.)
 final class FileWatcherTests: XCTestCase {
 
+    /// How long a wait may take before the test fails. Only an upper bound:
+    /// a passing wait ends when its event arrives, and a "settle" wait when
+    /// its own `asyncAfter` fires — a short bound only made the tests fail on
+    /// a loaded machine (an expectation fulfilled 3.1 s late is no bug).
+    private static let timeout: TimeInterval = 15
+
     private var tempDir: URL!
     private var fileURL: URL!
     private var watcher: FileWatcher!
@@ -36,7 +42,7 @@ final class FileWatcherTests: XCTestCase {
         handle.write(Data(" appended".utf8))
         try handle.close()
 
-        wait(for: [changed], timeout: 3)
+        wait(for: [changed], timeout: Self.timeout)
     }
 
     func testAtomicSaveFiresOnChangeAndKeepsWatching() throws {
@@ -47,14 +53,14 @@ final class FileWatcherTests: XCTestCase {
         watcher.start(watching: fileURL)
 
         try "replaced once".write(to: fileURL, atomically: true, encoding: .utf8)
-        wait(for: [firstChange], timeout: 3)
+        wait(for: [firstChange], timeout: Self.timeout)
 
         // The watcher must have re-armed on the NEW inode — a second atomic
         // save must fire again (this is where naive watchers go dead).
         let secondChange = expectation(description: "onChange after second atomic save")
         watcher.onChange = { secondChange.fulfill() }
         try "replaced twice".write(to: fileURL, atomically: true, encoding: .utf8)
-        wait(for: [secondChange], timeout: 3)
+        wait(for: [secondChange], timeout: Self.timeout)
     }
 
     func testRapidWritesCoalesceIntoOneCallback() throws {
@@ -71,11 +77,11 @@ final class FileWatcherTests: XCTestCase {
             try "write \(i)".write(to: fileURL, atomically: true, encoding: .utf8)
         }
 
-        wait(for: [changed], timeout: 3)
+        wait(for: [changed], timeout: Self.timeout)
         // Give the debounce window time to (incorrectly) fire again
         let settle = expectation(description: "settle")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { settle.fulfill() }
-        wait(for: [settle], timeout: 2)
+        wait(for: [settle], timeout: Self.timeout)
         XCTAssertEqual(changeCount, 1, "rapid writes must coalesce into a single reload")
     }
 
@@ -86,7 +92,7 @@ final class FileWatcherTests: XCTestCase {
         watcher.start(watching: fileURL)
 
         try FileManager.default.removeItem(at: fileURL)
-        wait(for: [missing], timeout: 3)
+        wait(for: [missing], timeout: Self.timeout)
     }
 
     /// git checkout / stash pop: the file is gone for a while, then back at
@@ -98,13 +104,13 @@ final class FileWatcherTests: XCTestCase {
         watcher.start(watching: fileURL)
 
         try FileManager.default.removeItem(at: fileURL)
-        wait(for: [missing], timeout: 3)
+        wait(for: [missing], timeout: Self.timeout)
 
         let back = expectation(description: "onChange after the file is recreated")
         watcher.onFileMissing = { XCTFail("recreation must not be reported as missing") }
         watcher.onChange = { back.fulfill() }
         try "recreated".write(to: fileURL, atomically: false, encoding: .utf8)
-        wait(for: [back], timeout: 4)
+        wait(for: [back], timeout: Self.timeout)
 
         let again = expectation(description: "onChange after a write to the recreated file")
         watcher.onChange = { again.fulfill() }
@@ -112,7 +118,7 @@ final class FileWatcherTests: XCTestCase {
         handle.seekToEndOfFile()
         handle.write(Data(" more".utf8))
         try handle.close()
-        wait(for: [again], timeout: 3)
+        wait(for: [again], timeout: Self.timeout)
     }
 
     func testStartOnMissingPathThenCreatedFiresOnChange() throws {
@@ -125,7 +131,7 @@ final class FileWatcherTests: XCTestCase {
         XCTAssertEqual(missingCount, 1, "a path that does not exist is reported missing at start")
 
         try "now here".write(to: later, atomically: false, encoding: .utf8)
-        wait(for: [created], timeout: 4)
+        wait(for: [created], timeout: Self.timeout)
         XCTAssertEqual(missingCount, 1)
     }
 
@@ -142,13 +148,13 @@ final class FileWatcherTests: XCTestCase {
                 missing.fulfill()
             }
             try FileManager.default.removeItem(at: fileURL)
-            wait(for: [missing], timeout: 3)
+            wait(for: [missing], timeout: Self.timeout)
             XCTAssertEqual(missingCount, round)
 
             let back = expectation(description: "recovery, round \(round)")
             watcher.onChange = { back.fulfill() }
             try "round \(round)".write(to: fileURL, atomically: false, encoding: .utf8)
-            wait(for: [back], timeout: 4)
+            wait(for: [back], timeout: Self.timeout)
             watcher.onChange = nil
         }
         XCTAssertEqual(missingCount, 2)
@@ -164,7 +170,7 @@ final class FileWatcherTests: XCTestCase {
         // Long enough for two polls.
         let settle = expectation(description: "settle")
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) { settle.fulfill() }
-        wait(for: [settle], timeout: 4)
+        wait(for: [settle], timeout: Self.timeout)
         XCTAssertEqual(missingCount, 1, "the poll must not re-report the missing file")
     }
 
@@ -189,18 +195,18 @@ final class FileWatcherTests: XCTestCase {
         watcher.start(watching: fileURL)
 
         try FileManager.default.removeItem(at: fileURL)
-        wait(for: [missing], timeout: 3)
+        wait(for: [missing], timeout: Self.timeout)
         try "locked".write(to: fileURL, atomically: false, encoding: .utf8)
         XCTAssertEqual(chmod(fileURL.path, 0), 0)
         defer { chmod(fileURL.path, 0o644) }
 
         // One poll sees it, fails to open it, reports it, stops.
-        wait(for: [denied], timeout: 10)
+        wait(for: [denied], timeout: Self.timeout)
 
         XCTAssertEqual(chmod(fileURL.path, 0o644), 0)
         let settle = expectation(description: "no poll after the denial")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { settle.fulfill() }
-        wait(for: [settle], timeout: 3)
+        wait(for: [settle], timeout: Self.timeout)
         XCTAssertEqual(missingCount, 1)
         XCTAssertEqual(unreadableCount, 1, "back, but off-limits: unreadable, not missing")
     }
@@ -232,7 +238,7 @@ final class FileWatcherTests: XCTestCase {
         XCTAssertEqual(chmod(replacement.path, 0), 0)
         replaced = expectation(description: "the replace is reported unreadable")
         XCTAssertEqual(rename(replacement.path, fileURL.path), 0)
-        wait(for: [replaced!], timeout: 10)
+        wait(for: [replaced!], timeout: Self.timeout)
         XCTAssertEqual(unreadableCount, 2)
 
         XCTAssertEqual(FileWatcher.Problem.missing.bannerText(path: "/a/b.md"), "File no longer exists at /a/b.md")
@@ -246,7 +252,7 @@ final class FileWatcherTests: XCTestCase {
         watcher.start(watching: fileURL)
 
         try FileManager.default.removeItem(at: fileURL)
-        wait(for: [missing], timeout: 3)
+        wait(for: [missing], timeout: Self.timeout)
 
         watcher.stop()
         watcher.onChange = { XCTFail("a stopped watcher must not report the recreated file") }
@@ -256,7 +262,7 @@ final class FileWatcherTests: XCTestCase {
         // Longer than one poll interval plus the debounce.
         let settle = expectation(description: "settle")
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { settle.fulfill() }
-        wait(for: [settle], timeout: 3)
+        wait(for: [settle], timeout: Self.timeout)
     }
 
     // MARK: - ExternalEditorManager

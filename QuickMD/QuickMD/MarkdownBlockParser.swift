@@ -1147,14 +1147,15 @@ struct MarkdownBlockParser: Sendable {
     #if DEBUG
     /// Lines `imageParagraph` has looked at, for the test that the parse
     /// scans each line of a failed run once (`imageParagraphSkip`).
-    /// Locked: parses run off-main, several documents at once.
+    /// Counted PER THREAD: parses run off-main, several at once (in the test
+    /// process too — a source-tint parse left queued by another test), and
+    /// the test reads the count of its own parse only.
     static let imageParagraphLineScans = ScanCounter()
 
-    final class ScanCounter: @unchecked Sendable {
-        private let lock = NSLock()
-        private var value = 0
-        func add() { lock.lock(); value += 1; lock.unlock() }
-        var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+    final class ScanCounter: Sendable {
+        private static let key = "QuickMD.ScanCounter"
+        func add() { Thread.current.threadDictionary[Self.key] = count + 1 }
+        var count: Int { Thread.current.threadDictionary[Self.key] as? Int ?? 0 }
     }
     #endif
 

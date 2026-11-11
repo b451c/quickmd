@@ -1216,13 +1216,19 @@ final class SourceEditorControllerTests: XCTestCase {
         let (controller, _, _) = makeEditor("# Top\n\nBody\n")
         waitUntil { controller.tintApplyCount == 1 }
         controller.textView.setSelectedRange(NSRange(location: 7, length: 0))
+        let typed = Date()
         type(controller, "## ")
         // Nothing is parsed on the keystroke; the old tint stays put meanwhile
         // (the storage delegate's attribute stamping does not touch it).
         XCTAssertEqual(controller.tintApplyCount, 1)
         assertSameColor(tint(controller, at: 0).color, light.keywordColor, appearance: nil)
         idle(SourceEditorController.tintDebounce / 2)
-        XCTAssertEqual(controller.tintApplyCount, 1, "still inside the debounce")
+        // Only while the debounce has provably not elapsed: on a loaded
+        // machine the half-debounce idle can return after the whole debounce,
+        // and then a re-tint is correct, not a failure.
+        if Date().timeIntervalSince(typed) < SourceEditorController.tintDebounce {
+            XCTAssertEqual(controller.tintApplyCount, 1, "still inside the debounce")
+        }
         waitUntil { controller.tintApplyCount == 2 }
         let heading = tint(controller, at: 7)
         assertSameColor(heading.color, light.keywordColor, appearance: nil)
@@ -1394,7 +1400,9 @@ final class SourceEditorControllerTests: XCTestCase {
         let parses = ParseCounter()
         controller.tintParseWillStart = { parses.increment() }
         let start = Date()
-        while parses.value == 0, Date().timeIntervalSince(start) < SourceEditorController.tintMaximumWait + 8 {
+        // The bound only ends a test that would fail anyway; generous so a
+        // loaded machine's late parse queue is not taken for a missing parse.
+        while parses.value == 0, Date().timeIntervalSince(start) < SourceEditorController.tintMaximumWait + 30 {
             type(controller, "x")
             idle(SourceEditorController.tintDebounce / 4)
         }
