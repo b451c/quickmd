@@ -386,6 +386,8 @@ final class BlockHeightMeasurerTests: XCTestCase {
 
     ![alt text](image.png)
 
+    ![a](a.png) ![b](b.png)
+
     ```mermaid
     graph TD; A-->B;
     ```
@@ -419,14 +421,14 @@ final class BlockHeightMeasurerTests: XCTestCase {
             case .text, .blockquote, .alert, .codeBlock, .table:
                 XCTAssertEqual(kind, .exact, "\(block.id) should be exact")
                 seen.insert(exemplar(block))
-            case .heading, .mathBlock, .image, .mermaidDiagram, .svgImage:
+            case .heading, .mathBlock, .image, .imageRow, .mermaidDiagram, .svgImage:
                 XCTAssertEqual(kind, .reported, "\(block.id) should be reported")
                 seen.insert(exemplar(block))
             }
         }
         // Every block kind is actually exercised by the fixture.
         XCTAssertEqual(seen, ["text", "blockquote", "alert", "codeBlock",
-                              "heading", "table", "mathBlock", "image", "mermaidDiagram", "svgImage"])
+                              "heading", "table", "mathBlock", "image", "imageRow", "mermaidDiagram", "svgImage"])
 
         // Converted strings exist for exactly the TextBlockView-backed kinds.
         for block in blocks {
@@ -466,6 +468,7 @@ final class BlockHeightMeasurerTests: XCTestCase {
         case .table: return "table"
         case .codeBlock: return "codeBlock"
         case .image: return "image"
+        case .imageRow: return "imageRow"
         case .blockquote: return "blockquote"
         case .alert: return "alert"
         case .heading: return "heading"

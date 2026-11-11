@@ -799,7 +799,7 @@ final class RendererTests: XCTestCase {
             case .heading(let level, let title, _):
                 shown.append(String(plain.renderHeader(title, level: level).characters))
             case .codeBlock(let code, _): shown.append(code)
-            case .image(_, let alt, _): shown.append("image:" + alt)
+            case .image(_, let alt, _, _): shown.append("image:" + alt)
             default: break
             }
         }
@@ -937,7 +937,7 @@ final class RendererTests: XCTestCase {
 
         // A standalone image whose alt holds a code span with `]`.
         let blocks = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light)).parse("![alt `]` x](i.png)")
-        guard case .image(let url, let alt, _)? = blocks.first?.content else { return XCTFail("image") }
+        guard case .image(let url, let alt, _, _)? = blocks.first?.content else { return XCTFail("image") }
         XCTAssertEqual(url, "i.png")
         XCTAssertEqual(alt, "alt `]` x")
     }
@@ -1054,7 +1054,7 @@ final class RendererTests: XCTestCase {
         guard case .text(let paragraph) = blocks[0].content else { return XCTFail("paragraph") }
         XCTAssertEqual(links(paragraph), ["a?b=1&c=2", "a%20b%C2%A9", "/u?x=1&y=2", "/v?k=&amp;"])
         XCTAssertTrue(String(paragraph.characters).hasSuffix("[c](a&amp;b)"), "code span untouched")
-        guard case .image(let url, _, _) = blocks[1].content else { return XCTFail("image") }
+        guard case .image(let url, _, _, _) = blocks[1].content else { return XCTFail("image") }
         XCTAssertEqual(url, "p&q.png")
         guard case .blockquote(let quote, _) = blocks[2].content else { return XCTFail("quote") }
         XCTAssertEqual(links(renderer.renderQuotedBody(quote)), ["/u?x=1&y=2", "/v?k=&amp;"],

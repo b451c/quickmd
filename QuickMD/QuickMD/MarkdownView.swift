@@ -1196,10 +1196,16 @@ struct MarkdownView: View {
                               onCopy: { copyToClipboard($0) })
                     .padding(.vertical, Metrics.codeOuterVerticalPadding)
 
-            case .image(let url, let alt, let width):
-                ImageBlockView(url: url, alt: alt, width: width, theme: theme, documentURL: documentURL,
+            case .image(let url, let alt, let width, let link):
+                ImageBlockView(url: url, alt: alt, width: width, link: link, theme: theme, documentURL: documentURL,
                                fontScale: scale, contentWidth: contentWidth, heightCache: heightCache,
-                               onEnlarge: presentGraphicPreview)
+                               onEnlarge: presentGraphicPreview, onLink: { handleLinkActivation($0) })
+                    .padding(.vertical, Metrics.imageOuterVerticalPadding)
+
+            case .imageRow(let images):
+                ImageRowView(images: images, theme: theme, documentURL: documentURL, fontScale: scale,
+                             contentWidth: contentWidth, heightCache: heightCache,
+                             onEnlarge: presentGraphicPreview, onLink: { handleLinkActivation($0) })
                     .padding(.vertical, Metrics.imageOuterVerticalPadding)
 
             case .blockquote(let content, let level):
@@ -1343,7 +1349,7 @@ struct MarkdownView: View {
                 hasInlineMath: false, theme: theme, fontScale: scale)
         case .table:
             return selectableTable(for: block, installedVersion: installedVersion)?.string
-        case .image, .svgImage, .mathBlock, .mermaidDiagram:
+        case .image, .imageRow, .svgImage, .mathBlock, .mermaidDiagram:
             return nil
         }
     }

@@ -247,8 +247,11 @@ enum DocumentSearch {
                 continue
             case .codeBlock(let code, _):
                 segments = [code]
-            case .image(_, let alt, _):
+            case .image(_, let alt, _, _):
                 segments = [alt]
+            case .imageRow(let images):
+                // Each picture's alt, as a lone image's (counted, not drawn).
+                segments = images.map(\.alt)
             case .mathBlock(let latex):
                 segments = [latex]
             case .mermaidDiagram(let source):
@@ -317,7 +320,7 @@ enum DocumentSearch {
             // here exactly as `HeadingBlockView` renders it.
             if let shown = converted[block.id] { return shown.string }
             return String(renderer.renderHeader(title, level: level).characters)
-        case .table, .codeBlock, .image, .svgImage, .mathBlock, .mermaidDiagram:
+        case .table, .codeBlock, .image, .imageRow, .svgImage, .mathBlock, .mermaidDiagram:
             return nil
         }
     }

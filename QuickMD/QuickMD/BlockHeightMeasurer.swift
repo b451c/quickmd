@@ -449,6 +449,11 @@ enum BlockLayout {
         /// body is a two-view tuple, flattened into the row's `VStack`, so this
         /// is that stack's spacing (the 8 pt the 1.8.0 document stack had).
         static let captionSpacing: CGFloat = 8
+        /// A linked picture (click = its link) shows the enlarge button on
+        /// hover only when it is at least this wide AND tall as drawn: the
+        /// 21 pt button plus its 6 pt inset would cover a badge, and a badge
+        /// is not worth previewing.
+        static let enlargeButtonMinimumSide: CGFloat = 64
 
         /// Scale the fitted 100% width, then keep the result inside the column.
         static func displayWidth(fontScale: CGFloat, contentWidth: CGFloat) -> CGFloat {
@@ -1374,7 +1379,7 @@ enum BlockHeightMeasurer {
                 }
                 kinds.append(.reported)
 
-            case .image(let url, let alt, let htmlWidth):
+            case .image(let url, let alt, let htmlWidth, _):
                 // An image this document has shown has a known size, and the
                 // row is what the view draws for it (`ImageBlock.rowHeight`) at
                 // any width and zoom. Until then: the loading view, 100 pt
@@ -1386,6 +1391,15 @@ enum BlockHeightMeasurer {
                 } ?? BlockLayout.ImageBlock.placeholderHeight
                 heights.append(BlockLayout.ImageBlock.rowHeight(picture: picture, alt: alt, fontScale: fontScale,
                                                                 contentWidth: contentWidth))
+                kinds.append(.reported)
+
+            case .imageRow(let images):
+                // The same line breaking `ImageFlowLayout` draws with, over
+                // the pictures this document has shown (their sizes) and
+                // loading squares for the rest; `.reported` like an image,
+                // so each picture that arrives or fails corrects the row.
+                heights.append(BlockLayout.ImageRow.rowHeight(images: images, imageSizes: imageSizes,
+                                                              fontScale: fontScale, contentWidth: contentWidth))
                 kinds.append(.reported)
 
             case .svgImage(let source):
@@ -1472,7 +1486,7 @@ enum BlockHeightMeasurer {
         case .mermaidDiagram:
             pad = Document.mermaidOuterVerticalPadding + BlockLayout.Mermaid.verticalPadding
                 + BlockLayout.Mermaid.inkInset * fontScale
-        case .image, .svgImage: pad = Document.imageOuterVerticalPadding
+        case .image, .imageRow, .svgImage: pad = Document.imageOuterVerticalPadding
         case .text, .heading: pad = 0  // measured, never here
         }
         return BlockLayout.Spacing.Row(role: role, edges: .box(top: pad, bottom: pad),

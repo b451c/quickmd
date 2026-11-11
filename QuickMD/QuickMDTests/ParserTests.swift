@@ -419,8 +419,8 @@ final class ParserTests: XCTestCase {
     /// `[![alt](img)](url)` alone in its paragraph is the picture, like
     /// `![alt](img)` and `<a href><img></a>` — an `.image` block on that line
     /// (Section copy, search of the alt and copy work as for a plain image
-    /// line). The link target is not kept (as for `<a><img>`). Text beside
-    /// it, or two linked images (a badge row), stay a paragraph.
+    /// line). Since 1.15 it keeps its link (a click follows it). Text beside
+    /// it stays a paragraph; two linked images are an image row (1.15).
     func testLineOfOneLinkedImageIsAnImageBlock() {
         let md = """
         # Title
@@ -443,26 +443,34 @@ final class ParserTests: XCTestCase {
         """
         let blocks = parse(md)
         let images: [(url: String, alt: String, line: Int)] = blocks.compactMap {
-            guard case .image(let url, let alt, nil) = $0.content else { return nil }
+            guard case .image(let url, let alt, nil, _) = $0.content else { return nil }
             return (url, alt, $0.sourceLine)
         }
         XCTAssertEqual(images.map(\.url), ["img/logo.png", "https://img.shields.io/x.svg", "img/plain.png"])
         XCTAssertEqual(images.map(\.alt), ["Logo", "Badge", "Plain"])
         XCTAssertEqual(images.map(\.line), [1, 3, 5], "each on its own source line")
 
+        let links: [URL?] = blocks.compactMap {
+            guard case .image(_, _, nil, let link) = $0.content else { return nil }
+            return .some(link)
+        }
+        XCTAssertEqual(links, [URL(string: "https://example.com"), URL(string: "https://example.com/site"), nil])
+
         let paragraphs = blocks.compactMap(plainText)
-        XCTAssertEqual(paragraphs.count, 4, "\(paragraphs)")
+        XCTAssertEqual(paragraphs.count, 3, "\(paragraphs)")
         XCTAssertTrue(paragraphs[0].hasPrefix("text before [Image: a]"))
         XCTAssertEqual(paragraphs[1], "[Image: a] text after")
-        XCTAssertEqual(paragraphs[2], "[Image: a] [Image: b]", "a badge row stays a paragraph (1.15)")
-        XCTAssertTrue(paragraphs[3].contains("[undefined]"), "no link → not a linked image")
+        XCTAssertTrue(paragraphs[2].contains("[undefined]"), "no link → not a linked image")
+        XCTAssertEqual(imageRows(blocks).map { $0.map(\.alt) }, [["a", "b"]], "a badge row is a row (1.15)")
 
-        // Exactly what a plain `![Logo](img/logo.png)` line parses to, id aside.
-        guard case .image(let url, let alt, let width) = parse("![Logo](img/logo.png)")[0].content,
-              case .image(let linkedURL, let linkedAlt, let linkedWidth) =
+        // Exactly what a plain `![Logo](img/logo.png)` line parses to, id and link aside.
+        guard case .image(let url, let alt, let width, let plainLink) = parse("![Logo](img/logo.png)")[0].content,
+              case .image(let linkedURL, let linkedAlt, let linkedWidth, let link) =
                 parse("[![Logo](img/logo.png)](https://example.com)")[0].content else { return XCTFail("images") }
         XCTAssertEqual([url, alt], [linkedURL, linkedAlt])
         XCTAssertNil(width); XCTAssertNil(linkedWidth)
+        XCTAssertNil(plainLink)
+        XCTAssertEqual(link, URL(string: "https://example.com"))
     }
 
     /// After the vertical-rhythm merge (rows rendered at the end of the
@@ -521,11 +529,11 @@ final class ParserTests: XCTestCase {
 
     /// Badges one per line are ONE paragraph on GitHub (`gh api markdown`:
     /// `<p><a><img></a>⏎<a><img></a>…</p>`), the same as a badge row on one
-    /// line: linked placeholders, not a column of pictures (badge rows: 1.15).
-    /// So is a linked image with text on the line before or after it. One
-    /// that a blank line, a block start or the document's end closes is the
-    /// picture.
-    func testLinkedImagesOnePerLineStayOneParagraph() {
+    /// line: one image row since 1.15, not a column of pictures. A linked
+    /// image with text on the line before or after it is a paragraph with
+    /// that text (linked placeholders). One that a blank line, a block start
+    /// or the document's end closes is the picture.
+    func testLinkedImagesOnePerLineAreOneRow() {
         let readme = """
         [![Platform](https://img.shields.io/platform.svg)](https://www.apple.com/macos)
         [![Swift](https://img.shields.io/swift.svg)](https://swift.org)
@@ -535,12 +543,13 @@ final class ParserTests: XCTestCase {
         """
         let blocks = parse(readme)
         XCTAssertEqual(images(blocks).map(\.alt), ["Donation goal"])
-        let paragraphs = blocks.compactMap(plainText)
-        XCTAssertEqual(paragraphs.count, 1, "\(paragraphs)")
-        XCTAssertEqual(paragraphs.first, "[Image: Platform] [Image: Swift] [Image: License]")
-        guard case .text(let row) = blocks[0].content else { return XCTFail("text") }
-        XCTAssertEqual(Set(row.runs.compactMap(\.link).map(\.absoluteString)),
-                       ["https://www.apple.com/macos", "https://swift.org", "LICENSE"])
+        XCTAssertTrue(blocks.compactMap(plainText).isEmpty)
+        let rows = imageRows(blocks)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.map(\.alt), ["Platform", "Swift", "License"])
+        XCTAssertEqual(rows.first?.map { $0.link?.absoluteString }, ["https://www.apple.com/macos", "https://swift.org", "LICENSE"])
+        XCTAssertEqual(rows.first?.map(\.separator), [.none, .space, .space], "soft breaks are spaces")
+        XCTAssertEqual(blocks.first?.sourceLine, 0)
 
         // Text right before or after (no blank line): one paragraph with it.
         XCTAssertTrue(images(parse("Built with:\n[![Swift](s.svg)](https://swift.org)")).isEmpty)
@@ -817,7 +826,7 @@ final class ParserTests: XCTestCase {
               case .heading(let level, let title, _) = blocks[0].content,
               case .text(let paragraph) = blocks[1].content,
               case .blockquote(let quote, _) = blocks[2].content,
-              case .image(let url, _, _) = blocks[3].content,
+              case .image(let url, _, _, _) = blocks[3].content,
               case .text(let literal) = blocks[4].content,
               case .text(let notDefinition) = blocks[5].content else {
             return XCTFail("blocks: \(blocks.map(\.content))")
@@ -859,7 +868,7 @@ final class ParserTests: XCTestCase {
               case .text(let paragraph) = blocks[1].content,
               case .blockquote(let quote, _) = blocks[2].content,
               case .table(_, let rows, _, _) = blocks[3].content,
-              case .image(let url, let alt, _) = blocks[4].content else {
+              case .image(let url, let alt, _, _) = blocks[4].content else {
             return XCTFail("blocks: \(blocks.map(\.content))")
         }
         XCTAssertEqual(links(renderer.renderHeader(title, level: level)), ["link text=https://lt"])
@@ -929,17 +938,25 @@ final class ParserTests: XCTestCase {
 
     func testStandaloneImageBlock() {
         let blocks = parse("![alt text](image.png)")
-        guard case .image(let url, let alt, _) = blocks[0].content else {
+        guard case .image(let url, let alt, _, _) = blocks[0].content else {
             return XCTFail("expected image block")
         }
         XCTAssertEqual(url, "image.png")
         XCTAssertEqual(alt, "alt text")
     }
 
+    /// The pictures of every `.imageRow` block, in order.
+    private func imageRows(_ blocks: [MarkdownBlock]) -> [[RowImage]] {
+        blocks.compactMap {
+            if case .imageRow(let images) = $0.content { return images }
+            return nil
+        }
+    }
+
     /// `(url, alt)` of every `.image` block, in order.
     private func images(_ blocks: [MarkdownBlock]) -> [(url: String, alt: String)] {
         blocks.compactMap {
-            if case .image(let url, let alt, _) = $0.content { return (url, alt) }
+            if case .image(let url, let alt, _, _) = $0.content { return (url, alt) }
             return nil
         }
     }
@@ -985,18 +1002,21 @@ final class ParserTests: XCTestCase {
     }
 
     /// D9 — the old lazy regex made this ONE image with url `x.png) ![b](y.png`.
-    func testTwoImagesOnOneLineAreTwoImageBlocks() {
+    /// Two pictures (since 1.15 in one image row: GitHub's one `<p>`).
+    func testTwoImagesOnOneLineAreTwoPicturesOfOneRow() {
         let blocks = parse("Intro\n\n![a](x.png) ![b](y.png)\n\nOutro")
-        let found = images(blocks)
-        XCTAssertEqual(found.map(\.url), ["x.png", "y.png"])
-        XCTAssertEqual(found.map(\.alt), ["a", "b"])
-        let imageBlocks = blocks.filter { $0.id.hasPrefix("image-") }
-        XCTAssertEqual(imageBlocks.map(\.sourceLine), [2, 2], "both images belong to line 2")
+        let rows = imageRows(blocks)
+        XCTAssertEqual(rows.first?.map(\.url), ["x.png", "y.png"])
+        XCTAssertEqual(rows.first?.map(\.alt), ["a", "b"])
+        let rowBlocks = blocks.filter { $0.id.hasPrefix("imagerow-") }
+        XCTAssertEqual(rowBlocks.map(\.sourceLine), [2], "the row belongs to line 2")
         XCTAssertEqual(Set(blocks.map(\.id)).count, blocks.count, "ids stay unique")
     }
 
     func testAdjacentImagesWithoutSpaceAreStillAnImageLine() {
-        XCTAssertEqual(images(parse("  ![a](x.png)![b](y.png)  ")).map(\.url), ["x.png", "y.png"])
+        let row = imageRows(parse("  ![a](x.png)![b](y.png)  ")).first ?? []
+        XCTAssertEqual(row.map(\.url), ["x.png", "y.png"])
+        XCTAssertEqual(row.map(\.separator), [.none, .none], "touching pictures: no space (GitHub)")
     }
 
     func testImageFollowedByTextIsNotStandalone() {
@@ -1100,16 +1120,16 @@ final class ParserTests: XCTestCase {
         XCTAssertLessThan(elapsed, 1.0, "2 MB data: line took \(elapsed) s")
     }
 
-    /// D11 — a badge line is a paragraph of linked placeholders, never image
-    /// blocks (real inline pictures are deferred).
-    func testBadgeLineStaysAParagraphOfLinks() {
+    /// D11 (until 1.14) a badge line was a paragraph of linked placeholders;
+    /// since 1.15 it is one image row whose pictures keep their links.
+    func testBadgeLineIsAnImageRowOfLinks() {
         let blocks = parse("[![ci](https://x.org/ci.svg)](https://x.org/ci) [![v](https://x.org/v.svg)](https://x.org/rel)")
         XCTAssertTrue(images(blocks).isEmpty)
         XCTAssertEqual(blocks.count, 1)
-        guard case .text(let attr) = blocks[0].content else { return XCTFail("expected text") }
-        XCTAssertEqual(Set(attr.runs.compactMap(\.link).map(\.absoluteString)),
-                       ["https://x.org/ci", "https://x.org/rel"])
-        XCTAssertFalse(String(attr.characters).contains("]("))
+        let row = imageRows(blocks).first ?? []
+        XCTAssertEqual(row.map(\.url), ["https://x.org/ci.svg", "https://x.org/v.svg"])
+        XCTAssertEqual(row.map { $0.link?.absoluteString }, ["https://x.org/ci", "https://x.org/rel"])
+        XCTAssertEqual(row.map(\.separator), [.none, .space])
     }
 
     // MARK: - Text chunking (constraint: ≤30 lines per text block)
@@ -1598,7 +1618,7 @@ final class ParserTests: XCTestCase {
         let kinds: (String) -> [String] = { md in
             self.parse(md).map { String($0.id.split(separator: "-")[0]) }
         }
-        XCTAssertEqual(kinds("Term\n: definition\n![a](x.png) ![b](y.png)"), ["text", "image", "image"])
+        XCTAssertEqual(kinds("Term\n: definition\n![a](x.png) ![b](y.png)"), ["text", "imagerow"])
         XCTAssertEqual(kinds("[logo]: https://x.org/l.png\n\nTerm\n: definition\n![logo]"), ["text", "image"])
     }
 

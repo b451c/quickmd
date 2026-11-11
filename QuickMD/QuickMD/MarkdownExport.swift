@@ -384,6 +384,9 @@ struct PrintableImageView: View {
     /// HTML `<img width>`; replaces the image's own width in the D4 rule.
     var width: ImageWidth? = nil
     var documentURL: URL? = nil
+    /// False in an image row (`PrintableImageRowView`): its pictures have no
+    /// caption, as on screen.
+    var showsCaption = true
 
     /// Page column cap. The D4 rule applies as on screen: an image is never
     /// drawn wider than its own width, so icons stay icon-sized.
@@ -412,7 +415,7 @@ struct PrintableImageView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
-            if !alt.isEmpty {
+            if showsCaption && !alt.isEmpty {
                 Text(alt)
                     .font(.system(size: 10))
                     .foregroundColor(Color(white: 0.5))
@@ -442,6 +445,24 @@ struct PrintableImageView: View {
             PrintFolderAccess.restoreSavedAccess(forParentOf: fileURL)
         }
         return ImageLoader.loadSync(raw: raw, source: source, maxPixel: ImageLoader.printMaxPixel)
+    }
+}
+
+/// An image row in print/PDF: the screen's flow (`ImageFlowLayout`, 100 %
+/// zoom), each picture a `PrintableImageView` without its caption — same
+/// loading (no network, no prompt) and the same placeholder for a picture
+/// that cannot be shown, inline in the row.
+struct PrintableImageRowView: View {
+    let images: [RowImage]
+    var documentURL: URL? = nil
+
+    var body: some View {
+        ImageFlowLayout(separators: images.map(\.separator), fontScale: 1) {
+            ForEach(images.indices, id: \.self) { index in
+                PrintableImageView(url: images[index].url, alt: images[index].alt, documentURL: documentURL,
+                                   showsCaption: false)
+            }
+        }
     }
 }
 
@@ -488,8 +509,11 @@ struct MarkdownPrintableBlockView: View {
             case .codeBlock(let code, let language):
                 PrintableCodeBlockView(code: code, language: language)
 
-            case .image(let url, let alt, let width):
+            case .image(let url, let alt, let width, _):
                 PrintableImageView(url: url, alt: alt, width: width, documentURL: documentURL)
+
+            case .imageRow(let images):
+                PrintableImageRowView(images: images, documentURL: documentURL)
 
             case .blockquote(let content, let level):
                 PrintableBlockquoteView(content: content, level: level)

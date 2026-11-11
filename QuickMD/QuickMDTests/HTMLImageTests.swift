@@ -20,7 +20,7 @@ final class HTMLImageTests: XCTestCase {
 
     private func images(_ blocks: [MarkdownBlock]) -> [Found] {
         blocks.compactMap {
-            if case .image(let url, let alt, let width) = $0.content {
+            if case .image(let url, let alt, let width, _) = $0.content {
                 return Found(url: url, alt: alt, width: width, line: $0.sourceLine)
             }
             return nil
