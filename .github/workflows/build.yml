@@ -21,8 +21,13 @@ jobs:
             -project QuickMD/QuickMD.xcodeproj \
             -scheme QuickMD \
             -destination 'platform=macOS' \
+            -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             test
+      - name: Failure details
+        # Parallel test output carries no assertion messages; print them from the result bundle.
+        if: failure()
+        run: xcrun xcresulttool get test-results summary --path TestResults.xcresult || true
 
   build-release:
     name: Build Release (GitHub flavor)

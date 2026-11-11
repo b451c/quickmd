@@ -1282,7 +1282,8 @@ extension RendererTests {
     /// on every macOS the tests run on (CI's older SDK resolves the system
     /// blue and the system font names differently):
     /// - colours as the theme role they equal (`text`, `link`, `secondary`,
-    ///   `code`, compared with the role resolved the same way at test time),
+    ///   `code`, `checkbox` — the system green differs between macOS
+    ///   versions too — compared with the role resolved the same way at test time),
     ///   `other(r,g,b,a)` only for a colour no role has;
     /// - fonts as size (0.01) + bold / italic / mono traits — no names;
     /// - every other attribute the renderer sets: underline, strikethrough,
@@ -1294,7 +1295,8 @@ extension RendererTests {
         let renderer = MarkdownRenderer(theme: theme)
         let roles: [(String, NSColor)] = [("text", NSColor(theme.textColor)), ("link", NSColor(theme.linkColor)),
                                           ("secondary", NSColor(theme.secondaryTextColor)),
-                                          ("code", NSColor(theme.codeBackgroundColor))]
+                                          ("code", NSColor(theme.codeBackgroundColor)),
+                                          ("checkbox", NSColor(theme.checkboxColor))]
         func components(_ color: NSColor) -> [CGFloat]? {
             guard let rgb = color.usingColorSpace(.sRGB) else { return nil }
             return [rgb.redComponent, rgb.greenComponent, rgb.blueComponent, rgb.alphaComponent]
@@ -1434,7 +1436,7 @@ extension RendererTests {
       "code" font=13.00 mono fg=text bg=code ui=fcb
       "
     " font=- fg=- bg=- ui=---
-      "☑ " font=14.00 fg=other(0.188,0.820,0.345,1.000) bg=- ui=fc-
+      "☑ " font=14.00 fg=checkbox bg=- ui=fc-
       "Done task with " font=14.00 fg=secondary bg=- s ui=fc-
       "link" font=14.00 fg=secondary bg=- u s link=https://x.example/c ui=fc-
     quote
