@@ -882,7 +882,7 @@ struct MarkdownRenderer: Sendable {
                     continue
                 }
             case UInt8(ascii: "["):
-                if let (attr, rest) = tryParseFootnoteRef(&remaining) {
+                if let (attr, rest) = tryParseFootnoteRef(&remaining, closing: parse.closingBrackets) {
                     parse.append(.atom(attr, .footnoteNumber))
                     remaining = rest
                     continue
@@ -967,6 +967,7 @@ struct MarkdownRenderer: Sendable {
         /// `![` and `](` is a lookup, not a forward scan — O(n) per call.
         let pairs: InlineSyntaxScanner.PairTable
         let codeSpans: InlineSyntaxScanner.CodeSpanTable
+        let closingBrackets: InlineSyntaxScanner.NextClosingBracket
         private(set) var nodes: [InlineNode] = []
         private(set) var delimiters = InlineDelimiterStack()
         private(set) var links: [LinkSpan] = []
@@ -991,6 +992,7 @@ struct MarkdownRenderer: Sendable {
             self.text = text
             pairs = InlineSyntaxScanner.PairTable(text)
             codeSpans = InlineSyntaxScanner.CodeSpanTable(text)
+            closingBrackets = InlineSyntaxScanner.NextClosingBracket(text)
         }
 
         private mutating func flush() {
@@ -1526,11 +1528,13 @@ struct MarkdownRenderer: Sendable {
     /// footnote id starts with it in practice.
     static let numberedFootnoteMarker: Unicode.Scalar = "\u{E000}"
 
-    private func tryParseFootnoteRef(_ remaining: inout Substring) -> (AttributedString, Substring)? {
+    private func tryParseFootnoteRef(_ remaining: inout Substring,
+                                     closing: InlineSyntaxScanner.NextClosingBracket) -> (AttributedString, Substring)? {
         guard remaining.hasPrefix("[^") else { return nil }
 
         let afterBracket = remaining.dropFirst(2)
-        guard let closeIndex = afterBracket.firstIndex(of: "]") else { return nil }
+        // The first `]` — from the line's shared lookup, linear per line.
+        guard let closeIndex = closing.at(orAfter: afterBracket.startIndex) else { return nil }
 
         let fnId = String(afterBracket[..<closeIndex])
         guard !fnId.isEmpty else { return nil }

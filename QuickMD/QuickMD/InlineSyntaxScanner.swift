@@ -389,6 +389,40 @@ enum InlineSyntaxScanner {
         }
     }
 
+    /// The next `]` of one text, for callers that ask left to right (a
+    /// footnote reference `[^id]` ends at the first `]`). Asking at every
+    /// `[^` with a fresh forward search was quadratic on a long line of `[^`
+    /// with no `]`; here the answer of the last search is reused while it is
+    /// still ahead, and "none from here" is remembered, so every byte is
+    /// examined at most once per text (`bytesExamined`, for the tests).
+    final class NextClosingBracket {
+        private let text: String
+        private var searchedFrom: String.Index?
+        private var found: String.Index?
+        private(set) var bytesExamined = 0
+
+        /// `text` should be native contiguous UTF-8; slices handed in later
+        /// must be slices of it.
+        init(_ text: String) { self.text = text }
+
+        /// The first `]` at or after `start`, or nil.
+        func at(orAfter start: String.Index) -> String.Index? {
+            if let from = searchedFrom, start >= from {
+                guard let found else { return nil }          // none after `from`
+                if start <= found { return found }
+            }
+            let utf8 = text.utf8
+            var index = start
+            while index < utf8.endIndex, utf8[index] != UInt8(ascii: "]") {
+                bytesExamined += 1
+                index = utf8.index(after: index)
+            }
+            searchedFrom = start
+            found = index < utf8.endIndex ? index : nil
+            return found
+        }
+    }
+
     /// The code spans of one text, for the renderer and `ReferenceLinks`:
     /// `CodeSpanScanner` over the text's bytes, runs listed once per text.
     final class CodeSpanTable {

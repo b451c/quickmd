@@ -154,6 +154,7 @@ enum ReferenceLinks {
         let utf8 = text.utf8
         let pairs = InlineSyntaxScanner.PairTable(text)
         let codeSpans = InlineSyntaxScanner.CodeSpanTable(text)
+        let closingBrackets = InlineSyntaxScanner.NextClosingBracket(text)
         var out = ""
         var remaining = text[...]
         /// The open `[`s (where each one's label starts) and, as in the
@@ -189,7 +190,7 @@ enum ReferenceLinks {
                 continue
             }
             // `tryParseFootnoteRef` runs before links.
-            if remaining.hasPrefix("[^"), let (numbered, rest) = footnote(remaining, sources: sources) {
+            if remaining.hasPrefix("[^"), let (numbered, rest) = footnote(remaining, sources: sources, closing: closingBrackets) {
                 out += numbered
                 remaining = rest
                 continue
@@ -247,9 +248,10 @@ enum ReferenceLinks {
 
     /// `tryParseFootnoteRef` at a `[^`: the id runs to the first `]`; a known
     /// id becomes its numbered form, anything else is left to the link scan.
-    private static func footnote(_ remaining: Substring, sources: Sources) -> (String, Substring)? {
+    private static func footnote(_ remaining: Substring, sources: Sources,
+                                 closing: InlineSyntaxScanner.NextClosingBracket) -> (String, Substring)? {
         let afterBracket = remaining.dropFirst(2)
-        guard let close = afterBracket.firstIndex(of: "]") else { return nil }
+        guard let close = closing.at(orAfter: afterBracket.startIndex) else { return nil }
         let id = String(afterBracket[..<close])
         guard !id.isEmpty,
               let index = sources.footnoteIds.firstIndex(of: ReferenceLabel.normalized(id)) else { return nil }

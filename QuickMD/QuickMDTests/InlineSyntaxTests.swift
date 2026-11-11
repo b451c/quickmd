@@ -339,6 +339,56 @@ final class InlineSyntaxTests: XCTestCase {
         ])
     }
 
+    /// `[l]()` and `[l](<>)` are links with an empty href on GitHub
+    /// (`<a href="">l</a>`, spec 495/496): drawn as a link, but no URL
+    /// attribute at all — a click does nothing, and `handleLinkActivation`
+    /// never sees an empty URL.
+    func testEmptyDestinationLooksLikeALinkButHasNoURL() {
+        for markdown in ["[l]()", "[l](<>)", "[l]( )"] {
+            let attributed = MarkdownRenderer(theme: theme).renderInline(markdown)
+            XCTAssertEqual(String(attributed.characters), "l", markdown)
+            XCTAssertTrue(attributed.runs.allSatisfy { $0.link == nil }, markdown)
+            let run = attributed.runs.first
+            XCTAssertEqual(run?[AttributeScopes.AppKitAttributes.ForegroundColorAttribute.self],
+                           NSColor(theme.linkColor), markdown)
+            XCTAssertNotNil(run?[AttributeScopes.AppKitAttributes.UnderlineStyleAttribute.self], markdown)
+        }
+    }
+
+    /// A footnote reference ends at the first `]`; the lookup is shared per
+    /// line, so 50 000 `[^` with no `]` examine each byte once — proved by
+    /// counting, not by the clock — and still render (with a defined
+    /// footnote, so the lookup runs) in a paragraph and through
+    /// `ReferenceLinks` in a quote.
+    func testFootnoteReferenceLookupIsLinear() {
+        let line = String(repeating: "[^", count: 50_000)
+        let lookup = InlineSyntaxScanner.NextClosingBracket(line)
+        var index = line.startIndex
+        while index < line.endIndex {
+            XCTAssertNil(lookup.at(orAfter: line.utf8.index(index, offsetBy: 2)))
+            index = line.utf8.index(index, offsetBy: 2)
+        }
+        XCTAssertLessThanOrEqual(lookup.bytesExamined, line.utf8.count)
+
+        // Many references with a `]` each: still one pass.
+        let refs = String(repeating: "x[^n] ", count: 10_000)
+        let refLookup = InlineSyntaxScanner.NextClosingBracket(refs)
+        var position = refs.startIndex
+        while let start = refs[position...].range(of: "[^")?.upperBound {
+            guard let close = refLookup.at(orAfter: start) else { return XCTFail("close") }
+            position = close
+        }
+        XCTAssertLessThanOrEqual(refLookup.bytesExamined, refs.utf8.count)
+
+        let renderer = MarkdownRenderer(theme: theme, footnoteDefinitions: [(id: "n", content: "note")])
+        var counts: [Int] = []
+        onSmallStack {
+            counts = [renderer.renderInline(line).characters.count,
+                      ReferenceLinks.inlined("> " + line, definitions: [:], footnoteIds: ["n"]).count]
+        }
+        XCTAssertEqual(counts, [100_000, 100_002])
+    }
+
     // MARK: - Adversarial input: linear, no deep recursion
 
     /// Runs `body` on a thread with the parse task's small (512 KB) stack, so
