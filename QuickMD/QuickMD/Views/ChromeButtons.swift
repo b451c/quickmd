@@ -395,6 +395,8 @@ struct ReloadDocumentButton: View {
 /// right here (constraints "Block hover buttons").
 struct EditSourceButton: View {
     let theme: MarkdownTheme
+    /// The pill's own window: only ITS resigning key resets the label.
+    let window: NSWindow?
     let action: () -> Void
     let sideBySideAction: () -> Void
 
@@ -421,7 +423,8 @@ struct EditSourceButton: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             stopWatchingOption()
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { note in
+            guard let resigned = note.object as? NSWindow, resigned === window else { return }
             stopWatchingOption()
         }
         .onDisappear { stopWatchingOption() }

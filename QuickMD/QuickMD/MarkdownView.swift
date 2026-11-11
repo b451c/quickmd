@@ -164,9 +164,6 @@ struct MarkdownView: View {
     /// Paces the preview's re-parse (debounce, maximum wait, one parse at a
     /// time). A reference, so a keystroke never re-evaluates this body.
     @State private var previewScheduler = PreviewRefreshScheduler()
-    /// The window side by side grew, and its frame before: given back on
-    /// leaving unless the user changed the window meanwhile.
-    @State private var sideBySideGrowth: SideBySideGrowth?
     /// The minimum content width while side by side shows — decided with the
     /// growing (`SideBySideLayout.minimumContentWidth`), never more than the
     /// window can have.
@@ -567,7 +564,7 @@ struct MarkdownView: View {
                     ReloadDocumentButton(theme: theme) {
                         reloadManually()
                     }
-                    EditSourceButton(theme: theme,
+                    EditSourceButton(theme: theme, window: hostWindow,
                                      action: { toggleSourceEdit() },
                                      sideBySideAction: { toggleSideBySide() })
                 }
@@ -769,6 +766,13 @@ struct MarkdownView: View {
             previewPendingWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
         }
+        // The 0.3 s check fell inside a live resize and the preview is still
+        // pending when it ends: show it now.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEndLiveResizeNotification)) { note in
+            guard let window = note.object as? NSWindow, window === hostWindow,
+                  isSideBySideShowing, isPreviewPending else { return }
+            showsPreviewPending = true
+        }
         .task(id: DocumentIdentity(text: renderedSource,
                                    colorScheme: MarkdownTheme.windowColorScheme(forThemeNamed: selectedThemeName) == nil
                                        ? colorScheme : nil,
@@ -783,8 +787,11 @@ struct MarkdownView: View {
             // and supersede each other as they always did.
             let isEditing = editSession.isActive
             if previewScheduler.mustWait(isEditing: isEditing) {
+                let queuedText = renderedSource
                 await previewScheduler.waitUntilIdle(isEditing: isEditing)
-                guard !Task.isCancelled else { return }
+                // Woken before SwiftUI re-evaluated an id the same publish
+                // changed: that newer task parses — this one would be wasted.
+                guard !Task.isCancelled, renderedSource == queuedText else { return }
             }
             let text = renderedSource
             let currentTheme = theme
@@ -1300,38 +1307,31 @@ struct MarkdownView: View {
                                     isFullScreen: window.styleMask.contains(.fullScreen))
     }
 
-    /// Grows the window when `fit` says so (remembering the frame before the
-    /// FIRST growth; a tab group grows as one), then sets the minimum from
-    /// what the window has now.
+    /// Grows the window when `fit` says so (`WindowSizeMemory` owns what the
+    /// growth means for the group: what is remembered, what is given back),
+    /// then sets the minimum from what the window has now.
     private func applySideBySideFit(_ fit: SideBySideLayout.Fit) {
         guard let window = hostWindow else {
             sideBySideMinimum = SideBySideLayout.standardMinimumWidth
             return
         }
         if case .grow(let frame) = fit {
-            let before = window.frame
+            let before = window.frame.size
             window.setFrame(frame, display: true, animate: false)
-            let growth = sideBySideGrowth.map { $0.regrown(to: window.frame) }
-                ?? SideBySideGrowth(original: before, grown: window.frame)
-            sideBySideGrowth = growth
-            WindowSizeMemory.setSideBySideGrowth(growth, for: window.tabbedWindows ?? [window])
+            WindowSizeMemory.sideBySideDidGrow(window, from: before)
+        } else {
+            WindowSizeMemory.sideBySideDidShow(window)
         }
         sideBySideMinimum = SideBySideLayout.minimumContentWidth(required: sideBySideRequiredWidth,
                                                                  contentWidth: Self.contentWidth(of: window))
     }
 
-    /// Side by side ended (toggled off, the session left): the width it took
-    /// goes back — unless the user resized or moved the window meanwhile.
-    /// On the next turn, once the minimum is back at the usual floor.
+    /// Side by side ended in this tab (toggled off, the session left): the
+    /// group gets its width back if no other tab shows side by side and the
+    /// user did not resize it meanwhile (`SideBySideGrowthState`).
     private func endSideBySideGrowth() {
-        guard let growth = sideBySideGrowth else { return }
-        sideBySideGrowth = nil
         guard let window = hostWindow else { return }
-        WindowSizeMemory.setSideBySideGrowth(nil, for: window.tabbedWindows ?? [window])
-        guard let frame = growth.frameToRestore(current: window.frame) else { return }
-        DispatchQueue.main.async {
-            window.setFrame(frame, display: true, animate: false)
-        }
+        WindowSizeMemory.sideBySideDidEnd(window)
     }
 
     /// The ONE place the preview is decided (`SideBySidePreview`), reached

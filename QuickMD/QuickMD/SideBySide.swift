@@ -351,44 +351,135 @@ enum SideBySideLayout {
 
 // MARK: - Giving the grown width back
 
-/// A window side by side grew (`SideBySideLayout.fit`): the frame it had
-/// before and the frame it got. The grown size is OURS, not a size the user
-/// chose — leaving side by side gives the width back, and `WindowSizeMemory`
-/// never remembers it. Once the user resized or moved the window, its frame
-/// is theirs: nothing is restored and the current size is what counts.
-struct SideBySideGrowth: Equatable {
-    /// Before the first growth of this side-by-side stretch.
-    let original: NSRect
-    /// What the window got (its frame right after `setFrame`).
-    let grown: NSRect
+/// Who owns the width side by side added to a window: ONE state for the whole
+/// process, keyed by the window GROUP (a window and its native tabs share one
+/// frame). Pure: windows are opaque ids, sizes are passed in — the caller
+/// (`WindowSizeMemory`) resolves a window's group at QUERY time
+/// (`tabbedWindows ?? [window]`), never from a list captured when it grew, so
+/// a tab that joins the group later belongs to it and a tab dragged out into
+/// its own window does not. No window is referenced, only ids.
+///
+/// Rules (each a test in `SideBySideTests`):
+/// - The first growth of a group records its pre-grow SIZE; a later growth
+///   keeps it — unless the user resized the window by hand since the last
+///   growth (its size is no longer the grown size, 1 pt tolerance; a move is
+///   not a resize): then the user's size is the new pre-grow size.
+/// - The group is grown while at least one of its tabs shows side by side.
+/// - While grown, the size to remember (resize end, close, quit) is the
+///   pre-grow size — unless the user resized by hand: then theirs.
+/// - Only the LAST side-by-side tab leaving (toggle off, Done / Esc, closing
+///   it) gives the width back, and only if the size is still the grown one;
+///   the caller keeps the current origin (`restoredFrame`). Never while
+///   another tab of the group still shows side by side.
+/// - Full screen: nothing is remembered meanwhile; leaving side by side in
+///   full screen defers the give-back to the exit from full screen (AppKit
+///   puts the grown frame back then). Full screen ENTERED while side by side
+///   needs nothing: leaving full screen restores the grown size, the group is
+///   still grown.
+struct SideBySideGrowthState: Equatable {
 
-    /// Another growth while one is in effect (a sidebar shown side by side):
-    /// the ORIGINAL frame stays the one before the first.
-    func regrown(to frame: NSRect) -> SideBySideGrowth {
-        SideBySideGrowth(original: original, grown: frame)
+    struct Entry: Equatable {
+        /// The size before the growth (what is given back / remembered).
+        var preGrowSize: NSSize
+        /// The size the last growth set.
+        var grownSize: NSSize
+        /// The windows (tabs) of the group showing side by side.
+        var sideBySide: Set<Int>
+        /// Nobody shows side by side any more, but the group was in full
+        /// screen: the give-back waits for its exit. The group's windows then.
+        var waitingForFullScreenExit: Set<Int> = []
+
+        var members: Set<Int> { sideBySide.union(waitingForFullScreenExit) }
     }
 
-    /// The window is still exactly as side by side left it.
-    func isUntouched(_ current: NSRect) -> Bool {
-        Self.same(current, grown)
+    private(set) var entries: [Entry] = []
+
+    /// 1 pt: AppKit rounds the frames it is given.
+    static func same(_ a: NSSize, _ b: NSSize) -> Bool {
+        abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
     }
 
-    /// The frame to restore on leaving side by side; nil when the user
-    /// changed the window meanwhile (keep it).
-    func frameToRestore(current: NSRect) -> NSRect? {
-        isUntouched(current) ? original : nil
+    private func index(of group: Set<Int>) -> Int? {
+        entries.firstIndex { !$0.members.isDisjoint(with: group) }
     }
 
-    /// The size `WindowSizeMemory` may remember for a window whose frame is
-    /// `current`: the pre-growth size while the growth is in effect.
-    static func sizeToPersist(current: NSRect, growth: SideBySideGrowth?) -> NSSize {
-        guard let growth, growth.isUntouched(current) else { return current.size }
-        return growth.original.size
+    func isGrown(group: Set<Int>) -> Bool { index(of: group) != nil }
+
+    /// Window `window` (of `group`) grew from `before` to `after`.
+    mutating func didGrow(window: Int, group: Set<Int>, from before: NSSize, to after: NSSize) {
+        guard let i = index(of: group) else {
+            entries.append(Entry(preGrowSize: before, grownSize: after, sideBySide: [window]))
+            return
+        }
+        // Resized by hand since the last growth: that size is the user's.
+        if !Self.same(before, entries[i].grownSize) { entries[i].preGrowSize = before }
+        entries[i].grownSize = after
+        entries[i].sideBySide.insert(window)
+        entries[i].waitingForFullScreenExit = []
     }
 
-    /// AppKit may round a frame it was given by a fraction of a point.
-    private static func same(_ a: NSRect, _ b: NSRect) -> Bool {
-        abs(a.minX - b.minX) < 1 && abs(a.minY - b.minY) < 1
-            && abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
+    /// Window `window` shows side by side without growing (it fit): a grown
+    /// group stays grown until this tab leaves too.
+    mutating func didShowWithoutGrowing(window: Int, group: Set<Int>) {
+        guard let i = index(of: group) else { return }
+        entries[i].sideBySide.insert(window)
+    }
+
+    /// Window `window` stops showing side by side — left it, or is closing.
+    /// `remaining`: the windows of its group that stay (itself included when
+    /// it only left side by side; its tabs when it closes). Returns the width
+    /// to give back to `remaining` now, or nil.
+    mutating func didLeave(window: Int, remaining: Set<Int>, size: NSSize, isFullScreen: Bool) -> CGFloat? {
+        guard let i = entries.firstIndex(where: { $0.sideBySide.contains(window) }) else { return nil }
+        entries[i].sideBySide.remove(window)
+        // Another tab still shows side by side: it needs the width.
+        guard entries[i].sideBySide.isEmpty else { return nil }
+        if isFullScreen && !remaining.isEmpty {
+            entries[i].waitingForFullScreenExit = remaining
+            return nil
+        }
+        let entry = entries.remove(at: i)
+        guard !remaining.isEmpty, !isFullScreen, Self.same(size, entry.grownSize) else { return nil }
+        return entry.preGrowSize.width
+    }
+
+    /// The group left full screen and has size `size` again.
+    mutating func didExitFullScreen(group: Set<Int>, size: NSSize) -> CGFloat? {
+        guard let i = index(of: group), entries[i].sideBySide.isEmpty,
+              !entries[i].waitingForFullScreenExit.isEmpty else { return nil }
+        let entry = entries.remove(at: i)
+        return Self.same(size, entry.grownSize) ? entry.preGrowSize.width : nil
+    }
+
+    /// A window closed (after its size was remembered and `didLeave` ran):
+    /// forget it; a group's state goes with its last window.
+    mutating func didClose(window: Int) {
+        for i in entries.indices.reversed() {
+            entries[i].sideBySide.remove(window)
+            entries[i].waitingForFullScreenExit.remove(window)
+            if entries[i].members.isEmpty { entries.remove(at: i) }
+        }
+    }
+
+    /// What `WindowSizeMemory` may remember for a window of `group` whose size
+    /// is `size`: nil in full screen, the pre-grow size while grown and not
+    /// resized by hand, otherwise the size itself.
+    func sizeToRemember(group: Set<Int>, size: NSSize, isFullScreen: Bool) -> NSSize? {
+        guard !isFullScreen else { return nil }
+        guard let i = index(of: group), Self.same(size, entries[i].grownSize) else { return size }
+        return entries[i].preGrowSize
+    }
+
+    /// The frame giving `width` back to a window at `current`: the current
+    /// origin (never an old position or display), moved only as far as the
+    /// screen's visible frame needs.
+    static func restoredFrame(current: NSRect, width: CGFloat, screen: NSRect?) -> NSRect {
+        var frame = current
+        frame.size.width = width
+        if let screen {
+            if frame.maxX > screen.maxX { frame.origin.x = screen.maxX - frame.width }
+            if frame.minX < screen.minX { frame.origin.x = screen.minX }
+        }
+        return frame
     }
 }
