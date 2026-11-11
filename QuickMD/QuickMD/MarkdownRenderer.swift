@@ -552,11 +552,22 @@ struct MarkdownRenderer: Sendable {
             case .text:
                 result.append(attributed[index..<end])
             case .math(let latex):
-                // The formula's own attributes (its first run), its source with escapes.
-                var source = AttributedString(piece.delimiter + latex + piece.delimiter)
-                if let first = attributed[index..<end].runs.first {
-                    source.setAttributes(first.attributes)
+                // The formula's own attributes (its first run), its source with
+                // escapes — except an escaped `$` (`\$` in the LaTeX: inside a
+                // formula every `$` is one), which stays a `$` TAGGED as
+                // escaped: written back as `\$` it would be a delimiter when
+                // the title view splits this text again.
+                let attributes = attributed[index..<end].runs.first?.attributes ?? AttributeContainer()
+                var source = AttributedString(piece.delimiter, attributes: attributes)
+                for (offset, part) in latex.components(separatedBy: "\\$").enumerated() {
+                    if offset > 0 {
+                        var dollar = AttributedString("$", attributes: attributes)
+                        dollar[EscapedCharacterAttribute.self] = true
+                        source.append(dollar)
+                    }
+                    source.append(AttributedString(part, attributes: attributes))
                 }
+                source.append(AttributedString(piece.delimiter, attributes: attributes))
                 result.append(source)
             }
             index = end

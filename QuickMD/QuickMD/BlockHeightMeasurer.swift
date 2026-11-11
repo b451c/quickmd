@@ -734,18 +734,30 @@ struct MathRendering {
 // MARK: - Formula attachments
 
 /// The attachment a typeset formula is embedded as (inline and quote display
-/// formulas, every kind). An attachment cannot wrap: wider than the line it
-/// sits on — a matrix in a narrow table column, a long sum in a narrow window
-/// — it would draw over the neighbouring cell or past the text's edge. So it
-/// is scaled down, aspect kept, to the width of the line fragment TextKit
-/// offers (the cell's or the text's width), and drawn at its natural size
-/// otherwise. Decided in layout, from the same string, so the measurer and
-/// the view agree at every width; centred on `capHeight` like any formula.
+/// formulas, every kind). An attachment cannot wrap, so the width it may take
+/// is the line it sits on — the line fragment TextKit offers (the text's or
+/// the table cell's width) minus the paragraph's head and tail indents (list
+/// items, definitions: TextKit 1 proposes the whole container and places the
+/// attachment at the indent). Then:
+/// - it fits: drawn at its natural size;
+/// - it is wider: scaled down, aspect kept — but never below `minimumScale`
+///   (50 %; subscripts of a matrix scaled further are unreadable);
+/// - even 50 % does not fit: it shows its SOURCE (`source`: what an
+///   untypesettable formula of its kind shows — the italic LaTeX, or the
+///   code-font LaTeX of a display formula), wrapped to that width, as one
+///   box. Never past the line, never into a neighbouring cell.
+/// Decided in layout from the same string, so the measurer and the view agree
+/// at every width; centred on `capHeight` like any formula. Copy and search
+/// still see the formula (its attachment character and source tag).
 final class FittingMathAttachment: NSTextAttachment {
-    private let capHeight: CGFloat
+    static let minimumScale: CGFloat = 0.5
 
-    init(image: NSImage, capHeight: CGFloat) {
+    private let capHeight: CGFloat
+    private let source: NSAttributedString
+
+    init(image: NSImage, capHeight: CGFloat, source: NSAttributedString) {
         self.capHeight = capHeight
+        self.source = source
         super.init(data: nil, ofType: nil)
         self.image = image
         bounds = Self.bounds(for: image.size, capHeight: capHeight, availableWidth: .greatestFiniteMagnitude)
@@ -753,6 +765,7 @@ final class FittingMathAttachment: NSTextAttachment {
 
     required init?(coder: NSCoder) {
         capHeight = 0
+        source = NSAttributedString()
         super.init(coder: coder)
     }
 
@@ -763,10 +776,56 @@ final class FittingMathAttachment: NSTextAttachment {
         return CGRect(x: 0, y: (capHeight - height) / 2, width: width, height: height)
     }
 
+    /// Whether a formula `width` wide shows its source in `availableWidth`.
+    static func showsSource(width: CGFloat, availableWidth: CGFloat) -> Bool {
+        availableWidth > 0 && width * minimumScale > availableWidth
+    }
+
+    /// The source box `available` wide at most: its wrapped text, the box's
+    /// bottom on the last line's descent.
+    private func sourceBounds(availableWidth: CGFloat) -> CGRect {
+        let text = source.boundingRect(with: NSSize(width: availableWidth, height: .greatestFiniteMagnitude),
+                                       options: [.usesLineFragmentOrigin, .usesFontLeading])
+        let font = source.length > 0 ? source.attribute(.font, at: 0, effectiveRange: nil) as? NSFont : nil
+        return CGRect(x: 0, y: font?.descender ?? 0, width: min(availableWidth, ceil(text.width)),
+                      height: ceil(text.height))
+    }
+
+    /// The width this attachment may take on the line at `charIndex`.
+    static func availableWidth(lineFragment: CGRect, textContainer: NSTextContainer?, characterIndex: Int) -> CGFloat {
+        var width = lineFragment.width
+        if let storage = textContainer?.layoutManager?.textStorage, characterIndex < storage.length,
+           let style = storage.attribute(.paragraphStyle, at: characterIndex, effectiveRange: nil) as? NSParagraphStyle {
+            width -= max(style.headIndent, style.firstLineHeadIndent)
+            width -= style.tailIndent <= 0 ? -style.tailIndent : max(0, lineFragment.width - style.tailIndent)
+        }
+        return floor(max(0, width))
+    }
+
     override func attachmentBounds(for textContainer: NSTextContainer?, proposedLineFragment lineFrag: CGRect,
                                    glyphPosition position: CGPoint, characterIndex charIndex: Int) -> CGRect {
         guard let size = image?.size else { return bounds }
-        return Self.bounds(for: size, capHeight: capHeight, availableWidth: floor(lineFrag.width))
+        let available = Self.availableWidth(lineFragment: lineFrag, textContainer: textContainer,
+                                            characterIndex: charIndex)
+        if Self.showsSource(width: size.width, availableWidth: available) {
+            return sourceBounds(availableWidth: available)
+        }
+        return Self.bounds(for: size, capHeight: capHeight, availableWidth: available)
+    }
+
+    /// The formula's image — or, for a box laid out as its source (its
+    /// aspect is not the image's), the source text drawn into it.
+    override func image(forBounds imageBounds: CGRect, textContainer: NSTextContainer?,
+                        characterIndex charIndex: Int) -> NSImage? {
+        guard let image, image.size.width > 0, image.size.height > 0 else { return image }
+        let sameAspect = abs(imageBounds.width * image.size.height - imageBounds.height * image.size.width)
+            <= max(imageBounds.width, imageBounds.height) * 0.01
+        guard !sameAspect else { return image }
+        let source = self.source
+        return NSImage(size: imageBounds.size, flipped: true) { rect in
+            source.draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading])
+            return true
+        }
     }
 }
 
@@ -847,9 +906,11 @@ enum BlockTextConverter {
                 if let image = math.inlineImage(latex, theme, mathFontSize) {
                     // Centred against the cap height of the text around it
                     // (14 pt body × zoom, or the heading's); scaled down when
-                    // wider than the line (`FittingMathAttachment`).
+                    // wider than the line, its source when even half its size
+                    // does not fit (`FittingMathAttachment`).
                     let attachment = FittingMathAttachment(
-                        image: image, capHeight: theme.fonts.appKit(size: mathFontSize).capHeight)
+                        image: image, capHeight: theme.fonts.appKit(size: mathFontSize).capHeight,
+                        source: inlineFallback(latex, theme: theme, fontSize: mathFontSize))
                     // Tagged with its source so a copy can write `$latex$`
                     // instead of U+FFFC (DocumentCopyBuilder). Draws nothing,
                     // lays out nothing — the measured height is unchanged.
@@ -864,17 +925,32 @@ enum BlockTextConverter {
                     result.append(embedded)
                 } else {
                     // Fallback: italic literal, same as the legacy pipeline
-                    var attr = AttributedString(latex)
-                    attr.setDualFont(size: mathFontSize, italic: true, fonts: theme.fonts)
-                    attr.setDualForeground(theme.textColor)
-                    if let ns = try? NSAttributedString(attr, including: \.appKit) {
-                        result.append(ns)
-                    }
+                    result.append(inlineFallback(latex, theme: theme, fontSize: mathFontSize))
                 }
             }
         }
 
         return result
+    }
+
+    /// How an inline formula that does not typeset shows: its LaTeX as an
+    /// italic literal in the text's size and colour. Also what a typeset one
+    /// shows when even half its size does not fit its line
+    /// (`FittingMathAttachment`).
+    static func inlineFallback(_ latex: String, theme: MarkdownTheme, fontSize: CGFloat) -> NSAttributedString {
+        var attr = AttributedString(latex)
+        attr.setDualFont(size: fontSize, italic: true, fonts: theme.fonts)
+        attr.setDualForeground(theme.textColor)
+        return (try? NSAttributedString(attr, including: \.appKit)) ?? NSAttributedString(string: latex)
+    }
+
+    /// How a quote's display formula that does not typeset shows: its LaTeX
+    /// in the code font (as a `$$` block becomes a ```latex block).
+    static func displayFallback(_ latex: String, theme: MarkdownTheme, fontScale: CGFloat) -> NSAttributedString {
+        NSAttributedString(string: latex, attributes: [
+            .font: theme.fonts.appKit(size: BlockLayout.Code.codeFontSize * fontScale, monospaced: true),
+            .foregroundColor: NSColor(theme.textColor),
+        ])
     }
 
     // MARK: Math in quotes, alerts, headings and table cells (v1.15)
@@ -927,16 +1003,20 @@ enum BlockTextConverter {
         }
         var plainStart = attributed.startIndex
         var lineStart = attributed.startIndex
+        var previousWasDisplay = false
         while lineStart < attributed.endIndex {
             let lineEnd = characters[lineStart...].firstIndex(of: "\n") ?? attributed.endIndex
             let line = AttributedString(attributed[lineStart..<lineEnd])
             let linePlain = String(line.characters)
+            var isDisplay = false
             if linePlain.contains("$") {
                 let display = line.runs.first(where: { $0[DisplayMathAttribute.self] != nil })?[DisplayMathAttribute.self]
                 if display != nil || containsInlineMath(line) {
                     appendPlain(plainStart..<lineStart)
                     if let display {
-                        result.append(displayFormula(display, theme: theme, fontScale: fontScale, math: math))
+                        isDisplay = true
+                        result.append(displayFormula(display, theme: theme, fontScale: fontScale,
+                                                     followsDisplay: previousWasDisplay, math: math))
                     } else {
                         result.append(makeNSAttributedString(from: line, hasInlineMath: true, theme: theme,
                                                              fontScale: fontScale, mathFontSize: mathFontSize,
@@ -945,6 +1025,7 @@ enum BlockTextConverter {
                     plainStart = lineEnd
                 }
             }
+            previousWasDisplay = isDisplay
             guard lineEnd < attributed.endIndex else { break }
             lineStart = characters.index(after: lineEnd)
         }
@@ -969,7 +1050,7 @@ enum BlockTextConverter {
 
     /// One display formula of a quote or alert body (see `makeMathString`).
     private static func displayFormula(_ latex: String, theme: MarkdownTheme, fontScale: CGFloat,
-                                       math: MathRendering) -> NSAttributedString {
+                                       followsDisplay: Bool, math: MathRendering) -> NSAttributedString {
         let render = math.displayImage ?? math.inlineImage
         // Fallback limits (accepted, as for a `$$` block that becomes a
         // ```latex block): the LaTeX keeps its own line breaks, so one body
@@ -979,15 +1060,13 @@ enum BlockTextConverter {
         // LaTeX (no `$$`), as the paragraphs' italic fallback copies its
         // LaTeX without `$`.
         guard let image = render(latex, theme, BlockLayout.Math.fontSize * fontScale) else {
-            return NSAttributedString(string: latex, attributes: [
-                .font: theme.fonts.appKit(size: BlockLayout.Code.codeFontSize * fontScale, monospaced: true),
-                .foregroundColor: NSColor(theme.textColor),
-            ])
+            return displayFallback(latex, theme: theme, fontScale: fontScale)
         }
         // Centred on the body text's cap height, as an inline formula: the
         // line is as tall as the formula, whatever its depth.
         let bodyFont = theme.fonts.appKit(size: 14 * fontScale)
-        let attachment = FittingMathAttachment(image: image, capHeight: bodyFont.capHeight)
+        let attachment = FittingMathAttachment(image: image, capHeight: bodyFont.capHeight,
+                                               source: displayFallback(latex, theme: theme, fontScale: fontScale))
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
         // The air a `$$` block keeps around its formula (`MathBlockView`'s
@@ -996,7 +1075,9 @@ enum BlockTextConverter {
         // string, so the measurer lays it out exactly as the view does.
         // Print gives the printed formula the same padding
         // (`PrintableQuotedFormula`).
-        paragraph.paragraphSpacingBefore = BlockLayout.Math.verticalPadding
+        // Right after another display formula the gap is ONE padding, not
+        // two (its spacing after already gives it).
+        paragraph.paragraphSpacingBefore = followsDisplay ? 0 : BlockLayout.Math.verticalPadding
         paragraph.paragraphSpacing = BlockLayout.Math.verticalPadding
         let embedded = NSMutableAttributedString(attachment: attachment)
         let range = NSRange(location: 0, length: embedded.length)
