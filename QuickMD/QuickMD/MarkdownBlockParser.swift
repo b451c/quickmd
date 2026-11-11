@@ -1638,12 +1638,20 @@ struct MarkdownBlockParser: Sendable {
 
     /// For each line, the index of the next LATER line holding `$$` — one
     /// backward pass, so finding a `$$` block's end costs nothing per line.
+    /// A fence line (``` or ~~~, opening or closing) ends the look-ahead: a
+    /// `$$` block never holds one, so an unclosed `$$` above a fence whose
+    /// code says `kill $$` stays text and the fence stays code (GitHub:
+    /// paragraph + code block).
     static func nextMathLines(_ lines: [String]) -> [Int?] {
         var result = [Int?](repeating: nil, count: lines.count)
         var next: Int?
         for index in stride(from: lines.count - 1, through: 0, by: -1) {
             result[index] = next
-            if lines[index].contains("$$") { next = index }
+            if fenceOpening(markerLine(lines[index])) != nil {
+                next = nil
+            } else if lines[index].contains("$$") {
+                next = index
+            }
         }
         return result
     }

@@ -26,6 +26,15 @@ enum DisplayMathAttribute: AttributedStringKey {
     static let name = "qmdDisplayMath"
 }
 
+/// Marks a heading formula's source as `renderHeader` rebuilt it (the
+/// formula's index): keeps it a run of its own when the heading look gives
+/// it and the text after it the same font, so a markup boundary after the
+/// closer (`$x$**b**`) still reads as one. Not in the AppKit scope.
+enum FormulaSourceAttribute: AttributedStringKey {
+    typealias Value = Int
+    static let name = "qmdFormulaSource"
+}
+
 /// Splits paragraph text into alternating plain-text and inline-math segments
 /// — THE inline-math rule: the views, the measurer, search, print and every
 /// "does this need the math engine" test (`BlockTextConverter
@@ -42,7 +51,9 @@ enum DisplayMathAttribute: AttributedStringKey {
 /// - CLOSING (GitHub's): the closer is the NEXT unescaped `$` (`$$` for a
 ///   `$$` opener), not preceded by white space; if an ASCII letter, digit or
 ///   `_` follows it IN THE SOURCE, it closes nothing and that opener fails —
-///   `$HOME/$USER`, `$5-$10`, `=$A$1`, `US$5 and US$6`, `$x$s` are text.
+///   `$HOME/$USER`, `$5-$10`, `=$A$1`, `US$5 and US$6`, `$x$s` are text —
+///   except a formula that can only be LaTeX (`isScientific`: `H$_2$O`,
+///   `x$^2$y`, `2$\times$3`), which 1.14.4 typeset and still does.
 ///   "In the source": the rendered text has lost the markup, so a closer
 ///   followed by a markup boundary (a new attribute run: `$x$**b**`,
 ///   `$x$[l](u)`, `$x$<sup>2</sup>`, `$x$` then a code span) closes — those
@@ -184,6 +195,26 @@ enum InlineMathSegmenter {
             return !(next.isASCII && (next.isLetter || next.isNumber || next == "_"))
         }
         func breaksLine(_ k: Int) -> Bool { !softBreaks && chars[k] == "\n" }
+        /// Scientific notation glued to words (the owner's call, 1.14.4 kept
+        /// it): a formula that can only be LaTeX closes even before a letter
+        /// or digit — a command (`2$\times$3`, `$\alpha$1`) or ONE sub- or
+        /// superscript (`H$_2$O`, `CO$_2$`, `x$^2$y`, `10$^{-3}$m`): `_` or
+        /// `^` then one letter or digit, or a `{…}` group, and nothing else.
+        /// Shell and Makefile variables do not look like that: `$_FOO$BAR`
+        /// (`_` then a word), `$^ $@`, `echo $_ and $x` stay text.
+        func isScientific(_ content: ArraySlice<Character>) -> Bool {
+            guard let first = content.first else { return false }
+            let rest = content.dropFirst()
+            switch first {
+            case "\\":
+                return rest.first.map { $0.isASCII && $0.isLetter } ?? false
+            case "_", "^":
+                if rest.count == 1, let only = rest.first { return only.isASCII && (only.isLetter || only.isNumber) }
+                return rest.first == "{" && rest.last == "}" && !rest.dropFirst().dropLast().contains("}")
+            default:
+                return false
+            }
+        }
 
         var result: [(segment: Segment, width: Int)] = []
         var textStart = 0
@@ -218,7 +249,7 @@ enum InlineMathSegmenter {
                 k = run
                 continue
             }
-            guard mayClose(before: close + width) else {
+            guard mayClose(before: close + width) || isScientific(content) else {
                 // A `$` glued to a word (`$USER`, `$10`) neither closes nor
                 // opens: `$a$b c$`, `PS1="$USER@$HOST"` stay text.
                 k = close + width

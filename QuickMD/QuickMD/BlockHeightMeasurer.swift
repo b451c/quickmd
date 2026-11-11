@@ -802,14 +802,22 @@ final class FittingMathAttachment: NSTextAttachment {
         availableWidth > 0 && width * minimumScale > availableWidth
     }
 
-    /// The source box `available` wide at most: its wrapped text, the box's
-    /// bottom on the last line's descent.
+    /// At most this many lines of source: a long matrix in a narrow cell
+    /// would otherwise make a row of dozens of lines. The last one shown ends
+    /// with "…"; a copy still writes the whole source.
+    static let maximumSourceLines = 8
+
+    /// The source box `available` wide at most: its wrapped text (capped at
+    /// `maximumSourceLines`), the box's bottom on the last line's descent.
     private func sourceBounds(availableWidth: CGFloat) -> CGRect {
         let text = source.boundingRect(with: NSSize(width: availableWidth, height: .greatestFiniteMagnitude),
                                        options: [.usesLineFragmentOrigin, .usesFontLeading])
         let font = source.length > 0 ? source.attribute(.font, at: 0, effectiveRange: nil) as? NSFont : nil
-        return CGRect(x: 0, y: font?.descender ?? 0, width: min(availableWidth, ceil(text.width)),
-                      height: ceil(text.height))
+        let line = NSAttributedString(string: "X", attributes: font.map { [.font: $0] } ?? [:])
+            .boundingRect(with: NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude),
+                          options: [.usesLineFragmentOrigin, .usesFontLeading]).height
+        let height = min(ceil(text.height), ceil(line * CGFloat(Self.maximumSourceLines)))
+        return CGRect(x: 0, y: font?.descender ?? 0, width: min(availableWidth, ceil(text.width)), height: height)
     }
 
     /// The width this attachment may take on the line at `charIndex`.
@@ -844,7 +852,8 @@ final class FittingMathAttachment: NSTextAttachment {
         guard !sameAspect else { return image }
         let source = self.source
         return NSImage(size: imageBounds.size, flipped: true) { rect in
-            source.draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading])
+            // Cut at the box (`maximumSourceLines`), the last line with "…".
+            source.draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading, .truncatesLastVisibleLine])
             return true
         }
     }

@@ -566,7 +566,7 @@ struct MarkdownRenderer: Sendable {
         }
         var result = AttributedString()
         var index = attributed.startIndex
-        for piece in pieces {
+        for (number, piece) in pieces.enumerated() {
             guard let end = attributed.characters.index(index, offsetBy: piece.length,
                                                         limitedBy: attributed.endIndex) else { break }
             switch piece.segment {
@@ -589,6 +589,10 @@ struct MarkdownRenderer: Sendable {
                     source.append(AttributedString(part, attributes: attributes))
                 }
                 source.append(AttributedString(piece.delimiter, attributes: attributes))
+                // Its own run whatever `headingLook` does to the fonts: the
+                // boundary after the closer is the markup the source had
+                // (`# T $x$**b**`), which the title view's split reads.
+                source[FormulaSourceAttribute.self] = number
                 result.append(source)
             }
             index = end
@@ -650,6 +654,13 @@ struct MarkdownRenderer: Sendable {
             }
         }
         return result
+    }
+
+    /// Whether the line right before `index` is a display formula (two in a
+    /// row are one padding apart — screen and print).
+    static func isDisplayMath(_ lines: [QuotedBodyLine], before index: Int) -> Bool {
+        guard index > 0, case .displayMath = lines[index - 1] else { return false }
+        return true
     }
 
     /// One shown line of a quote or alert body.

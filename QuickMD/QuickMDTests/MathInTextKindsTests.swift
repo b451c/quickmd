@@ -427,7 +427,7 @@ final class MathInTextKindsTests: XCTestCase {
                     "\"$FOO\" \"$BAR\"", "'$1' '$2'", "echo \"$a\" \"$b\"", ":$PATH:$HOME:", "=$A$1",
                     "($5)($6)", "$5/$6", "$5–$6", "|$5|$6|", "a$b$c", "Prices: $5; $6.", "PS1=\"$USER@$HOST\"",
                     "${VAR}", "$(cmd) $(cmd2)", "${VAR} and $(cmd) $(cmd2)", "$1 $2 $3", "price is $5.",
-                    "$a$1 end", "$a$_ end", "$\\alpha$x", "$a$b c$ end", "a $x$s and $n$th", "$ a$ end",
+                    "$a$1 end", "$a$_ end", "$a$b c$ end", "a $x$s and $n$th", "$ a$ end",
                     "$a $ end", "$$a$ end", "$$ x $$ mid", "$x\ny$ end", "$$x$$1 end",
                     "x $$a$b$$ y", "$$$x$$$", "and $$$x$$$ end"]
         for case_ in text { XCTAssertEqual(formulas(case_), [], case_) }
@@ -444,6 +444,17 @@ final class MathInTextKindsTests: XCTestCase {
             ("text $$x$$ more", ["x"]), ("$$x$$ more", ["x"]), ("tab\t$a$ end", ["a"]),
         ]
         for (case_, expected) in math { XCTAssertEqual(formulas(case_), expected, case_) }
+        // Scientific notation glued to words (the owner's call): a formula
+        // that can only be LaTeX closes before a letter or digit — 1.14.4
+        // typeset these; GitHub shows them as text (case17.html). Shell and
+        // Makefile variables stay text.
+        let scientific: [(String, [String])] = [
+            ("H$_2$O", ["_2"]), ("CO$_2$", ["_2"]), ("x$^2$y", ["^2"]), ("10$^{-3}$m", ["^{-3}"]),
+            ("2$\\times$3", ["\\times"]), ("$\\alpha$1", ["\\alpha"]), ("$\\alpha$x", ["\\alpha"]),
+            ("echo $_ and $x", []), ("$^ $@", []), ("$_FOO$BAR", []), ("$^FOO$BAR", []), ("$_$x", []),
+            ("$_{a}b$c", []), ("$\\$x", []), ("$5$th", []),
+        ]
+        for (case_, expected) in scientific { XCTAssertEqual(formulas(case_), expected, case_) }
         // The same through the renderer (run boundaries from real rendering):
         // plain text renders as ONE run, so nothing above changes.
         let renderer = MarkdownRenderer(theme: theme, fontScale: 1)
@@ -736,6 +747,65 @@ final class MathInTextKindsTests: XCTestCase {
             "text:End.",
         ])
         XCTAssertEqual(blocks.map(\.sourceLine), [0, 2, 4, 6, 8, 12, 15, 17, 19, 22, 25])
+    }
+
+    // MARK: - Final review (2026-11-11)
+
+    /// An unclosed `$$` above a fence whose code holds `$$` (`kill $$`): the
+    /// look-ahead stops at the fence. GitHub (case15):
+    /// `<p>$$<br>x</p><pre><code>code $$</code></pre><p>rest</p>`.
+    func testUnclosedDoubleDollarStopsAtAFence() {
+        for fence in ["```", "~~~"] {
+            let blocks = parse("$$\nx\n\(fence)\ncode $$\n\(fence)\n\nrest")
+            let shape = blocks.map { block -> String in
+                switch block.content {
+                case .text(let attributed): return "text:" + String(attributed.characters)
+                case .codeBlock(let code, _): return "code:" + code
+                case .mathBlock(let latex): return "math:" + latex
+                default: return "other"
+                }
+            }
+            XCTAssertEqual(shape, ["text:$$ x", "code:code $$", "text:rest"], fence)
+        }
+    }
+
+    /// `# T $x$**b**`: the heading look gives the formula and the bold run
+    /// the same font, yet the boundary after the closer is kept — the title
+    /// typesets `x` as the paragraph does (GitHub: `<M>$x$</M><strong>b</strong>`).
+    @MainActor
+    func testHeadingFormulaBeforeMarkupStaysAFormula() {
+        let recorder = Recorder()
+        let blocks = parse("# T $x$**b** and $y$[l](https://e.com)\n\nT $x$**b** and $y$[l](https://e.com)")
+        let measured = measure(blocks, math: engine(recorder))
+        XCTAssertEqual(measured.converted[blocks[0].id]?.string, "T \u{FFFC}b and \u{FFFC}l")
+        XCTAssertEqual(recorder.latex, ["x", "y", "x", "y"])
+    }
+
+    /// The source box is at most `maximumSourceLines` lines tall: a long
+    /// matrix in a narrow cell no longer makes a row of dozens of lines.
+    @MainActor
+    func testSourceFallbackIsCappedAtEightLines() {
+        let blocks = parse("""
+        | A | B | C | D | E |
+        |---|---|---|---|---|
+        | x | $\\begin{matrix} \(String(repeating: "a_{1} & ", count: 40)) z \\end{matrix}$ | y | z | w |
+        """)
+        let measured = measure(blocks, math: engine(), width: 400)
+        guard let table = measured.tables[blocks[0].id] else { return XCTFail("no table") }
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 10))
+        textView.configureForSelfSizing()
+        textView.installDocumentSelectionLayoutManager()
+        textView.textStorage?.setAttributedString(table.string)
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+        let cell = textView.tableCellBounds(band: 1, column: 1, layout: table.layout) ?? .zero
+        let font = NSFont.systemFont(ofSize: 14)
+        let line = ceil(font.ascender - font.descender + font.leading) + 1
+        XCTAssertGreaterThan(cell.height, 4 * line, "wraps")
+        XCTAssertLessThanOrEqual(cell.height, CGFloat(FittingMathAttachment.maximumSourceLines) * line
+                                    + 2 * BlockLayout.Table.cellVerticalPadding + 4, "capped")
+        // The whole source still copies.
+        let whole = SelectionRows.tablePiece(table, covered: NSRange(location: 0, length: table.string.length))
+        XCTAssertTrue(whole.map { DocumentCopyBuilder.build([$0]).plain }?.contains("a_{1} & a_{1}") ?? false)
     }
 
     // MARK: - What a quote body is made of (new API)

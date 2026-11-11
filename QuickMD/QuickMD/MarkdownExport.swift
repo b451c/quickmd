@@ -283,6 +283,13 @@ struct PrintableTableView: View, TableAlignmentProvider {
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.borderColor, lineWidth: 1))
     }
 
+    /// A grid cell's text width in print: equal columns of the printed
+    /// column, less the 1 pt dividers and 2 × 8 padding.
+    private var printedCellWidth: CGFloat {
+        let columns = CGFloat(max(1, columnCount))
+        return max(1, (PrintableMath.columnWidth - (columns - 1)) / columns - 16)
+    }
+
     private var gridBody: some View {
         VStack(spacing: 0) {
             if showsHeader {
@@ -290,7 +297,8 @@ struct PrintableTableView: View, TableAlignmentProvider {
                 HStack(spacing: 0) {
                     ForEach(0..<columnCount, id: \.self) { index in
                         PrintableMath.text(from: TableTextBuilder.printableCell(
-                            index < headers.count ? headers[index] : "", isHeader: true, renderer: renderer))
+                            index < headers.count ? headers[index] : "", isHeader: true, renderer: renderer),
+                                           maxWidth: printedCellWidth)
                             .foregroundColor(.black)
                             .multilineTextAlignment(textAlignmentFor(index))
                             .frame(maxWidth: .infinity, alignment: alignmentFor(index))
@@ -314,7 +322,8 @@ struct PrintableTableView: View, TableAlignmentProvider {
                     ForEach(0..<columnCount, id: \.self) { colIndex in
                         let cell = colIndex < row.count ? row[colIndex] : ""
                         PrintableMath.text(from: TableTextBuilder.printableCell(cell, isHeader: false,
-                                                                                renderer: renderer))
+                                                                                renderer: renderer),
+                                           maxWidth: printedCellWidth)
                             .foregroundColor(.black)
                             .multilineTextAlignment(textAlignmentFor(colIndex))
                             .frame(maxWidth: .infinity, alignment: alignmentFor(colIndex))
@@ -594,16 +603,19 @@ struct PrintableBlockquoteView: View {
             // quote written one sentence per line prints as one paragraph.
             // Display formulas (v1.15) are the screen's: `quotedBodyLines`.
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(MarkdownRenderer.quotedBodyLines(content).enumerated()), id: \.offset) { _, line in
+                let lines = MarkdownRenderer.quotedBodyLines(content)
+                ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                     switch line {
                     case .blank:
                         Text(" ").font(renderer.theme.fonts.swiftUI(size: 12))
                     case .text(let text):
-                        PrintableMath.text(from: renderer.renderInline(text))
+                        PrintableMath.text(from: renderer.renderInline(text),
+                                           maxWidth: PrintableQuotedFormula.bodyWidth(level: level))
                             .font(renderer.theme.fonts.swiftUI(size: 12, italic: true))
                             .foregroundColor(Color(white: 0.3))
                     case .displayMath(let latex):
-                        PrintableQuotedFormula(latex: latex)
+                        PrintableQuotedFormula(latex: latex, maxWidth: PrintableQuotedFormula.bodyWidth(level: level),
+                                               followsDisplay: MarkdownRenderer.isDisplayMath(lines, before: index))
                     }
                 }
             }
@@ -637,16 +649,19 @@ struct PrintableAlertView: View {
 
             // Soft breaks joined first — mirrors AlertBlockView on screen
             // (display formulas too, `quotedBodyLines`).
-            ForEach(Array(MarkdownRenderer.quotedBodyLines(content).enumerated()), id: \.offset) { _, line in
+            let lines = MarkdownRenderer.quotedBodyLines(content)
+            ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                 switch line {
                 case .blank:
                     Text(" ").font(renderer.theme.fonts.swiftUI(size: 12))
                 case .text(let text):
-                    PrintableMath.text(from: renderer.renderInline(text))
+                    PrintableMath.text(from: renderer.renderInline(text),
+                                       maxWidth: PrintableQuotedFormula.bodyWidth(level: 0))
                         .font(renderer.theme.fonts.swiftUI(size: 12))
                         .foregroundColor(Color(white: 0.2))
                 case .displayMath(let latex):
-                    PrintableQuotedFormula(latex: latex)
+                    PrintableQuotedFormula(latex: latex, maxWidth: PrintableQuotedFormula.bodyWidth(level: 0),
+                                           followsDisplay: MarkdownRenderer.isDisplayMath(lines, before: index))
                 }
             }
         }
@@ -965,7 +980,25 @@ enum PrintableMath {
     /// segmentation as `BlockTextConverter.makeNSAttributedString`, so screen and
     /// PDF agree on what is math. `fontSize`: the text around the formulas
     /// (a heading passes its own, v1.15).
-    static func text(from attributed: AttributedString, fontSize: CGFloat = 14) -> Text {
+    /// The printed column (`PDFExportManager.contentWidth`: US Letter less
+    /// two 40 pt margins), the widest any printed formula may be.
+    static let columnWidth: CGFloat = 532
+
+    /// The screen's fit rule (`FittingMathAttachment`) on a printed formula
+    /// `maxWidth` may hold: as is, scaled down to fit, or — below half its
+    /// size — nil (the caller prints the source).
+    static func fitted(_ image: NSImage, maxWidth: CGFloat) -> NSImage? {
+        guard image.size.width > maxWidth else { return image }
+        guard !FittingMathAttachment.showsSource(width: image.size.width, availableWidth: maxWidth) else { return nil }
+        let scaled = image.copy() as? NSImage ?? image
+        scaled.size = NSSize(width: maxWidth, height: image.size.height * maxWidth / image.size.width)
+        return scaled
+    }
+
+    /// `maxWidth`: the printed width of the text the formulas sit in (a
+    /// table cell's, a quote body's; the column by default).
+    static func text(from attributed: AttributedString, fontSize: CGFloat = 14,
+                     maxWidth: CGFloat = columnWidth) -> Text {
         guard BlockTextConverter.containsInlineMath(attributed) else { return Text(attributed) }
 
         var result = Text("")
@@ -983,9 +1016,11 @@ enum PrintableMath {
                                                          limitedBy: attributed.endIndex) {
                     index = end
                 }
-                if let rendered = inlineImage(latex, fontSize: fontSize) {
+                if let rendered = inlineImage(latex, fontSize: fontSize),
+                   let image = fitted(rendered.image, maxWidth: maxWidth) {
                     // Sit the image on the baseline: its own descent goes below.
-                    result = result + Text(Image(nsImage: rendered.image)).baselineOffset(-rendered.descent)
+                    let descent = rendered.descent * image.size.height / rendered.image.size.height
+                    result = result + Text(Image(nsImage: image)).baselineOffset(-descent)
                 } else {
                     result = result + Text(latex).italic()
                 }
@@ -1001,22 +1036,35 @@ enum PrintableMath {
 /// not typeset.
 struct PrintableQuotedFormula: View {
     let latex: String
+    /// The body's printed width (`PrintableQuotedFormula.bodyWidth`).
+    let maxWidth: CGFloat
+    /// Right after another display formula: one padding between them, as
+    /// on screen (the body's `VStack` spacing of 4 is taken back).
+    var followsDisplay = false
+
+    /// A quote's (or alert's, level 0) body width in print: the column less
+    /// the box's 2 × 12 padding and 3 + 8 per level bar.
+    static func bodyWidth(level: Int) -> CGFloat {
+        PrintableMath.columnWidth - 24 - CGFloat(level) * 11
+    }
 
     var body: some View {
-        if let image = PrintableMath.displayImage(latex) {
-            // Never wider than the column: scaled down to fit, as on screen
-            // (`FittingMathAttachment`).
+        if let typeset = PrintableMath.displayImage(latex),
+           let image = PrintableMath.fitted(typeset, maxWidth: maxWidth) {
+            // Never wider than the body: scaled down to fit, never below 50 %
+            // — then the source, as on screen (`FittingMathAttachment`).
             Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(maxWidth: image.size.width)
                 .frame(maxWidth: .infinity, alignment: .center)
                 // The screen's paragraph spacing around it (`Math.verticalPadding`).
-                .padding(.vertical, BlockLayout.Math.verticalPadding)
+                .padding(.top, followsDisplay ? -4 : BlockLayout.Math.verticalPadding)
+                .padding(.bottom, BlockLayout.Math.verticalPadding)
         } else {
+            // The source, at most `FittingMathAttachment.maximumSourceLines`
+            // lines, as on screen.
             Text(latex)
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundColor(.black)
+                .lineLimit(FittingMathAttachment.maximumSourceLines)
         }
     }
 }

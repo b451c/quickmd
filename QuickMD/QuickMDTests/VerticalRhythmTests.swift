@@ -918,9 +918,12 @@ final class VerticalRhythmTests: XCTestCase {
                        ["c:[x]: https://example.com\n\n[x]"])
         XCTAssertEqual(try quoteShape("Text[^1]\n\n```\n[^1]: in code\n```\n"),
                        ["t:Text[^1]", "c:[^1]: in code"])
-        // A fence inside a `$$` block is the formula's; the definition after
-        // the block is one.
-        XCTAssertEqual(try quoteShape("$$\n```\n$$\n\n[x]: http://e.com\n\n[x]\n"), ["other", "t:x"])
+        // A fence line ends a `$$` look-ahead (v1.15): GitHub shows
+        // `<p>$$</p><pre><code>$$\n\n[x]: http://e.com\n\n[x]\n</code></pre>`
+        // — the `$$` is text, the fence is code to the end, the definition
+        // inside it is code.
+        XCTAssertEqual(try quoteShape("$$\n```\n$$\n\n[x]: http://e.com\n\n[x]\n"),
+                       ["t:$$", "c:$$\n\n[x]: http://e.com\n\n[x]\n"])
         // Outside the fence it still is one.
         XCTAssertEqual(try quoteShape("```\ncode\n```\n\n[x]: http://e.com\n\n[x]\n"), ["c:code", "t:x"])
     }
