@@ -627,6 +627,39 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertTrue(glide.landed(token))
     }
 
+    /// Real wheel events, built the way a mouse driver (and the E2E tool
+    /// `kb scroll:`) posts them — `CGEvent(scrollWheelEvent2Source:units:…)`,
+    /// no scroll phase, no momentum phase — and converted by AppKit: a small
+    /// PIXEL delta (smooth-scrolling drivers: precise, continuous, −12 →
+    /// `scrollingDeltaY` −12 while `deltaY` is only −1.2) and a LINE notch
+    /// (not precise, −1) both stop a running glide; a horizontal tilt does
+    /// not. Pins the fields the coordinator reads (`scrollingDeltaY`, not
+    /// the line-quantised `deltaY`).
+    func testRealWheelEventsStopTheGlide() throws {
+        let source = CGEventSource(stateID: .hidSystemState)
+        func wheel(_ units: CGScrollEventUnit, dy: Int32, dx: Int32 = 0) throws -> NSEvent {
+            let cg = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: source, units: units,
+                                           wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0))
+            cg.flags = []
+            return try XCTUnwrap(NSEvent(cgEvent: cg))
+        }
+        for (event, label) in [(try wheel(.pixel, dy: -12), "pixel −12"), (try wheel(.pixel, dy: 1), "pixel +1"),
+                               (try wheel(.line, dy: -1), "line −1")] {
+            XCTAssertEqual(event.type, .scrollWheel)
+            XCTAssertTrue(event.phase.isEmpty && event.momentumPhase.isEmpty, label)
+            var glide = ScrollGlide()
+            let token = glide.start()
+            XCTAssertTrue(glide.scrollWheel(phase: event.phase, momentumPhase: event.momentumPhase,
+                                            deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY), label)
+            XCTAssertFalse(glide.landed(token), label)
+        }
+        let tilt = try wheel(.pixel, dy: 0, dx: 8)
+        var glide = ScrollGlide()
+        _ = glide.start()
+        XCTAssertFalse(glide.scrollWheel(phase: tilt.phase, momentumPhase: tilt.momentumPhase,
+                                         deltaX: tilt.scrollingDeltaX, deltaY: tilt.scrollingDeltaY))
+    }
+
     /// The AppKit half, stopped MID-FLIGHT: an animated clip-origin scroll
     /// stopped by `ScrollGlide.stop` after its first frames stays where it
     /// was (between start and target, on a whole device pixel), the stopped
