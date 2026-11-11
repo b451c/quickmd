@@ -83,11 +83,14 @@ struct MarkdownBlockParser: Sendable {
         var footnoteIds = Set<String>()
         // Every text drawn as Markdown, in document order, for the numbering.
         var footnoteNumbering = FootnoteNumbering()
-        // The top-level footnote definition whose lines may go on
+        // Where a footnote definition's continuation lines start (list items).
+        var containerColumns = FootnoteContainerColumns()
+        // The footnote definition whose lines may go on
         // (`FootnoteDefinitionBody`): its id (nil for a duplicate, whose text
-        // is dropped), and the blank lines read since its last line, which
-        // are the document's again if the definition ends after them.
-        var openFootnote: (id: String?, body: FootnoteDefinitionBody)?
+        // is not shown), its line, and the blank lines read since its last
+        // line, which are the document's again if the definition ends after
+        // them.
+        var openFootnote: (id: String?, line: Int, body: FootnoteDefinitionBody)?
         var blanksAfterFootnote: [Int] = []
         var lines: [String] = []
         // Maps index in the filtered `lines` back to the index in `allLines`.
@@ -119,26 +122,43 @@ struct MarkdownBlockParser: Sendable {
             return true
         }
         // The open footnote definition is complete: store its text (first
-        // definition of an id only), give the blank lines after it back.
-        func closeFootnote() {
-            if let open = openFootnote, let id = open.id {
+        // definition of an id only; every one's references count), give the
+        // blank lines after it back. `ending`: the line that ended it.
+        func closeFootnote(ending: String?) {
+            guard let open = openFootnote else { return }
+            if let id = open.id {
                 footnoteDefinitions.append((id: id, content: open.body.content))
             }
+            for drawn in FootnoteDefinitionBody.displayLines(of: open.body.content) {
+                footnoteNumbering.note(drawn)
+            }
             openFootnote = nil
+            // A definition that interrupted a paragraph ends it (GitHub): the
+            // line after it must not continue that paragraph as a Setext
+            // underline (`---`), an item that cannot interrupt one
+            // (`1984. y`), or text after an empty `[^n]:`. A blank line
+            // where the definition stood says so to the block loop.
+            if blanksAfterFootnote.isEmpty, let ending, let previous = lines.last,
+               !MarkdownRenderer.isBlankLine(previous), Self.wouldContinueParagraph(ending) {
+                blanksAfterFootnote.append(open.line)
+            }
             for blank in blanksAfterFootnote {
-                lines.append(allLines[blank])
+                lines.append(blank == open.line ? "" : allLines[blank])
                 lineMap.append(blank)
-                placement.kept(allLines[blank])
+                placement.kept("")
+                footnoteNumbering.keep("")
+                containerColumns.blank()
             }
             blanksAfterFootnote.removeAll()
         }
         // A footnote definition starts: the FIRST definition of an id wins
         // (GitHub drops a later one from the list too).
-        func startFootnote(id: String, firstLine: String) {
-            closeFootnote()
+        func startFootnote(id: String, firstLine: String, at index: Int) {
+            closeFootnote(ending: allLines[index])
             let isNew = footnoteIds.insert(id).inserted
-            openFootnote = (id: isNew ? id : nil, body: FootnoteDefinitionBody(firstLine: firstLine))
-            if isNew { footnoteNumbering.note(firstLine) }
+            let column = containerColumns.definition(allLines[index])
+            openFootnote = (id: isNew ? id : nil, line: index,
+                            body: FootnoteDefinitionBody(firstLine: firstLine, containerColumn: column))
         }
         for originalIndex in firstContentLine..<allLines.count {
             let line = allLines[originalIndex]
@@ -152,23 +172,19 @@ struct MarkdownBlockParser: Sendable {
                 let step = open.body.take(line, afterBlank: !blanksAfterFootnote.isEmpty,
                                           isLinkDefinition: { defineLink($0) })
                 openFootnote = open
-                switch step {
-                case .text(let text):
-                    if open.id != nil { footnoteNumbering.note(text) }
+                if step != .ended {
                     blanksAfterFootnote.removeAll()
                     continue
-                case .linkDefinition:
-                    blanksAfterFootnote.removeAll()
-                    continue
-                case .ended:
-                    closeFootnote()
                 }
+                closeFootnote(ending: line)
             }
             let trimmed = Self.markerLine(line)
             if verbatim.contains(trimmed) {
                 lines.append(line)
                 lineMap.append(originalIndex)
                 placement.verbatim()
+                footnoteNumbering.note("")
+                if !MarkdownRenderer.isBlankLine(line) { containerColumns.line(line) }
                 continue
             }
             let nsRange = NSRange(trimmed.startIndex..., in: trimmed)
@@ -183,7 +199,7 @@ struct MarkdownBlockParser: Sendable {
                 // marker line dropped comes back: two spaces are a hard break.
                 let trailing = line.reversed().prefix(while: { $0 == " " || $0 == "\t" })
                 startFootnote(id: ReferenceLabel.normalized(trimmed[idRange]),
-                              firstLine: String(trimmed[contentRange]) + String(trailing))
+                              firstLine: String(trimmed[contentRange]) + String(trailing), at: originalIndex)
                 placement.definition()
             } else if let text = placement.footnoteDefinitionText(trimmed),
                       let match = Self.footnoteDefRegex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
@@ -194,13 +210,16 @@ struct MarkdownBlockParser: Sendable {
                 let fnId = ReferenceLabel.normalized(text[idRange])
                 if footnoteIds.insert(fnId).inserted {
                     footnoteDefinitions.append((id: fnId, content: String(text[contentRange])))
-                    footnoteNumbering.note(String(text[contentRange]))
                 }
+                footnoteNumbering.note(String(text[contentRange]))
+                containerColumns.line(line)
                 _ = placement.definitionTaken(trimmed)
                 lines.append(line)
                 lineMap.append(originalIndex)
                 definitionLines.insert(lines.count - 1)
             } else if let text = placement.linkDefinitionText(trimmed), defineLink(text) {
+                footnoteNumbering.note("")
+                containerColumns.line(line)
                 if placement.definitionTaken(trimmed) {
                     lines.append(line)
                     lineMap.append(originalIndex)
@@ -210,10 +229,15 @@ struct MarkdownBlockParser: Sendable {
                 lines.append(line)
                 lineMap.append(originalIndex)
                 placement.kept(line)
-                footnoteNumbering.note(line)
+                footnoteNumbering.keep(line)
+                if MarkdownRenderer.isBlankLine(line) {
+                    containerColumns.blank()
+                } else {
+                    containerColumns.line(line)
+                }
             }
         }
-        closeFootnote()
+        closeFootnote(ending: nil)
 
         // Footnotes are numbered by their first reference, and only those
         // referenced are listed (`FootnoteNumbering`, GitHub): the renderers
@@ -1506,6 +1530,22 @@ struct MarkdownBlockParser: Sendable {
     /// definition pre-pass (`VerbatimRegions`), which reads it as a block.
     static func interruptsTable(_ line: String) -> Bool {
         !startsNoBlock(line) || markerLine(line).hasPrefix(">")
+    }
+
+    /// Whether `line`, right under paragraph text, would go on with that
+    /// paragraph in the block loop: a Setext underline, a list item that
+    /// may not interrupt a paragraph (`1984. y`), or plain text. Where a
+    /// footnote definition stood between the two, GitHub starts afresh
+    /// (the definition ended the paragraph), so the pre-pass leaves a blank
+    /// line there.
+    static func wouldContinueParagraph(_ line: String) -> Bool {
+        let marker = markerLine(line)
+        if marker.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil
+            || marker.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
+            return true
+        }
+        if MarkdownRenderer.isListItem(line) { return !MarkdownRenderer.canInterruptParagraph(line) }
+        return startsNoBlock(line) && !marker.hasPrefix(">")
     }
 
     /// CommonMark's part of `continuesQuoteLazily`: not blank, and no block

@@ -289,13 +289,139 @@ final class FootnoteTests: XCTestCase {
         XCTAssertEqual(toc.map(\.sourceLine), [7])
     }
 
+    // MARK: - Review fixes (gh api markdown, 2026-11-11)
+
+    /// R1: a fence or indented code inside the footnote closes its
+    /// paragraph — the next unindented line is the DOCUMENT's (GitHub
+    /// `<p>Next paragraph line</p>`, `<p>Rest</p>`, `<p>lazy?</p>` after a
+    /// heading in the footnote), but a lazy line after a list item in it
+    /// stays (`<li>item in fn⏎lazy item text</li>`). Code is drawn
+    /// literally: `x[^b]` in a footnote's code is no reference.
+    func testNestedCodeOrHeadingClosesTheFootnoteParagraph() {
+        let fence = parse("R[^1]\n\n[^1]: note\n    ```\n    code\n    ```\nNext paragraph line\n")
+        XCTAssertEqual(bodyTexts(fence), ["R\u{00B9}", "Next paragraph line"])
+        XCTAssertEqual(notes(fence), ["1. note", "code"])
+        XCTAssertEqual(fence.map(\.sourceLine), [0, 6, 7], "the list anchors to the last line")
+
+        let indented = parse("R[^1]\n\n[^1]: note\n\n        code\nRest\n")
+        XCTAssertEqual(bodyTexts(indented), ["R\u{00B9}", "Rest"])
+        XCTAssertEqual(notes(indented), ["1. note", "code"])
+
+        let heading = parse("R[^1]\n\n[^1]: note\n    # Head in fn\nlazy?\n")
+        XCTAssertEqual(bodyTexts(heading), ["R\u{00B9}", "lazy?"])
+
+        let item = parse("R[^1]\n\n[^1]: note\n    - item in fn\nlazy item text\n")
+        XCTAssertEqual(bodyTexts(item), ["R\u{00B9}"])
+        XCTAssertEqual(notes(item), ["1. note", "- item in fn lazy item text"])
+
+        // An unindented line inside the footnote's open fence ends it
+        // (GitHub `<p>not indented inside fence`).
+        let open = parse("R[^1]\n\n[^1]: note\n    ```\n    code\nnot indented inside fence\n")
+        XCTAssertEqual(bodyTexts(open), ["R\u{00B9}", "not indented inside fence"])
+        XCTAssertEqual(notes(open), ["1. note", "code"])
+
+        let code = parse("R[^1]\n\n[^1]: note\n    ```\n    x[^b] *code*\n      indented\n    ```\n\n[^b]: B\n")
+        XCTAssertEqual(notes(code), ["1. note", "x[^b] *code*", "\u{00A0}\u{00A0}indented"])
+    }
+
+    /// R2: a definition inside a list item counts its 4 columns from the
+    /// item's content (GitHub: `Para of item` is the item's second `<p>`;
+    /// under `- Item`, `indented 6` is the footnote's). At the top level a
+    /// definition indented 2 still goes on at 4 (`four`, `six`).
+    func testADefinitionInAListItemGoesOnFromTheItemsContent() {
+        let md = "1.  Item[^1]\n\n    [^1]: note\n\n    Para of item\n\nEnd\n"
+        let blocks = parse(md)
+        XCTAssertEqual(notes(blocks), ["1. note"])
+        let shown = bodyTexts(blocks).joined(separator: "|")
+        XCTAssertTrue(shown.contains("Para of item"), shown)
+        // Source lines: the item's paragraph is the item's (line 0, or its
+        // own line 4 if the list draws it as a row), never the definition's.
+        let item = blocks.first { text($0)?.contains("Para of item") == true }
+        XCTAssertTrue([0, 4].contains(item?.sourceLine ?? -1), "\(String(describing: item?.sourceLine))")
+        XCTAssertEqual(blocks.map(\.sourceLine), blocks.map(\.sourceLine).sorted())
+        XCTAssertEqual(blocks.first { text($0) == "End" }?.sourceLine, 6)
+
+        let bullet = parse("- Item[^1]\n\n  [^1]: note\n  lazy\n\n      indented 6\n\n  Para of item\n\nEnd\n")
+        XCTAssertEqual(notes(bullet), ["1. note lazy", "indented 6"])
+        XCTAssertTrue(bodyTexts(bullet).joined(separator: "|").contains("Para of item"))
+
+        XCTAssertEqual(notes(parse("R[^a]\n\n  [^a]: note\n\n    four\n\n      six\n")), ["1. note", "four", "six"])
+    }
+
+    /// R3: references are read as the renderer reads a paragraph, soft
+    /// breaks joined — a code span over a line break hides `[^a]` (GitHub
+    /// `<code>code [^a]</code> and{b=1}`, only B listed). Strikethrough and
+    /// strong emphasis do not hide one (GitHub `{a=1}`, `{b=2}`, `{c=3}`).
+    func testAReferenceInACodeSpanOverALineBreakIsNone() {
+        let blocks = parse("A `code\n[^a]` and[^b].\n\n[^a]: A\n[^b]: B\n")
+        XCTAssertEqual(bodyTexts(blocks), ["A code [^a] and\u{00B9}."])
+        XCTAssertEqual(notes(blocks), ["1. B"])
+        XCTAssertEqual(notes(parse("A ~~x\n[^a]~~ and[^b] ***y\n[^c]***\n\n[^a]: A\n[^b]: B\n[^c]: C\n")),
+                       ["1. A", "2. B", "3. C"])
+    }
+
+    /// R4: the references inside a DUPLICATE definition count where it
+    /// stands, though it is not listed (GitHub `Ref{a=1}`, `X{b=3} Y{c=2}`).
+    func testReferencesInADuplicateDefinitionCount() {
+        let blocks = parse("Ref[^a].\n\n[^a]: A\n[^a]: dup see[^c]\n\nX[^b] Y[^c]\n\n[^b]: B\n[^c]: C\n")
+        XCTAssertEqual(bodyTexts(blocks), ["Ref\u{00B9}.", "X\u{00B3} Y\u{00B2}"])
+        XCTAssertEqual(notes(blocks), ["1. A", "2. C", "3. B"])
+    }
+
+    /// R5: after a link definition at the footnote's start a lazy line is
+    /// still the footnote's (GitHub: footnote `lazy`; with text before it,
+    /// `note` + `lazy` and `x` defined).
+    func testALazyLineAfterALinkDefinitionInTheFootnote() {
+        let empty = parse("R[^1]\n\n[^1]:\n    [x]: http://e.x\nlazy\n")
+        XCTAssertEqual(bodyTexts(empty), ["R\u{00B9}"])
+        XCTAssertEqual(notes(empty), ["1. lazy"])
+        let after = parse("R[^1] [x]\n\n[^1]: note\n\n    [x]: http://e.x\nlazy\n")
+        XCTAssertEqual(bodyTexts(after), ["R\u{00B9} x"])
+        XCTAssertEqual(notes(after), ["1. note", "lazy"])
+    }
+
+    /// R6: a definition that interrupts a paragraph ends it (GitHub
+    /// `<p>Para A{1=1}</p><hr>`; `<p>Para</p><ol start="1984">`; after an
+    /// empty `[^a]:`, `<p>Para</p><p>more</p>`). Before: `---` made
+    /// "Para A" a Setext heading, `1984. y` and `more` joined "Para".
+    func testADefinitionBetweenParagraphLinesEndsTheParagraph() {
+        let rule = parse("Para A[^1]\n[^1]: note\n---\n")
+        XCTAssertFalse(rule.contains { if case .heading = $0.content { return true }; return false })
+        XCTAssertEqual(text(rule[0]), "Para A\u{00B9}")
+        XCTAssertEqual(rule[0].sourceLine, 0)
+        XCTAssertEqual(notes(rule), ["1. note"])
+
+        let item = parse("Para\n[^1]: x\n1984. y\n\nR[^1]\n")
+        XCTAssertEqual(text(item[0]), "Para")
+        XCTAssertEqual(item[1].sourceLine, 2)
+        XCTAssertTrue(text(item[1])?.contains("y") == true && text(item[1])?.contains("Para") == false)
+
+        let empty = parse("Para\n[^a]:\nmore\n\nR[^a]\n")
+        XCTAssertEqual(bodyTexts(empty), ["Para", "more", "R\u{00B9}"])
+        XCTAssertEqual(empty.map(\.sourceLine), [0, 2, 4, 5], "the list anchors to the last line")
+
+        // `===` under the definition is its lazy text (GitHub `x⏎===`).
+        XCTAssertEqual(notes(parse("Para[^1]\n[^1]: x\n===\n")), ["1. x ==="])
+    }
+
     /// The scan that numbers footnotes follows `tryParseFootnoteRef`: only
     /// defined labels, escapes and code skipped, normalised labels.
     func testFootnoteReferenceScan() {
         let defined: Set<String> = ["a", "b", "ss"]
-        XCTAssertEqual(ReferenceLinks.footnoteReferences(in: "x[^B] `[^a]` \\[^a] [^ẞ] [^zz] [^a]", defined: defined),
+        XCTAssertEqual(FootnoteReferenceScan.labels(in: "x[^B] `[^a]` \\[^a] [^ẞ] [^zz] [^a]", defined: defined),
                        ["b", "ss", "a"])
-        XCTAssertEqual(ReferenceLinks.footnoteReferences(in: "[^a]", defined: []), [])
-        XCTAssertEqual(ReferenceLinks.footnoteReferences(in: "[^] [^", defined: defined), [])
+        XCTAssertEqual(FootnoteReferenceScan.labels(in: "[^a]", defined: []), [])
+        XCTAssertEqual(FootnoteReferenceScan.labels(in: "[^] [^", defined: defined), [])
+        // CommonMark code spans: a run closes at the next run of its length.
+        XCTAssertEqual(FootnoteReferenceScan.labels(in: "`x [^a]` ``y`` [^b] ``` [^ss]", defined: defined), ["b", "ss"])
+        XCTAssertEqual(FootnoteReferenceScan.labels(in: "`` [^a] ` [^b] ``", defined: defined), [])
+        XCTAssertEqual(FootnoteReferenceScan.labels(in: "\\`[^a]`", defined: defined), ["a"])
+        // Emphasis does not hide a reference.
+        XCTAssertEqual(FootnoteReferenceScan.labels(in: "~~x [^a]~~ ***[^b]***", defined: defined), ["a", "b"])
+        // Many `[^` and no `]` (one forward search, not one per `[^`), and
+        // a long label.
+        XCTAssertEqual(FootnoteReferenceScan.labels(in: String(repeating: "[^a", count: 50_000), defined: defined), [])
+        let long = String(repeating: "x", count: 1200)
+        XCTAssertEqual(FootnoteReferenceScan.labels(in: "[^\(long)] [^a]", defined: [long, "a"]), [long, "a"])
     }
 }
