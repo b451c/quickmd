@@ -134,15 +134,29 @@ struct MarkdownBlock: Identifiable, Sendable {
     /// (`MathRendering.substitutingUntypesettableMath`). Copied whole, it
     /// reads `$$…$$` again, as the formula it is (`SelectionRows`).
     let substitutesFormula: Bool
+    /// Points from the column's leading edge to the text of the list item
+    /// that OWNS this block (`ListNesting`): a code block under a list item
+    /// is drawn where the item's text starts, not at the margin. 0 outside a
+    /// list. Set by the parser for `.codeBlock` only, in points at the parse's
+    /// zoom (like every font size in the rendered strings: zoom re-parses).
+    /// The view pads by it and the measurer narrows the code by it.
+    let listIndent: CGFloat
 
     init(id: String, content: BlockContent, sourceLine: Int, joinsPrevious: Bool = false,
-         isFrontMatter: Bool = false, substitutesFormula: Bool = false) {
+         isFrontMatter: Bool = false, substitutesFormula: Bool = false, listIndent: CGFloat = 0) {
         self.id = id
         self.content = content
         self.sourceLine = sourceLine
         self.joinsPrevious = joinsPrevious
         self.isFrontMatter = isFrontMatter
         self.substitutesFormula = substitutesFormula
+        self.listIndent = listIndent
+    }
+
+    /// This block drawn under a list item whose text starts `indent` points in.
+    func withListIndent(_ indent: CGFloat) -> MarkdownBlock {
+        MarkdownBlock(id: id, content: content, sourceLine: sourceLine, joinsPrevious: joinsPrevious,
+                      isFrontMatter: isFrontMatter, substitutesFormula: substitutesFormula, listIndent: indent)
     }
 
     /// A cheap content fingerprint of the block, to find the scroll anchor

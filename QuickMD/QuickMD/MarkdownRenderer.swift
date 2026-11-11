@@ -201,10 +201,18 @@ struct MarkdownRenderer: Sendable {
     /// The parser's entry point: it joins and computes the hangs over a whole
     /// text run, then renders the run one block at a time — so the items of a
     /// loose list, one row each, still share their list's widest marker.
-    func render(joined lines: [String], hangs: [String?]) -> AttributedString {
+    ///
+    /// `itemColumns[i]` (when given) is the list item that owns line `i` — a
+    /// paragraph of the item after its first (`ListNesting`): that line is
+    /// drawn at the item's text column (`renderItemParagraph`).
+    func render(joined lines: [String], hangs: [String?], itemColumns: [ListItemColumn?] = []) -> AttributedString {
         var result = AttributedString()
         for (index, line) in lines.enumerated() {
-            result.append(renderLine(line, hangingPrefix: index < hangs.count ? hangs[index] : nil))
+            if index < itemColumns.count, let column = itemColumns[index] {
+                result.append(renderItemParagraph(line, column: column))
+            } else {
+                result.append(renderLine(line, hangingPrefix: index < hangs.count ? hangs[index] : nil))
+            }
             result.append(AttributedString("\n"))
         }
         return result
@@ -291,6 +299,9 @@ struct MarkdownRenderer: Sendable {
         // Inside a paragraph that is not a list item's, until a blank or
         // structural line — across hard breaks too.
         var inPlainParagraph = false
+        // Inside any paragraph (an item's or not): a hard break does not end
+        // it, only a blank or structural line does.
+        var inParagraph = false
 
         for (index, line) in lines.enumerated() {
             let kind = classify(line)
@@ -298,6 +309,7 @@ struct MarkdownRenderer: Sendable {
                 joined.append((line, index))
                 openParagraph = false
                 inPlainParagraph = false
+                inParagraph = false
                 continue
             }
 
@@ -320,8 +332,13 @@ struct MarkdownRenderer: Sendable {
                 joined[joined.count - 1].line += " " + continuationText(text)
             } else {
                 joined.append((text, index))
-                inPlainParagraph = kind == .paragraph
+                // A line after a hard break is more of the SAME paragraph: an
+                // item's stays the item's, so `2. b` after it is the next
+                // item (GitHub), not text (`ListNesting` reads it so too).
+                let continuesAfterHardBreak = kind == .paragraph && inParagraph
+                if !continuesAfterHardBreak { inPlainParagraph = kind == .paragraph }
             }
+            inParagraph = true
             openParagraph = !hardBreak
         }
 
@@ -638,6 +655,52 @@ struct MarkdownRenderer: Sendable {
         let hangWidth = width(of: hangingPrefix ?? prefix)
         applyHangingIndent(&attr, indent: scaled(Self.listGutter),
                            firstLineLead: max(0, hangWidth - width(of: prefix)), hangWidth: hangWidth)
+        return attr
+    }
+
+    /// Where a list item's text starts: its nesting level and the x of its
+    /// text in points from the text margin (the gutter plus its hang — its
+    /// list's widest marker for an ordered item, its own marker otherwise).
+    /// What a block the item owns lines up with (`ListNesting`).
+    struct ListItemColumn: Equatable, Sendable {
+        let level: Int
+        let textIndent: CGFloat
+    }
+
+    /// The text column of the item `itemLine` renders (`renderLine`), hanging
+    /// under `hang` when it is an ordered item (`widestOrderedPrefixes`).
+    /// Nil for a line that is not an item.
+    func listItemColumn(itemLine: String, hang: String?) -> ListItemColumn? {
+        let indent = itemLine.prefix(while: { $0 == " " || $0 == "\t" })
+        let level = Self.listLevel(for: indent)
+        let prefix: String
+        if let task = parseTaskList(itemLine) {
+            prefix = Self.indentSpaces(task.level) + (task.checked ? "☑ " : "☐ ")
+        } else if let ordered = Self.orderedItem(itemLine) {
+            prefix = hang ?? ordered.prefix
+        } else if Self.isListItem(itemLine) {
+            prefix = Self.indentSpaces(level) + "• "
+        } else {
+            return nil
+        }
+        return ListItemColumn(level: level, textIndent: scaled(Self.listGutter) + width(of: prefix))
+    }
+
+    /// A paragraph of a list item after its first (CommonMark: indented to
+    /// the item's content) — on GitHub it starts where the item's text does.
+    /// The nesting lives in the CHARACTERS as for an item (one indent unit
+    /// deeper than the item's, so print/PDF shows it under the item text);
+    /// on screen the paragraph style puts every line at the item's text x,
+    /// the first one pulled back by the width of those spaces.
+    private func renderItemParagraph(_ line: String, column: ListItemColumn) -> AttributedString {
+        let spaces = Self.indentSpaces(column.level + 1)
+        var attr = AttributedString(spaces)
+        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
+        attr.setDualForeground(theme.textColor)
+        attr.append(renderInlineFormatting(Self.continuationText(line)))
+        let lead = width(of: spaces)
+        applyHangingIndent(&attr, indent: max(0, column.textIndent - lead), firstLineLead: 0,
+                           hangWidth: column.textIndent - max(0, column.textIndent - lead))
         return attr
     }
 

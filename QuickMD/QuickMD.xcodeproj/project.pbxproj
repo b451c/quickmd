@@ -43,6 +43,9 @@
 		A1B2C3D4010001C1 /* SelectionRows.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000001C0 /* SelectionRows.swift */; };
 		A1B2C3D4010002A0 /* VerticalRhythm.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000002A0 /* VerticalRhythm.swift */; };
 		A1B2C3D4010002A1 /* VerticalRhythm.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000002A0 /* VerticalRhythm.swift */; };
+		A1B2C3D401000420 /* ListNesting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000420 /* ListNesting.swift */; };
+		A1B2C3D401000421 /* ListNesting.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000420 /* ListNesting.swift */; };
+		A1B2C3D401000422 /* ListContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000421 /* ListContentTests.swift */; };
 		A1B2C3D401000301 /* ReferenceLinks.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000301 /* ReferenceLinks.swift */; };
 		A1B2C3D401000302 /* ReferenceLinks.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000301 /* ReferenceLinks.swift */; };
 		A1B2C3D401000303 /* CrossDocumentAnchors.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000303 /* CrossDocumentAnchors.swift */; };
@@ -247,6 +250,8 @@
 		A1B2C3D400000200 /* PrintableTableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrintableTableTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4000001C0 /* SelectionRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionRows.swift; sourceTree = "<group>"; };
 		A1B2C3D4000002A0 /* VerticalRhythm.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalRhythm.swift; sourceTree = "<group>"; };
+		A1B2C3D400000420 /* ListNesting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListNesting.swift; sourceTree = "<group>"; };
+		A1B2C3D400000421 /* ListContentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ListContentTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000301 /* ReferenceLinks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceLinks.swift; sourceTree = "<group>"; };
 		A1B2C3D400000303 /* CrossDocumentAnchors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossDocumentAnchors.swift; sourceTree = "<group>"; };
 		A1B2C3D400000305 /* SettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTab.swift; sourceTree = "<group>"; };
@@ -359,6 +364,7 @@
 				A1B2C3D400000067 /* ChromeHoverTests.swift */,
 				A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */,
 				A1B2C3D4000002A1 /* VerticalRhythmTests.swift */,
+				A1B2C3D400000421 /* ListContentTests.swift */,
 				A1B2C3D400000082 /* ImageLoadingTests.swift */,
 				A1B2C3D4000000E1 /* HTMLImageTests.swift */,
 				A1B2C3D4000000F0 /* HeadingLayoutTests.swift */,
@@ -405,6 +411,7 @@
 				A1B2C3D4000000C0 /* DocumentSelection.swift */,
 				A1B2C3D4000001C0 /* SelectionRows.swift */,
 				A1B2C3D4000002A0 /* VerticalRhythm.swift */,
+				A1B2C3D400000420 /* ListNesting.swift */,
 				A1B2C3D400000301 /* ReferenceLinks.swift */,
 				A1B2C3D400000303 /* CrossDocumentAnchors.swift */,
 				A1B2C3D400000305 /* SettingsTab.swift */,
@@ -708,6 +715,7 @@
 				A1B2C3D4010000C0 /* DocumentSelection.swift in Sources */,
 				A1B2C3D4010001C0 /* SelectionRows.swift in Sources */,
 				A1B2C3D4010002A0 /* VerticalRhythm.swift in Sources */,
+				A1B2C3D401000420 /* ListNesting.swift in Sources */,
 				A1B2C3D401000301 /* ReferenceLinks.swift in Sources */,
 				A1B2C3D401000303 /* CrossDocumentAnchors.swift in Sources */,
 				A1B2C3D401000305 /* SettingsTab.swift in Sources */,
@@ -755,6 +763,7 @@
 				A1B2C3D401000068 /* ChromeHoverState.swift in Sources (Tests) */,
 				A1B2C3D40100006A /* BlockHeightMeasurerTests.swift in Sources */,
 				A1B2C3D4010002A2 /* VerticalRhythmTests.swift in Sources */,
+				A1B2C3D401000422 /* ListContentTests.swift in Sources */,
 				A1B2C3D40100006B /* BlockHeightMeasurer.swift in Sources (Tests) */,
 				A1B2C3D4010001B1 /* TableTextBuilder.swift in Sources (Tests) */,
 				A1B2C3D401000221 /* FrontMatter.swift in Sources (Tests) */,
@@ -767,6 +776,7 @@
 				A1B2C3D4010000C1 /* DocumentSelection.swift in Sources (Tests) */,
 				A1B2C3D4010001C1 /* SelectionRows.swift in Sources (Tests) */,
 				A1B2C3D4010002A1 /* VerticalRhythm.swift in Sources (Tests) */,
+				A1B2C3D401000421 /* ListNesting.swift in Sources (Tests) */,
 				A1B2C3D401000302 /* ReferenceLinks.swift in Sources (Tests) */,
 				A1B2C3D401000304 /* CrossDocumentAnchors.swift in Sources (Tests) */,
 				A1B2C3D401000306 /* SettingsTab.swift in Sources (Tests) */,

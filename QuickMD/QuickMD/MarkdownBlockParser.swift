@@ -170,6 +170,12 @@ struct MarkdownBlockParser: Sendable {
         // (`renderPendingRows`): an ordered list's items hang under the
         // LIST's widest marker, and a list goes on past a block nested in it.
         var pendingRows: [PendingTextRow] = []
+        // Which list item owns what (`ListNesting`): the item line (original
+        // index) of a paragraph's first line, and of a code block (by its
+        // position in `blocks`). `renderPendingRows` lines them up with it.
+        var nesting = ListNesting()
+        var paragraphOwners: [Int: Int] = [:]
+        var blockOwners: [Int: Int] = [:]
 
         while i < lines.count {
             // Every turn consumes at least one line. A branch that decides on a
@@ -192,9 +198,41 @@ struct MarkdownBlockParser: Sendable {
             // What every block marker below is looked for in (`markerLine`).
             let trimmedLine = Self.markerLine(line)
 
+            // Indented code under a list item (CommonMark): four columns past
+            // the item's content column, not after paragraph text. FIRST: such
+            // a line is code whatever it looks like (a fence, `#`, `- x`).
+            // Blank lines inside it are code; trailing ones are not.
+            if let code = nesting.indentedCode(line) {
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                nesting.block(startingAt: line)
+                var codeLines: [String] = []
+                var end = i
+                var j = i
+                while j < lines.count {
+                    if Self.isBlank(lines[j]) {
+                        codeLines.append(Self.removingIndentation(lines[j], upTo: code.columns))
+                    } else if Self.indentColumns(lines[j]) >= code.columns {
+                        codeLines.append(Self.removingIndentation(lines[j], upTo: code.columns))
+                        end = j + 1
+                    } else {
+                        break
+                    }
+                    j += 1
+                }
+                codeLines.removeLast(j - end)
+                blockOwners[blocks.count] = code.owner
+                blocks.append(.codeBlock(index: blockIndex, code: codeLines.joined(separator: "\n"), language: "",
+                                         sourceLine: sourceLine))
+                blockIndex += 1
+                i = end
+                continue
+            }
+
             // Fenced code block — check BEFORE math to protect $$ inside code blocks
             if let opening = Self.fenceOpening(trimmedLine) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                // A fence indented under a list item is that item's.
+                if let owner = nesting.block(startingAt: line) { blockOwners[blocks.count] = owner }
                 let fenceLength = opening.length
                 // CommonMark: a fence indented N columns drops up to N columns
                 // of indentation from each of its lines (a fence under a list
@@ -233,6 +271,7 @@ struct MarkdownBlockParser: Sendable {
             // Display math block $$...$$ — after code block check to protect $$ inside code
             if trimmedLine.hasPrefix("$$") {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                nesting.block(startingAt: line)
 
                 let afterDollar = String(trimmedLine.dropFirst(2)).trimmingCharacters(in: .whitespaces)
 
@@ -275,6 +314,7 @@ struct MarkdownBlockParser: Sendable {
                let hashRange = Range(match.range(at: 1), in: line),
                let contentRange = Range(match.range(at: 2), in: line) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                nesting.block(startingAt: line)
                 let level = min(max(line[hashRange].count, 1), 6)
                 let title = Self.withoutClosingSequence(
                     String(line[contentRange]).trimmingCharacters(in: .whitespaces))
@@ -293,6 +333,7 @@ struct MarkdownBlockParser: Sendable {
             // (`![a](x.png) ![b](y.png)` is two pictures, not one bogus url).
             if let images = InlineSyntaxScanner.standaloneImages(in: line[...], references: referenceDefinitions) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                nesting.block(startingAt: line)
                 for image in images {
                     // The alt is caption text: references decoded like any inline
                     // text (an `<img alt>` is decoded by `HTMLImageSyntax`).
@@ -316,6 +357,7 @@ struct MarkdownBlockParser: Sendable {
                let image = InlineSyntaxScanner.linkedImage(in: line[...], references: referenceDefinitions),
                paragraphEnds(after: i, in: lines) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                nesting.block(startingAt: line)
                 blocks.append(.image(index: blockIndex, url: image.url, alt: HTMLEntities.decode(image.alt),
                                      width: nil, sourceLine: sourceLine))
                 blockIndex += 1
@@ -345,6 +387,7 @@ struct MarkdownBlockParser: Sendable {
                     }
                 } else {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                    nesting.block(startingAt: line)
                     for tag in html.images {
                         blocks.append(.image(index: blockIndex, url: tag.url, alt: tag.alt, width: tag.width,
                                              sourceLine: lineMap[i + tag.lineOffset]))
@@ -385,6 +428,7 @@ struct MarkdownBlockParser: Sendable {
                     var preceding = Array(textBuffer[..<start])
                     textBuffer.removeAll()
                     flushTextBuffer(&preceding, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                    nesting.block(startingAt: line)
                     blocks.append(.heading(index: blockIndex, level: level,
                                            title: ReferenceLinks.inlinedHeading(title, definitions: referenceDefinitions,
                                                                                 footnoteIds: footnoteDefinitions.map(\.id)),
@@ -399,6 +443,7 @@ struct MarkdownBlockParser: Sendable {
             if Self.pipeCount(line) >= 2 && !trimmed.isEmpty {
                 if !isTableSeparator(trimmed) && i + 1 < lines.count && isTableSeparator(lines[i + 1]) {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                    nesting.block(startingAt: line)
 
                     var alignments = parseTableAlignments(lines[i + 1])
                     // The separator row is authoritative for column count: a header row
@@ -437,6 +482,7 @@ struct MarkdownBlockParser: Sendable {
             // Blockquote detection - group consecutive > lines by nesting level
             if trimmed.hasPrefix(">") {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                nesting.block(startingAt: line)
                 // A later nesting group of this run continues the quote row
                 // before it (`MarkdownBlock.joinsPrevious`): `> a` then `>> b`
                 // is one quote on the page, drawn as two rows.
@@ -589,6 +635,7 @@ struct MarkdownBlockParser: Sendable {
                 // "para line\n: def" as term + definition).
                 var preceding = Array(textBuffer[..<run.bufferStart])
                 flushTextBuffer(&preceding, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                nesting.block(startingAt: line)
                 let termSourceLine = textBuffer[run.bufferStart].originalIndex
                 textBuffer.removeAll()
 
@@ -603,12 +650,18 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
+            if Self.isBlank(line) {
+                nesting.blank()
+            } else if let owner = nesting.text(line, sourceLine: sourceLine) {
+                paragraphOwners[sourceLine] = owner
+            }
             textBuffer.append((line: line, originalIndex: sourceLine))
             i += 1
         }
 
         flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-        renderPendingRows(pendingRows, in: &blocks, allLines: allLines, using: activeRenderer)
+        renderPendingRows(pendingRows, in: &blocks, allLines: allLines, using: activeRenderer,
+                          owners: ListOwners(paragraphs: paragraphOwners, blocks: blockOwners))
 
         // Append footnotes block at end of document if any definitions exist
         if !footnoteDefinitions.isEmpty {
@@ -1101,6 +1154,8 @@ struct MarkdownBlockParser: Sendable {
         let joined = MarkdownRenderer.joinSoftBreaksIndexed(buffer.map(\.line))
 
         var row: [String] = []
+        // The original line each of the row's lines starts on (`ListOwners`).
+        var rowSources: [Int] = []
         var rowSourceLine = 0
         var rowJoinsPrevious = false
         // The current block is a list: an item started it or continues it.
@@ -1108,18 +1163,20 @@ struct MarkdownBlockParser: Sendable {
 
         func flushRow() {
             guard !row.isEmpty else { return }
-            pending.append(PendingTextRow(position: blocks.count, index: index, lines: row,
+            pending.append(PendingTextRow(position: blocks.count, index: index, lines: row, sources: rowSources,
                                           sourceLine: rowSourceLine, joinsPrevious: rowJoinsPrevious))
             // Its place in the block list; `renderPendingRows` fills it in.
             blocks.append(.text(index: index, AttributedString(), sourceLine: rowSourceLine,
                                 joinsPrevious: rowJoinsPrevious))
             index += 1
             row = []
+            rowSources = []
             rowJoinsPrevious = false
         }
         func append(_ position: Int) {
             if row.isEmpty { rowSourceLine = buffer[joined[position].first].originalIndex }
             row.append(joined[position].line)
+            rowSources.append(buffer[joined[position].first].originalIndex)
         }
 
         for position in joined.indices {
@@ -1654,8 +1711,18 @@ struct MarkdownBlockParser: Sendable {
         let position: Int
         let index: Int
         let lines: [String]
+        /// The original line each of `lines` starts on.
+        let sources: [Int]
         let sourceLine: Int
         let joinsPrevious: Bool
+    }
+
+    /// What `ListNesting` found, by original line: the item line that owns a
+    /// paragraph starting on a line, and the item line that owns the code
+    /// block at a position in the block list.
+    struct ListOwners {
+        let paragraphs: [Int: Int]
+        let blocks: [Int: Int]
     }
 
     /// Stands in for a non-text block when the ordered-list hangs are worked
@@ -1671,16 +1738,29 @@ struct MarkdownBlockParser: Sendable {
     /// widest marker was each row's own, so a list cut into rows had two text
     /// edges, and the steps of a list whose items hold code blocks each hung
     /// under their own number ("1. " is narrower than "10. ").
+    ///
+    /// The same pass lines a list item's own blocks up with the item's text
+    /// (`owners`, from `ListNesting`): a paragraph of the item hangs where the
+    /// item's text starts, a code block is indented to it — both known only
+    /// now, once the item's hang (its list's widest marker) is.
     private func renderPendingRows(_ pending: [PendingTextRow], in blocks: inout [MarkdownBlock],
-                                   allLines: [String], using renderer: MarkdownRenderer) {
+                                   allLines: [String], using renderer: MarkdownRenderer,
+                                   owners: ListOwners) {
         guard !pending.isEmpty else { return }
         var lines: [String] = []
         var starts: [Int] = []
         starts.reserveCapacity(pending.count)
+        // Where an item line (by original line) landed in `lines`.
+        var itemLines: [Int: Int] = [:]
         var next = 0
         for (position, block) in blocks.enumerated() {
             if next < pending.count, pending[next].position == position {
                 starts.append(lines.count)
+                if !owners.paragraphs.isEmpty || !owners.blocks.isEmpty {
+                    for (offset, source) in pending[next].sources.enumerated() {
+                        itemLines[source] = lines.count + offset
+                    }
+                }
                 lines.append(contentsOf: pending[next].lines)
                 next += 1
             } else {
@@ -1689,11 +1769,24 @@ struct MarkdownBlockParser: Sendable {
             }
         }
         let hangs = renderer.widestOrderedPrefixes(lines)
+        /// The text column of the item on original line `itemLine`.
+        func column(ofItem itemLine: Int) -> MarkdownRenderer.ListItemColumn? {
+            guard let k = itemLines[itemLine] else { return nil }
+            return renderer.listItemColumn(itemLine: lines[k], hang: hangs[k])
+        }
         for (row, start) in zip(pending, starts) {
+            let columns = owners.paragraphs.isEmpty ? [] : row.sources.map { source in
+                owners.paragraphs[source].flatMap(column(ofItem:))
+            }
             blocks[row.position] = .text(index: row.index,
                                          renderer.render(joined: row.lines,
-                                                         hangs: Array(hangs[start..<(start + row.lines.count)])),
+                                                         hangs: Array(hangs[start..<(start + row.lines.count)]),
+                                                         itemColumns: columns),
                                          sourceLine: row.sourceLine, joinsPrevious: row.joinsPrevious)
+        }
+        for (position, owner) in owners.blocks {
+            guard let column = column(ofItem: owner) else { continue }
+            blocks[position] = blocks[position].withListIndent(column.textIndent)
         }
     }
 }
