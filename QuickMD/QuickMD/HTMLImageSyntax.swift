@@ -37,6 +37,11 @@ enum HTMLImageSyntax {
         let alt: String
         /// `width` when it is one of the understood forms (see `width(from:)`).
         let width: ImageWidth?
+        /// The `href` of an `<a>` that is open around this tag IN THE SAME
+        /// scanned text (`<a href="…"><img …></a>` on one line), entities
+        /// decoded, whitespace trimmed; nil otherwise. An `<a>` on a line of
+        /// its own is a wrapper-only line and its link is not carried over.
+        var link: String? = nil
         /// Line breaks between the start of the scanned text and this tag's
         /// `<` — the parser maps it to the line the tag STARTS on, which is
         /// the block's `sourceLine` (a multi-line tag is scanned joined).
@@ -57,8 +62,8 @@ enum HTMLImageSyntax {
 
     /// Wrapper tags that may surround or sit next to `<img>` and are dropped.
     /// Opening forms may carry attributes (`<p align="center">`, `<a href=…>`,
-    /// `<source srcset=…>`). `<a href>` is ignored for now: clicking the image
-    /// keeps opening the preview.
+    /// `<source srcset=…>`). An `<a href>` is kept for the images inside it
+    /// on the same line (`Tag.link`): a click on them follows it.
     private static let openingWrappers: Set<String> = ["p", "div", "center", "a", "picture", "source", "br"]
     private static let closingWrappers: Set<String> = ["p", "div", "center", "a", "picture"]
 
@@ -204,10 +209,14 @@ enum HTMLImageSyntax {
         var src: Range<Int>?
         var alt: Range<Int>?
         var width: Range<Int>?
+        /// `href` of an `<a>` tag (only read for `a`).
+        var href: Range<Int>?
     }
 
     private enum TagResult {
-        case wrapper(end: Int, isLineBreak: Bool)
+        /// `link`: an opening `<a>`'s href (`.some(nil)` for `<a>` without
+        /// one), `.none` for every other wrapper; `closesLink` for `</a>`.
+        case wrapper(end: Int, isLineBreak: Bool, link: Range<Int>?? = nil, closesLink: Bool = false)
         case image(ImageAttributes, end: Int)
         /// The text ended inside an `<img` tag.
         case unterminatedImage
@@ -222,6 +231,8 @@ enum HTMLImageSyntax {
         var newlines = 0
         var counted = 0
         var onlyLineBreaks = true
+        // The href of the `<a>` open at this point of the text, if any.
+        var openLink: Range<Int>?
         while i < bytes.count {
             guard bytes[i] == UInt8(ascii: "<") else { return nil }
             while counted < i {
@@ -233,11 +244,17 @@ enum HTMLImageSyntax {
                 return nil
             case .unterminatedImage:
                 return .unterminatedImage
-            case .wrapper(let end, let isLineBreak):
+            case .wrapper(let end, let isLineBreak, let link, let closesLink):
                 onlyLineBreaks = onlyLineBreaks && isLineBreak
+                if let link { openLink = link }
+                if closesLink { openLink = nil }
                 i = end
             case .image(let attributes, let end):
-                guard let tag = makeTag(bytes, attributes, lineOffset: newlines) else { return nil }
+                guard var tag = makeTag(bytes, attributes, lineOffset: newlines) else { return nil }
+                if let openLink {
+                    let href = decodeEntities(string(bytes, openLink)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !href.isEmpty { tag.link = href }
+                }
                 images.append(tag)
                 i = end
             }
@@ -300,10 +317,11 @@ enum HTMLImageSyntax {
             guard closingWrappers.contains(name) else { return .invalid }
             while i < bytes.count, isWhitespace(bytes[i]) { i += 1 }
             guard i < bytes.count, bytes[i] == UInt8(ascii: ">") else { return .invalid }
-            return .wrapper(end: i + 1, isLineBreak: false)
+            return .wrapper(end: i + 1, isLineBreak: false, closesLink: name == "a")
         }
 
         let isImage = name == "img"
+        let isLink = name == "a"
         guard isImage || openingWrappers.contains(name) else { return .invalid }
         // Running off the end is only interesting for `<img`: the parser
         // joins the following lines and tries again.
@@ -366,6 +384,9 @@ enum HTMLImageSyntax {
             // Compared in place (no String per attribute): a tag can carry
             // thousands of attributes. height, class, style, … are ignored
             // (the aspect ratio is kept).
+            if isLink, attributes.href == nil, equalsLowercased(bytes, attrStart..<attrEnd, "href") {
+                attributes.href = value ?? (attrEnd..<attrEnd)
+            }
             if isImage {
                 let name = attrStart..<attrEnd
                 let present = value ?? (attrEnd..<attrEnd)
@@ -379,7 +400,8 @@ enum HTMLImageSyntax {
             }
         }
 
-        return isImage ? .image(attributes, end: i) : .wrapper(end: i, isLineBreak: name == "br")
+        if isImage { return .image(attributes, end: i) }
+        return .wrapper(end: i, isLineBreak: name == "br", link: isLink ? .some(attributes.href) : .none)
     }
 
     /// ASCII case-insensitive `bytes[range] == name` (`name` is lowercase).

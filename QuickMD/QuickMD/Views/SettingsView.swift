@@ -28,12 +28,27 @@ struct SettingsView: View {
 // MARK: - General
 
 /// Settings → General: behaviour that is not about how the document looks —
-/// the opt-in auto-copy of selections (v1.11 S-D10) and the Contents sidebar's
-/// depth (#42, also in the sidebar's context menu); same grouped Form and
-/// window size as the other tabs, so switching tabs does not resize the window.
+/// the opt-in auto-copy of selections (v1.11 S-D10), separate document
+/// windows instead of tabs (#57) and the Contents sidebar's depth (#42, also in
+/// the sidebar's context menu); same grouped Form and window size as the other
+/// tabs, so switching tabs does not resize the window.
 struct GeneralSettingsView: View {
     @AppStorage(SelectionAutoCopy.defaultsKey) private var autoCopySelection: Bool = false
     @AppStorage(ToCDepth.defaultsKey) private var tocMaxLevel: Int = ToCDepth.all
+    @AppStorage(WindowTabbing.separateWindowsKey) private var separateWindows: Bool = false
+
+    /// Writes the setting and applies it to the documents opened from now on
+    /// (`WindowTabbing.applyWindowPreference` lists what a running app can and
+    /// cannot change).
+    private var separateWindowsBinding: Binding<Bool> {
+        Binding(
+            get: { separateWindows },
+            set: { newValue in
+                separateWindows = newValue
+                WindowTabbing.applyWindowPreference()
+            }
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -46,6 +61,20 @@ struct GeneralSettingsView: View {
                         .foregroundColor(.secondary)
                 } footer: {
                     Text("Selected text is copied to the clipboard as soon as you finish selecting. Off by default because it replaces whatever you copied in another app.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+
+                Section {
+                    Toggle("Open documents in separate windows", isOn: separateWindowsBinding)
+                } header: {
+                    Text("Windows")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.secondary)
+                } footer: {
+                    // A switch to tabs reaches full screen only after a
+                    // relaunch (AppKit caches the tabbing preference).
+                    Text("Documents already open stay as they are. Takes full effect after restarting QuickMD.")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }

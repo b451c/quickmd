@@ -364,12 +364,12 @@ struct VirtualBlockList: NSViewRepresentable {
         /// - `reportHeight`: the anchored block stays put on screen
         ///   (`RowGeometry.reportAction`).
         private var anchor: ReaderAnchor?
+        /// The animated scroll of a jump, and the reader's scroll that stops
+        /// it (`ScrollGlide`).
+        private var glide = ScrollGlide()
         /// A programmatic animated scroll is on its way to `anchor`: reports
         /// re-aim it instead of compensating a content top that is mid-flight.
-        private var isJumping = false
-        /// Bumped per animated jump, so an older animation's completion does
-        /// not end a newer one.
-        private var jumpGeneration = 0
+        private var isJumping: Bool { glide.isRunning }
         /// `.reported` blocks whose view has told this table its height: their
         /// height is no longer an estimate (`RowGeometry.anchorPlacement`).
         private var reportedBlocks: Set<String> = []
@@ -471,11 +471,20 @@ struct VirtualBlockList: NSViewRepresentable {
             scrollView.onEndLiveResize = { [weak self] in
                 self?.clipFrameChanged(afterLiveResize: true)
             }
-            scrollView.onReaderScroll = { [weak self] in self?.matchAim.readerScrolled() }
+            scrollView.onReaderScroll = { [weak self] in self?.readerScrolled() }
+            scrollView.onScrollWheel = { [weak self] event in self?.scrollWheel(event) }
             liveScrollObserver = NotificationCenter.default.addObserver(
                 forName: NSScrollView.willStartLiveScrollNotification, object: scrollView, queue: nil
             ) { [weak self] _ in
-                self?.matchAim.readerScrolled()
+                // A trackpad gesture posts this too, from inside
+                // `scrollWheel` — its glide decision is `scrollWheel(_:)`'s
+                // (a flick's tail must not stop a glide). Anything else is
+                // the scroller: new input.
+                if NSApp.currentEvent?.type == .scrollWheel {
+                    self?.matchAim.readerScrolled()
+                } else {
+                    self?.readerScrolled()
+                }
             }
             frameObserver = NotificationCenter.default.addObserver(
                 forName: NSView.frameDidChangeNotification,
@@ -573,7 +582,7 @@ struct VirtualBlockList: NSViewRepresentable {
             let anchor = captureAnchor()
             let previousCount = blocks.count
             self.anchor = nil
-            isJumping = false
+            glide.settle()
             isSwitchingLayout = false
             matchAim.drop()
             reportedBlocks = []
@@ -772,21 +781,54 @@ struct VirtualBlockList: NSViewRepresentable {
                     && !reportedBlocks.contains(blocks[row].id))
             var completion: (() -> Void)?
             if animated {
-                jumpGeneration += 1
-                let jump = jumpGeneration
-                isJumping = true
+                let token = glide.start()
                 completion = { [weak self] in
-                    guard let self, self.jumpGeneration == jump else { return }
-                    self.isJumping = false
+                    guard let self, self.glide.landed(token) else { return }
                     self.aimAtPendingMatch()
                 }
             } else {
-                isJumping = false
+                glide.settle()
             }
             let reached = setContentTop(blockTop + placement, animated: animated, completion: completion)
             anchor = ReaderAnchor(blockId: blocks[row].id, offset: offset, placed: reached - blockTop)
             #if DEBUG
             listLog.debug("place: row \(row) offset=\(offset, format: .fixed(precision: 1)) placed=\(reached - blockTop, format: .fixed(precision: 1))\(animated ? " (jump)" : "", privacy: .public)")
+            #endif
+        }
+
+        /// The reader scrolled with input that starts now (scroller, scroll
+        /// keys, a drag-select at the edge): a match aim is dropped and a
+        /// glide in flight stops where the view is, so their scroll goes on
+        /// from there — no snap to the target, no second jump when the
+        /// animation would have ended (`ScrollGlide`). Runs BEFORE the
+        /// input's own scroll (`BlockTableView.scrollVertically`, the
+        /// live-scroll notification).
+        private func readerScrolled() {
+            matchAim.readerScrolled()
+            if glide.readerScrolled() { stopGlide() }
+        }
+
+        /// A wheel / trackpad event, BEFORE AppKit scrolls by it: the aim
+        /// rule is unchanged (`PendingMatchAim.isReaderScroll`); the glide
+        /// stops only for a vertical scroll that started during it
+        /// (`ScrollGlide.scrollWheel`).
+        private func scrollWheel(_ event: NSEvent) {
+            if PendingMatchAim.isReaderScroll(event.phase, event.momentumPhase, event.scrollingDeltaY) {
+                matchAim.readerScrolled()
+            }
+            if glide.scrollWheel(phase: event.phase, momentumPhase: event.momentumPhase,
+                                 deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY) {
+                stopGlide()
+            }
+        }
+
+        private func stopGlide() {
+            guard let scrollView else { return }
+            ScrollGlide.stop(scrollView.contentView)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            #if DEBUG
+            expectedContentTop = contentTopY()
+            listLog.debug("glide stopped by the reader at top \(self.contentTopY(), format: .fixed(precision: 1))")
             #endif
         }
 
@@ -1517,14 +1559,15 @@ private struct RowHeightReporter: ViewModifier {
 /// or two of the user letting go instead of waiting out the debounce.
 final class BlockScrollView: NSScrollView {
     var onEndLiveResize: (() -> Void)?
-    /// The reader scrolled: wheel or trackpad here, a scroll key or a
-    /// drag-select at the edge (`BlockTableView.scrollVertically`).
+    /// The reader scrolled: a scroll key or a drag-select at the edge
+    /// (`BlockTableView.scrollVertically`).
     var onReaderScroll: (() -> Void)?
+    /// Every wheel / trackpad event, before it scrolls (the coordinator's
+    /// `scrollWheel(_:)` decides what it means for an aim and a glide).
+    var onScrollWheel: ((NSEvent) -> Void)?
 
     override func scrollWheel(with event: NSEvent) {
-        if PendingMatchAim.isReaderScroll(event.phase, event.momentumPhase, event.scrollingDeltaY) {
-            onReaderScroll?()
-        }
+        onScrollWheel?(event)
         super.scrollWheel(with: event)
     }
     /// Clicks in the content insets above the first / below the last row land

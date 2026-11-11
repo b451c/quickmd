@@ -18,12 +18,19 @@ final class HTMLImageTests: XCTestCase {
         let line: Int
     }
 
+    /// Every picture, in order: an image block's, and (since 1.15) each of
+    /// an image row's — a paragraph of several `<img>` is one row, on the
+    /// row's first line.
     private func images(_ blocks: [MarkdownBlock]) -> [Found] {
-        blocks.compactMap {
-            if case .image(let url, let alt, let width) = $0.content {
-                return Found(url: url, alt: alt, width: width, line: $0.sourceLine)
+        blocks.flatMap { block -> [Found] in
+            switch block.content {
+            case .image(let url, let alt, let width, _):
+                return [Found(url: url, alt: alt, width: width, line: block.sourceLine)]
+            case .imageRow(let images):
+                return images.map { Found(url: $0.url, alt: $0.alt, width: $0.width, line: block.sourceLine) }
+            default:
+                return []
             }
-            return nil
         }
     }
 
@@ -278,9 +285,15 @@ final class HTMLImageTests: XCTestCase {
         let md = "Intro\n\n<p align=\"center\">\n<img\nsrc=\"a.png\"\nalt=\"A\"> <img\nsrc='b.png'>\n</p>\nOutro"
         let blocks = parse(md)
         XCTAssertEqual(images(blocks).map(\.url), ["a.png", "b.png"])
-        XCTAssertEqual(images(blocks).map(\.line), [3, 5])
-        XCTAssertEqual(kinds(blocks), ["text", "image", "image", "text"])
-        XCTAssertEqual(plainText(blocks[3]), "Outro")
+        // Since 1.15 the two tags are one row (one `<p>` on GitHub), on the
+        // line its first tag starts on.
+        XCTAssertEqual(images(blocks).map(\.line), [3, 3])
+        XCTAssertEqual(kinds(blocks), ["text", "imagerow", "text"])
+        XCTAssertEqual(plainText(blocks[2]), "Outro")
+        // One tag alone keeps the image block on its own start line.
+        let single = parse("Intro\n\n<p align=\"center\">\n<img\nsrc=\"a.png\"\nalt=\"A\">\n</p>\nOutro")
+        XCTAssertEqual(images(single).map(\.line), [3])
+        XCTAssertEqual(kinds(single), ["text", "image", "text"])
     }
 
     func testUnterminatedMultiLineImgStaysText() {

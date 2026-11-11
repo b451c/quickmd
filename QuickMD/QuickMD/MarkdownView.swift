@@ -152,6 +152,31 @@ struct MarkdownView: View {
     /// The editor's find bar height (0 = hidden): the bar sits where the pills
     /// and banners float, so they move below it (`topChromeInset`).
     @State private var editorFindBarHeight: CGFloat = 0
+    /// Source Edit side by side (#55): the editor on the left, the rendered
+    /// document on the right. Per tab; plain Edit always starts without it.
+    @State private var isSideBySide = false
+    private var isSideBySideShowing: Bool { editSession.isActive && isSideBySide }
+    /// The side-by-side preview: the editor's unsaved text, shown by the
+    /// rendered list only (nil = the saved text). `currentText` stays what is
+    /// on disk, so print, export, reload and the session never see it.
+    /// Decided ONLY by `refreshPreview` (`SideBySidePreview`).
+    @State private var preview = SideBySidePreview()
+    /// Paces the preview's re-parse (debounce, maximum wait, one parse at a
+    /// time). A reference, so a keystroke never re-evaluates this body.
+    @State private var previewScheduler = PreviewRefreshScheduler()
+    /// The minimum content width while side by side shows — decided with the
+    /// growing (`SideBySideLayout.minimumContentWidth`), never more than the
+    /// window can have.
+    @State private var sideBySideMinimum = SideBySideLayout.standardMinimumWidth
+    /// "Rendering…" on the preview half only once it has been pending a
+    /// moment (not on every step of a live resize or a sidebar drag).
+    @State private var showsPreviewPending = false
+    @State private var previewPendingWork: DispatchWorkItem?
+    /// What the rendered list shows: the preview only while side by side.
+    private var renderedSource: String {
+        SideBySidePreview.renderedSource(isShowing: isSideBySideShowing, preview: preview.text,
+                                         current: currentText)
+    }
     /// The text `cachedBlocks` were parsed from. Block ids are positional, so a
     /// scroll by id is only meaningful against the blocks of the text it was
     /// computed for — the landing after Source Edit checks this (S-D10).
@@ -256,9 +281,7 @@ struct MarkdownView: View {
                 TableOfContentsView(headings: headings, onSelect: { targetId in
                     selectHeading(targetId)
                 }, onCopy: { entry in
-                    if let section = SectionExtractor.extractSection(from: currentText, entry: entry, headings: headings) {
-                        copyToClipboard(section)
-                    }
+                    copySection(entry)
                 }, onCollapse: {
                     withAnimation(.easeInOut(duration: 0.2)) { isToCVisible = false }
                 })
@@ -280,41 +303,59 @@ struct MarkdownView: View {
                     )
                 }
 
-                // Our own virtualized list (v1.9): exact row heights from
-                // `measured.table`, one layout path for every document size,
-                // nothing estimated — see VirtualBlockList.swift.
-                VirtualBlockList(
-                    blocks: cachedBlocks,
-                    table: measured.table,
-                    contentVersion: contentVersion,
-                    searchText: searchText,
-                    focusedBlockId: focusedBlockId,
-                    focusedOccInBlock: focusedOccInBlock,
-                    scrollRequest: scrollRequest,
-                    layoutStyle: isReadingMode ? .reading(fontScale: CGFloat(renderedFontScale)) : .standard,
-                    contentWidth: $contentWidth,
-                    onHeightReport: { blockId, row, height in
-                        applyHeightReport(blockId: blockId, row: row, height: height)
-                    },
-                    content: { block in AnyView(hostedBlockView(for: block)) },
-                    selectableText: { block, version in
-                        selectableText(for: block, installedVersion: version)
-                    },
-                    selectableTable: { block, version in
-                        selectableTable(for: block, installedVersion: version)
-                    },
-                    onCopySelection: { output in copySelectionToClipboard(output) },
-                    focusRequest: documentFocusRequest,
-                    // Stays mounted under the editor (its anchor and offset
-                    // survive; a remount would park at the top) but never takes
-                    // the focus back while covered, and leaves the
-                    // accessibility tree meanwhile (set on the AppKit view).
-                    isCovered: graphicPreview != nil || editSession.isActive,
-                    readingPosition: readingPosition,
-                    column: documentColumn
-                )
-                .onChange(of: scrollTrigger) { _ in
-                    scrollFocusedMatchIntoView()
+                HStack(spacing: 0) {
+                    // Side by side: the left half is the editor's (overlay below).
+                    if isSideBySideShowing {
+                        Color.clear.frame(maxWidth: .infinity)
+                        Divider()
+                    }
+                    // Our own virtualized list (v1.9): exact row heights from
+                    // `measured.table`, one layout path for every document size,
+                    // nothing estimated — see VirtualBlockList.swift.
+                    VirtualBlockList(
+                        blocks: cachedBlocks,
+                        table: measured.table,
+                        contentVersion: contentVersion,
+                        searchText: searchText,
+                        focusedBlockId: focusedBlockId,
+                        focusedOccInBlock: focusedOccInBlock,
+                        scrollRequest: scrollRequest,
+                        layoutStyle: isReadingMode ? .reading(fontScale: CGFloat(renderedFontScale)) : .standard,
+                        contentWidth: $contentWidth,
+                        onHeightReport: { blockId, row, height in
+                            applyHeightReport(blockId: blockId, row: row, height: height)
+                        },
+                        content: { block in AnyView(hostedBlockView(for: block)) },
+                        selectableText: { block, version in
+                            selectableText(for: block, installedVersion: version)
+                        },
+                        selectableTable: { block, version in
+                            selectableTable(for: block, installedVersion: version)
+                        },
+                        onCopySelection: { output in copySelectionToClipboard(output) },
+                        focusRequest: documentFocusRequest,
+                        // Under the editor alone it stays mounted (its anchor
+                        // and offset survive; a remount would park at the top)
+                        // but never takes the focus back while covered, and
+                        // leaves the accessibility tree meanwhile (set on the
+                        // AppKit view). Side by side it is the visible preview
+                        // half: not covered.
+                        isCovered: graphicPreview != nil || (editSession.isActive && !isSideBySide),
+                        readingPosition: readingPosition,
+                        column: documentColumn
+                    )
+                    .frame(maxWidth: .infinity)
+                    .overlay(alignment: .center) {
+                        // Side by side, the preview half says when it is being
+                        // re-laid out (a toggle re-measures the whole document
+                        // at the new width; until then it draws the old one).
+                        if showsPreviewPending && isSideBySideShowing && isPreviewPending {
+                            renderingPill
+                        }
+                    }
+                    .onChange(of: scrollTrigger) { _ in
+                        scrollFocusedMatchIntoView()
+                    }
                 }
             }
             .overlay {
@@ -323,12 +364,23 @@ struct MarkdownView: View {
                 // changing identity: one live `SourceEditorView` per controller
                 // (an outgoing copy would take the scroll view from the new
                 // one). Theme, zoom and Reading Mode reach it through `style`.
+                // Side by side only ADDS siblings after the editor: its
+                // identity never changes when the layout toggles.
                 Group {
                     if editSession.isActive {
-                        SourceEditorView(controller: editSession.editor,
-                                         style: .overDocument(theme: theme, fontScale: fontScale,
-                                                              shownFontScale: renderedFontScale,
-                                                              isReadingMode: isReadingMode))
+                        HStack(spacing: 0) {
+                            SourceEditorView(controller: editSession.editor,
+                                             style: .overDocument(theme: theme, fontScale: fontScale,
+                                                                  shownFontScale: renderedFontScale,
+                                                                  isReadingMode: isReadingMode))
+                                .frame(maxWidth: .infinity)
+                                .overlay(alignment: .topTrailing) { sourceEditPills }
+                            // Side by side: the right half shows the list beneath.
+                            if isSideBySide {
+                                Divider()
+                                Color.clear.frame(maxWidth: .infinity).allowsHitTesting(false)
+                            }
+                        }
                     }
                 }
                 // An animated transaction from elsewhere (a toast, a sidebar)
@@ -369,6 +421,18 @@ struct MarkdownView: View {
                 // once (a change the buffer has not acknowledged, then the file
                 // goes): stacked, never on top of each other.
                 VStack(spacing: 8) {
+                    // Side by side they sit BELOW the Side by Side / Save /
+                    // Done row: those pills are at the window's centre then,
+                    // exactly where a centred banner goes. The reserved row
+                    // is a hidden pill — the pills' own height. Reading and
+                    // the editor alone: where they always were (1.14.4).
+                    if isSideBySideShowing && (fileMissing || editSession.externalChange) {
+                        ChromePillLabel(theme: theme, title: "") {
+                            Image(systemName: "checkmark").font(.system(size: 11))
+                        }
+                        .hidden()
+                        .accessibilityHidden(true)
+                    }
                     if fileMissing {
                         HStack(spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill")
@@ -412,25 +476,12 @@ struct MarkdownView: View {
                 }
             }
             .overlay(alignment: .center) {
-                // The hidden list re-parses after every save; the editor is
-                // what is on screen, and it is not waiting for anything.
+                // Editing: the editor is what is on screen and it is not
+                // waiting for anything — the list under the editor alone is
+                // hidden, and side by side the preview half shows its own
+                // pill (on the list above).
                 if isRenderPending && !editSession.isActive {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.small)
-                        // Two different waits, and on a big document they are
-                        // long enough to tell apart: the parser turning text into
-                        // blocks, then the measurer turning blocks into row
-                        // heights.
-                        Text(isParsing ? "Parsing…" : "Rendering…")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .background(theme.codeBackgroundColor.opacity(0.85))
-                    .clipShape(Capsule())
-                    .transition(.opacity)
+                    renderingPill
                 }
             }
             .overlay(alignment: .bottom) {
@@ -450,6 +501,36 @@ struct MarkdownView: View {
         }
     }
 
+    /// "Parsing…" / "Rendering…" while the list has nothing consistent to
+    /// show: centred on the document, side by side on the preview half.
+    private var renderingPill: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            // Two different waits, and on a big document they are long enough
+            // to tell apart: the parser turning text into blocks, then the
+            // measurer turning blocks into row heights.
+            Text(isParsing ? "Parsing…" : "Rendering…")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(theme.codeBackgroundColor.opacity(0.85))
+        .clipShape(Capsule())
+        .transition(.opacity)
+    }
+
+    /// Side by side: `isRenderPending`, or a height table measured at another
+    /// width than the preview half's (toggling re-measures the whole document;
+    /// meanwhile the rows keep the old width — cells never lay out narrower
+    /// than their measured width — and the half shows them cut off).
+    private var isPreviewPending: Bool {
+        isRenderPending
+            || (contentWidth > 0 && !cachedBlocks.isEmpty && measured.table.count == cachedBlocks.count
+                && measured.table.contentWidth != contentWidth)
+    }
+
     /// Where the top chrome (pills, banners, the sidebar button) floats: below
     /// the search bar, or below the editor's find bar while that is showing —
     /// the find bar's own buttons sit exactly under the Save / Done pills.
@@ -466,23 +547,10 @@ struct MarkdownView: View {
     /// ⌥⌘E, ⌘⇧C) all still work, so nothing is lost except the thing
     /// hovering over the text.
     ///
-    /// Editing: ONLY Save and Done, also in Reading Mode — a mode you can only
-    /// leave by shortcut is not acceptable (S-D12).
+    /// Editing: `sourceEditPills`, drawn on the editor itself.
     @ViewBuilder
     private var chromeCluster: some View {
-        if editSession.isActive {
-            HStack(spacing: 8) {
-                SourceSaveButton(theme: theme, isEnabled: editSession.isDirty) {
-                    editSession.save()
-                }
-                SourceDoneButton(theme: theme) {
-                    editSession.requestLeave()
-                }
-            }
-            .chromeHoverCluster()
-            .padding(.top, topChromeInset)
-            .padding(.trailing, 24)
-        } else if !isReadingMode {
+        if !editSession.isActive && !isReadingMode {
             HStack(spacing: 8) {
                 // `appliedDefaultZoom`, not `defaultZoom`: no pill flash in a
                 // window that follows a Settings change (see its doc comment).
@@ -496,9 +564,9 @@ struct MarkdownView: View {
                     ReloadDocumentButton(theme: theme) {
                         reloadManually()
                     }
-                    EditSourceButton(theme: theme) {
-                        toggleSourceEdit()
-                    }
+                    EditSourceButton(theme: theme, window: hostWindow,
+                                     action: { toggleSourceEdit() },
+                                     sideBySideAction: { toggleSideBySide() })
                 }
                 CopySourceButton(theme: theme) {
                     copyToClipboard(currentText)
@@ -512,9 +580,30 @@ struct MarkdownView: View {
         }
     }
 
-    /// S-D9: the file changed on disk while the buffer holds unsaved text. The
-    /// rendered view (hidden) already shows the disk; the user decides about
-    /// the buffer. Same look and place as the missing-file banner.
+    /// Editing: ONLY Side by Side, Save and Done, also in Reading Mode — a
+    /// mode you can only leave by shortcut is not acceptable (S-D12).
+    /// Top-right of the editor, so side by side they stay on the editing half.
+    private var sourceEditPills: some View {
+        HStack(spacing: 8) {
+            SourceSideBySideButton(theme: theme, isSideBySide: isSideBySide) {
+                toggleSideBySide()
+            }
+            SourceSaveButton(theme: theme, isEnabled: editSession.isDirty) {
+                editSession.save()
+            }
+            SourceDoneButton(theme: theme) {
+                editSession.requestLeave()
+            }
+        }
+        .chromeHoverCluster()
+        .padding(.top, topChromeInset)
+        .padding(.trailing, 24)
+    }
+
+    /// S-D9: the file changed on disk while the buffer holds unsaved text.
+    /// `currentText` already is the disk (the list shows it under the editor
+    /// alone; side by side the preview keeps showing the buffer); the user
+    /// decides about the buffer. Same look and place as the missing-file banner.
     private var changedOnDiskBanner: some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -550,7 +639,15 @@ struct MarkdownView: View {
         documentStack
         .disabled(graphicPreview != nil)
         .onChange(of: graphicPreview == nil) { closed in
-            if closed { documentFocusRequest += 1 }
+            // Opened from the side-by-side preview while editing: the keyboard
+            // goes back to the editor, not to the list — typing must land in
+            // the buffer without a click.
+            guard closed else { return }
+            if editSession.isActive {
+                editSession.focusEditor()
+            } else {
+                documentFocusRequest += 1
+            }
         }
         .onChange(of: isSearchVisible) { visible in
             // Esc or the close button: the search field goes away with focus,
@@ -565,7 +662,7 @@ struct MarkdownView: View {
         }
         .background(theme.backgroundColor)
         .background(WindowConfigurator { window in
-            // Tabbing is set up app-wide (WindowTabbing.preferTabsAlways); the
+            // Tabbing is set up app-wide (WindowTabbing.applyWindowPreferenceAtLaunch); the
             // window keeps SwiftUI's shared tabbingIdentifier.
             // Remembered so the process-global key monitor below can ignore
             // key events addressed to OTHER windows (tabs are separate windows).
@@ -618,8 +715,10 @@ struct MarkdownView: View {
     private var sourceEditStack: some View {
         configuredDocumentStack
         .focusedSceneValue(\.sourceEditState,
-                           SourceEditMenuState(isEditing: editSession.isActive, isDirty: editSession.isDirty))
+                           SourceEditMenuState(isEditing: editSession.isActive, isDirty: editSession.isDirty,
+                                               isSideBySide: isSideBySide))
         .focusedSceneValue(\.toggleSourceEditAction, { toggleSourceEdit() })
+        .focusedSceneValue(\.toggleSideBySideAction, { toggleSideBySide() })
         .focusedSceneValue(\.saveSourceAction, { editSession.save() })
         .focusedSceneValue(\.discardSourceChangesAction, { editSession.discardChanges() })
         // A document can be moved or renamed while open: the session's URL
@@ -643,16 +742,70 @@ struct MarkdownView: View {
             handleLinkActivation(url)
             return .handled
         })
-        .frame(minWidth: 400, minHeight: 300)
-        .task(id: DocumentIdentity(text: currentText,
+        // Side by side keeps the width it needs while it shows (entering grew
+        // the window to it); leaving restores the floor, never shrinks.
+        .frame(minWidth: isSideBySideShowing ? sideBySideMinimum : SideBySideLayout.standardMinimumWidth,
+               minHeight: 300)
+        // A sidebar shown, hidden or dragged side by side: the same decision
+        // again — grow if the screen allows, otherwise narrower halves.
+        .onChange(of: visibleSidebarsWidth) { _ in
+            guard isSideBySideShowing else { return }
+            applySideBySideFit(sideBySideFit())
+        }
+        .onChange(of: isSideBySideShowing && isPreviewPending) { pending in
+            previewPendingWork?.cancel()
+            previewPendingWork = nil
+            guard pending else {
+                showsPreviewPending = false
+                return
+            }
+            let work = DispatchWorkItem {
+                guard !(hostWindow?.inLiveResize ?? false), isSideBySideShowing, isPreviewPending else { return }
+                showsPreviewPending = true
+            }
+            previewPendingWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+        }
+        // The 0.3 s check fell inside a live resize and the preview is still
+        // pending when it ends: show it now.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEndLiveResizeNotification)) { note in
+            guard let window = note.object as? NSWindow, window === hostWindow,
+                  isSideBySideShowing, isPreviewPending else { return }
+            showsPreviewPending = true
+        }
+        .task(id: DocumentIdentity(text: renderedSource,
                                    colorScheme: MarkdownTheme.windowColorScheme(forThemeNamed: selectedThemeName) == nil
                                        ? colorScheme : nil,
                                    themeName: selectedThemeName,
                                    fonts: DocumentFonts(body: bodyFontFamily, code: codeFontFamily),
                                    fontScale: fontScale)) {
-            let text = currentText
+            // Source Edit only (and a preview parse left running by it): one
+            // detached parse per window at a time — a toggle or a leave
+            // changes the list's text while one runs, and that one cannot be
+            // cancelled; a task superseded while it waits never parses.
+            // Outside Source Edit nothing waits: the viewer's parses start
+            // and supersede each other as they always did.
+            let isEditing = editSession.isActive
+            if previewScheduler.mustWait(isEditing: isEditing) {
+                let queuedText = renderedSource
+                await previewScheduler.waitUntilIdle(isEditing: isEditing)
+                // Woken before SwiftUI re-evaluated an id the same publish
+                // changed: that newer task parses — this one would be wasted.
+                guard !Task.isCancelled, renderedSource == queuedText else { return }
+            }
+            let text = renderedSource
             let currentTheme = theme
             isParsing = true
+            // Counted until the detached parse below has really finished —
+            // `await` on it outlives a cancel. The preview scheduler publishes
+            // no new buffer while any parse runs.
+            let isPreviewParse = isSideBySideShowing && preview.text != nil
+            let parseStart = ProcessInfo.processInfo.systemUptime
+            previewScheduler.parseStarted(isPreview: isPreviewParse)
+            defer {
+                previewScheduler.parseFinished(duration: ProcessInfo.processInfo.systemUptime - parseStart,
+                                               isPreview: isPreviewParse)
+            }
             let scale = CGFloat(fontScale)
             // The width the list will lay the blocks out at. 0 before the host's
             // first layout — then the heights task below picks it up as soon as
@@ -925,6 +1078,7 @@ struct MarkdownView: View {
             }
             fileWatcher?.stop()
             fileWatcher = nil
+            previewScheduler.cancel()
             releaseEditSession()
         }
         #if APPSTORE
@@ -1038,9 +1192,18 @@ struct MarkdownView: View {
             renderedText: { currentText },
             commitText: { text in
                 if !SourceEditSession.isSameText(text, currentText) { currentText = text }
+                // The preview compares the buffer with the saved text: a new
+                // saved text (Save, an external change) can end it or start it.
+                previewScheduler.flush()
             },
-            toast: { showToast($0) }
+            toast: { showToast($0) },
+            bufferChanged: {
+                // Per keystroke: a timer re-armed, nothing copied.
+                if isSideBySideShowing { previewScheduler.bufferChanged(length: editSession.editor.length) }
+            },
+            bufferReplaced: { previewScheduler.flush() }
         )
+        previewScheduler.publish = { refreshPreview() }
         editSession.editor.onFindBarHeightChange = { height in
             // Reported from the scroll view's `tile()`, i.e. inside an AppKit
             // layout pass: published on the next turn, not during it.
@@ -1051,17 +1214,25 @@ struct MarkdownView: View {
     private func releaseEditSession() {
         editSession.environment = SourceEditSession.Environment(documentURL: documentURL)
         editSession.editor.onFindBarHeightChange = nil
+        previewScheduler.publish = {}
     }
 
     /// ⌥⌘E, File ▸ Edit Source / Done Editing, the Edit pill. Entering starts
     /// at the source line being read — the selection's first row, else the
     /// top visible row (`editorLine()` is 1-based, the session 0-based).
-    private func toggleSourceEdit() {
+    /// `sideBySide`: enter with the preview beside the editor (⌥⇧⌘E).
+    private func toggleSourceEdit(sideBySide: Bool = false) {
         if editSession.isActive {
             editSession.requestLeave()
             return
         }
         guard graphicPreview == nil else { return }
+        // Side by side refuses BEFORE entering when the screen has no room.
+        let fit = sideBySide ? sideBySideFit() : .fits
+        if fit == .tooNarrow {
+            showToast(Self.tooNarrowMessage)
+            return
+        }
         // A rendered selection whose text is literally in its source lines is
         // selected in the editor (S-D14b); otherwise the caret goes to the line.
         if let refusal = editSession.enter(atLine: readingPosition.editorLine().map { $0 - 1 },
@@ -1069,11 +1240,114 @@ struct MarkdownView: View {
             showToast(refusal.message)
             return
         }
+        isSideBySide = sideBySide
+        applySideBySideFit(fit)
         // A landing still waiting for a parse belongs to the previous session.
         landing.cancel()
         isSearchVisible = false
         searchText = ""
         editSession.focusEditor()
+    }
+
+    /// ⌥⇧⌘E, File ▸ Edit Side by Side / Editor Only, the Side by Side pill,
+    /// Option-click on Edit. Editing: flips the layout (not while a prompt is
+    /// up — beeps). Reading: enters Source Edit side by side.
+    private func toggleSideBySide() {
+        guard editSession.isActive else {
+            toggleSourceEdit(sideBySide: true)
+            return
+        }
+        guard editSession.mayChangeLayout() else { return }
+        if !isSideBySide {
+            let fit = sideBySideFit()
+            if fit == .tooNarrow {
+                showToast(Self.tooNarrowMessage)
+                return
+            }
+            applySideBySideFit(fit)
+        }
+        isSideBySide.toggle()
+        if isSideBySide {
+            // Recomputed from the buffer now (or when the running parse lands).
+            previewScheduler.flush()
+        } else {
+            // Cleared at once, never after a running parse.
+            previewScheduler.hide()
+            endSideBySideGrowth()
+        }
+        editSession.focusEditor()
+    }
+
+    static let tooNarrowMessage = "Window too narrow for side by side"
+
+    /// Points of sidebars beside the document (they keep their widths side
+    /// by side; the editor and the preview share the rest).
+    private var visibleSidebarsWidth: CGFloat {
+        guard !isReadingMode else { return 0 }
+        var width: CGFloat = 0
+        // The recent-documents sidebar and its 6 pt resize handle.
+        if isDocumentListVisible { width += CGFloat(documentListWidth) + 6 }
+        // Contents and its divider.
+        if isToCVisible && !headings.isEmpty { width += 220 + 1 }
+        return width
+    }
+
+    private var sideBySideRequiredWidth: CGFloat {
+        SideBySideLayout.requiredContentWidth(sidebars: visibleSidebarsWidth)
+    }
+
+    private static func contentWidth(of window: NSWindow) -> CGFloat {
+        window.contentView?.frame.width ?? window.frame.width
+    }
+
+    /// Does this window have room for side by side (`SideBySideLayout.fit`)?
+    /// No window yet: nothing to measure, nothing to grow.
+    private func sideBySideFit() -> SideBySideLayout.Fit {
+        guard let window = hostWindow else { return .fits }
+        return SideBySideLayout.fit(windowFrame: window.frame,
+                                    contentWidth: Self.contentWidth(of: window),
+                                    requiredContentWidth: sideBySideRequiredWidth,
+                                    screenFrame: (window.screen ?? NSScreen.main)?.visibleFrame,
+                                    isFullScreen: window.styleMask.contains(.fullScreen))
+    }
+
+    /// Grows the window when `fit` says so (`WindowSizeMemory` owns what the
+    /// growth means for the group: what is remembered, what is given back),
+    /// then sets the minimum from what the window has now.
+    private func applySideBySideFit(_ fit: SideBySideLayout.Fit) {
+        guard let window = hostWindow else {
+            sideBySideMinimum = SideBySideLayout.standardMinimumWidth
+            return
+        }
+        if case .grow(let frame) = fit {
+            let before = window.frame.size
+            window.setFrame(frame, display: true, animate: false)
+            WindowSizeMemory.sideBySideDidGrow(window, from: before)
+        } else {
+            WindowSizeMemory.sideBySideDidShow(window)
+        }
+        sideBySideMinimum = SideBySideLayout.minimumContentWidth(required: sideBySideRequiredWidth,
+                                                                 contentWidth: Self.contentWidth(of: window))
+    }
+
+    /// Side by side ended in this tab (toggled off, the session left): the
+    /// group gets its width back if no other tab shows side by side and the
+    /// user did not resize it meanwhile (`SideBySideGrowthState`).
+    private func endSideBySideGrowth() {
+        guard let window = hostWindow else { return }
+        WindowSizeMemory.sideBySideDidEnd(window)
+    }
+
+    /// The ONE place the preview is decided (`SideBySidePreview`), reached
+    /// through `previewScheduler`: typing (debounced), replacements of the
+    /// buffer or the saved text, toggling and leaving (at once, or as soon
+    /// as the running parse lands).
+    private func refreshPreview() {
+        var next = preview
+        if next.refresh(isShowing: isSideBySideShowing, buffer: { editSession.editor.text },
+                        rendered: currentText) {
+            preview = next
+        }
     }
 
     /// The session left (Done, Esc, the command; after Save or Don't Save).
@@ -1082,6 +1356,14 @@ struct MarkdownView: View {
     /// caret's line — against the blocks of the CURRENT text (S-D10).
     private func didLeaveSourceEdit(_ leave: SourceEditSession.LeaveInfo) {
         documentFocusRequest += 1
+        // Unsaved text is gone with the editor: back to the saved text first,
+        // so the landing below waits for (or finds) the saved parse. Cleared
+        // at once, never after a running parse: re-entering side by side
+        // while it runs must not bring the left-over text back. (The list
+        // already renders `currentText` — `renderedSource` ignores the
+        // preview once the session is inactive.)
+        previewScheduler.hide()
+        endSideBySideGrowth()
         // `==`, as `DocumentIdentity` compares: text it calls equal is never
         // re-parsed, so waiting for a parse of it would wait forever.
         let current = installedText.map { $0 == currentText } ?? false
@@ -1099,15 +1381,17 @@ struct MarkdownView: View {
         }
     }
 
-    /// A ToC click. While editing, the EDITOR scrolls to the heading's source
-    /// line (S-D13) — best effort until the next save, since the headings come
-    /// from the last saved parse; the hidden list stays where the reader was.
+    /// A ToC click or an in-document link. While editing, the EDITOR scrolls
+    /// to the heading's source line (S-D13) — under the editor alone best
+    /// effort until the next save (the headings come from the saved parse)
+    /// and the hidden list stays where the reader was; side by side the
+    /// headings are the preview's (the buffer's) and the preview scrolls too.
     private func selectHeading(_ targetId: String, animated: Bool = true) {
         if editSession.isActive {
             if let entry = headings.first(where: { $0.id == targetId }) {
                 editSession.editor.scroll(toLine: entry.sourceLine)
             }
-            return
+            guard isSideBySide else { return }
         }
         requestScroll(to: targetId, anchor: .top, animated: animated)
     }
@@ -1198,12 +1482,22 @@ struct MarkdownView: View {
                 CodeBlockView(code: code, language: language, theme: theme,
                               fontScale: scale, searchText: searchText, focusedOccurrence: focusedOcc,
                               onCopy: { copyToClipboard($0) })
+                    // Under a list item: at the item's text (the measurer
+                    // narrows the code by the same amount, same width).
+                    .padding(.leading, BlockLayout.Code.leadingInset(listIndent: block.listIndent,
+                                                                     contentWidth: measured.table.contentWidth))
                     .padding(.vertical, Metrics.codeOuterVerticalPadding)
 
-            case .image(let url, let alt, let width):
-                ImageBlockView(url: url, alt: alt, width: width, theme: theme, documentURL: documentURL,
+            case .image(let url, let alt, let width, let link):
+                ImageBlockView(url: url, alt: alt, width: width, link: link, theme: theme, documentURL: documentURL,
                                fontScale: scale, contentWidth: contentWidth, heightCache: heightCache,
-                               onEnlarge: presentGraphicPreview)
+                               onEnlarge: presentGraphicPreview, onLink: { handleLinkActivation($0) })
+                    .padding(.vertical, Metrics.imageOuterVerticalPadding)
+
+            case .imageRow(let images):
+                ImageRowView(images: images, theme: theme, documentURL: documentURL, fontScale: scale,
+                             contentWidth: contentWidth, heightCache: heightCache,
+                             onEnlarge: presentGraphicPreview, onLink: { handleLinkActivation($0) })
                     .padding(.vertical, Metrics.imageOuterVerticalPadding)
 
             case .blockquote(let content, let level):
@@ -1233,9 +1527,8 @@ struct MarkdownView: View {
                     focusedOccurrence: focusedOcc,
                     onLink: { handleLinkActivation($0) },
                     onCopySection: {
-                        if let entry = headings.first(where: { $0.id == block.id }),
-                           let section = SectionExtractor.extractSection(from: currentText, entry: entry, headings: headings) {
-                            copyToClipboard(section)
+                        if let entry = headings.first(where: { $0.id == block.id }) {
+                            copySection(entry)
                         }
                     },
                     isReadingMode: isReadingMode
@@ -1282,6 +1575,18 @@ struct MarkdownView: View {
     /// which "Copied!" never did (a section can be one line or fifty).
     private func copyToClipboard(_ text: String) {
         showToast(DocumentClipboard.write(plain: text, rtf: nil))
+    }
+
+    /// Copy section (heading button, Contents ▸ Copy): sliced from the text the
+    /// headings were parsed from — side by side the buffer the preview shows,
+    /// never the disk text at the buffer's line numbers. Reading and the
+    /// editor alone: the saved text, as in 1.14.4.
+    private func copySection(_ entry: ToCEntry) {
+        let source = SideBySidePreview.sectionSource(isShowing: isSideBySideShowing, installed: installedText,
+                                                     current: currentText)
+        if let section = SectionExtractor.extractSection(from: source, entry: entry, headings: headings) {
+            copyToClipboard(section)
+        }
     }
 
     /// ⌘C / context-menu Copy / auto-copy of the document selection (v1.11 S-D8/S-D9):
@@ -1347,7 +1652,7 @@ struct MarkdownView: View {
                                                    renderer: renderer, math: .swiftMath)
         case .table:
             return selectableTable(for: block, installedVersion: installedVersion)?.string
-        case .image, .svgImage, .mathBlock, .mermaidDiagram:
+        case .image, .imageRow, .svgImage, .mathBlock, .mermaidDiagram:
             return nil
         }
     }
@@ -1571,16 +1876,12 @@ struct MarkdownView: View {
             // Any other scheme (shortcuts:, ssh:, vnc:, …) launches whatever app
             // registered it. Documents are untrusted input — confirm before
             // handing control to another application.
-            let alert = NSAlert()
-            alert.messageText = "Open \u{201C}\(scheme):\u{201D} link?"
             // Middle-truncated: a document can carry a multi-megabyte URL
             // (a `data:` link, #32) and an alert does not scroll.
-            alert.informativeText = "This link opens another application:\n"
-                + DisplayString.middleTruncated(url.absoluteString, maxLength: 200)
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "Open")
-            alert.addButton(withTitle: "Cancel")
-            if alert.runModal() == .alertFirstButtonReturn {
+            if confirmOpening(title: "Open \u{201C}\(scheme):\u{201D} link?",
+                              message: "This link opens another application:\n"
+                                + DisplayString.middleTruncated(url.absoluteString, maxLength: 200),
+                              cancelIsDefault: false) {
                 NSWorkspace.shared.open(url)
             }
             return
@@ -1618,9 +1919,38 @@ struct MarkdownView: View {
             config.activates = true
             NSWorkspace.shared.open([finalURL], withApplicationAt: Bundle.main.bundleURL, configuration: config)
         } else {
-            // Open in the default application for that file type
+            // Open in the default application for that file type — after a
+            // confirmation when that RUNS something (an app, a `.command`, a
+            // script, an installer, an executable): one click on a link or a
+            // badge must not start a program (`LocalLinkSafety`).
+            if LocalLinkSafety.verdict(for: finalURL) == .confirm {
+                let name = DisplayString.middleTruncated(finalURL.lastPathComponent, maxLength: 80)
+                guard confirmOpening(title: "Open \u{201C}\(name)\u{201D}?",
+                                     message: "This link opens a program or script on your Mac.",
+                                     cancelIsDefault: true) else { return }
+            }
             NSWorkspace.shared.open(finalURL)
         }
+    }
+
+    /// The confirmation in front of a link that hands control to something
+    /// else — another app's URL scheme, a program or script on disk. App-
+    /// modal (`runModal`), so there is only ever one at a time. True = Open.
+    /// `cancelIsDefault`: Return cancels (the program case); the scheme
+    /// prompt keeps its pre-1.15 Open-first buttons.
+    private func confirmOpening(title: String, message: String, cancelIsDefault: Bool) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        if cancelIsDefault {
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Open")
+            return alert.runModal() == .alertSecondButtonReturn
+        }
+        alert.addButton(withTitle: "Open")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     /// Scrolls to the heading an in-document link names, as a ToC click does

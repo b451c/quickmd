@@ -71,25 +71,19 @@ struct FocusedExportDocumentLocationKey: FocusedValueKey {
     typealias Value = ExportDocumentLocation
 }
 
-/// Source Edit (v1.12 S-D12) as the File menu sees the focused document: the
-/// title of "Edit Source" / "Done Editing", whether Save and Discard Changes
-/// are enabled, and the commands that must be off while the editor shows
-/// (Export, Print, Copy Markdown, Open in External Editor act on the SAVED
-/// text, not the one the user is looking at). Non-optional for the same
-/// reason as `FocusedExportNameKey`.
-struct SourceEditMenuState: Equatable {
-    let isEditing: Bool
-    let isDirty: Bool
-
-    var canSave: Bool { isEditing && isDirty }
-}
-
+/// `SourceEditMenuState` lives in SideBySide.swift (compiled into the tests).
 struct FocusedSourceEditStateKey: FocusedValueKey {
     typealias Value = SourceEditMenuState
 }
 
 /// ⌥⌘E — enter or leave Source Edit in the FOCUSED document only.
 struct FocusedToggleSourceEditKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+/// ⌥⇧⌘E — Source Edit side by side with the rendered document, or back to
+/// the editor only, in the FOCUSED document only.
+struct FocusedToggleSideBySideKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
@@ -111,6 +105,10 @@ extension FocusedValues {
     var toggleSourceEditAction: (() -> Void)? {
         get { self[FocusedToggleSourceEditKey.self] }
         set { self[FocusedToggleSourceEditKey.self] = newValue }
+    }
+    var toggleSideBySideAction: (() -> Void)? {
+        get { self[FocusedToggleSideBySideKey.self] }
+        set { self[FocusedToggleSideBySideKey.self] = newValue }
     }
     var saveSourceAction: (() -> Void)? {
         get { self[FocusedSaveSourceKey.self] }
@@ -385,6 +383,9 @@ struct PrintableImageView: View {
     /// HTML `<img width>`; replaces the image's own width in the D4 rule.
     var width: ImageWidth? = nil
     var documentURL: URL? = nil
+    /// False in an image row (`PrintableImageRowView`): its pictures have no
+    /// caption, as on screen.
+    var showsCaption = true
 
     /// Page column cap. The D4 rule applies as on screen: an image is never
     /// drawn wider than its own width, so icons stay icon-sized.
@@ -413,7 +414,7 @@ struct PrintableImageView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
-            if !alt.isEmpty {
+            if showsCaption && !alt.isEmpty {
                 Text(alt)
                     .font(.system(size: 10))
                     .foregroundColor(Color(white: 0.5))
@@ -443,6 +444,24 @@ struct PrintableImageView: View {
             PrintFolderAccess.restoreSavedAccess(forParentOf: fileURL)
         }
         return ImageLoader.loadSync(raw: raw, source: source, maxPixel: ImageLoader.printMaxPixel)
+    }
+}
+
+/// An image row in print/PDF: the screen's flow (`ImageFlowLayout`, 100 %
+/// zoom), each picture a `PrintableImageView` without its caption — same
+/// loading (no network, no prompt) and the same placeholder for a picture
+/// that cannot be shown, inline in the row.
+struct PrintableImageRowView: View {
+    let images: [RowImage]
+    var documentURL: URL? = nil
+
+    var body: some View {
+        ImageFlowLayout(separators: images.map(\.separator), fontScale: 1) {
+            ForEach(images.indices, id: \.self) { index in
+                PrintableImageView(url: images[index].url, alt: images[index].alt, documentURL: documentURL,
+                                   showsCaption: false)
+            }
+        }
     }
 }
 
@@ -488,9 +507,15 @@ struct MarkdownPrintableBlockView: View {
 
             case .codeBlock(let code, let language):
                 PrintableCodeBlockView(code: code, language: language)
+                    // Print draws item text through SwiftUI `Text`, without
+                    // the on-screen gutter: the code lines up with it there.
+                    .padding(.leading, MarkdownRenderer.printedListIndent(block.listIndent))
 
-            case .image(let url, let alt, let width):
+            case .image(let url, let alt, let width, _):
                 PrintableImageView(url: url, alt: alt, width: width, documentURL: documentURL)
+
+            case .imageRow(let images):
+                PrintableImageRowView(images: images, documentURL: documentURL)
 
             case .blockquote(let content, let level):
                 PrintableBlockquoteView(content: content, level: level)
@@ -1033,8 +1058,9 @@ struct ExportPDFCommand: View {
                                              documentURL: documentLocation?.url)
             }
         }
-        // While editing the export would be of the saved text, not the screen.
-        .disabled((documentText?.isEmpty ?? true) || sourceEditState?.isEditing == true)
+        // While editing the export would be of the saved text, not the screen
+        // (side by side included: the preview shows the buffer).
+        .disabled((documentText?.isEmpty ?? true) || sourceEditState?.allowsSavedTextCommands == false)
         .keyboardShortcut("e", modifiers: [.command, .shift])
     }
 }
@@ -1050,7 +1076,7 @@ struct PrintCommand: View {
                 PrintManager.printDocument(documentText: text, documentURL: documentLocation?.url)
             }
         }
-        .disabled((documentText?.isEmpty ?? true) || sourceEditState?.isEditing == true)
+        .disabled((documentText?.isEmpty ?? true) || sourceEditState?.allowsSavedTextCommands == false)
         .keyboardShortcut("p", modifiers: .command)
     }
 }

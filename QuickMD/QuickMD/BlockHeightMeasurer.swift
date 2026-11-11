@@ -186,6 +186,22 @@ enum BlockLayout {
             BlockLayout.singleLineHeight(for: languageLabelFont(fontScale: fontScale))
         }
 
+        /// How far the code box is moved in under a list item: the item's
+        /// text x (`MarkdownBlock.listIndent`), but never more than half the
+        /// column — a deep item at high zoom in a narrow window would
+        /// otherwise leave the box no width (or a negative one). The view pads
+        /// by exactly this, computed from the width the table was measured at.
+        static func leadingInset(listIndent: CGFloat, contentWidth: CGFloat) -> CGFloat {
+            max(0, min(listIndent, contentWidth / 2))
+        }
+
+        /// The width the code text wraps at: the column, less the block's
+        /// `leadingInset` and the horizontal padding on both sides.
+        static func textWidth(contentWidth: CGFloat, listIndent: CGFloat) -> CGFloat {
+            BlockLayout.clampedWidth(contentWidth - leadingInset(listIndent: listIndent, contentWidth: contentWidth)
+                                     - 2 * horizontalPadding)
+        }
+
         /// Fixed vertical chrome around the code text, language label included.
         static func verticalChrome(hasLanguage: Bool, fontScale: CGFloat) -> CGFloat {
             guard hasLanguage else { return 2 * verticalPaddingWithoutLanguage }
@@ -450,6 +466,11 @@ enum BlockLayout {
         /// body is a two-view tuple, flattened into the row's `VStack`, so this
         /// is that stack's spacing (the 8 pt the 1.8.0 document stack had).
         static let captionSpacing: CGFloat = 8
+        /// A linked picture (click = its link) shows the enlarge button on
+        /// hover only when it is at least this wide AND tall as drawn: the
+        /// 21 pt button plus its 6 pt inset would cover a badge, and a badge
+        /// is not worth previewing.
+        static let enlargeButtonMinimumSide: CGFloat = 64
 
         /// Scale the fitted 100% width, then keep the result inside the column.
         static func displayWidth(fontScale: CGFloat, contentWidth: CGFloat) -> CGFloat {
@@ -998,6 +1019,71 @@ enum BlockTextConverter {
         result.addAttribute(.foregroundColor, value: NSColor(theme.textColor), range: fullRange)
         return result
     }
+
+    /// Info strings that mean "plain text": the block shows no token colours.
+    /// `text` is GitHub Linguist's "Text" language (`tm_scope: none`), and
+    /// `fundamental` / `parindent` its one-word aliases; `plaintext` is the
+    /// plain-text id of highlight.js, Prism and VS Code. GitHub draws all four
+    /// uncoloured (`gh api markdown`: `<pre lang="text"><code>…` with no
+    /// `pl-*` spans). Deliberately NOT here: `txt` (GitHub colours it as
+    /// Linguist's "Adblock Filter List"), `console` (shell session), and
+    /// unknown words / no info string, which keep the generic colouring.
+    static let plainTextLanguages: Set<String> = ["text", "plaintext", "fundamental", "parindent"]
+
+    /// Whether a fenced block with info string `language` gets token colours.
+    /// The language is the info string's first word, case-insensitive
+    /// (Linguist matches names and aliases that way; ```` ```text title=x ````
+    /// is still text).
+    static func colorsCodeTokens(language: String) -> Bool {
+        let word = language.split(whereSeparator: { $0 == " " || $0 == "\t" }).first ?? ""
+        return !plainTextLanguages.contains(word.lowercased())
+    }
+
+    /// `plainCode` with the generic token colours (strings, comments, numbers,
+    /// keywords, type names) — what `CodeBlockView` installs once its
+    /// background task has built it. Colours only: the characters and fonts
+    /// are `plainCode`'s, so the measured height and search are unchanged.
+    /// A plain-text language (`colorsCodeTokens`) gets `plainCode` as is.
+    static func highlightedCode(_ code: String, language: String,
+                                theme: MarkdownTheme, fontScale: CGFloat) -> NSAttributedString {
+        let plain = plainCode(code, theme: theme, fontScale: fontScale)
+        guard colorsCodeTokens(language: language) else { return plain }
+        let result = NSMutableAttributedString(attributedString: plain)
+        let fullRange = NSRange(location: 0, length: (code as NSString).length)
+
+        // IndexSet keeps overlap checks O(log n) per match; the previous
+        // array-of-ranges scan was quadratic on match-heavy blocks.
+        var colored = IndexSet()
+
+        func apply(regex: NSRegularExpression, color: Color) {
+            let nsColor = NSColor(color)
+            for match in regex.matches(in: code, range: fullRange) {
+                guard let range = Range(match.range), !range.isEmpty else { continue }
+                guard !colored.intersects(integersIn: range) else { continue }
+                result.addAttribute(.foregroundColor, value: nsColor, range: match.range)
+                colored.insert(integersIn: range)
+            }
+        }
+
+        // Same priority as v1.4: strings > comments > others
+        apply(regex: CodeHighlightRegex.string, color: theme.stringColor)
+        apply(regex: CodeHighlightRegex.comment, color: theme.commentColor)
+        apply(regex: CodeHighlightRegex.number, color: theme.numberColor)
+        apply(regex: CodeHighlightRegex.keyword, color: theme.keywordColor)
+        apply(regex: CodeHighlightRegex.type, color: theme.typeColor)
+        return result
+    }
+}
+
+// MARK: - Static Regex Patterns (compiled once, reused)
+// File-scope (not members of a View) so they are not swept into a View's
+// implicit @MainActor isolation — the highlight runs on a background task.
+private enum CodeHighlightRegex {
+    static let comment = try! NSRegularExpression(pattern: #"(//.*|#.*|--.*)"#)
+    static let string = try! NSRegularExpression(pattern: #"\"[^\"]*\"|'[^']*'"#)
+    static let number = try! NSRegularExpression(pattern: #"\b\d+\.?\d*\b"#)
+    static let keyword = try! NSRegularExpression(pattern: #"\b(func|function|def|class|struct|enum|let|var|const|if|else|for|while|return|import|from|pub|fn|async|await|try|catch|throw|new|self|this|nil|null|true|false|None|True|False)\b"#)
+    static let type = try! NSRegularExpression(pattern: #"\b[A-Z][a-zA-Z0-9]*\b"#)
 }
 
 // MARK: - Read-only NSTextView configuration
@@ -1453,7 +1539,6 @@ enum BlockHeightMeasurer {
 
         // Derived widths, clamped once (see `BlockLayout.clampedWidth`).
         let textWidth = BlockLayout.clampedWidth(contentWidth)
-        let codeWidth = BlockLayout.clampedWidth(contentWidth - 2 * BlockLayout.Code.horizontalPadding)
         let alertBodyWidth = BlockLayout.clampedWidth(contentWidth - 2 * BlockLayout.Alert.horizontalPadding)
 
         // `makeNSAttributedString` takes an engine even for strings that have no
@@ -1541,7 +1626,8 @@ enum BlockHeightMeasurer {
 
             case .codeBlock(let code, let language):
                 heights.append(codeRowHeight(code: code, theme: theme, fontScale: fontScale,
-                                             codeWidth: codeWidth,
+                                             codeWidth: BlockLayout.Code.textWidth(contentWidth: contentWidth,
+                                                                                   listIndent: block.listIndent),
                                              chrome: language.isEmpty ? codeChromeWithoutLanguage
                                                                       : codeChromeWithLanguage))
                 kinds.append(.exact)
@@ -1594,7 +1680,7 @@ enum BlockHeightMeasurer {
                 }
                 kinds.append(.reported)
 
-            case .image(let url, let alt, let htmlWidth):
+            case .image(let url, let alt, let htmlWidth, _):
                 // An image this document has shown has a known size, and the
                 // row is what the view draws for it (`ImageBlock.rowHeight`) at
                 // any width and zoom. Until then: the loading view, 100 pt
@@ -1606,6 +1692,15 @@ enum BlockHeightMeasurer {
                 } ?? BlockLayout.ImageBlock.placeholderHeight
                 heights.append(BlockLayout.ImageBlock.rowHeight(picture: picture, alt: alt, fontScale: fontScale,
                                                                 contentWidth: contentWidth))
+                kinds.append(.reported)
+
+            case .imageRow(let images):
+                // The same line breaking `ImageFlowLayout` draws with, over
+                // the pictures this document has shown (their sizes) and
+                // loading squares for the rest; `.reported` like an image,
+                // so each picture that arrives or fails corrects the row.
+                heights.append(BlockLayout.ImageRow.rowHeight(images: images, imageSizes: imageSizes,
+                                                              fontScale: fontScale, contentWidth: contentWidth))
                 kinds.append(.reported)
 
             case .svgImage(let source):
@@ -1692,7 +1787,7 @@ enum BlockHeightMeasurer {
         case .mermaidDiagram:
             pad = Document.mermaidOuterVerticalPadding + BlockLayout.Mermaid.verticalPadding
                 + BlockLayout.Mermaid.inkInset * fontScale
-        case .image, .svgImage: pad = Document.imageOuterVerticalPadding
+        case .image, .imageRow, .svgImage: pad = Document.imageOuterVerticalPadding
         case .text, .heading: pad = 0  // measured, never here
         }
         return BlockLayout.Spacing.Row(role: role, edges: .box(top: pad, bottom: pad),
@@ -1862,7 +1957,7 @@ enum BlockHeightMeasurer {
                 // never pending). Rare, so the chrome is computed per row.
                 heights[index] = codeRowHeight(
                     code: code, theme: theme, fontScale: fontScale,
-                    codeWidth: BlockLayout.clampedWidth(contentWidth - 2 * BlockLayout.Code.horizontalPadding),
+                    codeWidth: BlockLayout.Code.textWidth(contentWidth: contentWidth, listIndent: block.listIndent),
                     chrome: BlockLayout.Code.verticalChrome(hasLanguage: !language.isEmpty, fontScale: fontScale))
                 kinds[index] = .exact
                 rhythm[index] = boxRhythm(block, fontScale: fontScale)

@@ -247,8 +247,15 @@ enum DocumentSearch {
                 continue
             case .codeBlock(let code, _):
                 segments = [code]
-            case .image(_, let alt, _):
+            case .image(_, let alt, _, _):
                 segments = [alt]
+            case .imageRow:
+                // Not searched: a row draws no captions, and the count must
+                // be what the views SHOW. (A picture that cannot show draws
+                // its alt in a chip — still not counted, so the count never
+                // depends on what has loaded.) A lone image keeps counting
+                // its caption.
+                segments = []
             case .mathBlock(let latex):
                 segments = [latex]
             case .mermaidDiagram(let source):
@@ -326,7 +333,7 @@ enum DocumentSearch {
             return shownWithFormulas(renderer.renderHeader(title, level: level)) {
                 BlockTextConverter.headingTitle($0, level: level, renderer: renderer, math: searchMathPlaceholder)
             }
-        case .table, .codeBlock, .image, .svgImage, .mathBlock, .mermaidDiagram:
+        case .table, .codeBlock, .image, .imageRow, .svgImage, .mathBlock, .mermaidDiagram:
             return nil
         }
     }

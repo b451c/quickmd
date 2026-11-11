@@ -369,6 +369,99 @@ struct PendingMatchAim: Equatable {
     }
 }
 
+/// The animated scroll of a jump (⌘G / a search result: 0.25 s,
+/// `VirtualBlockList.setContentTop`) and the reader's scroll during it.
+///
+/// The reader wins: a scroll they START while the glide runs — a mouse
+/// wheel tick, a trackpad gesture that begins (and its momentum), a scroller
+/// drag, a scroll key — stops it where the view is (`stop(_:)`) and their
+/// scroll goes on from there. Until 1.15 the glide won — AppKit's animation
+/// kept setting the clip origin every frame, so the reader's scroll was
+/// undone and the view landed on the match anyway.
+///
+/// What does NOT stop it (`scrollWheel`): the momentum tail or the fingers
+/// of a gesture that began BEFORE the glide (flick, then ⌘G: the jump must
+/// still arrive), and a mostly horizontal swipe (the document never scrolls
+/// sideways).
+///
+/// Each glide has a token; the animation's completion counts only for the
+/// glide that is still running. A stopped glide's completion still arrives
+/// (AppKit ends the replaced animation group) and must do nothing: no aim at
+/// the match, no second jump. The next glide starts afresh.
+struct ScrollGlide: Equatable {
+    /// A glide is on its way and nothing has stopped it.
+    private(set) var isRunning = false
+    private var token = 0
+    /// A trackpad gesture began during THIS glide: its later events
+    /// (changes, momentum) are the reader's new scroll.
+    private var gestureBeganDuringGlide = false
+
+    /// A glide starts; pass the token to `landed` from its completion.
+    mutating func start() -> Int {
+        token += 1
+        isRunning = true
+        gestureBeganDuringGlide = false
+        return token
+    }
+
+    /// The glide with `token` finished animating. True only for the latest
+    /// glide the reader did not stop — the caller then finishes the jump
+    /// (aims at a match that was not on display, `PendingMatchAim`).
+    mutating func landed(_ token: Int) -> Bool {
+        guard token == self.token else { return false }
+        isRunning = false
+        return true
+    }
+
+    /// A scroll-wheel event reached the document. True when it is a vertical
+    /// scroll the reader started during the running glide: the caller stops
+    /// the glide now (`stop(_:)`), and its completion will be ignored.
+    /// - no phase and no momentum phase: a mouse wheel tick — new input;
+    /// - a gesture phase or momentum: only if the gesture `.began` during
+    ///   this glide (a flick's tail from before ⌘G is ignored);
+    /// - `|dx| > |dy|` or no vertical delta: never.
+    mutating func scrollWheel(phase: NSEvent.Phase, momentumPhase: NSEvent.Phase,
+                              deltaX: CGFloat, deltaY: CGFloat) -> Bool {
+        guard isRunning else { return false }
+        if phase.contains(.began) { gestureBeganDuringGlide = true }
+        let isWheelTick = phase.isEmpty && momentumPhase.isEmpty
+        guard isWheelTick || gestureBeganDuringGlide,
+              deltaY != 0, abs(deltaY) >= abs(deltaX) else { return false }
+        return readerScrolled()
+    }
+
+    /// Input that always starts now — a scroller drag or a click in its
+    /// track, a scroll key, a drag-select at the edge. True when a glide was
+    /// running: the caller stops it now (`stop(_:)`), and its completion
+    /// will be ignored.
+    mutating func readerScrolled() -> Bool {
+        guard isRunning else { return false }
+        isRunning = false
+        token += 1
+        return true
+    }
+
+    /// The scroll position was set without animation, or the table was
+    /// replaced: not jumping any more. (Unchanged pre-1.15 semantics: a
+    /// glide still in flight is not stopped here, and its completion still
+    /// finishes the jump.)
+    mutating func settle() { isRunning = false }
+
+    /// Stops an animated scroll of `clipView` where it is now: a zero-length
+    /// animation of the same property replaces the running one, and the
+    /// clip origin (which AppKit updates every frame) is its current place.
+    /// No rounding of our own: `NSClipView.setBoundsOrigin` already snaps
+    /// to whole device pixels (measured: 1234.3 → 1234.0 at 1x), so the
+    /// resting origin is never fractional.
+    /// `VerticalRhythmTests.testAGlideStoppedMidFlightStaysWhereItWas`.
+    static func stop(_ clipView: NSClipView) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            clipView.animator().setBoundsOrigin(clipView.bounds.origin)
+        }
+    }
+}
+
 // MARK: - Print / PDF
 
 /// The rhythm for print and PDF (`PDFExportManager.generateMultiPagePDF`):
@@ -409,7 +502,7 @@ enum PrintRhythm {
         case .mermaidDiagram where diagramIsPicture:
             role = .box
             edges = .box(top: BlockLayout.Mermaid.inkInset, bottom: BlockLayout.Mermaid.inkInset)
-        case .table, .codeBlock, .blockquote, .alert, .image, .svgImage, .mermaidDiagram:
+        case .table, .codeBlock, .blockquote, .alert, .image, .imageRow, .svgImage, .mermaidDiagram:
             role = .box
             edges = .box(top: 0, bottom: 0)
         }
