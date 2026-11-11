@@ -240,10 +240,27 @@ struct PictureView: View {
     private var chip: some View {
         typealias Row = BlockLayout.ImageRow
         let size = Row.chipSize(alt: alt, fontScale: fontScale, contentWidth: contentWidth)
-        return Text(Row.chipLabel(alt: alt))
-            .font(.system(size: Row.chipFontSize * fontScale))
-            .lineLimit(1)
-            .truncationMode(.tail)
+        let glyph = Row.chipGlyphSide * fontScale
+        let isLoading = image == nil && accessDeniedURL == nil && source != nil && failure == nil
+        return HStack(spacing: Row.chipGlyphSpacing * fontScale) {
+            Group {
+                if isLoading {
+                    // A small control spinner (16 pt) scaled into the slot:
+                    // the slot, not the spinner, is the layout.
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(glyph / 16)
+                } else {
+                    Image(systemName: "photo")
+                        .font(.system(size: Row.chipFontSize * fontScale))
+                }
+            }
+            .frame(width: glyph, height: glyph)
+            Text(Row.chipLabel(alt: alt))
+                .font(.system(size: Row.chipFontSize * fontScale))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
             .foregroundColor(theme.secondaryTextColor)
             .padding(.horizontal, Row.chipHorizontalPadding * fontScale)
             .frame(width: size.width, height: size.height, alignment: .leading)
@@ -252,25 +269,37 @@ struct PictureView: View {
     }
 
     /// A linked picture that is not showing is still its link: the same
-    /// click path, help tag, cursor and role as the picture. The block's
-    /// folder-access card keeps its own button (a nested button wins its
-    /// clicks), so the card takes the link through a tap instead.
+    /// click path, help tag, cursor and role as the picture. Behind a denied
+    /// folder (sandbox) the click follows the link, so the folder is offered
+    /// in the context menu ("Grant Folder Access…"); the block's card keeps
+    /// its Grant button BESIDE the linked part, never under the link's
+    /// cursor area or help tag.
     @ViewBuilder
     private func linkedPlaceholder(_ link: URL) -> some View {
-        if accessDeniedURL != nil && style == .block {
-            placeholder
-                .contentShape(Rectangle())
-                .onTapGesture { onLink(link) }
-                .help(Self.helpText(for: link))
-                .overlay(PointingHandCursorArea().allowsHitTesting(false))
+        if let accessDeniedURL, style == .block {
+            accessDeniedView(for: accessDeniedURL, link: link)
+                .contextMenu { grantAccessMenuItem }
+        } else if accessDeniedURL != nil {
+            linkButton(around: chip, link: link)
+                .contextMenu { grantAccessMenuItem }
         } else {
-            Button {
-                onLink(link)
-            } label: {
-                placeholder.contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .linkRole(link, alt: alt)
+            linkButton(around: placeholder, link: link)
+        }
+    }
+
+    private func linkButton<Label: View>(around label: Label, link: URL) -> some View {
+        Button {
+            onLink(link)
+        } label: {
+            label.contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .linkRole(link, alt: alt)
+    }
+
+    private var grantAccessMenuItem: some View {
+        Button("Grant Folder Access\u{2026}") {
+            Task { await retryWithAccess() }
         }
     }
 
@@ -381,14 +410,15 @@ struct PictureView: View {
     // MARK: - Loading
 
     /// Placeholder shown when the user denied folder access for a local image.
-    private func accessDeniedView(for fileURL: URL) -> some View {
+    /// `link`: the icon and the message are the picture's link (a sibling
+    /// of the Grant button, so each keeps its own click and cursor).
+    private func accessDeniedView(for fileURL: URL, link: URL? = nil) -> some View {
         VStack(spacing: 8) {
-            Image(systemName: "lock.shield")
-                .font(.system(size: 24))
-                .foregroundColor(.secondary)
-            Text("Can\u{2019}t load \u{201C}\(fileURL.lastPathComponent)\u{201D}")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.secondary)
+            if let link {
+                linkButton(around: VStack(spacing: 8) { accessDeniedMessage(for: fileURL) }, link: link)
+            } else {
+                accessDeniedMessage(for: fileURL)
+            }
             Button("Grant Folder Access") {
                 Task { await retryWithAccess() }
             }
@@ -397,6 +427,16 @@ struct PictureView: View {
         }
         .frame(maxWidth: Metrics.displayWidth(fontScale: fontScale, contentWidth: contentWidth))
         .padding(.vertical, 12)
+    }
+
+    @ViewBuilder
+    private func accessDeniedMessage(for fileURL: URL) -> some View {
+        Image(systemName: "lock.shield")
+            .font(.system(size: 24))
+            .foregroundColor(.secondary)
+        Text("Can\u{2019}t load \u{201C}\(fileURL.lastPathComponent)\u{201D}")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(.secondary)
     }
 
     /// Load through `ImageLoader` (decode off the main thread). A local file
