@@ -775,20 +775,30 @@ struct MarkdownView: View {
                                    themeName: selectedThemeName,
                                    fonts: DocumentFonts(body: bodyFontFamily, code: codeFontFamily),
                                    fontScale: fontScale)) {
-            // One detached parse per window at a time: a toggle or a leave
+            // Source Edit only (and a preview parse left running by it): one
+            // detached parse per window at a time — a toggle or a leave
             // changes the list's text while one runs, and that one cannot be
-            // cancelled. A task superseded while it waits never parses.
-            await previewScheduler.waitUntilIdle()
-            guard !Task.isCancelled else { return }
+            // cancelled; a task superseded while it waits never parses.
+            // Outside Source Edit nothing waits: the viewer's parses start
+            // and supersede each other as they always did.
+            let isEditing = editSession.isActive
+            if previewScheduler.mustWait(isEditing: isEditing) {
+                await previewScheduler.waitUntilIdle(isEditing: isEditing)
+                guard !Task.isCancelled else { return }
+            }
             let text = renderedSource
             let currentTheme = theme
             isParsing = true
-            // One parse at a time for the preview: the scheduler publishes no
-            // new buffer while this runs. Counted until the detached parse
-            // below has really finished — `await` on it outlives a cancel.
+            // Counted until the detached parse below has really finished —
+            // `await` on it outlives a cancel. The preview scheduler publishes
+            // no new buffer while any parse runs.
+            let isPreviewParse = isSideBySideShowing && preview.text != nil
             let parseStart = ProcessInfo.processInfo.systemUptime
-            previewScheduler.parseStarted()
-            defer { previewScheduler.parseFinished(duration: ProcessInfo.processInfo.systemUptime - parseStart) }
+            previewScheduler.parseStarted(isPreview: isPreviewParse)
+            defer {
+                previewScheduler.parseFinished(duration: ProcessInfo.processInfo.systemUptime - parseStart,
+                                               isPreview: isPreviewParse)
+            }
             let scale = CGFloat(fontScale)
             // The width the list will lay the blocks out at. 0 before the host's
             // first layout — then the heights task below picks it up as soon as

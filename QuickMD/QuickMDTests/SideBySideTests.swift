@@ -650,7 +650,7 @@ final class SideBySideTests: XCTestCase {
         private var taskText: String?
         private var taskToken = 0
         /// Detached parses running: (token, text).
-        var running: [(token: Int, text: String)] = []
+        var running: [(token: Int, text: String, isPreview: Bool)] = []
         var maximumRunning = 0
         /// Every text a parse INSTALLED, in order.
         var installed: [String] = []
@@ -674,18 +674,26 @@ final class SideBySideTests: XCTestCase {
             taskText = text
             taskToken += 1
             let token = taskToken
-            scheduler.whenIdle { [unowned self] in
+            let isEditing = isActive
+            let start = { [unowned self] in
                 guard token == self.taskToken else { return }  // superseded: cancelled
-                self.scheduler.parseStarted()
-                self.running.append((token, text))
+                let isPreview = self.isShowing && self.preview.text != nil
+                self.scheduler.parseStarted(isPreview: isPreview)
+                self.running.append((token, text, isPreview))
                 self.maximumRunning = max(self.maximumRunning, self.running.count)
+            }
+            // As the view: wait only when `mustWait`, else start at once.
+            if scheduler.mustWait(isEditing: isEditing) {
+                scheduler.whenIdle(isEditing: isEditing, start)
+            } else {
+                start()
             }
         }
 
         func finishParse() {
             let parse = running.removeFirst()
             if parse.token == taskToken { installed.append(parse.text) }
-            scheduler.parseFinished(duration: 1)
+            scheduler.parseFinished(duration: 1, isPreview: parse.isPreview)
             update()
         }
 
@@ -745,6 +753,24 @@ final class SideBySideTests: XCTestCase {
         XCTAssertEqual(sim.installed.last, "disk\n")
         XCTAssertFalse(sim.installed.contains("discarded\n"))
         XCTAssertEqual(sim.maximumRunning, 1)
+    }
+
+    /// Not editing: scheduling exactly as on main — a superseding parse
+    /// (zoom, theme, reload, an external change) starts AT ONCE while the
+    /// previous one still runs; the superseded one never lands.
+    func testNotEditingASupersedingParseStartsImmediately() {
+        let sim = ListSim()
+        sim.isActive = false
+        sim.update()
+        XCTAssertEqual(sim.running.map(\.text), ["disk\n"])
+        sim.disk = "changed on disk\n"
+        sim.update()
+        XCTAssertEqual(sim.running.map(\.text), ["disk\n", "changed on disk\n"],
+                       "started immediately, next to the running one")
+        XCTAssertFalse(sim.scheduler.mustWait(isEditing: false))
+        sim.finishParse()
+        sim.finishParse()
+        XCTAssertEqual(sim.installed, ["changed on disk\n"], "the superseded parse is dropped")
     }
 
     func testIdleWaitersRunAfterTheLastParseAndRecheck() {

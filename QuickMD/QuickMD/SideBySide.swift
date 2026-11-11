@@ -113,9 +113,13 @@ struct SideBySidePreview: Equatable {
 /// - Hiding never waits: leaving side by side clears the preview at once
 ///   (`hide`), even while a parse runs — a reset deferred to the parse's end
 ///   came BACK when side by side was turned on again meanwhile.
-/// - The window's parse task itself waits for a running parse to finish
-///   (`waitUntilIdle`): toggling or leaving changes the list's text while a
-///   parse runs, and a second detached parse must not start next to it.
+/// - While Source Edit is active, the window's parse task waits for a running
+///   parse to finish (`waitUntilIdle`): toggling or leaving changes the
+///   list's text while a parse runs, and a second detached parse must not
+///   start next to it. Outside Source Edit it waits ONLY for a running parse
+///   of preview text (left over from a session that just ended) — the
+///   viewer's own parses (zoom, theme, reload, open) start at once and
+///   supersede each other exactly as before side by side existed.
 ///
 /// Per keystroke: one timer re-armed (`bufferChanged`), nothing read or
 /// copied. Main-thread by convention, like `SourceEditSession`.
@@ -136,6 +140,8 @@ final class PreviewRefreshScheduler {
     }
 
     private(set) var parsesInFlight = 0
+    /// The running parses of PREVIEW text (side by side, buffer != disk).
+    private(set) var previewParsesInFlight = 0
     private(set) var lastParseDuration: TimeInterval = 0
     private var lastParseEnd: TimeInterval?
     /// The first edit not shown yet, and the latest one.
@@ -180,38 +186,55 @@ final class PreviewRefreshScheduler {
         publish()
     }
 
-    /// `body` runs once no parse of this window is in flight: now, or right
-    /// after the last one finished — re-checked then, as another may have
-    /// started first.
-    func whenIdle(_ body: @escaping () -> Void) {
-        guard parsesInFlight > 0 else { return body() }
+    /// Must a parse task started now wait? Editing: while ANY parse runs
+    /// (one detached parse at a time). Not editing: only while a parse of
+    /// preview text runs — otherwise the viewer's scheduling is untouched.
+    func mustWait(isEditing: Bool) -> Bool {
+        isEditing ? parsesInFlight > 0 : previewParsesInFlight > 0
+    }
+
+    /// `body` runs once `mustWait(isEditing:)` is false: now, or after a
+    /// parse finished — re-checked then, as another may have started first.
+    func whenIdle(isEditing: Bool = true, _ body: @escaping () -> Void) {
+        guard mustWait(isEditing: isEditing) else { return body() }
         idleWaiters.append { [weak self] in
             guard let self else { return body() }
-            self.whenIdle(body)
+            self.whenIdle(isEditing: isEditing, body)
         }
     }
 
-    /// `whenIdle` for the view's parse task: at most one detached parse per
-    /// window at any time. A task cancelled while it waits still wakes (when
-    /// the running parse ends) and then returns without parsing.
-    func waitUntilIdle() async {
+    /// `whenIdle` for the view's parse task. A task cancelled while it waits
+    /// still wakes (when the running parse ends) and then returns without
+    /// parsing. The view calls it only when `mustWait` — a task that need
+    /// not wait has no suspension point added.
+    func waitUntilIdle(isEditing: Bool) async {
         repeat {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                whenIdle { continuation.resume() }
+                whenIdle(isEditing: isEditing) { continuation.resume() }
             }
-        } while parsesInFlight > 0
+        } while mustWait(isEditing: isEditing)
     }
 
-    /// A parse of this window started (the view's parse task).
-    func parseStarted() {
+    /// A parse of this window started (the view's parse task); `isPreview`:
+    /// of preview text.
+    func parseStarted(isPreview: Bool = false) {
         parsesInFlight += 1
+        if isPreview { previewParsesInFlight += 1 }
     }
 
     /// That parse finished, landed or not.
-    func parseFinished(duration: TimeInterval) {
+    func parseFinished(duration: TimeInterval, isPreview: Bool = false) {
         parsesInFlight = max(parsesInFlight - 1, 0)
+        if isPreview { previewParsesInFlight = max(previewParsesInFlight - 1, 0) }
         lastParseDuration = duration
         lastParseEnd = now()
+        // Waiters re-check their own condition (a viewer task waits only for
+        // preview parses, which may end while another parse still runs).
+        defer {
+            let waiters = idleWaiters
+            idleWaiters.removeAll()
+            waiters.forEach { $0() }
+        }
         guard parsesInFlight == 0 else { return }
         if firstPendingEdit != nil {
             // Typing went on during the parse: its own deadline, measured
@@ -221,9 +244,6 @@ final class PreviewRefreshScheduler {
             publishWhenIdle = false
             publish()
         }
-        let waiters = idleWaiters
-        idleWaiters.removeAll()
-        waiters.forEach { $0() }
     }
 
     /// Nothing pending survives (the view disappeared, the session left).
