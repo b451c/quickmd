@@ -502,7 +502,7 @@ enum PrintRhythm {
         case .mermaidDiagram where diagramIsPicture:
             role = .box
             edges = .box(top: BlockLayout.Mermaid.inkInset, bottom: BlockLayout.Mermaid.inkInset)
-        case .table, .codeBlock, .blockquote, .alert, .image, .svgImage, .mermaidDiagram:
+        case .table, .codeBlock, .blockquote, .alert, .image, .imageRow, .svgImage, .mermaidDiagram:
             role = .box
             edges = .box(top: 0, bottom: 0)
         }

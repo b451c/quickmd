@@ -1200,10 +1200,16 @@ struct MarkdownView: View {
                                                                      contentWidth: measured.table.contentWidth))
                     .padding(.vertical, Metrics.codeOuterVerticalPadding)
 
-            case .image(let url, let alt, let width):
-                ImageBlockView(url: url, alt: alt, width: width, theme: theme, documentURL: documentURL,
+            case .image(let url, let alt, let width, let link):
+                ImageBlockView(url: url, alt: alt, width: width, link: link, theme: theme, documentURL: documentURL,
                                fontScale: scale, contentWidth: contentWidth, heightCache: heightCache,
-                               onEnlarge: presentGraphicPreview)
+                               onEnlarge: presentGraphicPreview, onLink: { handleLinkActivation($0) })
+                    .padding(.vertical, Metrics.imageOuterVerticalPadding)
+
+            case .imageRow(let images):
+                ImageRowView(images: images, theme: theme, documentURL: documentURL, fontScale: scale,
+                             contentWidth: contentWidth, heightCache: heightCache,
+                             onEnlarge: presentGraphicPreview, onLink: { handleLinkActivation($0) })
                     .padding(.vertical, Metrics.imageOuterVerticalPadding)
 
             case .blockquote(let content, let level):
@@ -1347,7 +1353,7 @@ struct MarkdownView: View {
                 hasInlineMath: false, theme: theme, fontScale: scale)
         case .table:
             return selectableTable(for: block, installedVersion: installedVersion)?.string
-        case .image, .svgImage, .mathBlock, .mermaidDiagram:
+        case .image, .imageRow, .svgImage, .mathBlock, .mermaidDiagram:
             return nil
         }
     }
@@ -1571,16 +1577,12 @@ struct MarkdownView: View {
             // Any other scheme (shortcuts:, ssh:, vnc:, …) launches whatever app
             // registered it. Documents are untrusted input — confirm before
             // handing control to another application.
-            let alert = NSAlert()
-            alert.messageText = "Open \u{201C}\(scheme):\u{201D} link?"
             // Middle-truncated: a document can carry a multi-megabyte URL
             // (a `data:` link, #32) and an alert does not scroll.
-            alert.informativeText = "This link opens another application:\n"
-                + DisplayString.middleTruncated(url.absoluteString, maxLength: 200)
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "Open")
-            alert.addButton(withTitle: "Cancel")
-            if alert.runModal() == .alertFirstButtonReturn {
+            if confirmOpening(title: "Open \u{201C}\(scheme):\u{201D} link?",
+                              message: "This link opens another application:\n"
+                                + DisplayString.middleTruncated(url.absoluteString, maxLength: 200),
+                              cancelIsDefault: false) {
                 NSWorkspace.shared.open(url)
             }
             return
@@ -1618,9 +1620,38 @@ struct MarkdownView: View {
             config.activates = true
             NSWorkspace.shared.open([finalURL], withApplicationAt: Bundle.main.bundleURL, configuration: config)
         } else {
-            // Open in the default application for that file type
+            // Open in the default application for that file type — after a
+            // confirmation when that RUNS something (an app, a `.command`, a
+            // script, an installer, an executable): one click on a link or a
+            // badge must not start a program (`LocalLinkSafety`).
+            if LocalLinkSafety.verdict(for: finalURL) == .confirm {
+                let name = DisplayString.middleTruncated(finalURL.lastPathComponent, maxLength: 80)
+                guard confirmOpening(title: "Open \u{201C}\(name)\u{201D}?",
+                                     message: "This link opens a program or script on your Mac.",
+                                     cancelIsDefault: true) else { return }
+            }
             NSWorkspace.shared.open(finalURL)
         }
+    }
+
+    /// The confirmation in front of a link that hands control to something
+    /// else — another app's URL scheme, a program or script on disk. App-
+    /// modal (`runModal`), so there is only ever one at a time. True = Open.
+    /// `cancelIsDefault`: Return cancels (the program case); the scheme
+    /// prompt keeps its pre-1.15 Open-first buttons.
+    private func confirmOpening(title: String, message: String, cancelIsDefault: Bool) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        if cancelIsDefault {
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Open")
+            return alert.runModal() == .alertSecondButtonReturn
+        }
+        alert.addButton(withTitle: "Open")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     /// Scrolls to the heading an in-document link names, as a ToC click does

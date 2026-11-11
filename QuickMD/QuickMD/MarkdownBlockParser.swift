@@ -288,6 +288,8 @@ struct MarkdownBlockParser: Sendable {
         // (`renderPendingRows`): an ordered list's items hang under the
         // LIST's widest marker, and a list goes on past a block nested in it.
         var pendingRows: [PendingTextRow] = []
+        // `imageParagraph` is not tried again before this line (see there).
+        var imageParagraphSkip = 0
         // Which list item owns what (`ListNesting`): the item line (original
         // index) of a paragraph's first line, and of a code block (by its
         // position in `blocks`). `renderPendingRows` lines them up with it.
@@ -457,9 +459,46 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
+            // A PARAGRAPH made only of images, plain and/or linked
+            // (`imageParagraph`): README badges one per line, `![a](x)
+            // ![b](y)`, consecutive image lines — GitHub's one `<p>` of
+            // inline pictures. Two or more are one `.imageRow` (pictures
+            // that wrap like words); a lone one is the `.image` block, with
+            // its link when it has one (click = follow it). Only where a
+            // paragraph can start, and only when the paragraph ends with its
+            // images: text before or after keeps the lines below.
+            if i >= imageParagraphSkip, Self.noParagraphOpen(textBuffer) {
+                switch imageParagraph(at: i, in: lines, references: referenceDefinitions) {
+                case .images(let images, let end):
+                    flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                    // Paragraph text for the list nesting, as an image line
+                    // always was (an item's paragraph; the picture or row is
+                    // drawn at the margin, like a lone image). Its other lines
+                    // continue that paragraph: nothing more to tell.
+                    _ = nesting.text(line, sourceLine: sourceLine)
+                    if images.count == 1, let image = images.first {
+                        blocks.append(.image(index: blockIndex, url: image.url, alt: image.alt, width: image.width,
+                                             link: image.link, sourceLine: sourceLine))
+                    } else {
+                        blocks.append(.imageRow(index: blockIndex, images: images, sourceLine: sourceLine))
+                    }
+                    blockIndex += 1
+                    i = end
+                    continue
+                case .notImages(let checkedUntil):
+                    // The lines up to there belong to a paragraph that is
+                    // not images only: no image paragraph starts inside it,
+                    // and scanning them again from each line would be
+                    // quadratic on a long run of image lines.
+                    imageParagraphSkip = checkedUntil
+                }
+            }
+
             // Standalone image line: one OR MORE images and nothing else. Each
             // becomes its own `.image` block, all on this line's `sourceLine`
             // (`![a](x.png) ![b](y.png)` is two pictures, not one bogus url).
+            // Reached only for a line inside a longer paragraph (text before
+            // or after it): the pre-1.15 behaviour, kept.
             if let images = InlineSyntaxScanner.standaloneImages(in: line[...], references: referenceDefinitions) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                 // Paragraph text in CommonMark: an item's paragraph goes on.
@@ -471,26 +510,6 @@ struct MarkdownBlockParser: Sendable {
                                          width: nil, sourceLine: sourceLine))
                     blockIndex += 1
                 }
-                i += 1
-                continue
-            }
-
-            // A PARAGRAPH that is only ONE linked image (`[![alt](img)](url)`,
-            // the README logo/badge form): the same `.image` block as
-            // `![alt](img)` — drawn on screen and in PDF, click = preview. The
-            // link target is dropped, as it is for `<a href><img></a>` (links
-            // on images: 1.15). Not a line of a longer paragraph: badges one
-            // per line are ONE paragraph on GitHub, a badge row like the one
-            // on a single line, and stay its linked placeholders (badge rows:
-            // 1.15) instead of a column of pictures.
-            if Self.noParagraphOpen(textBuffer),
-               let image = InlineSyntaxScanner.linkedImage(in: line[...], references: referenceDefinitions),
-               paragraphEnds(after: i, in: lines) {
-                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-                _ = nesting.text(line, sourceLine: sourceLine)
-                blocks.append(.image(index: blockIndex, url: image.url, alt: HTMLEntities.decode(image.alt),
-                                     width: nil, sourceLine: sourceLine))
-                blockIndex += 1
                 i += 1
                 continue
             }
@@ -520,7 +539,9 @@ struct MarkdownBlockParser: Sendable {
                     // Inline HTML in a paragraph for CommonMark: as an image line.
                     _ = nesting.text(line, sourceLine: sourceLine)
                     for tag in html.images {
+                        // `<a href="…"><img></a>` on one line: the picture is the link.
                         blocks.append(.image(index: blockIndex, url: tag.url, alt: tag.alt, width: tag.width,
+                                             link: tag.link.flatMap { MarkdownRenderer.linkURL(for: $0) },
                                              sourceLine: lineMap[i + tag.lineOffset]))
                         blockIndex += 1
                     }
@@ -1029,6 +1050,88 @@ struct MarkdownBlockParser: Sendable {
         if MarkdownRenderer.isListItem(next) { return MarkdownRenderer.canInterruptParagraph(next) }
         if Self.startsHTMLBlock(marker, interruptingParagraph: true) { return true }
         return Self.pipeCount(next) >= 2 && index + 2 < lines.count && isTableSeparator(lines[index + 2])
+    }
+
+    /// What `imageParagraph` found at a line.
+    enum ImageParagraph {
+        /// The paragraph is these pictures and nothing else; it ends before
+        /// line `end`.
+        case images([RowImage], end: Int)
+        /// It is not: no image paragraph starts before line `checkedUntil`.
+        case notImages(checkedUntil: Int)
+    }
+
+    /// The paragraph starting at `start` (the caller knows one may start
+    /// there) when it is made ONLY of images (`InlineSyntaxScanner
+    /// .imageOnlyLine`): every line of it, up to where it ends
+    /// (`paragraphEnds`), holds nothing else. GitHub (`gh api markdown`,
+    /// 2026-11-11): such a paragraph is one `<p>` of inline pictures; a soft
+    /// line break between them is a space, a hard one (two trailing spaces,
+    /// a `\` at the end of a line) a `<br>`; a `\` on the paragraph's LAST
+    /// line is a literal backslash, i.e. text. A line of text, a setext
+    /// underline (the paragraph is a heading then) or any line that goes on
+    /// with the paragraph and is not images → `.notImages`.
+    ///
+    /// An HTML image line (`htmlImageLine`, the whitelist unchanged) counts
+    /// as a line of images too, with each `<img>`'s width and same-line
+    /// `<a href>`: GitHub draws `<a href><img></a> <a href><img></a>` on one
+    /// line, such lines one under the other, and `![a](x)` over an `<img>`
+    /// line as one `<p>` of inline pictures. Between two tags of one line
+    /// the scanner does not keep the whitespace, so they always get a
+    /// space. A wrapper-only line (`<p align="center">`, `<br>`) is not
+    /// images: the paragraph keeps its pre-1.15 shape.
+    func imageParagraph(at start: Int, in lines: [String], references: [String: String]) -> ImageParagraph {
+        var images: [RowImage] = []
+        var lineBreakBefore = false
+        var index = start
+        while index < lines.count {
+            if index > start, paragraphEnds(after: index - 1, in: lines) {
+                // A `\` hard break needs a line after it IN the paragraph.
+                return Self.endsWithBackslashBreak(lines[index - 1])
+                    ? .notImages(checkedUntil: index) : .images(images, end: index)
+            }
+            let line = lines[index]
+            let backslash = Self.endsWithBackslashBreak(line)
+            guard let found = InlineSyntaxScanner.imageOnlyLine(backslash ? line.dropLast() : line[...],
+                                                                references: references) else {
+                guard !backslash, let html = htmlImageLine(lines, at: index), !html.images.isEmpty else {
+                    return .notImages(checkedUntil: index)
+                }
+                for (offset, tag) in html.images.enumerated() {
+                    let separator: RowImage.Separator = images.isEmpty
+                        ? .none : (offset == 0 && lineBreakBefore ? .lineBreak : .space)
+                    images.append(RowImage(url: tag.url, alt: tag.alt,
+                                           link: tag.link.flatMap { MarkdownRenderer.linkURL(for: $0) },
+                                           separator: separator, width: tag.width))
+                }
+                lineBreakBefore = lines[html.end - 1].hasSuffix("  ")
+                index = html.end
+                continue
+            }
+            for (offset, image) in found.enumerated() {
+                let separator: RowImage.Separator
+                if images.isEmpty {
+                    separator = .none
+                } else if offset == 0 {
+                    separator = lineBreakBefore ? .lineBreak : .space
+                } else {
+                    separator = image.spaceBefore ? .space : .none
+                }
+                images.append(RowImage(url: image.url, alt: HTMLEntities.decode(image.alt),
+                                       link: image.link.flatMap { MarkdownRenderer.linkURL(for: $0) },
+                                       separator: separator))
+            }
+            lineBreakBefore = backslash || line.hasSuffix("  ")
+            index += 1
+        }
+        return Self.endsWithBackslashBreak(lines[index - 1])
+            ? .notImages(checkedUntil: index) : .images(images, end: index)
+    }
+
+    /// A line ending in ONE backslash (CommonMark's hard line break when a
+    /// paragraph line follows; `\\` is an escaped backslash).
+    private static func endsWithBackslashBreak(_ line: String) -> Bool {
+        line.hasSuffix("\\") && !line.hasSuffix("\\\\")
     }
 
     /// Can this line be a definition-list TERM? Non-blank, not a definition
