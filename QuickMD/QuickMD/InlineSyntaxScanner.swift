@@ -285,44 +285,94 @@ enum InlineSyntaxScanner {
         }
     }
 
-    /// A line that is nothing but ONE linked image — `[![alt](img)](url)`,
-    /// `[![alt][logo]][site]` or any link form the renderer
-    /// accepts around one image, whitespace around it allowed — as the image
-    /// it shows. The link target is NOT returned: the parser makes the line an
-    /// ordinary image block (click = preview), as `<a href><img></a>` is;
-    /// links on images are a later feature. Text beside the link, a second
-    /// image or an outer link that does not resolve → nil (a paragraph, as
-    /// before).
-    static func linkedImage(in line: Substring, references: [String: String]) -> ImageSyntax? {
+    /// One picture of an image-only line (`imageOnlyLine`).
+    struct LineImage: Sendable {
+        /// Raw alt text, exactly as written.
+        let alt: String
+        /// The image destination (or its reference definition's URL).
+        let url: String
+        /// The link around it — `[![alt](img)](dest)` or a reference form —
+        /// as written (inline destination parsed, reference resolved); nil
+        /// for a plain image.
+        let link: String?
+        /// Whitespace between this picture and the one before it on the
+        /// line (false for the first).
+        let spaceBefore: Bool
+    }
+
+    /// The pictures of a line that is nothing but images, plain and/or
+    /// linked, separated by whitespace or nothing — or nil for any other
+    /// line. A plain image is any form `image(atStartOf:)` takes; a linked
+    /// one is any link form the renderer accepts (`linkTail`)
+    /// (`[![a](x)](url)`, `[![a][x]][site]`, `[![a][x]][]`, `[![a][x]]`)
+    /// around exactly ONE image, spaces inside the brackets allowed. Text,
+    /// two images in one link or a link that does not resolve → nil (the
+    /// line is paragraph text, as before). The parser decides whether the
+    /// line's paragraph is images only (`MarkdownBlockParser.imageParagraph`).
+    ///
+    /// One pair table per line: linear in the line's length (a `data:` line
+    /// can be megabytes).
+    static func imageOnlyLine(_ line: Substring, references: [String: String]) -> [LineImage]? {
         let scalars = line.unicodeScalars
         guard let first = scalars.firstIndex(where: { !$0.properties.isWhitespace }),
               let last = scalars.lastIndex(where: { !$0.properties.isWhitespace }) else { return nil }
         // Cheap reject before any copy: most lines are not this.
-        guard Substring(scalars[first...last]).utf8.starts(with: "[![".utf8) else { return nil }
-        let text = String(Substring(scalars[first...last]))
+        let trimmed = Substring(scalars[first...last])
+        guard trimmed.utf8.starts(with: "![".utf8) || trimmed.utf8.starts(with: "[![".utf8) else { return nil }
+        let text = String(trimmed)
         let pairs = PairTable(text)
-        guard let close = closingBracket(in: text[...], pairs: pairs) else { return nil }
-        let linkText = text[text.index(after: text.startIndex)..<close]
+        var images: [LineImage] = []
+        var index = text.startIndex
+        var spaceBefore = false
+        while index < text.endIndex {
+            let rest = text[index...]
+            let found: (alt: String, url: String, link: String?, end: String.Index)?
+            if rest.utf8.starts(with: "![".utf8) {
+                found = image(atStartOf: rest, references: references, pairs: pairs)
+                    .map { ($0.alt, $0.url, nil, $0.end) }
+            } else if rest.utf8.starts(with: "[![".utf8) {
+                found = linkedImage(atStartOf: rest, in: text, references: references, pairs: pairs)
+            } else {
+                found = nil
+            }
+            guard let found else { return nil }
+            images.append(LineImage(alt: found.alt, url: found.url, link: found.link,
+                                    spaceBefore: !images.isEmpty && spaceBefore))
+            index = found.end
+            let afterSpace = text[index...].unicodeScalars.firstIndex { !isWhitespaceScalar($0) } ?? text.endIndex
+            spaceBefore = afterSpace > index
+            index = afterSpace
+        }
+        return images.isEmpty ? nil : images
+    }
 
-        // The link text: exactly one image, spaces around it allowed.
+    /// CommonMark whitespace (`isWhitespace(_: UInt8)`) as a scalar.
+    private static func isWhitespaceScalar(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.isASCII && isWhitespace(UInt8(scalar.value))
+    }
+
+    /// `[![alt](img)]` + a link destination or reference at the start of
+    /// `rest` (a suffix of `text`, which `pairs` was built for), by the
+    /// renderer's rules: the link text is exactly one image, spaces
+    /// around it allowed; a reference link must resolve.
+    private static func linkedImage(atStartOf rest: Substring, in text: String, references: [String: String],
+                                    pairs: PairTable) -> (alt: String, url: String, link: String?, end: String.Index)? {
+        guard let close = closingBracket(in: rest, pairs: pairs) else { return nil }
+        let linkText = text[text.index(after: rest.startIndex)..<close]
         let innerStart = linkText.firstIndex { !$0.isWhitespace } ?? linkText.endIndex
         guard let image = self.image(atStartOf: linkText[innerStart...], references: references, pairs: pairs),
               linkText[image.end...].allSatisfy(\.isWhitespace) else { return nil }
 
-        // The link itself, by the renderer's link forms, ending the line.
+        // The link around it by the renderer's own rule (`linkTail`): inline
+        // (strict, then lenient), a defined full label (an undefined one is
+        // no link — no shortcut fallback), collapsed, shortcut; labels capped.
         let after = text[text.index(after: close)...]
-        if after.hasPrefix("(") {
-            guard let destination = parenthesizedDestination(after, pairs: pairs),
-                  destination.end == text.endIndex else { return nil }
-        } else if after.hasPrefix("[") {
-            guard let labelClose = ReferenceLabel.closingBracket(in: after, from: after.index(after: after.startIndex)),
-                  text.index(after: labelClose) == text.endIndex else { return nil }
-            let label = String(after[after.index(after: after.startIndex)..<labelClose])
-            guard references[ReferenceLabel.normalized(label.isEmpty ? String(linkText) : label)] != nil else { return nil }
-        } else {
-            guard after.isEmpty, references[ReferenceLabel.normalized(linkText)] != nil else { return nil }
+        switch linkTail(after: after, label: linkText, references: references, pairs: pairs) {
+        case .inline(let url, let end)?, .reference(let url, let end)?:
+            return (image.alt, image.url, url, end)
+        case nil:
+            return nil
         }
-        return ImageSyntax(alt: image.alt, url: image.url, end: line.endIndex)
     }
 
     /// A CommonMark autolink at the start of `text`: `<scheme:…>` (a scheme

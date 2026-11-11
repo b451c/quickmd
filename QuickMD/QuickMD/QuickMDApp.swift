@@ -21,8 +21,12 @@ struct QuickMDApp: App {
         // Split View. Overrides the system-wide "Prefer tabs when opening
         // documents" preference for our app only; AppKit does the tabbing as
         // each window is ordered in. Must run before the first window exists.
-        NSWindow.allowsAutomaticWindowTabbing = true
-        WindowTabbing.preferTabsAlways()
+        //
+        // Settings ▸ General ▸ "Open documents in separate windows" writes
+        // "manual" instead (macOS's own "Never"). AppKit reads the value once
+        // per process, so a change in Settings goes through
+        // `WindowTabbing.applyWindowPreference()` instead.
+        WindowTabbing.applyWindowPreferenceAtLaunch()
     }
 
     var body: some Scene {
@@ -167,13 +171,15 @@ struct ToggleDocumentListCommand: View {
     }
 }
 
-/// File ▸ Edit Source / Done Editing (⌥⌘E), Save (⌘S), Discard Changes —
+/// File ▸ Edit Source / Done Editing (⌥⌘E), Edit Side by Side / Editor Only
+/// (⌥⇧⌘E), Save (⌘S), Discard Changes —
 /// Source Edit for the frontmost document only, via @FocusedValue like every
 /// other per-document command (an NSEvent monitor would act on every tab).
 /// ⌘S belongs to Save only while there is something to save: the viewer has
 /// no other Save, so a disabled item costs nothing.
 struct SourceEditCommands: View {
     @FocusedValue(\.toggleSourceEditAction) var toggleSourceEditAction
+    @FocusedValue(\.toggleSideBySideAction) var toggleSideBySideAction
     @FocusedValue(\.saveSourceAction) var saveSourceAction
     @FocusedValue(\.discardSourceChangesAction) var discardSourceChangesAction
     @FocusedValue(\.sourceEditState) var sourceEditState
@@ -184,6 +190,12 @@ struct SourceEditCommands: View {
         }
         .keyboardShortcut("e", modifiers: [.command, .option])
         .disabled(toggleSourceEditAction == nil)
+
+        Button(SourceEditMenuState.sideBySideTitle(for: sourceEditState)) {
+            toggleSideBySideAction?()
+        }
+        .keyboardShortcut("e", modifiers: [.command, .option, .shift])
+        .disabled(toggleSideBySideAction == nil)
 
         Button("Save") {
             saveSourceAction?()
@@ -207,8 +219,9 @@ struct CopyMarkdownCommand: View {
             copyDocumentAction?()
         }
         .keyboardShortcut("c", modifiers: [.command, .shift])
-        // While editing it would copy the saved text, not the one on screen.
-        .disabled(copyDocumentAction == nil || sourceEditState?.isEditing == true)
+        // While editing it would copy the saved text, not the one on screen
+        // (side by side included: the preview shows the buffer).
+        .disabled(copyDocumentAction == nil || sourceEditState?.allowsSavedTextCommands == false)
     }
 }
 

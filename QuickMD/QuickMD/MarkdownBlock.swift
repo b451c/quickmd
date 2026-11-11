@@ -71,6 +71,37 @@ enum ImageWidth: Sendable, Equatable {
     }
 }
 
+// MARK: - Image Row
+
+/// One picture of a paragraph made only of images (`BlockContent.imageRow`):
+/// README badges one per line, `![a](x) ![b](y)`, consecutive image lines.
+/// GitHub draws such a paragraph as inline pictures that wrap like words; so
+/// does `ImageRowView`. Also `<img>` tags of HTML image lines in such a
+/// paragraph (`<a href><img></a> <a href><img></a>`), with their `width`.
+struct RowImage: Sendable, Equatable {
+    /// What stands between this picture and the one before it in the source.
+    enum Separator: Sendable, Equatable {
+        /// Nothing (`![a](x)![b](y)`), and the first picture of the row.
+        case none
+        /// Whitespace or a soft line break: a space's width.
+        case space
+        /// A hard line break (two trailing spaces or a `\` at the end of the
+        /// line before): this picture starts a new line of the row.
+        case lineBreak
+    }
+
+    /// The image destination as written (or its reference definition's).
+    let url: String
+    /// Raw alt text, entities decoded.
+    let alt: String
+    /// `[![alt](img)](link)`: where a click goes (`handleLinkActivation`, the
+    /// text links' handler). Nil for a plain image (click = preview).
+    let link: URL?
+    let separator: Separator
+    /// HTML `<img width>` (nil for Markdown images) — `ImageWidth`.
+    var width: ImageWidth? = nil
+}
+
 // MARK: - Table Style
 
 /// How a `.table` block is drawn. Every Markdown table is `.grid`; YAML front
@@ -134,15 +165,32 @@ struct MarkdownBlock: Identifiable, Sendable {
     /// (`MathRendering.substitutingUntypesettableMath`). Copied whole, it
     /// reads `$$…$$` again, as the formula it is (`SelectionRows`).
     let substitutesFormula: Bool
+    /// Points from the column's leading edge to the text of the list item
+    /// that OWNS this block (`ListNesting`): a code block under a list item
+    /// is drawn where the item's text starts, not at the margin. 0 outside a
+    /// list. Set by the parser on `.codeBlock` rows only (a ```` ```mermaid ````
+    /// or ```` ```svg ```` fence and every other kind under an item stay at
+    /// the margin), in points at the parse's zoom (like every font size in
+    /// the rendered strings: zoom re-parses). The view pads and the measurer
+    /// narrows the code by `BlockLayout.Code.leadingInset` of it; print by
+    /// `MarkdownRenderer.printedListIndent`.
+    let listIndent: CGFloat
 
     init(id: String, content: BlockContent, sourceLine: Int, joinsPrevious: Bool = false,
-         isFrontMatter: Bool = false, substitutesFormula: Bool = false) {
+         isFrontMatter: Bool = false, substitutesFormula: Bool = false, listIndent: CGFloat = 0) {
         self.id = id
         self.content = content
         self.sourceLine = sourceLine
         self.joinsPrevious = joinsPrevious
         self.isFrontMatter = isFrontMatter
         self.substitutesFormula = substitutesFormula
+        self.listIndent = listIndent
+    }
+
+    /// This block drawn under a list item whose text starts `indent` points in.
+    func withListIndent(_ indent: CGFloat) -> MarkdownBlock {
+        MarkdownBlock(id: id, content: content, sourceLine: sourceLine, joinsPrevious: joinsPrevious,
+                      isFrontMatter: isFrontMatter, substitutesFormula: substitutesFormula, listIndent: indent)
     }
 
     /// A cheap content fingerprint of the block, to find the scroll anchor
@@ -169,8 +217,10 @@ struct MarkdownBlock: Identifiable, Sendable {
             return "b|\(rows.count)|" + head((headers + (rows.first ?? [])).joined(separator: "\u{1F}"))
         case .codeBlock(let code, let language):
             return "c|\(language)|" + head(code)
-        case .image(let url, let alt, _):
+        case .image(let url, let alt, _, _):
             return "i|\(head(url))|" + head(alt)
+        case .imageRow(let images):
+            return "r|\(images.count)|" + head(images.map(\.url).joined(separator: "\u{1F}"))
         case .blockquote(let content, let level):
             return "q|\(level)|" + head(content)
         case .alert(let kind, let content):
@@ -193,8 +243,14 @@ struct MarkdownBlock: Identifiable, Sendable {
         case codeBlock(code: String, language: String)
         /// `width` comes from an HTML `<img width>` (nil for Markdown images,
         /// which have no width syntax): it replaces the image's own width in
-        /// the D4 sizing rule — see `ImageWidth`.
-        case image(url: String, alt: String, width: ImageWidth?)
+        /// the D4 sizing rule — see `ImageWidth`. `link`: the picture is a
+        /// link (`[![alt](img)](url)`, `<a href><img></a>` on one line) — a
+        /// click follows it like a text link; nil = click opens the preview.
+        case image(url: String, alt: String, width: ImageWidth?, link: URL?)
+        /// A paragraph of two or more images and nothing else: one row of
+        /// pictures that wraps like words (`ImageRowView`). At least two
+        /// elements — a lone image is an `.image` block with its caption.
+        case imageRow(images: [RowImage])
         case blockquote(content: String, level: Int)
         /// GFM alert: `> [!NOTE]` etc. `content` is the quote body without the
         /// marker line, still in raw Markdown (inline-rendered by the view).
@@ -237,8 +293,13 @@ struct MarkdownBlock: Identifiable, Sendable {
         MarkdownBlock(id: "code-\(index)", content: .codeBlock(code: code, language: language),
                       sourceLine: sourceLine, isFrontMatter: isFrontMatter)
     }
-    static func image(index: Int, url: String, alt: String, width: ImageWidth?, sourceLine: Int) -> MarkdownBlock {
-        MarkdownBlock(id: "image-\(index)", content: .image(url: url, alt: alt, width: width), sourceLine: sourceLine)
+    static func image(index: Int, url: String, alt: String, width: ImageWidth?, link: URL? = nil,
+                      sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "image-\(index)", content: .image(url: url, alt: alt, width: width, link: link),
+                      sourceLine: sourceLine)
+    }
+    static func imageRow(index: Int, images: [RowImage], sourceLine: Int) -> MarkdownBlock {
+        MarkdownBlock(id: "imagerow-\(index)", content: .imageRow(images: images), sourceLine: sourceLine)
     }
     static func blockquote(index: Int, content: String, level: Int, sourceLine: Int,
                            joinsPrevious: Bool = false) -> MarkdownBlock {

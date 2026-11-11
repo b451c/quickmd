@@ -385,25 +385,71 @@ struct ReloadDocumentButton: View {
 /// buttons side by side were one too many) — it stays on ⌘E and in the File
 /// menu. One of the three ways into Source Edit, with File ▸ Edit Source and
 /// the shortcut.
+///
+/// Holding Option over it turns it into "Side by Side" (⌥⇧⌘E), like an
+/// alternate menu item: the pill shows the two-column icon and an
+/// Option-click enters Source Edit side by side. Only while the pointer is
+/// over THIS pill: the `flagsChanged` monitor exists only then (Option-letters
+/// typed elsewhere — ą, ę on a Polish keyboard — relabel nothing, in no tab),
+/// and the label resets when the app or a window resigns, where no hover exit
+/// arrives. A chrome pill, outside the document rows: a plain `.onHover` is
+/// right here (constraints "Block hover buttons").
 struct EditSourceButton: View {
     let theme: MarkdownTheme
+    /// The pill's own window: only ITS resigning key resets the label.
+    let window: NSWindow?
     let action: () -> Void
+    let sideBySideAction: () -> Void
+
+    @State private var isOptionDown = false
+    @State private var flagsMonitor: Any?
 
     var body: some View {
         ChromePill(
             theme: theme,
-            title: "Edit",
-            help: "Edit source (⌥⌘E)",
-            action: action
+            title: isOptionDown ? "Side by Side" : "Edit",
+            help: "Edit source (⌥⌘E) · Option-click to edit side by side (⌥⇧⌘E)",
+            action: {
+                // The flags at the click, not the last flagsChanged seen.
+                NSEvent.modifierFlags.contains(.option) ? sideBySideAction() : action()
+            }
         ) {
-            Image(systemName: "pencil")
+            Image(systemName: isOptionDown ? "rectangle.split.2x1" : "pencil")
                 .font(.system(size: 11))
         }
         .accessibilityIdentifier("source-edit")
+        .onHover { hovering in
+            if hovering { startWatchingOption() } else { stopWatchingOption() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            stopWatchingOption()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { note in
+            guard let resigned = note.object as? NSWindow, resigned === window else { return }
+            stopWatchingOption()
+        }
+        .onDisappear { stopWatchingOption() }
+    }
+
+    @MainActor
+    private func startWatchingOption() {
+        isOptionDown = NSEvent.modifierFlags.contains(.option)
+        guard flagsMonitor == nil else { return }
+        flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+            isOptionDown = event.modifierFlags.contains(.option)
+            return event
+        }
+    }
+
+    @MainActor
+    private func stopWatchingOption() {
+        if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
+        flagsMonitor = nil
+        if isOptionDown { isOptionDown = false }
     }
 }
 
-// MARK: - Source Edit Pills (Save / Done)
+// MARK: - Source Edit Pills (Side by Side / Save / Done)
 
 /// The whole cluster while Source Edit shows (S-D12) — also in Reading Mode,
 /// where the cluster is otherwise hidden: a mode you could only leave by
@@ -422,6 +468,25 @@ struct SourceSaveButton: View {
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.5)
         .accessibilityIdentifier("source-save")
+    }
+}
+
+/// Side by side on or off: the editor left, the rendered document right
+/// (per tab). Never called "Split": Split View is the macOS window feature.
+struct SourceSideBySideButton: View {
+    let theme: MarkdownTheme
+    let isSideBySide: Bool
+    let action: () -> Void
+
+    var body: some View {
+        ChromePill(theme: theme, title: isSideBySide ? "Editor Only" : "Side by Side",
+                   help: isSideBySide ? "Show the editor only (⌥⇧⌘E)"
+                                      : "Show the rendered document beside the editor (⌥⇧⌘E)",
+                   action: action) {
+            Image(systemName: isSideBySide ? "rectangle" : "rectangle.split.2x1")
+                .font(.system(size: 11))
+        }
+        .accessibilityIdentifier("source-side-by-side")
     }
 }
 

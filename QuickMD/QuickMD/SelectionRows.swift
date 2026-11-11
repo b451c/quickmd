@@ -17,9 +17,26 @@ enum SelectionRows {
     /// cells, its selectable string is `TableTextBuilder`'s.
     static func isAtomic(_ block: MarkdownBlock) -> Bool {
         switch block.content {
-        case .image, .svgImage, .mathBlock, .mermaidDiagram: return true
+        case .image, .imageRow, .svgImage, .mathBlock, .mermaidDiagram: return true
         case .text, .codeBlock, .blockquote, .alert, .heading, .table: return false
         }
+    }
+
+    /// An image row's copy text: the non-empty alts in order, a space
+    /// between two pictures, a line break where the row has a hard break
+    /// (a picture without alt adds nothing, as a lone image copies "").
+    static func rowAltText(_ images: [RowImage]) -> String {
+        var text = ""
+        var breakPending = false
+        for image in images {
+            if image.separator == .lineBreak { breakPending = true }
+            let alt = image.alt.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !alt.isEmpty else { continue }
+            if !text.isEmpty { text += breakPending ? "\n" : " " }
+            text += alt
+            breakPending = false
+        }
+        return text
     }
 
     // MARK: Copy (S-D8 / TS-D8)
@@ -68,8 +85,13 @@ enum SelectionRows {
             guard let built = table(block),
                   let covered = selection.range(inRow: row, rowLength: built.string.length) else { return nil }
             return tablePiece(built, covered: covered)
-        case .image(_, let alt, _):
+        case .image(_, let alt, _, _):
             return selection.range(inRow: row, rowLength: 1) == nil ? nil : .image(alt: alt)
+        case .imageRow(let images):
+            // A lone image copies its alt; a row its pictures' alts in
+            // order, as GitHub's text of the paragraph reads them: a space
+            // between pictures, a line break at a hard break.
+            return selection.range(inRow: row, rowLength: 1) == nil ? nil : .image(alt: rowAltText(images))
         case .svgImage:
             return selection.range(inRow: row, rowLength: 1) == nil ? nil : .image(alt: "")
         case .mathBlock(let latex):
@@ -227,7 +249,7 @@ enum SelectionRows {
                 guard let built = table(block) else { return nil }
                 string = built.string
                 layout = built.layout
-            case .image, .svgImage, .mathBlock, .mermaidDiagram:
+            case .image, .imageRow, .svgImage, .mathBlock, .mermaidDiagram:
                 return nil
             }
             guard let range = selection.range(inRow: row, rowLength: string.length) else { continue }

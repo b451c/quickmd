@@ -56,12 +56,13 @@ struct CodeBlockView: View {
     typealias Metrics = BlockLayout.Code
 
     private var cacheKey: String {
-        // theme.name + isDark + code font + a content fingerprint. isDark
+        // theme.name + isDark + code font + language (plain text draws no
+        // token colours) + a content fingerprint. isDark
         // matters because "Auto" keeps its name across light/dark palette
         // flips; the code family because Settings can change it under an
         // unchanged theme name. We use code.count + first/last chars to keep
         // the key cheap; if anyone manages a collision we just recompute.
-        "\(theme.name)|\(theme.isDark)|\(theme.fonts.code ?? "")|\(fontScale)|\(code.count)|\(code.prefix(8))…\(code.suffix(8))"
+        "\(theme.name)|\(theme.isDark)|\(theme.fonts.code ?? "")|\(fontScale)|\(language)|\(code.count)|\(code.prefix(8))…\(code.suffix(8))"
     }
 
     var body: some View {
@@ -145,10 +146,12 @@ struct CodeBlockView: View {
             // once per (code, theme) tuple — not per body eval.
             let key = cacheKey
             let code = self.code
+            let language = self.language
             let theme = self.theme
             let fontScale = self.fontScale
             let boxed = await Task.detached(priority: .userInitiated) {
-                SendableAttributedString(value: Self.computeHighlightedAttributedString(code: code, theme: theme, fontScale: fontScale))
+                SendableAttributedString(value: Self.computeHighlightedAttributedString(
+                    code: code, language: language, theme: theme, fontScale: fontScale))
             }.value
             // The task is cancelled when cacheKey changes (zoom, theme, content).
             // Without this guard a superseded highlight can land last and stick.
@@ -168,45 +171,20 @@ struct CodeBlockView: View {
         BlockTextConverter.plainCode(code, theme: theme, fontScale: fontScale)
     }
 
-    /// Full syntax highlight. Static + nonisolated so the detached task can run
-    /// it off the main actor, capturing plain values (code + theme), not the view.
-    nonisolated static func computeHighlightedAttributedString(code: String, theme: MarkdownTheme, fontScale: CGFloat) -> NSAttributedString {
+    /// Full syntax highlight (`BlockTextConverter.highlightedCode`; a
+    /// plain-text language such as ```` ```text ```` gets no token colours).
+    /// Static + nonisolated so the detached task can run it off the main
+    /// actor, capturing plain values (code + theme), not the view.
+    nonisolated static func computeHighlightedAttributedString(code: String, language: String,
+                                                               theme: MarkdownTheme, fontScale: CGFloat) -> NSAttributedString {
         #if DEBUG
         let signpostID = codeSignpost.makeSignpostID()
         let state = codeSignpost.beginInterval("compute", id: signpostID, "lines=\(code.split(separator: "\n").count)")
         defer { codeSignpost.endInterval("compute", state) }
         #endif
-
-        let result = NSMutableAttributedString(string: code)
-        let fullRange = NSRange(location: 0, length: (code as NSString).length)
-        let baseFont = theme.fonts.appKit(size: Metrics.codeFontSize * fontScale, monospaced: true)
-
-        result.addAttribute(.font, value: baseFont, range: fullRange)
-        result.addAttribute(.foregroundColor, value: NSColor(theme.textColor), range: fullRange)
-
-        // IndexSet keeps overlap checks O(log n) per match; the previous
-        // array-of-ranges scan was quadratic on match-heavy blocks.
-        var colored = IndexSet()
-
-        func apply(regex: NSRegularExpression, color: Color) {
-            let nsColor = NSColor(color)
-            for match in regex.matches(in: code, range: fullRange) {
-                guard let range = Range(match.range), !range.isEmpty else { continue }
-                guard !colored.intersects(integersIn: range) else { continue }
-                result.addAttribute(.foregroundColor, value: nsColor, range: match.range)
-                colored.insert(integersIn: range)
-            }
-        }
-
-        // Same priority as v1.4: strings > comments > others
-        apply(regex: CodeHighlightRegex.string, color: theme.stringColor)
-        apply(regex: CodeHighlightRegex.comment, color: theme.commentColor)
-        apply(regex: CodeHighlightRegex.number, color: theme.numberColor)
-        apply(regex: CodeHighlightRegex.keyword, color: theme.keywordColor)
-        apply(regex: CodeHighlightRegex.type, color: theme.typeColor)
-
+        let result = BlockTextConverter.highlightedCode(code, language: language, theme: theme, fontScale: fontScale)
         #if DEBUG
-        codeLog.debug("compute: \(code.count) chars, \(colored.rangeView.count) ranges, theme=\(theme.name, privacy: .public)")
+        codeLog.debug("compute: \(code.count) chars, theme=\(theme.name, privacy: .public)")
         #endif
         return result
     }
@@ -217,17 +195,6 @@ struct CodeBlockView: View {
 /// hand-off — safe despite NSAttributedString not being Sendable.
 private struct SendableAttributedString: @unchecked Sendable {
     let value: NSAttributedString
-}
-
-// MARK: - Static Regex Patterns (compiled once, reused)
-// File-scope (not members of the View struct) so they are not swept into the
-// View's implicit @MainActor isolation — the highlight runs on a background task.
-private enum CodeHighlightRegex {
-    static let comment = try! NSRegularExpression(pattern: #"(//.*|#.*|--.*)"#)
-    static let string = try! NSRegularExpression(pattern: #"\"[^\"]*\"|'[^']*'"#)
-    static let number = try! NSRegularExpression(pattern: #"\b\d+\.?\d*\b"#)
-    static let keyword = try! NSRegularExpression(pattern: #"\b(func|function|def|class|struct|enum|let|var|const|if|else|for|while|return|import|from|pub|fn|async|await|try|catch|throw|new|self|this|nil|null|true|false|None|True|False)\b"#)
-    static let type = try! NSRegularExpression(pattern: #"\b[A-Z][a-zA-Z0-9]*\b"#)
 }
 
 // MARK: - NSTextView Wrapper
