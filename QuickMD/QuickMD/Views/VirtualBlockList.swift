@@ -784,6 +784,9 @@ struct VirtualBlockList: NSViewRepresentable {
                 let token = glide.start()
                 completion = { [weak self] in
                     guard let self, self.glide.landed(token) else { return }
+                    #if DEBUG
+                    listLog.debug("glide landed at top \(self.contentTopY(), format: .fixed(precision: 1))")
+                    #endif
                     self.aimAtPendingMatch()
                 }
             } else {
@@ -816,10 +819,17 @@ struct VirtualBlockList: NSViewRepresentable {
             if PendingMatchAim.isReaderScroll(event.phase, event.momentumPhase, event.scrollingDeltaY) {
                 matchAim.readerScrolled()
             }
-            if glide.scrollWheel(phase: event.phase, momentumPhase: event.momentumPhase,
-                                 deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY) {
-                stopGlide()
-            }
+            #if DEBUG
+            let wasGliding = glide.isRunning
+            #endif
+            let stops = glide.scrollWheel(phase: event.phase, momentumPhase: event.momentumPhase,
+                                          deltaX: event.scrollingDeltaX, deltaY: event.scrollingDeltaY)
+            #if DEBUG
+            // E2E evidence for "did the wheel arrive during the glide": its
+            // order against `scrollRequest` / `place … (jump)` / `glide stopped`.
+            listLog.debug("wheel: phase=\(event.phase.rawValue) momentum=\(event.momentumPhase.rawValue) dy=\(event.scrollingDeltaY, format: .fixed(precision: 1)) precise=\(event.hasPreciseScrollingDeltas) gliding=\(wasGliding) → \(stops ? "stop" : "ignore", privacy: .public)")
+            #endif
+            if stops { stopGlide() }
         }
 
         private func stopGlide() {
