@@ -360,19 +360,32 @@ enum ImageLoader {
         }
 
         var existing: URL?
+        var readableButNotAnImage = false
         for candidate in fileCandidates(for: url, raw: raw) {
             if let image = decodeFile(candidate, maxPixel: maxPixel) {
                 store(Entry(image: image, fileURL: candidate, fileDate: modificationDate(of: candidate)),
                       key: key, maxPixel: maxPixel)
                 return .success(image)
             }
-            if existing == nil, FileManager.default.fileExists(atPath: candidate.path) {
+            // A FOLDER is no picture and no reason to ask for access: an
+            // empty destination (`![x]()`) resolves to the document's own
+            // folder, and the Source Edit preview renders `![l](assets/)`
+            // while the reader deletes a file name.
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDirectory),
+                  !isDirectory.boolValue else { continue }
+            if FileManager.default.isReadableFile(atPath: candidate.path) {
+                // Readable bytes that do not decode: not the sandbox.
+                readableButNotAnImage = true
+            } else if existing == nil {
                 existing = candidate
             }
         }
-        // A file that exists but did not load is most likely the sandbox —
-        // the view turns `.unreadable` into the folder-access prompt.
-        return .failure(existing.map { .unreadable($0) } ?? .notFound)
+        // A file that exists but could not be READ is the sandbox (or a
+        // permission) — the view turns `.unreadable` into the folder-access
+        // request (`FolderAccessBroker`).
+        if let existing { return .failure(.unreadable(existing)) }
+        return .failure(readableButNotAnImage ? .undecodable : .notFound)
     }
 
     /// ImageIO thumbnail (downsampled, EXIF orientation applied), falling back
@@ -656,5 +669,31 @@ enum DisplayString {
             return text
         }
         return String(head) + "\u{2026}" + String(text.suffix(tailCount))
+    }
+}
+
+// MARK: - Remote fetches while editing
+
+/// A remote picture in the Source Edit preview is fetched only once its URL
+/// has been in the preview for `stableInterval`: the preview re-parses after
+/// every typing pause, and each half-typed URL would otherwise be a GET.
+/// "In the preview since" is remembered per URL across re-parses (the rows
+/// are re-created, the URL is the same); reading mode never waits.
+@MainActor
+enum RemoteFetchGate {
+    static let stableInterval: TimeInterval = 1
+    private static var firstSeen: [String: Date] = [:]
+
+    /// False when the waiting task was cancelled (the URL changed, the row
+    /// went away): nothing is fetched then.
+    static func waitUntilStable(_ url: String, now: Date = Date()) async -> Bool {
+        if firstSeen.count > 256 { firstSeen.removeAll() }
+        let since = firstSeen[url] ?? now
+        firstSeen[url] = since
+        let remaining = stableInterval - now.timeIntervalSince(since)
+        if remaining > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+        }
+        return !Task.isCancelled
     }
 }

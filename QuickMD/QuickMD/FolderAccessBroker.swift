@@ -26,6 +26,11 @@ import Foundation
 ///   "declined" is persisted.
 /// - Requests while a panel is up wait for its answer (one panel at a time)
 ///   and are decided again with it.
+/// - An AUTOMATIC request (a picture loading) may be told not to ask at
+///   all (`mayAsk: false`): while the window's document is in Source Edit,
+///   whose preview re-renders half-typed paths every pause. The picture
+///   shows its denied placeholder, nothing is marked declined, and its
+///   Grant button (explicit) still asks.
 /// - Not sandboxed (GitHub/Homebrew build): never asks — an unreadable file
 ///   there is a POSIX permission, which a folder panel cannot fix.
 ///
@@ -111,8 +116,9 @@ final class FolderAccessBroker {
     }
 
     /// Access for `file`, asking at most once per folder (see the type).
-    /// True when `file` is covered afterwards.
-    func requestAccess(forFileAt file: URL, documentURL: URL?, explicit: Bool) async -> Bool {
+    /// True when `file` is covered afterwards. `mayAsk: false` (an automatic
+    /// request during Source Edit) never shows a panel and marks nothing.
+    func requestAccess(forFileAt file: URL, documentURL: URL?, explicit: Bool, mayAsk: Bool = true) async -> Bool {
         // One panel at a time: wait for the one up, then decide again with
         // its answer.
         while let pending {
@@ -121,6 +127,7 @@ final class FolderAccessBroker {
         guard case .ask(let folder) = decision(forFileAt: file, documentURL: documentURL, explicit: explicit) else {
             return decision(forFileAt: file, documentURL: documentURL, explicit: false) == .granted
         }
+        guard explicit || mayAsk else { return false }
         let task = Task { @MainActor in
             // Cleared by the task itself, before it completes: a waiter that
             // wakes up must never find a finished task still pending.

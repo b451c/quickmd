@@ -103,7 +103,32 @@ final class SandboxAccessManager {
     /// (`FolderAccessBroker`). `explicit`: the reader pressed a Grant
     /// button, so an earlier decline does not count.
     func requestAccess(forFileAt file: URL, documentURL: URL?, explicit: Bool) async -> Bool {
-        await broker.requestAccess(forFileAt: file, documentURL: documentURL, explicit: explicit)
+        await broker.requestAccess(forFileAt: file, documentURL: documentURL, explicit: explicit,
+                                   mayAsk: explicit || !isEditing(documentURL))
+    }
+
+    // MARK: - Source Edit
+
+    /// Documents with an active Source Edit session, by the windows editing
+    /// them (`MarkdownView` reports start and end with its own token, so a
+    /// repeated report is harmless). Their pictures never raise a
+    /// panel by themselves: the side-by-side preview re-parses the buffer
+    /// after every pause, half-typed paths included (`![l](assets/)`), and
+    /// an app-modal panel would take the keyboard mid-edit. Remote pictures
+    /// wait until their URL stands still (`RemoteFetchGate`).
+    private var editing: [String: Set<UUID>] = [:]
+
+    func setEditing(_ documentURL: URL?, window: UUID, _ active: Bool) {
+        guard let documentURL else { return }
+        let key = documentURL.standardizedFileURL.path
+        var windows = editing[key] ?? []
+        if active { windows.insert(window) } else { windows.remove(window) }
+        editing[key] = windows.isEmpty ? nil : windows
+    }
+
+    func isEditing(_ documentURL: URL?) -> Bool {
+        guard let documentURL else { return false }
+        return editing[documentURL.standardizedFileURL.path] != nil
     }
 
     /// A saved grant covering `file`, restored silently; never a panel

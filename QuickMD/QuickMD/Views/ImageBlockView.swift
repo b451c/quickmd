@@ -474,6 +474,12 @@ struct PictureView: View {
         if image !== seeded { image = seeded }
         if let seeded { heightCache?.setImageSize(seeded.size, for: url) }
 
+        // Source Edit: the preview re-renders a remote URL being typed after
+        // every pause; fetch only a URL that stood still for a second (a
+        // changed URL cancels this task, so a partial one is never fetched).
+        if seeded == nil, case .remote = source, SandboxAccessManager.shared.isEditing(documentURL) {
+            guard await RemoteFetchGate.waitUntilStable(url) else { return }
+        }
         let first = await ImageLoader.load(raw: url, source: source, maxPixel: ImageLoader.displayMaxPixel)
         if case .failure(.unreadable(let fileURL)) = first {
             // File exists but couldn't load — likely sandbox. Request access and retry.

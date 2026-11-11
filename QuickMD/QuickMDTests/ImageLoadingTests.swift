@@ -310,6 +310,56 @@ final class ImageLoadingTests: XCTestCase {
         XCTAssertEqual(missingResult.failureValue, .notFound)
     }
 
+    /// Seam review S1: only a file that exists AND cannot be read is
+    /// `.unreadable` (the folder-access request). A folder — also what an
+    /// empty destination `![x]()` resolves to, and what the Source Edit
+    /// preview renders for `![l](assets/)` — is `.notFound`; readable bytes
+    /// that do not decode are `.undecodable`. Neither may ever ask.
+    func testOnlyAnUnreadableFileAsksForAccess() async throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("quickmd-s1-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("assets"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let document = dir.appendingPathComponent("doc.md")
+        func load(_ raw: String) async throws -> ImageLoadFailure? {
+            let source = try XCTUnwrap(ImageSource.resolve(raw, documentURL: document), raw)
+            return await ImageLoader.load(raw: raw, source: source, maxPixel: ImageLoader.displayMaxPixel).failureValue
+        }
+        let emptyDestination = try await load("")
+        XCTAssertEqual(emptyDestination, .notFound, "![x]() = the document's folder")
+        let folder = try await load("assets/")
+        XCTAssertEqual(folder, .notFound)
+        let folderNoSlash = try await load("assets")
+        XCTAssertEqual(folderNoSlash, .notFound)
+        try Data("not a picture".utf8).write(to: dir.appendingPathComponent("notes.png"))
+        let garbage = try await load("notes.png")
+        XCTAssertEqual(garbage, .undecodable)
+        let locked = dir.appendingPathComponent("locked.png")
+        try Data("x".utf8).write(to: locked)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: locked.path) }
+        let unreadable = try await load("locked.png")
+        XCTAssertEqual(unreadable, .unreadable(locked))
+    }
+
+    /// While editing, a remote URL is fetched only once it stood in the
+    /// preview for `stableInterval`; a cancelled wait (the URL changed)
+    /// fetches nothing.
+    @MainActor
+    func testRemoteFetchGateWaitsForAStableURL() async {
+        let url = "https://quickmd.invalid/\(UUID().uuidString).png"
+        // First seen long ago: no wait.
+        let past = Date().addingTimeInterval(-5)
+        let stable = await RemoteFetchGate.waitUntilStable(url, now: past)
+        XCTAssertTrue(stable)
+        // A new URL whose wait is cancelled (typing went on): false.
+        let typing = Task { @MainActor in
+            await RemoteFetchGate.waitUntilStable("https://quickmd.invalid/partial-\(UUID().uuidString)")
+        }
+        typing.cancel()
+        let result = await typing.value
+        XCTAssertFalse(result)
+    }
+
     func testLocalFileLiterallyNamedWithPercentEscape() throws {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("quickmd-img-\(UUID().uuidString)")

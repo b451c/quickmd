@@ -173,4 +173,23 @@ final class FolderAccessBrokerTests: XCTestCase {
         XCTAssertEqual(FolderAccessBroker.folderToAsk(forFileAt: file("elsewhere/a.svg"), documentURL: nil)
                         .standardizedFileURL.path, file("elsewhere").standardizedFileURL.path)
     }
+
+    /// Source Edit (seam review S1): an automatic request may not ask —
+    /// no panel, nothing marked declined — and the explicit Grant still asks.
+    func testAutomaticRequestsDuringSourceEditNeverAsk() async {
+        let world = World()
+        world.answer = { $0 }
+        let access = broker(world)
+        for _ in 0..<5 {
+            let shown = await access.requestAccess(forFileAt: file("docs/assets/x.png"), documentURL: document,
+                                                   explicit: false, mayAsk: false)
+            XCTAssertFalse(shown)
+        }
+        XCTAssertTrue(world.prompts.isEmpty)
+        XCTAssertTrue(access.declinedFolders.isEmpty, "not a decline: after editing it may ask")
+        let granted = await access.requestAccess(forFileAt: file("docs/assets/x.png"), documentURL: document,
+                                                 explicit: true, mayAsk: false)
+        XCTAssertTrue(granted)
+        XCTAssertEqual(world.prompts.count, 1)
+    }
 }
