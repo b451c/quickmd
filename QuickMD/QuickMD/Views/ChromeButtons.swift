@@ -49,11 +49,11 @@ struct HeadingBlockView: View {
         // converts this exact `renderHeader` output through the same converter.
         let renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
         let headingAttr = renderer.renderHeader(title, level: level)
-        // The heading font is the title's font (`renderHeader`): every run but
-        // code spans and footnote numbers, which are smaller (13/14, 11/14);
-        // view and measurer read this same value, so they always agree.
+        // The title's first baseline from the fonts it is set in (a code
+        // span is smaller, 13/14) — the same call the measurer makes.
         let geometry = Metrics.titleGeometry(
-            titleFirstBaseline: Metrics.titleFirstBaseline(font: renderer.headerAppKitFont(level: level)))
+            titleFirstBaseline: Metrics.titleFirstBaseline(of: headingAttr,
+                                                           headerFont: renderer.headerAppKitFont(level: level)))
 
         TextBlockView(
             blockId: id,

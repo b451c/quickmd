@@ -180,6 +180,42 @@ enum InlineSyntaxScanner {
         case reference(url: String, end: String.Index)
     }
 
+    /// The bracket stack of one line — the ONE place that decides which `]`
+    /// closes a link, shared by `MarkdownRenderer` (drawing), `ReferenceLinks`
+    /// (rewriting references in quotes, cells, headings) and
+    /// `FootnoteReferenceScan` (numbering): CommonMark's nearest opener, an
+    /// inactive one dropped, `linkTail` deciding, and a link deactivating
+    /// every opener before it (links never nest; the inner one wins). Each
+    /// caller attaches its own `Payload` to an opener.
+    struct LinkBrackets<Payload> {
+        private var openers: [(labelStart: String.Index, isImage: Bool, payload: Payload)] = []
+        /// Openers below this stack position are inactive.
+        private var activeFrom = 0
+
+        init() {}
+
+        /// A `[` whose label starts at `labelStart`; `isImage` for the `[`
+        /// of a `![` (an image may sit inside a link, so closing one
+        /// deactivates nothing — the badge idiom `[![a](i)](u)`).
+        mutating func open(labelStart: String.Index, isImage: Bool = false, _ payload: Payload) {
+            openers.append((labelStart, isImage, payload))
+        }
+
+        /// A `]` at `close` (an index of `text`): the opener's payload and the
+        /// link's tail when it closes a link, nil when the `]` is text.
+        mutating func close(at close: String.Index, in text: String, references: [String: String],
+                            pairs: PairTable?) -> (payload: Payload, tail: LinkTail)? {
+            guard let opener = openers.popLast() else { return nil }
+            defer { activeFrom = min(activeFrom, openers.count) }
+            guard openers.count >= activeFrom,
+                  let tail = linkTail(after: text[text.utf8.index(after: close)...],
+                                      label: text[opener.labelStart..<close],
+                                      references: references, pairs: pairs) else { return nil }
+            if !opener.isImage { activeFrom = openers.count }
+            return (opener.payload, tail)
+        }
+    }
+
     static func linkTail(after rest: Substring, label: Substring, references: [String: String],
                          pairs: PairTable?) -> LinkTail? {
         if rest.utf8.first == UInt8(ascii: "("),
@@ -210,24 +246,22 @@ enum InlineSyntaxScanner {
         return references[ReferenceLabel.normalized(label)].map { .reference(url: $0, end: rest.startIndex) }
     }
 
-    /// Whether `label` can be a link label (CommonMark): at most 999
-    /// characters and no unescaped bracket. Without the cap `[` × N + `]` × N
-    /// normalised labels of every length up to 2N whenever a definition
-    /// existed — quadratic. Looks at no more than ~1000 characters (the byte
-    /// count rules out longer text first); `work` counts what it looked at.
+    /// Whether `label` can be a link label (cmark): at most 999 BYTES of
+    /// UTF-8 as written and no unescaped bracket — GitHub links a label of
+    /// 333 `字` (999 bytes) and not one of 400 (1200 bytes). Without the cap
+    /// `[` × N + `]` × N normalised labels of every length up to 2N whenever
+    /// a definition existed — quadratic. Looks at no more than 999 bytes;
+    /// `work` counts the characters it looked at.
     static func isLinkLabel(_ label: Substring) -> Bool {
         var work = 0
         return isLinkLabel(label, work: &work)
     }
 
     static func isLinkLabel(_ label: Substring, work: inout Int) -> Bool {
-        guard label.utf8.count <= 999 * 4 else { return false }
-        var characters = 0
+        guard label.utf8.count <= 999 else { return false }
         var escaped = false
         for character in label {
             work += 1
-            characters += 1
-            guard characters <= 999 else { return false }
             if escaped { escaped = false; continue }
             if character == "\\" { escaped = true; continue }
             if character == "[" || character == "]" { return false }
@@ -303,9 +337,11 @@ enum InlineSyntaxScanner {
     /// The pictures of a line that is nothing but images, plain and/or
     /// linked, separated by whitespace or nothing — or nil for any other
     /// line. A plain image is any form `image(atStartOf:)` takes; a linked
-    /// one is any link form the renderer accepts (`linkTail`)
-    /// (`[![a](x)](url)`, `[![a][x]][site]`, `[![a][x]][]`, `[![a][x]]`)
-    /// around exactly ONE image, spaces inside the brackets allowed. Text,
+    /// one is a link the renderer accepts (`linkTail`) around exactly ONE
+    /// image: `[![a](x)](url)` or a full reference `[![a][x]][site]`. The
+    /// collapsed and shortcut forms (`[![a][x]][]`, `[![a][x]]`) never
+    /// resolve — their label holds brackets, so it is no label (GitHub draws
+    /// them as text too). Spaces inside the brackets allowed. Text,
     /// two images in one link or a link that does not resolve → nil (the
     /// line is paragraph text, as before). The parser decides whether the
     /// line's paragraph is images only (`MarkdownBlockParser.imageParagraph`).

@@ -423,6 +423,27 @@ enum BlockLayout {
             // A fresh layout manager, same reason as `singleLineHeight`.
             return NSLayoutManager().defaultBaselineOffset(for: font)
         }
+
+        /// The first baseline of `title` as TextKit sets it: the deepest
+        /// baseline offset of the fonts in it (a line's baseline is its
+        /// tallest font's). Since 1.15 a title is not one font — a code span
+        /// is monospaced at 13/14 of the heading size — so `# `make`` has
+        /// its baseline higher than the heading font's; a title in one font
+        /// gives exactly `titleFirstBaseline(font:)` of it. Read from the
+        /// whole title, not only its first line: width-independent, so the
+        /// view and the measurer agree before layout; it differs from the
+        /// laid-out first line only when a code span at the start alone
+        /// fills that line. `headerFont`: for a title with no fonts.
+        static func titleFirstBaseline(of title: AttributedString, headerFont: NSFont) -> CGFloat {
+            var fonts: [NSFont] = []
+            for run in title.runs {
+                if let font = run[AttributeScopes.AppKitAttributes.FontAttribute.self], !fonts.contains(font) {
+                    fonts.append(font)
+                }
+            }
+            guard !fonts.isEmpty else { return titleFirstBaseline(font: headerFont) }
+            return fonts.map { titleFirstBaseline(font: $0) }.max() ?? titleFirstBaseline(font: headerFont)
+        }
     }
 
     // MARK: Tables
@@ -2113,7 +2134,8 @@ enum BlockHeightMeasurer {
         -> (height: CGFloat, edges: BlockLayout.Spacing.Edges, string: NSAttributedString) {
         let ns = built ?? BlockTextConverter.headingTitle(attributed(), level: level, renderer: renderer, math: math)
         let geometry = BlockLayout.Heading.titleGeometry(
-            titleFirstBaseline: BlockLayout.Heading.titleFirstBaseline(font: renderer.headerAppKitFont(level: level)))
+            titleFirstBaseline: BlockLayout.Heading.titleFirstBaseline(of: attributed,
+                                                                       headerFont: renderer.headerAppKitFont(level: level)))
         let ink = textInk(text: ns, width: BlockLayout.Heading.titleWrapWidth(rowWidth: contentWidth))
         let height = max(geometry.titleTopInset + ink.height, geometry.minimumHeight)
         return (height, .text(ink, top: geometry.titleTopInset, rowHeight: height), ns)

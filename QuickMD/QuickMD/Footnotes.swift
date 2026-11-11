@@ -18,11 +18,15 @@ import Foundation
 /// `a`. Emphasis and strikethrough do not hide a reference (GitHub numbers
 /// `~~x[^a]~~`).
 ///
-/// It uses the renderer's own scanners, so the two cannot disagree: code
-/// spans through `InlineSyntaxScanner.CodeSpanTable`, a `<…>` autolink
-/// (`angleAutolink`) is skipped whole (its text is no reference), and the
-/// `]` comes from `NextClosingBracket`. Linear in the text: each scanner
-/// looks at every byte a bounded number of times.
+/// It decides "is this `[^x]` a reference" with the renderer's own code:
+/// code spans through `InlineSyntaxScanner.CodeSpanTable`, a `<…>` autolink
+/// (`angleAutolink`) skipped whole, the `]` from `NextClosingBracket`, and
+/// links through the shared bracket stack (`LinkBrackets` + `linkTail`) — a
+/// link's DESTINATION is skipped (`[t](x[^a])`: no reference, GitHub), its
+/// text is not. An image's `[` opens like a link's, so its destination is
+/// skipped and its alt read (GitHub numbers `![x [^a]](y)`). Without the
+/// document's link definitions here, only inline link tails are known (a
+/// reference link has no destination text to hide). Linear in the text.
 enum FootnoteReferenceScan {
     static func labels(in text: String, defined: Set<String>) -> [String] {
         guard !defined.isEmpty, text.contains("[^") else { return [] }
@@ -31,6 +35,8 @@ enum FootnoteReferenceScan {
         let utf8 = text.utf8
         let codeSpans = InlineSyntaxScanner.CodeSpanTable(text)
         let closing = InlineSyntaxScanner.NextClosingBracket(text)
+        let pairs = InlineSyntaxScanner.PairTable(text)
+        var brackets = InlineSyntaxScanner.LinkBrackets<Void>()
         var labels: [String] = []
         var index = text.startIndex
         while index < text.endIndex {
@@ -58,6 +64,16 @@ enum FootnoteReferenceScan {
                         continue
                     }
                 }
+            }
+            if byte == UInt8(ascii: "[") {
+                let isImage = index > text.startIndex && utf8[utf8.index(before: index)] == UInt8(ascii: "!")
+                brackets.open(labelStart: next, isImage: isImage, ())
+            } else if byte == UInt8(ascii: "]"),
+                      let (_, tail) = brackets.close(at: index, in: text, references: [:], pairs: pairs) {
+                switch tail {
+                case .inline(_, let end), .reference(_, let end): index = end
+                }
+                continue
             }
             index = next
         }

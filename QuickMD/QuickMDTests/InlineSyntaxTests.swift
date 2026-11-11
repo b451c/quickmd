@@ -169,9 +169,9 @@ final class InlineSyntaxTests: XCTestCase {
         XCTAssertTrue(traits("docs").contains(.bold))
         XCTAssertTrue(traits("it").contains(.italic))
         XCTAssertTrue(traits("make").isSuperset(of: [.bold, .monoSpace]), "\(traits("make"))")
-        XCTAssertEqual(font("make")?.pointSize, 13 * 1.5)
+        XCTAssertEqual(font("make")?.pointSize ?? 0, 13 * 1.5, accuracy: 0.01)
         XCTAssertNotNil(run("make")?[AttributeScopes.AppKitAttributes.BackgroundColorAttribute.self])
-        XCTAssertEqual(font("\u{00B9}")?.pointSize, 11 * 1.5, "footnote number keeps its size")
+        XCTAssertEqual(font("\u{00B9}")?.pointSize ?? 0, 11 * 1.5, accuracy: 0.01, "footnote number keeps its size")
         XCTAssertTrue(traits("x").isSuperset(of: [.bold, .italic, .monoSpace]), "\(traits("x"))")
         XCTAssertNotNil(run("make")?.font, "SwiftUI scope too")
         // Text around them is the ordinary bold body font.
@@ -457,11 +457,62 @@ final class InlineSyntaxTests: XCTestCase {
 
     /// An address right after `/` belongs to a URL. GitHub:
     /// `ftp://user@example.com` text, `<a href="http://user@example.com">`.
+    /// GitHub refuses an address only inside an `ftp://` URL; after any
+    /// other `/` it links: `sales/<a href="mailto:support@example.com">`,
+    /// `path/to/<a href="mailto:me@host.example">`,
+    /// `ssh://<a href="mailto:git@github.com">`, `ftp://user@example.com`.
     func testNoEmailInsideAURL() {
         check([
             ("see ftp://user@example.com", "see ftp://user@example.com"),
             ("see http://user@example.com", "see <http://user@example.com>{http://user@example.com}"),
+            ("see sales/support@example.com", "see sales/<mailto:support@example.com>{support@example.com}"),
+            ("path/to/me@host.example", "path/to/<mailto:me@host.example>{me@host.example}"),
+            ("ssh://git@github.com", "ssh://<mailto:git@github.com>{git@github.com}"),  // not a credential (GitHub e-mail case) betterleaks:allow
         ])
+    }
+
+    /// A `www.` inside a domain that failed only because its SECOND-TO-LAST
+    /// label has an `_` still links when its own domain is the last label.
+    /// GitHub: `www._<a href="http://www.example">www.example</a>`,
+    /// `a _www.a_b._<a href="http://www.example">www.example</a> z`.
+    func testInnerWWWAfterAFailedDomain() {
+        check([
+            ("www._www.example", "www._<http://www.example>{www.example}"),
+            ("a _www.a_b._www.example z", "a _www.a_b._<http://www.example>{www.example} z"),
+            ("_www.a.b_x", "_www.a.b_x"),
+        ])
+    }
+
+    /// A reference label is at most 999 BYTES (cmark): GitHub links a label
+    /// of 333 `字` (999 bytes) and leaves one of 400 (1200 bytes) as text.
+    func testLinkLabelCapIsInBytes() {
+        let short = String(repeating: "字", count: 333)
+        let long = String(repeating: "字", count: 400)
+        let markdown = "[\(short)] and [\(long)]\n\n[\(short)]: /han333\n[\(long)]: /han400"
+        XCTAssertEqual(structure(markdown), "</han333>{\(short)} and [\(long)]")
+    }
+
+    /// The footnote numbering scan reads a text as the renderer draws it:
+    /// a link's destination holds no reference, its text and an image's alt
+    /// do. GitHub: `[t](x[^a]) then[^b]` numbers b only (a unlisted);
+    /// `<y [^a]>` destinations too.
+    func testFootnoteScanSkipsLinkDestinations() {
+        XCTAssertEqual(FootnoteReferenceScan.labels(in: "[t](x[^a]) then[^b] and [u](<y [^a]>)",
+                                                    defined: ["a", "b"]), ["b"])
+        XCTAssertEqual(FootnoteReferenceScan.labels(in: "[![i](img)](u[^a]) x[^b] [t [^a]](v)",
+                                                    defined: ["a", "b"]), ["b", "a"])
+        XCTAssertEqual(FootnoteReferenceScan.labels(in: "![x [^a]](y[^b])", defined: ["a", "b"]), ["a"])
+        XCTAssertEqual(FootnoteReferenceScan.labels(in: "[a [b](x) c](y[^a])", defined: ["a"]), ["a"],
+                       "the inner link wins, so the outer `](y…)` is text")
+    }
+
+    /// A definition-list term is a bold context like a heading: code stays
+    /// monospaced on its chip, italic stays (policy B).
+    func testDefinitionTermKeepsTheLookOfItsRuns() {
+        let blocks = MarkdownBlockParser(theme: theme).parse("Term `code` *it*\n: Definition")
+        guard case .text(let attributed)? = blocks.first?.content else { return XCTFail("definition list") }
+        let structure = Self.structure(of: attributed)
+        XCTAssertTrue(structure.hasPrefix("B{Term }BC{code}B{ }BI{it}"), structure)
     }
 
     /// The scans a long line can repeat — `www.` domains (review B1:
@@ -518,6 +569,7 @@ final class InlineSyntaxTests: XCTestCase {
         }
         let cases: [(String, (Int) -> String, (String) -> Int)] = [
             ("www failing", { String(repeating: "_www.a.", count: $0) + "_x_" }, autolinkWork),
+            ("www second-to-last", { String(repeating: "www._www._www.a_b.c", count: $0) }, autolinkWork),
             ("www linking", { String(repeating: "www.a ", count: $0) }, autolinkWork),
             ("http failing", { String(repeating: "(http://a_.b_", count: $0) }, autolinkWork),
             ("https", { String(repeating: "(https://a.b/c) ", count: $0) }, autolinkWork),
