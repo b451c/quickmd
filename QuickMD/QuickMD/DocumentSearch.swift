@@ -283,8 +283,11 @@ enum DocumentSearch {
     ///   `BlockTextConverter.makeNSAttributedString`. Without inline math the
     ///   converter's string is the AttributedString's characters (it only
     ///   bridges attributes), so those are taken directly — pinned by
-    ///   `SearchTests`. A paragraph WITH inline math shows one attachment
-    ///   character (U+FFFC) per `$…$` segment; the converter is run with
+    ///   `SearchTests`. A paragraph WITH inline math — and since v1.15 a
+    ///   quote or alert body or a heading with a formula (`$…$` or a quote's
+    ///   display `$$…$$`) — shows one attachment character (U+FFFC) per
+    ///   formula: its LaTeX is neither counted nor highlighted, the text
+    ///   around it is. The converter is run with
     ///   `searchMathPlaceholder`, an engine that never touches SwiftMath
     ///   (main-thread only), so the characters come out of the same code.
     ///   Known limit of this fallback only: a formula SwiftMath refuses to
