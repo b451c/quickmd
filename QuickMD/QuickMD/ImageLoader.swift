@@ -139,6 +139,16 @@ enum ImageLoadFailure: Error, Equatable {
     case notAnImage
     /// Transport error or a non-2xx HTTP status.
     case network
+
+    /// The file to ask folder access for, or nil when the failure is final.
+    /// Only an `.unreadable` file, and only in the sandbox: unsandboxed
+    /// (GitHub/Homebrew build) it is a POSIX permission (`chmod 000`) that a
+    /// folder panel cannot fix — the broker never asks there, so a Grant
+    /// button would do nothing; the picture shows the plain error instead.
+    func folderAccessFile(isSandboxed: Bool) -> URL? {
+        guard isSandboxed, case .unreadable(let file) = self else { return nil }
+        return file
+    }
 }
 
 // MARK: - Loader

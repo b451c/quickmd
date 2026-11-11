@@ -115,20 +115,16 @@ final class SandboxAccessManager {
     /// panel by themselves: the side-by-side preview re-parses the buffer
     /// after every pause, half-typed paths included (`![l](assets/)`), and
     /// an app-modal panel would take the keyboard mid-edit. Remote pictures
-    /// wait until their URL stands still (`RemoteFetchGate`).
-    private var editing: [String: Set<UUID>] = [:]
+    /// wait until their URL stands still (`RemoteFetchGate`). Keyed by the
+    /// path at activation, ended by the token (`SourceEditRegistry`).
+    private var editing = SourceEditRegistry()
 
     func setEditing(_ documentURL: URL?, window: UUID, _ active: Bool) {
-        guard let documentURL else { return }
-        let key = documentURL.standardizedFileURL.path
-        var windows = editing[key] ?? []
-        if active { windows.insert(window) } else { windows.remove(window) }
-        editing[key] = windows.isEmpty ? nil : windows
+        editing.set(documentURL, window: window, active: active)
     }
 
     func isEditing(_ documentURL: URL?) -> Bool {
-        guard let documentURL else { return false }
-        return editing[documentURL.standardizedFileURL.path] != nil
+        editing.isEditing(documentURL)
     }
 
     /// A saved grant covering `file`, restored silently; never a panel

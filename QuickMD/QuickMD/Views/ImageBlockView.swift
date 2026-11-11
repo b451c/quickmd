@@ -481,8 +481,11 @@ struct PictureView: View {
             guard await RemoteFetchGate.waitUntilStable(url) else { return }
         }
         let first = await ImageLoader.load(raw: url, source: source, maxPixel: ImageLoader.displayMaxPixel)
-        if case .failure(.unreadable(let fileURL)) = first {
-            // File exists but couldn't load — likely sandbox. Request access and retry.
+        if case .failure(let loadFailure) = first,
+           let fileURL = loadFailure.folderAccessFile(isSandboxed: SandboxAccessManager.isSandboxed) {
+            // Sandboxed, and the file exists but couldn't be read: request
+            // access and retry. (Unsandboxed: the plain error below — no
+            // Grant affordance a folder panel could not honour.)
             let granted = await SandboxAccessManager.shared.requestAccess(
                 forFileAt: fileURL, documentURL: documentURL, explicit: explicitAccess)
             guard granted else {

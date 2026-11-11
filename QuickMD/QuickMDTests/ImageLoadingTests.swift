@@ -341,6 +341,19 @@ final class ImageLoadingTests: XCTestCase {
         XCTAssertEqual(unreadable, .unreadable(locked))
     }
 
+    /// Final review S2: only the sandbox turns an unreadable file into a
+    /// folder-access request (card, chip menu, panel). Unsandboxed it is a
+    /// POSIX permission the broker never asks for: the plain error, no
+    /// Grant button that does nothing.
+    func testFolderAccessIsAskedForOnlyInTheSandbox() {
+        let file = URL(fileURLWithPath: "/tmp/locked.png")
+        XCTAssertEqual(ImageLoadFailure.unreadable(file).folderAccessFile(isSandboxed: true), file)
+        XCTAssertNil(ImageLoadFailure.unreadable(file).folderAccessFile(isSandboxed: false))
+        for final in [ImageLoadFailure.notFound, .undecodable, .tooLarge, .notAnImage, .network] {
+            XCTAssertNil(final.folderAccessFile(isSandboxed: true), "\(final)")
+        }
+    }
+
     /// While editing, a remote URL is fetched only once it stood in the
     /// preview for `stableInterval`; a cancelled wait (the URL changed)
     /// fetches nothing.

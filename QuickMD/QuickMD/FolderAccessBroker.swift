@@ -25,7 +25,10 @@ import Foundation
 ///   ask, and a grant clears the declined marks it covers. Nothing about
 ///   "declined" is persisted.
 /// - Requests while a panel is up wait for its answer (one panel at a time)
-///   and are decided again with it.
+///   and are decided again with it — an explicit one too: a click that
+///   lands while an automatic panel for the same folder is up (the app was
+///   in the background, the click activated it) takes that panel's answer
+///   and never raises a second one.
 /// - An AUTOMATIC request (a picture loading) may be told not to ask at
 ///   all (`mayAsk: false`): while the window's document is in Source Edit,
 ///   whose preview re-renders half-typed paths every pause. The picture
@@ -66,6 +69,8 @@ final class FolderAccessBroker {
     private(set) var declinedFolders: Set<String> = []
     /// The panel being shown (or about to be): requests wait for it.
     private var pending: Task<Void, Never>?
+    /// The folder `pending` asks for (canonical path).
+    private var pendingFolder: String?
 
     init(environment: Environment) {
         self.environment = environment
@@ -73,8 +78,26 @@ final class FolderAccessBroker {
 
     // MARK: Paths
 
+    /// The path as the disk spells it: standardized, symlinks resolved, in
+    /// the on-disk CASE (`resolvingSymlinksInPath` is `realpath`, which on a
+    /// case-insensitive volume returns the stored name: `../Docs/x.png` and a
+    /// document in `/docs/` meet). Both need the path to EXIST — for a path
+    /// that does not, Foundation returns it untouched (`/var/…` instead of
+    /// `/private/var/…`, the case as written) — so the deepest existing
+    /// ancestor is canonicalized and the rest appended as written. Metadata
+    /// only (`stat`, `getattrlist`): the App Sandbox allows it everywhere
+    /// (`application.sb`: `(allow file-read-metadata)`), so this holds for
+    /// folders the app cannot read yet.
     nonisolated static func canonicalPath(_ url: URL) -> String {
-        url.standardizedFileURL.resolvingSymlinksInPath().path
+        var existing = url.standardizedFileURL
+        var rest: [String] = []
+        while existing.path != "/", !FileManager.default.fileExists(atPath: existing.path) {
+            rest.insert(existing.lastPathComponent, at: 0)
+            existing.deleteLastPathComponent()
+        }
+        var path = existing.resolvingSymlinksInPath().path
+        for component in rest { path = (path as NSString).appendingPathComponent(component) }
+        return path
     }
 
     /// `folder` is `path` or one of its ancestors.
@@ -121,7 +144,13 @@ final class FolderAccessBroker {
     func requestAccess(forFileAt file: URL, documentURL: URL?, explicit: Bool, mayAsk: Bool = true) async -> Bool {
         // One panel at a time: wait for the one up, then decide again with
         // its answer.
+        // A panel that asked for a folder covering this file WAS this
+        // request's question: its answer stands, explicit or not (one click
+        // never shows two panels).
+        let path = Self.canonicalPath(file)
+        var explicit = explicit
         while let pending {
+            if let pendingFolder, Self.covers(pendingFolder, path) { explicit = false }
             await pending.value
         }
         guard case .ask(let folder) = decision(forFileAt: file, documentURL: documentURL, explicit: explicit) else {
@@ -131,7 +160,10 @@ final class FolderAccessBroker {
         let task = Task { @MainActor in
             // Cleared by the task itself, before it completes: a waiter that
             // wakes up must never find a finished task still pending.
-            defer { pending = nil }
+            defer {
+                pending = nil
+                pendingFolder = nil
+            }
             await environment.waitUntilReady()
             guard let chosen = environment.prompt(folder), environment.save(chosen) else {
                 declinedFolders.insert(Self.canonicalPath(folder))
@@ -143,7 +175,34 @@ final class FolderAccessBroker {
             environment.didGrant(chosen)
         }
         pending = task
+        pendingFolder = Self.canonicalPath(folder)
         await task.value
         return decision(forFileAt: file, documentURL: documentURL, explicit: false) == .granted
+    }
+}
+
+/// Documents with an active Source Edit session, by the window token that
+/// reported it (`SandboxAccessManager.setEditing`). The key is the document
+/// path AT ACTIVATION and is removed by the token alone: a document renamed
+/// or moved while editing (the view is re-created with the new URL and the
+/// same token) never leaves its old path marked as editing — which would
+/// keep a later document there from ever asking for folder access and make
+/// its remote pictures wait. Pure, unit-tested.
+struct SourceEditRegistry {
+    private var documents: [UUID: String] = [:]
+
+    mutating func set(_ documentURL: URL?, window: UUID, active: Bool) {
+        guard active else {
+            documents[window] = nil
+            return
+        }
+        guard let documentURL else { return }
+        documents[window] = documentURL.standardizedFileURL.path
+    }
+
+    func isEditing(_ documentURL: URL?) -> Bool {
+        guard let documentURL else { return false }
+        let path = documentURL.standardizedFileURL.path
+        return documents.values.contains(path)
     }
 }
