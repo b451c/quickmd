@@ -826,6 +826,8 @@ struct MarkdownBlockParser: Sendable {
             var rule = AttributedString("────────────────────────────────\n")
             rule.setDualFont(size: renderer.scaled(12), fonts: theme.fonts)
             rule.setDualForeground(theme.secondaryTextColor)
+            // One clipped line, never wrapped into a second dash line.
+            rule[AttributeScopes.AppKitAttributes.ParagraphStyleAttribute.self] = MarkdownRenderer.ruleParagraphStyle
             footnoteText.append(rule)
 
             for (index, def) in footnoteDefinitions.enumerated() {

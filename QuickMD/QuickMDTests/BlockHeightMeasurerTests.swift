@@ -1107,3 +1107,42 @@ extension BlockHeightMeasurerTests {
         }
     }
 }
+
+// MARK: - Dash rules never wrap (1.15)
+
+extension BlockHeightMeasurerTests {
+
+    private static let dashRule = String(repeating: "─", count: 32)
+
+    private func textOf(_ block: MarkdownBlock) -> String? {
+        if case .text(let attr) = block.content { return String(attr.characters) }
+        return nil
+    }
+
+    /// A thematic break and the footnote list's separator are 32 "─" each. In a
+    /// column narrower than that (half-width side-by-side preview) they used to
+    /// wrap into a second dash line; clipped, the row is exactly as tall as in a
+    /// wide column, and the characters search/selection/copy see are unchanged.
+    func testDashRulesStayOneLineInANarrowColumn() {
+        let markdown = "Above.\n\n---\n\nCited[^a].\n\n[^a]: one"
+        let blocks = parse(markdown)
+        guard let ruleIndex = blocks.firstIndex(where: { textOf($0) == Self.dashRule }) else {
+            return XCTFail("fixture has no thematic break row")
+        }
+        guard let footIndex = blocks.lastIndex(where: { textOf($0)?.hasPrefix(Self.dashRule + "\n") == true }) else {
+            return XCTFail("fixture has no footnote block led by the separator")
+        }
+        let narrow: CGFloat = 120
+        let wide: CGFloat = 800
+        // The rule really is wider than the narrow column (else this proves nothing).
+        if case .text(let attr) = blocks[ruleIndex].content {
+            XCTAssertGreaterThan(NSAttributedString(attr).size().width, narrow + 20)
+        }
+        let narrowHeights = measure(blocks, width: narrow).table.heights
+        let wideHeights = measure(blocks, width: wide).table.heights
+        XCTAssertEqual(narrowHeights[ruleIndex], wideHeights[ruleIndex], accuracy: tolerance,
+                       "the thematic break wrapped at \(narrow) pt")
+        XCTAssertEqual(narrowHeights[footIndex], wideHeights[footIndex], accuracy: tolerance,
+                       "the footnote separator wrapped at \(narrow) pt")
+    }
+}
