@@ -50,10 +50,12 @@ struct HeadingBlockView: View {
         let renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
         let headingAttr = renderer.renderHeader(title, level: level)
         // The title's first baseline from the fonts it is set in (a code
-        // span is smaller, 13/14) — the same call the measurer makes.
+        // span is smaller, 13/14) and its formulas — the same call the
+        // measurer makes.
         let geometry = Metrics.titleGeometry(
             titleFirstBaseline: Metrics.titleFirstBaseline(of: headingAttr,
-                                                           headerFont: renderer.headerAppKitFont(level: level)))
+                                                           headerFont: renderer.headerAppKitFont(level: level),
+                                                           shown: { shownTitle(headingAttr) }))
 
         TextBlockView(
             blockId: id,
@@ -124,17 +126,26 @@ struct HeadingBlockView: View {
     /// applies to headings); it is built once per layout key and laid out
     /// once per wrap width, so a hover toggle is a lookup.
     private func copyButtonLeading(rowWidth: CGFloat, headingAttr: AttributedString) -> CGFloat {
-        let key = Metrics.titleLayoutKey(title: title, level: level, fontScale: fontScale,
-                                         fonts: theme.fonts)
         let usedWidth = Metrics.titleUsedWidth(
-            cachedAs: key, wrapWidth: Metrics.titleWrapWidth(rowWidth: rowWidth)
-        ) {
-            TextBlockView.makeMathString(from: headingAttr,
-                                         mathFontSize: MarkdownRenderer(theme: theme, fontScale: fontScale)
-                                            .headerFontSize(level: level),
-                                         theme: theme, fontScale: fontScale)
-        }
+            cachedAs: titleKey, wrapWidth: Metrics.titleWrapWidth(rowWidth: rowWidth)
+        ) { makeTitle(headingAttr) }
         return Metrics.copyButtonLeading(titleUsedWidth: usedWidth, rowWidth: rowWidth)
+    }
+
+    private var titleKey: String {
+        Metrics.titleLayoutKey(title: title, level: level, fontScale: fontScale, fonts: theme.fonts)
+    }
+
+    /// The title as its text view shows it, cached per `titleKey`.
+    private func shownTitle(_ headingAttr: AttributedString) -> NSAttributedString {
+        Metrics.cachedTitle(titleKey) { makeTitle(headingAttr) }
+    }
+
+    private func makeTitle(_ headingAttr: AttributedString) -> NSAttributedString {
+        TextBlockView.makeMathString(from: headingAttr,
+                                     mathFontSize: MarkdownRenderer(theme: theme, fontScale: fontScale)
+                                        .headerFontSize(level: level),
+                                     theme: theme, fontScale: fontScale)
     }
 }
 

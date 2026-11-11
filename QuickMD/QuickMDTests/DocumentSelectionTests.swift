@@ -229,7 +229,7 @@ final class DocumentSelectionTests: XCTestCase {
         let math = MathRendering(inlineImage: { _, _, _ in NSImage(size: NSSize(width: 20, height: 10)) },
                                  displayHeight: { _, _, _ in 0 })
         let converted = BlockTextConverter.makeNSAttributedString(
-            from: AttributedString("Area $\\pi r^2$ of a circle"), hasInlineMath: true,
+            from: MarkdownRenderer(theme: theme).renderInline("Area $\\pi r^2$ of a circle"), hasInlineMath: true,
             theme: theme, fontScale: 1, math: math)
 
         // The converter tags the attachment with its source…

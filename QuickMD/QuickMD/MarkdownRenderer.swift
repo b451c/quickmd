@@ -148,6 +148,9 @@ struct MarkdownRenderer: Sendable {
     /// (`renderInline(_:literalBackslashes:literalEntities:)`): GitHub shows
     /// front matter as plain text, references included.
     private var entitiesLiteral = false
+    /// True only for a heading's id text (`headingAnchorText`): no formula
+    /// atoms, the inline pass alone, as GitHub's id reads it.
+    private var formulasDisabled = false
 
     /// `text` with its character references decoded, unless `entitiesLiteral`.
     private func decodedText(_ text: String) -> String {
@@ -501,8 +504,14 @@ struct MarkdownRenderer: Sendable {
     /// A footnote reference counts as its number in ASCII digits: GitHub's
     /// slug reads the heading's text, `Note<sup>1</sup>` is `note1`, and the
     /// superscript digit drawn here is not a word character for the slug.
+    /// Formulas are NOT atoms here (`formulasDisabled`): GitHub finds math
+    /// after its inline pass and takes the id from that pass's text, so
+    /// `# $(a)_n + x_{i}$` is `an--xi` there although QuickMD shows (and
+    /// Contents lists) the formula.
     func headingAnchorText(_ title: String) -> String {
-        let attributed = Self.formulaSourceWithEscapes(renderInlineFormatting(title), softBreaks: true)
+        var githubText = self
+        githubText.formulasDisabled = true
+        let attributed = githubText.renderInlineFormatting(title)
         var text = ""
         for run in attributed.runs {
             if let number = run[FootnoteNumberAttribute.self] {
@@ -515,8 +524,7 @@ struct MarkdownRenderer: Sendable {
     }
 
     func renderHeader(_ text: String, level: Int) -> AttributedString {
-        boldLook(Self.formulaSourceWithEscapes(renderInlineFormatting(Self.shownHeadingTitle(text))),
-                 size: headerFontSize(level: level), recolors: true)
+        boldLook(renderInlineFormatting(Self.shownHeadingTitle(text)), size: headerFontSize(level: level), recolors: true)
     }
 
     /// A BOLD CONTEXT — a heading title, a definition-list term — is bold
@@ -546,56 +554,6 @@ struct MarkdownRenderer: Sendable {
                 .fontDescriptor.symbolicTraits.contains(.italic) ?? false
             piece.setDualFont(size: size * ratio, bold: true, italic: italic, monospaced: isCode, fonts: theme.fonts)
             result.append(piece)
-        }
-        return result
-    }
-
-    /// A heading's formulas keep their LaTeX escapes, which the Markdown
-    /// escape pass removed: `# H \% $a\,b$` reads "H % $a\,b$" (text outside
-    /// the formula loses its backslash as everywhere). The same split as math
-    /// paragraphs (`InlineMathSegmenter.pieces(of:)`). Since v1.15 the title
-    /// view typesets the formulas (`BlockTextConverter.makeMathString`, which
-    /// splits this text the same way); the heading's id and the Contents
-    /// sidebar still read these characters, so they keep the source.
-    private static func formulaSourceWithEscapes(_ attributed: AttributedString,
-                                                 softBreaks: Bool = false) -> AttributedString {
-        guard attributed.characters.contains("$") else { return attributed }
-        let pieces = InlineMathSegmenter.pieces(of: attributed, softBreaks: softBreaks)
-        guard pieces.contains(where: { if case .math = $0.segment { return true } else { return false } }) else {
-            return attributed
-        }
-        var result = AttributedString()
-        var index = attributed.startIndex
-        for (number, piece) in pieces.enumerated() {
-            guard let end = attributed.characters.index(index, offsetBy: piece.length,
-                                                        limitedBy: attributed.endIndex) else { break }
-            switch piece.segment {
-            case .text:
-                result.append(attributed[index..<end])
-            case .math(let latex):
-                // The formula's own attributes (its first run), its source with
-                // escapes — except an escaped `$` (`\$` in the LaTeX: inside a
-                // formula every `$` is one), which stays a `$` TAGGED as
-                // escaped: written back as `\$` it would be a delimiter when
-                // the title view splits this text again.
-                let attributes = attributed[index..<end].runs.first?.attributes ?? AttributeContainer()
-                var source = AttributedString(piece.delimiter, attributes: attributes)
-                for (offset, part) in latex.components(separatedBy: "\\$").enumerated() {
-                    if offset > 0 {
-                        var dollar = AttributedString("$", attributes: attributes)
-                        dollar[EscapedCharacterAttribute.self] = true
-                        source.append(dollar)
-                    }
-                    source.append(AttributedString(part, attributes: attributes))
-                }
-                source.append(AttributedString(piece.delimiter, attributes: attributes))
-                // Its own run whatever `headingLook` does to the fonts: the
-                // boundary after the closer is the markup the source had
-                // (`# T $x$**b**`), which the title view's split reads.
-                source[FormulaSourceAttribute.self] = number
-                result.append(source)
-            }
-            index = end
         }
         return result
     }
@@ -1039,7 +997,8 @@ struct MarkdownRenderer: Sendable {
 
     /// One line of inline Markdown, CommonMark's way: ONE left-to-right pass
     /// cuts the line into nodes — text, finished atoms (escape, code span,
-    /// footnote number, image placeholder, autolink) and delimiter runs —
+    /// formula, footnote number, image placeholder, autolink) and delimiter
+    /// runs —
     /// while a bracket stack resolves links at their `]` and the delimiter
     /// stack (`InlineDelimiterStack`) resolves emphasis and strikethrough;
     /// then the nodes are drawn with the styles of the spans covering them.
@@ -1060,8 +1019,32 @@ struct MarkdownRenderer: Sendable {
         var parse = InlineParse(text: text)
         var remaining = text[...]
         let utf8 = text.utf8
+        // Formulas first, on the source (`InlineMathSegmenter.formulas`):
+        // each is one opaque atom, so no delimiter run, bracket, autolink or
+        // character reference inside it is ever seen. A properties value
+        // (`escapesDisabled`) is front matter, which has no math.
+        let formulas = escapesDisabled || formulasDisabled ? [] : InlineMathSegmenter.formulas(
+            in: text, codeSpans: parse.codeSpans, entities: !entitiesLiteral)
+        var nextFormula = 0
 
         while let byte = remaining.utf8.first {
+            var plainLimit = remaining.endIndex
+            if nextFormula < formulas.count {
+                let offset = utf8.distance(from: utf8.startIndex, to: remaining.startIndex)
+                // A formula some atom jumped over (a link destination, an
+                // autolink) is not one.
+                while nextFormula < formulas.count, formulas[nextFormula].start < offset { nextFormula += 1 }
+                if nextFormula < formulas.count {
+                    let formula = formulas[nextFormula]
+                    if formula.start == offset {
+                        parse.append(.atom(formulaAtom(formula, in: text, index: nextFormula), .body))
+                        remaining = text[utf8.index(utf8.startIndex, offsetBy: formula.end)...]
+                        nextFormula += 1
+                        continue
+                    }
+                    plainLimit = utf8.index(utf8.startIndex, offsetBy: formula.start)
+                }
+            }
             switch byte {
             case UInt8(ascii: "\\"):
                 if !escapesDisabled, let (attr, rest) = tryParseEscape(&remaining) {
@@ -1125,12 +1108,32 @@ struct MarkdownRenderer: Sendable {
                 break
             }
             // Plain text up to the next byte some parser starts on (all of
-            // them ASCII, so the cut is never inside a multi-byte scalar).
-            let next = remaining.utf8.dropFirst().firstIndex(where: Self.startsInlineSyntax) ?? remaining.endIndex
+            // them ASCII, so the cut is never inside a multi-byte scalar), or
+            // the next formula.
+            let next = text.utf8[remaining.startIndex..<plainLimit].dropFirst()
+                .firstIndex(where: Self.startsInlineSyntax) ?? plainLimit
             parse.addPlain(remaining.startIndex..<next)
             remaining = text[next...]
         }
         return draw(parse.finished())
+    }
+
+    /// A formula as the inline pass draws it: its source as written —
+    /// delimiters (a `&#36;` one as `$`) around the LaTeX, escapes and
+    /// references untouched — in the body look, tagged so
+    /// `InlineMathSegmenter.pieces(of:)` finds it. Emphasis and a link over
+    /// it still reach it (`restyle`, `finish`): a formula in link text keeps
+    /// the link.
+    private func formulaAtom(_ formula: InlineMathSegmenter.Formula, in text: String, index: Int) -> AttributedString {
+        let utf8 = text.utf8
+        let latex = text[utf8.index(utf8.startIndex, offsetBy: formula.contentStart)
+                         ..< utf8.index(utf8.startIndex, offsetBy: formula.contentEnd)]
+        let delimiter = String(repeating: "$", count: formula.width)
+        var attr = AttributedString(delimiter + latex + delimiter)
+        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
+        attr.setDualForeground(theme.textColor)
+        attr[InlineFormulaAttribute.self] = InlineFormulaAttribute.Value(index: index, width: formula.width)
+        return attr
     }
 
     /// Bytes the loop in `renderInlineFormatting` dispatches on.
@@ -1151,8 +1154,8 @@ struct MarkdownRenderer: Sendable {
     private enum InlineNode {
         /// Source text, drawn in the body style (character references decoded).
         case text(Substring)
-        /// A finished piece: escape, code span, footnote number, image
-        /// placeholder, autolink — with the font it was drawn in, so
+        /// A finished piece: escape, code span, formula, footnote number,
+        /// image placeholder, autolink — with the font it was drawn in, so
         /// emphasis can add its traits to that font (`restyle`).
         case atom(AttributedString, AtomFont)
         /// A delimiter run (index into the stack's runs): the characters no
@@ -1453,20 +1456,7 @@ struct MarkdownRenderer: Sendable {
         if code.count >= 2, code.hasPrefix(" "), code.hasSuffix(" "), code.contains(where: { $0 != " " }) {
             code = String(code.dropFirst().dropLast())
         }
-
-        // A `$` in a code span is code, never a formula delimiter (GitHub:
-        // "`$x$`" is `<code>$x$</code>` in paragraphs, quotes and cells
-        // alike): tagged as an escaped `$` is, the one thing
-        // `InlineMathSegmenter` reads to leave a dollar alone.
-        var attr = AttributedString()
-        for (index, part) in code.split(separator: "$", omittingEmptySubsequences: false).enumerated() {
-            if index > 0 {
-                var dollar = AttributedString("$")
-                dollar[EscapedCharacterAttribute.self] = true
-                attr.append(dollar)
-            }
-            attr.append(AttributedString(String(part)))
-        }
+        var attr = AttributedString(code)
         attr.setDualFont(size: scaled(13), monospaced: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         attr.setDualBackground(theme.codeBackgroundColor)
@@ -1562,9 +1552,6 @@ struct MarkdownRenderer: Sendable {
         var attr = AttributedString(String(escaped))
         attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
-        // Inline math is found in the rendered text: tagged so `\$` is never
-        // a delimiter and a formula gets its LaTeX escapes back.
-        attr[EscapedCharacterAttribute.self] = true
         return (attr, remaining.dropFirst(2))
     }
 
