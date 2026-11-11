@@ -144,15 +144,65 @@ enum InlineSyntaxScanner {
         return text.utf8.index(text.startIndex, offsetBy: offset)
     }
 
-    /// For `text` starting with `(`: the parsed destination (see
-    /// `linkDestination`) and the index just past the matching `)`. The
-    /// closing paren is found by paren depth (`Foo_(bar)` keeps its parens),
-    /// escaped parens not counted. Nil when the paren is never closed.
+    /// For `text` starting with `(`: the destination of an inline link and
+    /// the index just past its `)`.
+    ///
+    /// CommonMark's form first (`strictLinkTail`): a `<…>` destination may
+    /// hold parens (`[a](<b)c>)` → "b)c") and a title may hold parens or the
+    /// other quote (`[a](u "x (y")`, `[a](u (t "q"))`) — the paren pairs
+    /// alone end such a link at the wrong `)`. When the text is not that
+    /// form, the lenient reading (`linkDestination`): the closing paren by
+    /// paren depth (`Foo_(bar)` keeps its parens), escaped parens not
+    /// counted, so `My Notes.md` and spaced base64 keep working. Nil when
+    /// the paren is never closed.
     static func parenthesizedDestination(_ text: Substring, pairs: PairTable? = nil) -> (url: String, end: String.Index)? {
         guard text.utf8.first == UInt8(ascii: "(") else { return nil }
         let lookup = pairs?.lookup(for: text)
-        guard let found = withBytes(text, { scanParenDestination($0, open: 0, lookup) }) else { return nil }
+        guard let found = withBytes(text, {
+            strictLinkTail($0, open: 0) ?? scanParenDestination($0, open: 0, lookup)
+        }) else { return nil }
         return (found.url, text.utf8.index(text.startIndex, offsetBy: found.end))
+    }
+
+    /// What closes a link's text `[…]` (the `]` is just before `rest`):
+    /// CommonMark's order. An inline tail `(…)` (`parenthesizedDestination`);
+    /// else a full reference `[label]` — a defined label is the link, an
+    /// undefined one makes it NO link (`[foo][bar]` stays text even when
+    /// `foo` is defined); else a collapsed `[]` or a shortcut: the text
+    /// itself as the label (`label`, raw). Labels are matched normalised
+    /// (`ReferenceLabel`). Shared by `MarkdownRenderer` and `ReferenceLinks`
+    /// so a paragraph and a quote resolve the same brackets.
+    enum LinkTail {
+        /// `[text](dest)`: the destination as parsed, the end of the `)`.
+        case inline(url: String, end: String.Index)
+        /// `[text][ref]`, `[text][]`, `[text]`: the definition's URL and the
+        /// end of what the reference consumed (the second label, or nothing).
+        case reference(url: String, end: String.Index)
+    }
+
+    static func linkTail(after rest: Substring, label: Substring, references: [String: String],
+                         pairs: PairTable?) -> LinkTail? {
+        if rest.utf8.first == UInt8(ascii: "("),
+           let inline = parenthesizedDestination(rest, pairs: pairs) {
+            return .inline(url: inline.url, end: inline.end)
+        }
+        guard !references.isEmpty else { return nil }
+        if rest.utf8.first == UInt8(ascii: "[") {
+            let afterOpen = rest.index(after: rest.startIndex)
+            if afterOpen < rest.endIndex,
+               let close = ReferenceLabel.closingBracket(in: rest, from: afterOpen) {
+                let ref = rest[afterOpen..<close]
+                let end = rest.index(after: close)
+                if ref.isEmpty {
+                    return references[ReferenceLabel.normalized(label)].map { .reference(url: $0, end: end) }
+                }
+                if !ReferenceLabel.normalized(ref).isEmpty {
+                    // A real label decides: defined → the link, else no link.
+                    return references[ReferenceLabel.normalized(ref)].map { .reference(url: $0, end: end) }
+                }
+            }
+        }
+        return references[ReferenceLabel.normalized(label)].map { .reference(url: $0, end: rest.startIndex) }
     }
 
     /// An image at the very start of `text`: `![alt](dest)`, `![alt][ref]`,
@@ -206,7 +256,7 @@ enum InlineSyntaxScanner {
     }
 
     /// A line that is nothing but ONE linked image — `[![alt](img)](url)`,
-    /// `[![alt][logo]][site]` or any link form `MarkdownRenderer.tryParseLink`
+    /// `[![alt][logo]][site]` or any link form the renderer
     /// accepts around one image, whitespace around it allowed — as the image
     /// it shows. The link target is NOT returned: the parser makes the line an
     /// ordinary image block (click = preview), as `<a href><img></a>` is;
@@ -229,7 +279,7 @@ enum InlineSyntaxScanner {
         guard let image = self.image(atStartOf: linkText[innerStart...], references: references, pairs: pairs),
               linkText[image.end...].allSatisfy(\.isWhitespace) else { return nil }
 
-        // The link itself, by `tryParseLink`'s rules, ending the line.
+        // The link itself, by the renderer's link forms, ending the line.
         let after = text[text.index(after: close)...]
         if after.hasPrefix("(") {
             guard let destination = parenthesizedDestination(after, pairs: pairs),
@@ -243,6 +293,19 @@ enum InlineSyntaxScanner {
             guard after.isEmpty, references[ReferenceLabel.normalized(linkText)] != nil else { return nil }
         }
         return ImageSyntax(alt: image.alt, url: image.url, end: line.endIndex)
+    }
+
+    /// A CommonMark autolink at the start of `text`: `<scheme:…>` (a scheme
+    /// of 2–32 letters, digits, `+`, `.`, `-` starting with a letter, then
+    /// no white space, control character, `<` or `>`) or `<local@domain>`
+    /// (CommonMark's e-mail grammar). The address between the brackets, as
+    /// written — backslashes are characters there — and the end.
+    static func angleAutolink(atStartOf text: Substring) -> (address: Substring, isEmail: Bool, end: String.Index)? {
+        guard text.utf8.first == UInt8(ascii: "<"),
+              let found = withBytes(text, { scanAngleAutolink($0) }) else { return nil }
+        let utf8 = text.utf8
+        let close = utf8.index(text.startIndex, offsetBy: found.close)
+        return (text[utf8.index(after: text.startIndex)..<close], found.isEmail, utf8.index(after: close))
     }
 
     /// `data:` scheme (case-insensitive) — the destination of an embedded
@@ -274,34 +337,79 @@ enum InlineSyntaxScanner {
     private static let backslash = UInt8(ascii: "\\")
     private static let backtick = UInt8(ascii: "`")
 
-    /// Where `MarkdownRenderer.tryParseInlineCode` would end a code span
-    /// starting at a backtick — so bracket matching skips what the renderer
-    /// will draw as code (CommonMark: code spans outrank brackets;
-    /// `[a `](` b](u)` is a link whose text holds the code "](").
-    /// Its rules exactly: a run of 1 or 2 backticks closes at the FIRST later
-    /// occurrence of that many backticks (a 2-run whose closer is followed by
-    /// a third backtick opens nothing); a run of 3+ is literal and skipped
-    /// whole. No span → nil (the caller moves on one byte, as the renderer
-    /// moves on one character). A search that found no closer is remembered
-    /// per run length, so many unclosed backticks stay linear.
+    /// Code spans as CommonMark defines them — the ONE rule for the renderer
+    /// (`MarkdownRenderer`, through `CodeSpanTable`), the bracket scans here
+    /// (code spans outrank brackets: `[a `](` b](u)` is a link whose text
+    /// holds the code "](") and `ReferenceLinks`. A run of N backticks
+    /// (maximal from the opener on) opens a span that closes at the next run
+    /// of EXACTLY N backticks; with no such run the opening run is literal
+    /// text as a whole (```` ``x` ```` is "``x`", not "`" + code). Inside a
+    /// span a backslash is a character, so closers are raw runs.
+    ///
+    /// The runs of the buffer are listed once, per length, on first use; a
+    /// closer is a binary search — linear however many backticks a line has
+    /// (10 000 unclosed "`" used to be one forward scan each).
     fileprivate struct CodeSpanScanner {
-        private var noCloserAfter: [Int: Int] = [:]  // run length → offset searched from
+        private var runsByLength: [Int: [Int]]?
 
-        mutating func end(_ bytes: Bytes, at start: Int) -> Int? {
+        /// The run opening at `start` (its length) and the offset of its
+        /// closing run, or nil when it closes nowhere (a literal run).
+        mutating func match(_ bytes: Bytes, at start: Int) -> (run: Int, closer: Int?) {
             var run = 0
             while start + run < bytes.count, bytes[start + run] == backtick { run += 1 }
-            if run > 2 { return start + run }
-            if let from = noCloserAfter[run], from <= start + run { return nil }
-            var i = start + run
-            while i + run <= bytes.count {
-                if bytes[i] == backtick, run == 1 || bytes[i + 1] == backtick {
-                    if run == 2, i + 2 < bytes.count, bytes[i + 2] == backtick { return nil }
-                    return i + run
-                }
-                i += 1
+            if runsByLength == nil { runsByLength = Self.runs(bytes) }
+            guard let starts = runsByLength?[run] else { return (run, nil) }
+            // First run of this length starting after the opener.
+            var lo = 0
+            var hi = starts.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if starts[mid] < start + run { lo = mid + 1 } else { hi = mid }
             }
-            noCloserAfter[run] = start + run
-            return nil
+            return (run, lo < starts.count ? starts[lo] : nil)
+        }
+
+        /// Where the code span (or the literal run) starting at `start` ends.
+        mutating func end(_ bytes: Bytes, at start: Int) -> Int? {
+            let found = match(bytes, at: start)
+            return found.closer.map { $0 + found.run } ?? start + found.run
+        }
+
+        private static func runs(_ bytes: Bytes) -> [Int: [Int]] {
+            var runs: [Int: [Int]] = [:]
+            var i = 0
+            while i < bytes.count {
+                guard bytes[i] == backtick else { i += 1; continue }
+                var j = i
+                while j < bytes.count, bytes[j] == backtick { j += 1 }
+                runs[j - i, default: []].append(i)
+                i = j
+            }
+            return runs
+        }
+    }
+
+    /// The code spans of one text, for the renderer and `ReferenceLinks`:
+    /// `CodeSpanScanner` over the text's bytes, runs listed once per text.
+    final class CodeSpanTable {
+        private let text: String
+        private var scanner = CodeSpanScanner()
+
+        /// `text` should be native contiguous UTF-8; slices handed in later
+        /// must be slices of it.
+        init(_ text: String) { self.text = text }
+
+        /// For `slice` starting with a backtick: the span's content and the
+        /// index just past its closing run — or, when the run closes nowhere,
+        /// `content` nil and `end` just past the (literal) run.
+        func span(at slice: Substring) -> (content: Substring?, end: String.Index) {
+            let base = text.utf8.distance(from: text.startIndex, to: slice.startIndex)
+            let found = InlineSyntaxScanner.withBytes(text[...]) { scanner.match($0, at: base) }
+            let utf8 = text.utf8
+            let open = utf8.index(slice.startIndex, offsetBy: found.run)
+            guard let closer = found.closer else { return (nil, open) }
+            let close = utf8.index(text.startIndex, offsetBy: closer)
+            return (text[open..<close], utf8.index(close, offsetBy: found.run))
         }
     }
     private static let ampersand = UInt8(ascii: "&")
@@ -404,6 +512,135 @@ enum InlineSyntaxScanner {
             i += 1
         }
         return nil
+    }
+
+    /// CommonMark's inline link tail at `open` (a `(`): optional white space,
+    /// a destination — `<…>` (no `<` or line break inside) or a raw one (no
+    /// white space or control character, parens balanced, at most 32 deep as
+    /// in cmark) — then optional white space and ONE title (`"…"`, `'…'`,
+    /// `(…)`; white space before it required), optional white space, `)`.
+    /// `[a]()` is the empty destination. Nil when the text is not exactly
+    /// that; `parenthesizedDestination` then reads it leniently.
+    ///
+    /// Cost: a raw destination stops at white space or at a 33rd open paren
+    /// and a title at its first closer, so failed attempts at many `](`
+    /// stay linear in the line.
+    private static func strictLinkTail(_ bytes: Bytes, open: Int) -> (url: String, end: Int)? {
+        let count = bytes.count
+        var i = skipWhitespace(bytes, from: open + 1)
+        guard i < count else { return nil }
+        if bytes[i] == UInt8(ascii: ")") { return ("", i + 1) }
+        let url: String
+        if bytes[i] == UInt8(ascii: "<") {
+            var j = i + 1
+            while j < count {
+                if isEscape(bytes, at: j, before: count) { j += 2; continue }
+                let byte = bytes[j]
+                if byte == UInt8(ascii: ">") || byte == UInt8(ascii: "<") || byte == 0x0A || byte == 0x0D { break }
+                j += 1
+            }
+            guard j < count, bytes[j] == UInt8(ascii: ">") else { return nil }
+            url = unescaped(bytes, (i + 1)..<j)
+            i = j + 1
+        } else {
+            var depth = 0
+            var j = i
+            while j < count {
+                if isEscape(bytes, at: j, before: count) { j += 2; continue }
+                let byte = bytes[j]
+                if byte <= 0x20 || byte == 0x7F { break }
+                if byte == UInt8(ascii: "(") {
+                    depth += 1
+                    if depth > 32 { return nil }
+                } else if byte == UInt8(ascii: ")") {
+                    if depth == 0 { break }
+                    depth -= 1
+                }
+                j += 1
+            }
+            guard depth == 0 else { return nil }
+            url = unescaped(bytes, i..<j)
+            i = j
+        }
+        var k = skipWhitespace(bytes, from: i)
+        guard k < count else { return nil }
+        if bytes[k] == UInt8(ascii: ")") { return (url, k + 1) }
+        guard k > i, let titleEnd = titleEnd(bytes, at: k) else { return nil }
+        k = skipWhitespace(bytes, from: titleEnd)
+        guard k < count, bytes[k] == UInt8(ascii: ")") else { return nil }
+        return (url, k + 1)
+    }
+
+    /// The offset just past a link title starting at `start`, or nil: `"…"`
+    /// and `'…'` end at their first unescaped closer (parens and the other
+    /// quote are text), `(…)` at its first unescaped `)` with no unescaped
+    /// `(` before it.
+    private static func titleEnd(_ bytes: Bytes, at start: Int) -> Int? {
+        let opener = bytes[start]
+        let closer: UInt8
+        switch opener {
+        case UInt8(ascii: "\""), UInt8(ascii: "'"): closer = opener
+        case UInt8(ascii: "("): closer = UInt8(ascii: ")")
+        default: return nil
+        }
+        var i = start + 1
+        while i < bytes.count {
+            if isEscape(bytes, at: i, before: bytes.count) { i += 2; continue }
+            if bytes[i] == closer { return i + 1 }
+            if opener == UInt8(ascii: "("), bytes[i] == opener { return nil }
+            i += 1
+        }
+        return nil
+    }
+
+    private static func isASCIILetter(_ byte: UInt8) -> Bool {
+        (byte | 0x20) >= UInt8(ascii: "a") && (byte | 0x20) <= UInt8(ascii: "z")
+    }
+
+    private static func isASCIIAlphanumeric(_ byte: UInt8) -> Bool {
+        isASCIILetter(byte) || (byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9"))
+    }
+
+    /// The punctuation an e-mail autolink's local part may hold.
+    private static let localSpecials = Set(".!#$%&'*+/=?^_`{|}~-".utf8)
+
+    /// `angleAutolink` over bytes (`bytes[0]` is `<`): the offset of the
+    /// closing `>`. Every attempt stops at the first white space, `<` or
+    /// `>`, so many `<` on a line stay linear.
+    private static func scanAngleAutolink(_ bytes: Bytes) -> (close: Int, isEmail: Bool)? {
+        let count = bytes.count
+        // URI: scheme ":" then anything but white space, controls, < and >.
+        if count > 1, isASCIILetter(bytes[1]) {
+            var i = 2
+            while i < count, i <= 33,
+                  isASCIIAlphanumeric(bytes[i]) || bytes[i] == UInt8(ascii: "+")
+                    || bytes[i] == UInt8(ascii: ".") || bytes[i] == UInt8(ascii: "-") { i += 1 }
+            if i >= 3, i <= 33, i < count, bytes[i] == UInt8(ascii: ":") {
+                var j = i + 1
+                while j < count {
+                    let byte = bytes[j]
+                    if byte == UInt8(ascii: ">") { return (j, false) }
+                    if byte <= 0x20 || byte == 0x7F || byte == UInt8(ascii: "<") { break }
+                    j += 1
+                }
+            }
+        }
+        // E-mail: local part, "@", labels of letters/digits/hyphens (not at
+        // either end, at most 63) separated by dots.
+        var i = 1
+        while i < count, isASCIIAlphanumeric(bytes[i]) || localSpecials.contains(bytes[i]) { i += 1 }
+        guard i > 1, i < count, bytes[i] == UInt8(ascii: "@") else { return nil }
+        i += 1
+        while true {
+            let labelStart = i
+            while i < count, isASCIIAlphanumeric(bytes[i]) || bytes[i] == UInt8(ascii: "-") { i += 1 }
+            let length = i - labelStart
+            guard length >= 1, length <= 63, bytes[labelStart] != UInt8(ascii: "-"),
+                  bytes[i - 1] != UInt8(ascii: "-"), i < count else { return nil }
+            if bytes[i] == UInt8(ascii: ">") { return (i, true) }
+            guard bytes[i] == UInt8(ascii: ".") else { return nil }
+            i += 1
+        }
     }
 
     /// D8 — the destination inside the parens (see `linkDestination`).
