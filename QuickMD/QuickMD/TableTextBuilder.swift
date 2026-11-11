@@ -224,15 +224,20 @@ enum TableTextBuilder {
 
     typealias Metrics = BlockLayout.Table
 
+    /// `math`: the engine a grid cell's inline formulas are typeset with
+    /// (v1.15, `BlockTextConverter.makeMathString`). The real one only on the
+    /// main thread — the off-main measurer defers a table that `needsMath`
+    /// (`measureMathRows` builds it). The default draws formulas as their
+    /// italic source (tests, and tables without `$`, never consult it).
     static func build(headers: [String], rows: [[String]], alignments: [TextAlignment], style: TableStyle,
-                      theme: MarkdownTheme, fontScale: CGFloat) -> TableText {
+                      theme: MarkdownTheme, fontScale: CGFloat, math: MathRendering = .none) -> TableText {
         let renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
         let (columnCount, showsHeader, bands) = grid(headers: headers, rows: rows, alignments: alignments)
         // Rendered once: the key column's width is measured on these very cells.
         let renderedBands = bands.map { band in
             (0..<columnCount).map { column in
                 renderedCell(column < band.count ? band[column] : "", column: column, style: style,
-                             renderer: renderer)
+                             renderer: renderer, math: math)
             }
         }
 
@@ -354,12 +359,26 @@ enum TableTextBuilder {
         var result = ""
         for band in bands {
             for column in 0..<columnCount {
+                // A formula is one attachment character, as `build` with the
+                // real engine draws it (the placeholder never runs SwiftMath).
                 result += renderedCell(column < band.count ? band[column] : "", column: column, style: style,
-                                       renderer: renderer).string
+                                       renderer: renderer, math: DocumentSearch.searchMathPlaceholder).string
                 result += "\n"
             }
         }
         return result
+    }
+
+    /// Whether a grid table has a cell with a formula, i.e. whether `build`
+    /// needs the math engine (v1.15) — the off-main measurer defers such a
+    /// table to the main actor. Only cells with a `$` are rendered.
+    static func needsMath(headers: [String], rows: [[String]], style: TableStyle,
+                          renderer: MarkdownRenderer) -> Bool {
+        guard style == .grid else { return false }
+        func cellNeedsMath(_ cell: String) -> Bool {
+            cell.contains("$") && BlockTextConverter.needsMath(renderer.renderInline(cell))
+        }
+        return headers.contains(where: cellNeedsMath) || rows.contains { $0.contains(where: cellNeedsMath) }
     }
 
     /// The bands the string is made of: the header band only when it shows
@@ -378,15 +397,21 @@ enum TableTextBuilder {
 
     /// One cell's rendered text (AppKit scope), without its "\n". A
     /// `.properties` key (column 0) is literal (`keyCell`), its value
-    /// `valueCell`, every grid cell inline Markdown.
+    /// `valueCell`, every grid cell inline Markdown with its formulas typeset
+    /// (v1.15, `BlockTextConverter.makeMathString`: the paragraphs' `$` rule,
+    /// 14 pt × zoom). Front matter has no math: GitHub shows it as text.
     private static func renderedCell(_ markdown: String, column: Int, style: TableStyle,
-                                     renderer: MarkdownRenderer) -> NSMutableAttributedString {
-        let attributed = style == .properties
-            ? (column == 0 ? keyCell(markdown, renderer: renderer) : valueCell(markdown, renderer: renderer))
-            : renderer.renderInline(markdown)
-        let cell = NSMutableAttributedString(
-            attributedString: (try? NSAttributedString(attributed, including: \.appKit))
-                ?? NSAttributedString(string: markdown))
+                                     renderer: MarkdownRenderer, math: MathRendering) -> NSMutableAttributedString {
+        let ns: NSAttributedString
+        if style == .properties {
+            let attributed = column == 0 ? keyCell(markdown, renderer: renderer)
+                                         : valueCell(markdown, renderer: renderer)
+            ns = (try? NSAttributedString(attributed, including: \.appKit)) ?? NSAttributedString(string: markdown)
+        } else {
+            ns = BlockTextConverter.makeMathString(from: renderer.renderInline(markdown), theme: renderer.theme,
+                                                   fontScale: renderer.fontScale, math: math)
+        }
+        let cell = NSMutableAttributedString(attributedString: ns)
         // One paragraph per cell is the layout's invariant (TS-D4). A table row
         // is one source line, so this never fires today; it keeps the
         // invariant if the renderer ever emits a break.

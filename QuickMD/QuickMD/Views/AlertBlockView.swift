@@ -75,6 +75,7 @@ struct AlertBlockView: View {
                     searchTerm: searchText,
                     focusedOccurrence: focusedOccurrence,
                     preconverted: preconverted,
+                    typesetsTextKindMath: true,
                     onLink: onLink
                 )
             }

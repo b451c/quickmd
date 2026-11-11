@@ -842,7 +842,7 @@ struct MarkdownView: View {
                         // hosts disagree about inline math.
                         meta[block.id] = TextBlockMeta(
                             plain: plain,
-                            hasInlineMath: BlockTextConverter.containsInlineMath(plain))
+                            hasInlineMath: BlockTextConverter.containsInlineMath(attr))
                     }
                 }
                 // Measure in the SAME task, so blocks and their heights reach the
@@ -941,6 +941,9 @@ struct MarkdownView: View {
             // everything that alters the characters (text, theme, fonts, zoom)
             // goes through a re-parse.
             let reusableStrings = measured.converted
+            // Tables with formulas are built on the main actor (v1.15); the
+            // same instance is re-wrapped, never re-typeset (`measureMathRows`).
+            let reusableTables = measured.tables
             let raw: MeasuredBlocks = await Task.detached(priority: .userInitiated) {
                 BlockHeightMeasurer.measure(blocks: blocks, theme: currentTheme, fontScale: scale,
                                             contentWidth: width, heightSeeds: seeds,
@@ -953,7 +956,8 @@ struct MarkdownView: View {
                                                           blocks: blocks, theme: currentTheme,
                                                           fontScale: scale, contentWidth: width,
                                                           math: .swiftMath,
-                                                          reusing: reusableStrings)
+                                                          reusing: reusableStrings,
+                                                          reusingTables: reusableTables)
             if firstTableForParse {
                 rerunSearchAfterReparse()
                 followCrossDocumentAnchor()
@@ -1630,34 +1634,34 @@ struct MarkdownView: View {
             if let cached { return cached }
             return TextBlockView.makeNSAttributedString(
                 from: attributed,
-                hasInlineMath: BlockTextConverter.containsInlineMath(String(attributed.characters)),
+                hasInlineMath: BlockTextConverter.containsInlineMath(attributed),
                 theme: theme, fontScale: scale)
         case .blockquote(let content, _):
             if let cached { return cached }
-            return TextBlockView.makeNSAttributedString(
-                from: MarkdownRenderer(theme: theme, fontScale: scale).renderQuotedBody(content),
-                hasInlineMath: false, theme: theme, fontScale: scale)
+            let renderer = MarkdownRenderer(theme: theme, fontScale: scale)
+            return BlockTextConverter.quotedBody(renderer.renderQuotedBody(content), renderer: renderer,
+                                                 math: .swiftMath)
         case .alert(_, let content):
             // The alert's TITLE is chrome, not text: only the body is selectable.
             guard !content.isEmpty else { return nil }
             if let cached { return cached }
-            return TextBlockView.makeNSAttributedString(
-                from: MarkdownRenderer(theme: theme, fontScale: scale).renderQuotedBody(content),
-                hasInlineMath: false, theme: theme, fontScale: scale)
+            let renderer = MarkdownRenderer(theme: theme, fontScale: scale)
+            return BlockTextConverter.quotedBody(renderer.renderQuotedBody(content), renderer: renderer,
+                                                 math: .swiftMath)
         case .codeBlock(let code, _):
             // The plain string the view shows until the highlight lands; the
             // highlight changes colours only, never characters.
             return BlockTextConverter.plainCode(code, theme: theme, fontScale: scale)
         case .heading(let level, let title, _):
             // Exactly what `HeadingBlockView` hands its `TextBlockView`: the
-            // same `renderHeader` output through the same converter (no
-            // inline math — a heading shows `$…$` literally, as before). The
-            // measurer kept it (`MeasuredBlocks.converted`): a ⌘C of a
-            // heading-heavy document no longer converts every heading again.
+            // same `renderHeader` output through the same converter (formulas
+            // typeset at the heading's size since v1.15). The measurer kept
+            // it (`MeasuredBlocks.converted`): a ⌘C of a heading-heavy
+            // document no longer converts every heading again.
             if let cached { return cached }
-            return TextBlockView.makeNSAttributedString(
-                from: MarkdownRenderer(theme: theme, fontScale: scale).renderHeader(title, level: level),
-                hasInlineMath: false, theme: theme, fontScale: scale)
+            let renderer = MarkdownRenderer(theme: theme, fontScale: scale)
+            return BlockTextConverter.headingTitle(renderer.renderHeader(title, level: level), level: level,
+                                                   renderer: renderer, math: .swiftMath)
         case .table:
             return selectableTable(for: block, installedVersion: installedVersion)?.string
         case .image, .imageRow, .svgImage, .mathBlock, .mermaidDiagram:
@@ -1679,7 +1683,7 @@ struct MarkdownView: View {
             return table
         }
         return TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments, style: style,
-                                      theme: theme, fontScale: scale)
+                                      theme: theme, fontScale: scale, math: .swiftMath)
     }
 
     /// The Settings default, normalized (never blank, never 0).

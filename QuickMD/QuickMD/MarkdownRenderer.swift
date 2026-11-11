@@ -502,7 +502,7 @@ struct MarkdownRenderer: Sendable {
     /// slug reads the heading's text, `Note<sup>1</sup>` is `note1`, and the
     /// superscript digit drawn here is not a word character for the slug.
     func headingAnchorText(_ title: String) -> String {
-        let attributed = Self.formulaSourceWithEscapes(renderInlineFormatting(title))
+        let attributed = Self.formulaSourceWithEscapes(renderInlineFormatting(title), softBreaks: true)
         var text = ""
         for run in attributed.runs {
             if let number = run[FootnoteNumberAttribute.self] {
@@ -549,17 +549,17 @@ struct MarkdownRenderer: Sendable {
         return result
     }
 
-    /// Headings typeset no inline math (the title view converts with
-    /// `hasInlineMath: false`), so a `$…$` shows its source — and that source
-    /// must keep its LaTeX escapes, which the Markdown escape pass removed:
-    /// `# H \% $a\,b$` shows "H % $a\,b$" (text outside the formula loses
-    /// its backslash as everywhere). The same split as math paragraphs
-    /// (`InlineMathSegmenter.pieces(of:)`); every heading consumer — view,
-    /// measurer, title cache, ids, Contents, search, copy, print — reads
-    /// `renderHeader`, so they all see this text.
-    private static func formulaSourceWithEscapes(_ attributed: AttributedString) -> AttributedString {
+    /// A heading's formulas keep their LaTeX escapes, which the Markdown
+    /// escape pass removed: `# H \% $a\,b$` reads "H % $a\,b$" (text outside
+    /// the formula loses its backslash as everywhere). The same split as math
+    /// paragraphs (`InlineMathSegmenter.pieces(of:)`). Since v1.15 the title
+    /// view typesets the formulas (`BlockTextConverter.makeMathString`, which
+    /// splits this text the same way); the heading's id and the Contents
+    /// sidebar still read these characters, so they keep the source.
+    private static func formulaSourceWithEscapes(_ attributed: AttributedString,
+                                                 softBreaks: Bool = false) -> AttributedString {
         guard attributed.characters.contains("$") else { return attributed }
-        let pieces = InlineMathSegmenter.pieces(of: attributed)
+        let pieces = InlineMathSegmenter.pieces(of: attributed, softBreaks: softBreaks)
         guard pieces.contains(where: { if case .math = $0.segment { return true } else { return false } }) else {
             return attributed
         }
@@ -572,11 +572,22 @@ struct MarkdownRenderer: Sendable {
             case .text:
                 result.append(attributed[index..<end])
             case .math(let latex):
-                // The formula's own attributes (its first run), its source with escapes.
-                var source = AttributedString("$" + latex + "$")
-                if let first = attributed[index..<end].runs.first {
-                    source.setAttributes(first.attributes)
+                // The formula's own attributes (its first run), its source with
+                // escapes — except an escaped `$` (`\$` in the LaTeX: inside a
+                // formula every `$` is one), which stays a `$` TAGGED as
+                // escaped: written back as `\$` it would be a delimiter when
+                // the title view splits this text again.
+                let attributes = attributed[index..<end].runs.first?.attributes ?? AttributeContainer()
+                var source = AttributedString(piece.delimiter, attributes: attributes)
+                for (offset, part) in latex.components(separatedBy: "\\$").enumerated() {
+                    if offset > 0 {
+                        var dollar = AttributedString("$", attributes: attributes)
+                        dollar[EscapedCharacterAttribute.self] = true
+                        source.append(dollar)
+                    }
+                    source.append(AttributedString(part, attributes: attributes))
                 }
+                source.append(AttributedString(piece.delimiter, attributes: attributes))
                 result.append(source)
             }
             index = end
@@ -610,20 +621,109 @@ struct MarkdownRenderer: Sendable {
     /// Shared by `BlockquoteView`, `AlertBlockView` and `BlockHeightMeasurer`:
     /// the measured string has to be the rendered string, character for
     /// character, or the row height is wrong.
+    ///
+    /// A paragraph that is only `$$…$$` formulas (`quotedBodyLines`) becomes
+    /// one line per formula: its source on one line, tagged with
+    /// `DisplayMathAttribute`, which `BlockTextConverter.makeMathString`
+    /// typesets as a display formula.
     func renderQuotedBody(_ content: String) -> AttributedString {
         var result = AttributedString()
-        let lines = Self.joinSoftBreaks(content.components(separatedBy: "\n"))
+        let lines = Self.quotedBodyLines(content)
         for (index, line) in lines.enumerated() {
-            if Self.isBlankLine(line) {
+            switch line {
+            case .blank:
                 result.append(AttributedString(" "))
-            } else {
-                result.append(renderInline(line))
+            case .text(let text):
+                result.append(renderInline(text))
+            case .displayMath(let latex):
+                // One line whatever the source's line breaks: the converter
+                // replaces the whole run, and every other consumer reads lines.
+                var source = AttributedString("$$" + latex.replacingOccurrences(of: "\n", with: " ") + "$$")
+                source.setDualFont(size: scaled(14), fonts: theme.fonts)
+                source.setDualForeground(theme.textColor)
+                source[DisplayMathAttribute.self] = latex
+                result.append(source)
             }
             if index < lines.count - 1 {
                 result.append(AttributedString("\n"))
             }
         }
         return result
+    }
+
+    /// One shown line of a quote or alert body.
+    enum QuotedBodyLine: Equatable {
+        /// A blank source line (a paragraph break).
+        case blank
+        /// Inline Markdown, soft breaks already joined (`joinSoftBreaks`).
+        case text(String)
+        /// A display formula: its LaTeX, line breaks as written.
+        case displayMath(latex: String)
+    }
+
+    /// The lines a quote or alert body shows — screen (`renderQuotedBody`)
+    /// and print (`PrintableBlockquoteView`, `PrintableAlertView`) alike.
+    ///
+    /// Display math inside a quote, as GitHub decides it (v1.15, checked with
+    /// `gh api markdown`): a PARAGRAPH (lines between blank lines) made only
+    /// of `$$…$$` formulas — `$$a+b$$`, or `$$` / LaTeX lines / `$$`, or
+    /// several formulas — shows each formula as display math. A `$$…$$` that
+    /// shares its paragraph with text stays in the text, where the segmenter
+    /// reads it as an INLINE formula ("Before⏎$$E$$⏎after", as GitHub's
+    /// `js-inline-math`), or as text when its `$$` stands alone on a line
+    /// ("Text⏎$$⏎x⏎$$": joined, the opener is followed by a space — text on
+    /// GitHub too). The formula is read from the RAW lines, before the
+    /// soft-break join, so a LaTeX `\\` at a line end stays LaTeX (the join
+    /// would read it as a hard break).
+    ///
+    /// Without `$$` in the body this is exactly `joinSoftBreaks` (blank lines
+    /// reset its state, so joining paragraph by paragraph equals joining the
+    /// whole body).
+    static func quotedBodyLines(_ content: String) -> [QuotedBodyLine] {
+        let raw = content.components(separatedBy: "\n")
+        guard content.contains("$$") else {
+            return joinSoftBreaks(raw).map { isBlankLine($0) ? .blank : .text($0) }
+        }
+        var result: [QuotedBodyLine] = []
+        var paragraph: [String] = []
+        func flush() {
+            guard !paragraph.isEmpty else { return }
+            if let formulas = displayFormulas(paragraph) {
+                result.append(contentsOf: formulas.map { .displayMath(latex: $0) })
+            } else {
+                result.append(contentsOf: joinSoftBreaks(paragraph).map { isBlankLine($0) ? .blank : .text($0) })
+            }
+            paragraph = []
+        }
+        for line in raw {
+            if isBlankLine(line) {
+                flush()
+                result.append(.blank)
+            } else {
+                paragraph.append(line)
+            }
+        }
+        flush()
+        return result
+    }
+
+    /// The formulas of a paragraph made only of `$$…$$` formulas (white space
+    /// between them), each trimmed; nil when anything else is in it or a
+    /// formula is empty.
+    static func displayFormulas(_ paragraph: [String]) -> [String]? {
+        var rest = paragraph.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)[...]
+        guard rest.hasPrefix("$$") else { return nil }
+        var formulas: [String] = []
+        while !rest.isEmpty {
+            guard rest.hasPrefix("$$") else { return nil }
+            let body = rest.dropFirst(2)
+            guard let close = body.range(of: "$$") else { return nil }
+            let latex = body[..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !latex.isEmpty else { return nil }
+            formulas.append(latex)
+            rest = body[close.upperBound...].drop(while: { $0.isWhitespace || $0.isNewline })
+        }
+        return formulas.isEmpty ? nil : formulas
     }
 
     // MARK: - List Indentation
@@ -1354,7 +1454,20 @@ struct MarkdownRenderer: Sendable {
         if code.count >= 2, code.hasPrefix(" "), code.hasSuffix(" "), code.contains(where: { $0 != " " }) {
             code = String(code.dropFirst().dropLast())
         }
-        var attr = AttributedString(code)
+
+        // A `$` in a code span is code, never a formula delimiter (GitHub:
+        // "`$x$`" is `<code>$x$</code>` in paragraphs, quotes and cells
+        // alike): tagged as an escaped `$` is, the one thing
+        // `InlineMathSegmenter` reads to leave a dollar alone.
+        var attr = AttributedString()
+        for (index, part) in code.split(separator: "$", omittingEmptySubsequences: false).enumerated() {
+            if index > 0 {
+                var dollar = AttributedString("$")
+                dollar[EscapedCharacterAttribute.self] = true
+                attr.append(dollar)
+            }
+            attr.append(AttributedString(String(part)))
+        }
         attr.setDualFont(size: scaled(13), monospaced: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         attr.setDualBackground(theme.codeBackgroundColor)

@@ -156,12 +156,12 @@ enum SelectionRows {
             guard range.length > 0 else { return nil }
             return .text(withoutCellLayout(table.string.attributedSubstring(from: range)))
         }
-        let string = table.string.string as NSString
+        let text = copiedText(of: table.string)
         var bands: [[String]] = []
         for band in first.band...last.band {
             let lower = band == first.band ? first.column : 0
             let upper = band == last.band ? last.column : layout.columnCount - 1
-            bands.append((lower...upper).map { string.substring(with: coveredText(band, $0)) })
+            bands.append((lower...upper).map { text(coveredText(band, $0)) })
         }
         return .tableCells(bands: bands)
     }
@@ -175,10 +175,22 @@ enum SelectionRows {
     /// 1.12's `tsv` padded to (the parser normalizes every row to it).
     private static func wholeTable(_ table: TableText) -> SelectionPiece {
         let layout = table.layout
-        let string = table.string.string as NSString
-        let bands = layout.cellRanges.map { $0.map(string.substring(with:)) }
+        let text = copiedText(of: table.string)
+        let bands = layout.cellRanges.map { $0.map(text) }
         guard layout.showsHeader, let header = bands.first else { return .table(headers: nil, rows: bands) }
         return .table(headers: header, rows: Array(bands.dropFirst()))
+    }
+
+    /// The text of a range of a table string as it copies: a cell's formula
+    /// (v1.15) is its source `$…$` — `DocumentCopyBuilder.replacingAttachments`,
+    /// as in a paragraph — not the attachment character it is drawn as.
+    /// Asked once per copy: a table without formulas reads plain substrings.
+    private static func copiedText(of string: NSAttributedString) -> (NSRange) -> String {
+        let plain = string.string as NSString
+        guard string.containsAttachments else { return { plain.substring(with: $0) } }
+        return { range in
+            DocumentCopyBuilder.replacingAttachments(in: string.attributedSubstring(from: range)).string
+        }
     }
 
     /// `text` with what belongs to the TABLE removed from its paragraph

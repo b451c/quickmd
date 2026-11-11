@@ -33,10 +33,10 @@ extension MathRendering {
     /// height is `ascent + descent` of the same display list (`MathImage`
     /// additionally rounds up, which is the safe direction for a row height).
     static let swiftMath = MathRendering(
-        inlineImage: { latex, theme, fontScale in
+        inlineImage: { latex, theme, fontSize in
             var mathImage = MathImage(
                 latex: latex,
-                fontSize: 14 * fontScale,
+                fontSize: fontSize,
                 textColor: NSColor(theme.textColor),
                 labelMode: .text,
                 textAlignment: .left
@@ -62,7 +62,16 @@ extension MathRendering {
         // declines (`MathInk.typesetsToSomething`). No bitmap, so the check
         // costs a fraction of the `displayHeight` call that follows for the
         // same row.
-        typesets: { latex in MathInk.typesetsToSomething(latex) }
+        typesets: { latex in MathInk.typesetsToSomething(latex) },
+        // A display formula inside a quote or alert body (v1.15): display
+        // style, as `MTMathUILabel` draws a `$$` block; nothing drawn → nil
+        // (the body shows the LaTeX instead).
+        displayImage: { latex, theme, fontSize in
+            var mathImage = MathImage(latex: latex, fontSize: fontSize, textColor: NSColor(theme.textColor))
+            let (error, image, _) = mathImage.asImage()
+            guard error == nil, let image, MathInk.drawsSomething(latex, image: image) else { return nil }
+            return image
+        }
     )
 }
 

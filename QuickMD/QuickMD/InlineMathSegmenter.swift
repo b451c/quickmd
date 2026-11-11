@@ -14,9 +14,49 @@ enum EscapedCharacterAttribute: AttributedStringKey {
     static let name = "qmdEscapedCharacter"
 }
 
-/// Splits paragraph text into alternating plain-text and inline-math segments.
-/// Math is delimited by single `$` (never `$$` — that's display math).
-/// Pure Foundation — shared by TextBlockView (app) and the unit tests.
+/// Marks a display formula inside a quote or alert body (v1.15): a paragraph
+/// that is nothing but `$$…$$` formulas (`MarkdownRenderer.quotedBodyLines`).
+/// The value is the formula's LaTeX as written (line breaks kept); the
+/// characters it covers are its source on one line, so a body line is still
+/// one line. `BlockTextConverter.makeMathString` draws it as a centred
+/// display formula. Not part of the AppKit scope, like
+/// `EscapedCharacterAttribute`.
+enum DisplayMathAttribute: AttributedStringKey {
+    typealias Value = String
+    static let name = "qmdDisplayMath"
+}
+
+/// Splits paragraph text into alternating plain-text and inline-math segments
+/// — THE inline-math rule: the views, the measurer, search, print and every
+/// "does this need the math engine" test (`BlockTextConverter
+/// .containsInlineMath`, `needsMath`) ask this, never a second pattern.
+/// Pure Foundation — shared by the app and the unit tests.
+///
+/// The rule (v1.15; GitHub's output from `gh api markdown -f mode=gfm`,
+/// quoted in `MathInTextKindsTests`):
+/// - OPENING: any unescaped `$` may open, whatever precedes it — 1.14.4's
+///   rule, kept on purpose (the owner's call): `中文$x$中文`, `—$x$`,
+///   `=$x$`, `"$x$"`, `[$x$]`, a `$` after a no-break space stay formulas,
+///   although GitHub opens only at the start or after white space or `(`.
+///   Not followed by white space (`$ a$` is text).
+/// - CLOSING (GitHub's): the closer is the NEXT unescaped `$` (`$$` for a
+///   `$$` opener), not preceded by white space; if an ASCII letter, digit or
+///   `_` follows it IN THE SOURCE, it closes nothing and that opener fails —
+///   `$HOME/$USER`, `$5-$10`, `=$A$1`, `US$5 and US$6`, `$x$s` are text.
+///   "In the source": the rendered text has lost the markup, so a closer
+///   followed by a markup boundary (a new attribute run: `$x$**b**`,
+///   `$x$[l](u)`, `$x$<sup>2</sup>`, `$x$` then a code span) closes — those
+///   are formulas on GitHub and were in 1.14.4.
+/// - A formula never spans a line break, nor the edge of a link
+///   (`[$a](u) b$` is text). Digits are a formula (`$5$`, as GitHub).
+/// - `$$…$$` inside text is an INLINE formula (GitHub's `js-inline-math`);
+///   its content holds no `$`, and a run of three or more `$` is text
+///   (`$$$x$$$`, `$$a$b$$` as on GitHub). A quote paragraph made only of
+///   `$$…$$` and a top-level `$$` line are display math, decided before this
+///   (`MarkdownRenderer.quotedBodyLines`, the parser).
+/// Escaped dollars (`\$`, `EscapedCharacterAttribute`) and a code span's `$`
+/// are never delimiters — QuickMD's long-standing rule; GitHub's API treats
+/// `\$x\$` as math, which the app deliberately does not.
 enum InlineMathSegmenter {
 
     /// The Character offsets, in `String(attributed.characters)`, of every
@@ -42,30 +82,70 @@ enum InlineMathSegmenter {
 
     /// A segment as the views draw it: text as is, a formula as the LaTeX to
     /// typeset (escaped characters with their backslash back, `tex`), with
-    /// the number of Characters it spans in the rendered text (`$…$`).
+    /// the number of Characters it spans in the rendered text (`$…$`), and
+    /// its delimiter (`$`, or `$$` for an in-text `$$…$$`) — copy writes it
+    /// back around the LaTeX.
     struct Piece: Equatable {
         let segment: Segment
         let length: Int
+        var delimiter: String = "$"
     }
 
     /// The paragraph's text and formulas, from the renderer's string: the one
     /// split the screen, the measurer, search and print share.
-    static func pieces(of attributed: AttributedString) -> [Piece] {
+    ///
+    /// `softBreaks`: a "\n" in `attributed` is a soft line break of ONE
+    /// paragraph (a Setext title's id text keeps them), which a formula may
+    /// span as it spans the space the break reads as everywhere else.
+    static func pieces(of attributed: AttributedString, softBreaks: Bool = false) -> [Piece] {
         let plain = String(attributed.characters)
+        guard plain.contains("$") else { return plain.isEmpty ? [] : [Piece(segment: .text(plain), length: plain.count)] }
         let escaped = escapedCharacters(in: attributed)
+        let (runStarts, linkEdges) = boundaries(in: attributed)
         var offset = 0
-        return split(plain, escaped: escaped).map { segment in
+        return delimited(plain, escaped: escaped, softBreaks: softBreaks,
+                         runStarts: runStarts, linkEdges: linkEdges).map { segment, width in
             switch segment {
             case .text(let text):
                 offset += text.count
                 return Piece(segment: segment, length: text.count)
             case .math(let source):
-                let piece = Piece(segment: .math(tex(source, escaped: escaped, contentStart: offset + 1)),
-                                  length: source.count + 2)
+                let piece = Piece(segment: .math(tex(source, escaped: escaped, contentStart: offset + width)),
+                                  length: source.count + 2 * width,
+                                  delimiter: String(repeating: "$", count: width))
                 offset += piece.length
                 return piece
             }
         }
+    }
+
+    /// Character offsets where an attribute run starts (markup the rendered
+    /// text lost: a closer followed by one is followed by markup in the
+    /// source) and where the link changes (a formula never spans one). Runs,
+    /// not characters, are walked.
+    static func boundaries(in attributed: AttributedString) -> (runStarts: Set<Int>, linkEdges: Set<Int>) {
+        let characters = attributed.characters
+        var runStarts: Set<Int> = []
+        var linkEdges: Set<Int> = []
+        var offset = 0
+        for run in attributed.runs {
+            if offset > 0 { runStarts.insert(offset) }
+            offset += characters[run.range].count
+        }
+        offset = 0
+        for (link, range) in attributed.runs[\.link] {
+            _ = link
+            if offset > 0 { linkEdges.insert(offset) }
+            offset += characters[range].count
+        }
+        return (runStarts, linkEdges)
+    }
+
+    /// Whether `pieces(of:)` has a formula — the one "needs the math engine"
+    /// decision for every kind.
+    static func hasMath(_ attributed: AttributedString) -> Bool {
+        guard attributed.characters.contains("$") else { return false }
+        return pieces(of: attributed).contains { if case .math = $0.segment { return true } else { return false } }
     }
 
     /// A formula's LaTeX: `source` (as rendered) with a backslash put back
@@ -86,72 +166,70 @@ enum InlineMathSegmenter {
     /// (`escapedCharacters(in:)`). An escaped `$` is never a delimiter, so it
     /// stays text or, inside a formula, part of its LaTeX.
     static func split(_ text: String, escaped: Set<Int> = []) -> [Segment] {
-        var segments: [Segment] = []
-        var remaining = text[...]
-        var buffer = ""
-        let literal: Set<String.Index> = Set(escaped.compactMap {
-            text.index(text.startIndex, offsetBy: $0, limitedBy: text.endIndex)
-        })
-        /// The next delimiter `$` at or after `from`.
-        func nextDollar(in slice: Substring) -> String.Index? {
-            var index = slice.startIndex
-            while let found = slice[index...].firstIndex(of: "$") {
-                if !literal.contains(found) { return found }
-                index = slice.index(after: found)
-            }
-            return nil
+        delimited(text, escaped: escaped, softBreaks: false, runStarts: [], linkEdges: []).map(\.segment)
+    }
+
+    /// `split` with each formula's delimiter width (1 for `$`, 2 for `$$`).
+    /// `runStarts` / `linkEdges`: `boundaries(in:)` (empty for plain text).
+    private static func delimited(_ text: String, escaped: Set<Int>, softBreaks: Bool,
+                                  runStarts: Set<Int>, linkEdges: Set<Int>) -> [(segment: Segment, width: Int)] {
+        let chars = Array(text)
+        let count = chars.count
+        func isDollar(_ k: Int) -> Bool { k >= 0 && k < count && chars[k] == "$" && !escaped.contains(k) }
+        /// GitHub: a closer followed by an ASCII letter, digit or `_` in the
+        /// source closes nothing — a markup boundary in between is source.
+        func mayClose(before k: Int) -> Bool {
+            guard k < count, !runStarts.contains(k) else { return true }
+            let next = chars[k]
+            return !(next.isASCII && (next.isLetter || next.isNumber || next == "_"))
         }
+        func breaksLine(_ k: Int) -> Bool { !softBreaks && chars[k] == "\n" }
 
-        while !remaining.isEmpty {
-            // Look for opening $
-            guard let dollarIndex = nextDollar(in: remaining) else {
-                buffer.append(contentsOf: remaining)
-                break
+        var result: [(segment: Segment, width: Int)] = []
+        var textStart = 0
+        var k = 0
+        while k < count {
+            guard isDollar(k) else { k += 1; continue }
+            // A run of three or more dollars is text (`$$$x$$$`).
+            var run = k
+            while isDollar(run) { run += 1 }
+            if run - k >= 3 { k = run; continue }
+            let width = run - k
+            let contentStart = k + width
+            // The next delimiter of the same width; a line break ends the search.
+            var close = contentStart
+            while close < count, !breaksLine(close), !isDollar(close) { close += 1 }
+            var closes = close < count && isDollar(close)
+            if closes, width == 2, !(isDollar(close + 1) && !isDollar(close + 2)) {
+                // `$$…$$` holds no single `$`: `$$a$b$$` is text as a whole
+                // (GitHub) — skip to its closing `$$` on this line, if any,
+                // so `$b$` inside is no formula either.
+                var end = close
+                while end < count, !breaksLine(end), !(isDollar(end) && isDollar(end + 1)) { end += 1 }
+                if end < count, isDollar(end) { k = end + 2; continue }
+                closes = false
             }
-
-            // Skip $$ (display math delimiter, not inline)
-            let afterDollar = remaining.index(after: dollarIndex)
-            if afterDollar < remaining.endIndex && remaining[afterDollar] == "$" && !literal.contains(afterDollar) {
-                buffer.append(contentsOf: remaining[remaining.startIndex...afterDollar])
-                remaining = remaining[remaining.index(after: afterDollar)...]
+            let content = closes ? chars[contentStart..<close] : []
+            guard closes, let first = content.first, let last = content.last,
+                  !first.isWhitespace, !last.isWhitespace,
+                  !linkEdges.contains(where: { $0 > k && $0 <= close + width - 1 }) else {
+                // Past the whole opener: the second `$` of a failed `$$` is
+                // no opener of its own (`$$a$` is text, as in 1.14.4).
+                k = run
                 continue
             }
-
-            // Check for closing $
-            let searchStart = afterDollar
-            guard searchStart < remaining.endIndex,
-                  let closeIndex = nextDollar(in: remaining[searchStart...]) else {
-                buffer.append(contentsOf: remaining)
-                break
-            }
-
-            let latex = String(remaining[searchStart..<closeIndex])
-
-            // Validate: not empty, not purely numbers, no leading/trailing whitespace
-            guard !latex.isEmpty,
-                  latex.first?.isWhitespace != true,
-                  latex.last?.isWhitespace != true,
-                  !latex.allSatisfy({ $0.isNumber || $0 == "." || $0 == "," }) else {
-                buffer.append(contentsOf: remaining[remaining.startIndex...dollarIndex])
-                remaining = remaining[afterDollar...]
+            guard mayClose(before: close + width) else {
+                // A `$` glued to a word (`$USER`, `$10`) neither closes nor
+                // opens: `$a$b c$`, `PS1="$USER@$HOST"` stay text.
+                k = close + width
                 continue
             }
-
-            // Flush text before this math
-            buffer.append(contentsOf: remaining[remaining.startIndex..<dollarIndex])
-            if !buffer.isEmpty {
-                segments.append(.text(buffer))
-                buffer = ""
-            }
-
-            segments.append(.math(latex))
-            remaining = remaining[remaining.index(after: closeIndex)...]
+            if textStart < k { result.append((.text(String(chars[textStart..<k])), 0)) }
+            result.append((.math(String(content)), width))
+            k = close + width
+            textStart = k
         }
-
-        if !buffer.isEmpty {
-            segments.append(.text(buffer))
-        }
-
-        return segments
+        if textStart < count { result.append((.text(String(chars[textStart..<count])), 0)) }
+        return result
     }
 }

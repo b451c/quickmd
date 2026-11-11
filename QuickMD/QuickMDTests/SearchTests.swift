@@ -425,7 +425,7 @@ final class SearchTests: XCTestCase {
         }
         switch block.content {
         case .text(let attributed):
-            return convert(attributed, math: BlockTextConverter.containsInlineMath(String(attributed.characters)))
+            return convert(attributed, math: BlockTextConverter.containsInlineMath(attributed))
         case .blockquote(let content, _):
             return convert(renderer.renderQuotedBody(content), math: false)
         case .alert(_, let content):

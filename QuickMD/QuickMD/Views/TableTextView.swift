@@ -105,7 +105,7 @@ private struct TableTextRepresentable: NSViewRepresentable {
         if textChanged {
             let table = preconverted.flatMap { $0.source == source ? $0 : nil }
                 ?? TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments, style: style,
-                                          theme: theme, fontScale: fontScale)
+                                          theme: theme, fontScale: fontScale, math: .swiftMath)
             textView.textStorage?.setAttributedString(table.string)
             textView.cachedAttributed = table.string
             textView.tableLayout = table.layout

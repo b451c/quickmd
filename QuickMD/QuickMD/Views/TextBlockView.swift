@@ -48,6 +48,13 @@ struct TextBlockView: View {
     /// then be a cache hit once the new blocks land. Empty for every other
     /// caller (their `preconverted` string wins over the cache anyway).
     var cacheScope: String = ""
+    /// Quote and alert bodies, heading titles (v1.15): the string is converted
+    /// by `BlockTextConverter.makeMathString` (formulas found line by line,
+    /// display formulas included; `hasInlineMath` is not consulted), with
+    /// inline formulas at `mathFontSize` (nil = body size). Paragraphs keep
+    /// the parse's `hasInlineMath` flag.
+    var typesetsTextKindMath: Bool = false
+    var mathFontSize: CGFloat? = nil
     let onLink: (URL) -> Void
 
     @State private var cachedNS: NSAttributedString?
@@ -58,6 +65,8 @@ struct TextBlockView: View {
          searchTerm: String = "", focusedOccurrence: Int? = nil,
          preconverted: NSAttributedString? = nil,
          cacheScope: String = "",
+         typesetsTextKindMath: Bool = false,
+         mathFontSize: CGFloat? = nil,
          onLink: @escaping (URL) -> Void) {
         self.blockId = blockId
         self.attributed = attributed
@@ -69,6 +78,8 @@ struct TextBlockView: View {
         self.focusedOccurrence = focusedOccurrence
         self.preconverted = preconverted
         self.cacheScope = cacheScope
+        self.typesetsTextKindMath = typesetsTextKindMath
+        self.mathFontSize = mathFontSize
         self.onLink = onLink
     }
 
@@ -85,8 +96,11 @@ struct TextBlockView: View {
     var body: some View {
         let ns = preconverted
             ?? (cacheKey == cachedKey ? cachedNS : nil)
-            ?? Self.makeNSAttributedString(
-                from: attributed, hasInlineMath: hasInlineMath, theme: theme, fontScale: fontScale)
+            ?? (typesetsTextKindMath
+                ? Self.makeMathString(from: attributed, mathFontSize: mathFontSize, theme: theme,
+                                      fontScale: fontScale)
+                : Self.makeNSAttributedString(
+                    from: attributed, hasInlineMath: hasInlineMath, theme: theme, fontScale: fontScale))
 
         // Height comes from BlockTextView.sizeThatFits (synchronous, per width) —
         // no state round-trip, so lazy re-creation can't jump or oscillate.
@@ -123,6 +137,16 @@ struct TextBlockView: View {
         BlockTextConverter.makeNSAttributedString(from: attributed, hasInlineMath: hasInlineMath,
                                                   theme: theme, fontScale: fontScale,
                                                   math: .swiftMath)
+    }
+
+    /// `BlockTextConverter.makeMathString` with the production math engine —
+    /// quote and alert bodies, heading titles (v1.15). Main thread only (the
+    /// engine's rule), not actor-isolated for the same reason as
+    /// `makeNSAttributedString` (the heading's copy-button helper calls it).
+    nonisolated static func makeMathString(from attributed: AttributedString, mathFontSize: CGFloat?,
+                               theme: MarkdownTheme, fontScale: CGFloat) -> NSAttributedString {
+        BlockTextConverter.makeMathString(from: attributed, mathFontSize: mathFontSize, theme: theme,
+                                          fontScale: fontScale, math: .swiftMath)
     }
 }
 

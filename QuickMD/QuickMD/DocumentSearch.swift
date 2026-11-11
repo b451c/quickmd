@@ -290,8 +290,11 @@ enum DocumentSearch {
     ///   `BlockTextConverter.makeNSAttributedString`. Without inline math the
     ///   converter's string is the AttributedString's characters (it only
     ///   bridges attributes), so those are taken directly — pinned by
-    ///   `SearchTests`. A paragraph WITH inline math shows one attachment
-    ///   character (U+FFFC) per `$…$` segment; the converter is run with
+    ///   `SearchTests`. A paragraph WITH inline math — and since v1.15 a
+    ///   quote or alert body or a heading with a formula (`$…$` or a quote's
+    ///   display `$$…$$`) — shows one attachment character (U+FFFC) per
+    ///   formula: its LaTeX is neither counted nor highlighted, the text
+    ///   around it is. The converter is run with
     ///   `searchMathPlaceholder`, an engine that never touches SwiftMath
     ///   (main-thread only), so the characters come out of the same code.
     ///   Known limit of this fallback only: a formula SwiftMath refuses to
@@ -306,30 +309,44 @@ enum DocumentSearch {
         case .text(let attributed):
             if let shown = converted[block.id] { return shown.string }
             let plain = String(attributed.characters)
-            guard BlockTextConverter.containsInlineMath(plain) else { return plain }
+            guard BlockTextConverter.containsInlineMath(attributed) else { return plain }
             return BlockTextConverter.makeNSAttributedString(
                 from: attributed, hasInlineMath: true,
                 theme: renderer.theme, fontScale: renderer.fontScale,
                 math: searchMathPlaceholder).string
         case .blockquote(let content, _):
             if let shown = converted[block.id] { return shown.string }
-            return String(renderer.renderQuotedBody(content).characters)
+            return shownWithFormulas(renderer.renderQuotedBody(content)) {
+                BlockTextConverter.quotedBody($0, renderer: renderer, math: searchMathPlaceholder)
+            }
         case .alert(_, let content):
             // The title is chrome; an empty body has no text view at all.
             guard !content.isEmpty else { return "" }
             if let shown = converted[block.id] { return shown.string }
-            return String(renderer.renderQuotedBody(content).characters)
+            return shownWithFormulas(renderer.renderQuotedBody(content)) {
+                BlockTextConverter.quotedBody($0, renderer: renderer, math: searchMathPlaceholder)
+            }
         case .heading(let level, let title, _):
             // The measurer keeps the title it measured; without it, rendered
             // here exactly as `HeadingBlockView` renders it.
             if let shown = converted[block.id] { return shown.string }
-            return String(renderer.renderHeader(title, level: level).characters)
+            return shownWithFormulas(renderer.renderHeader(title, level: level)) {
+                BlockTextConverter.headingTitle($0, level: level, renderer: renderer, math: searchMathPlaceholder)
+            }
         case .table, .codeBlock, .image, .imageRow, .svgImage, .mathBlock, .mermaidDiagram:
             return nil
         }
     }
 
-    /// A math engine for `displayedString` only: every formula "typesets" to
+    /// Quote and alert bodies, headings (v1.15): the rendered characters, or
+    /// — when the text has a formula — the converter's string with each
+    /// formula as its attachment character, as a math paragraph is counted.
+    private static func shownWithFormulas(_ attributed: AttributedString,
+                                          convert: (AttributedString) -> NSAttributedString) -> String {
+        BlockTextConverter.needsMath(attributed) ? convert(attributed).string : String(attributed.characters)
+    }
+
+    /// A math engine for `displayedString` (and `TableTextBuilder.plainString`) only: every formula "typesets" to
     /// an empty 1×1 image, so the converter emits the attachment character a
     /// typeset formula is drawn as. Thread-safe (no SwiftMath, just NSImage).
     static let searchMathPlaceholder = MathRendering(

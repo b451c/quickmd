@@ -45,10 +45,15 @@ final class TableSelectionTests: XCTestCase {
                                                          theme: theme, fontScale: 1, math: .none)
     }
 
+    /// A stand-in engine that typesets every formula (SwiftMath is not in the
+    /// test bundle): a cell's `$x$` is an attachment, as on screen (v1.15).
+    private let typesettingMath = MathRendering(inlineImage: { _, _, _ in NSImage(size: NSSize(width: 10, height: 10)) },
+                                                displayHeight: { _, _, _ in 0 })
+
     private func table(_ block: MarkdownBlock) -> TableText? {
         guard case .table(let headers, let rows, let alignments, let style) = block.content else { return nil }
         return TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments, style: style,
-                                      theme: theme, fontScale: 1)
+                                      theme: theme, fontScale: 1, math: typesettingMath)
     }
 
     private func tableBlock(_ markdown: String = tableMarkdown) -> (block: MarkdownBlock, text: TableText) {

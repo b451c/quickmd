@@ -110,6 +110,7 @@ struct MarkdownBlockParser: Sendable {
         // Fenced code and `$$` blocks, read as the block loop reads them: a
         // definition inside one is that block's text (GitHub).
         var verbatim = VerbatimRegions()
+        let allNextMath = Self.nextMathLines(allLines)
         // A link definition cannot interrupt a paragraph (`DefinitionPlacement`).
         var placement = DefinitionPlacement()
         // A link definition: the FIRST of a label wins (CommonMark, GitHub),
@@ -207,7 +208,8 @@ struct MarkdownBlockParser: Sendable {
                 }
             }
             let opensVerbatim = !verbatim.isOpen
-            if verbatim.contains(trimmed) {
+            if verbatim.contains(trimmed, at: originalIndex, nextMath: allNextMath,
+                                 markerAt: { Self.markerLine(allLines[$0]) }) {
                 lines.append(line)
                 lineMap.append(originalIndex)
                 placement.verbatim()
@@ -280,6 +282,8 @@ struct MarkdownBlockParser: Sendable {
             ? self.renderer
             : MarkdownRenderer(theme: theme, fontScale: fontScale, referenceDefinitions: referenceDefinitions, footnoteDefinitions: footnoteDefinitions)
 
+        // The `$$` lines' look-ahead (`mathOpening`), once per parse.
+        let nextMath = Self.nextMathLines(lines)
         var i = 0
         // Each buffered line keeps the index it had in `allLines` so a flushed
         // chunk can report the ORIGINAL first line, not its position in `lines`.
@@ -399,17 +403,22 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
-            // Display math block $$...$$ — after code block check to protect $$ inside code
-            if trimmedLine.hasPrefix("$$") {
+            // Display math block $$...$$ — after code block check to protect $$
+            // inside code. A `$$` line that is paragraph text (`mathOpening`:
+            // `$$x$$ text`, unclosed) falls through to the text branches.
+            let mathOpening: MathOpening? = trimmedLine.hasPrefix("$$")
+                ? Self.mathOpening(trimmedLine, nextMathLine: nextMath[i],
+                                   nextMathMarker: nextMath[i].map { Self.markerLine(lines[$0]) })
+                : nil
+            if let mathOpening, mathOpening != .text {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                 nesting.block(startingAt: line)
 
                 let afterDollar = String(trimmedLine.dropFirst(2)).trimmingCharacters(in: .whitespaces)
 
                 // Single-line: $$content$$ (must have content between delimiters)
-                if !Self.opensMultilineMath(trimmedLine) {
-                    let latex = String(afterDollar.dropLast(2)).trimmingCharacters(in: .whitespaces)
-                    if !latex.isEmpty {
+                guard case .block(let closingLine, let closingText) = mathOpening else {
+                    if case .singleLine(let latex) = mathOpening, !latex.isEmpty {
                         blocks.append(.mathBlock(index: blockIndex, latex: latex, sourceLine: sourceLine))
                         blockIndex += 1
                     }
@@ -417,18 +426,12 @@ struct MarkdownBlockParser: Sendable {
                     continue
                 }
 
-                // Multi-line: accumulate until standalone closing $$
+                // Multi-line: up to and including the closing line.
                 var mathLines: [String] = []
                 if !afterDollar.isEmpty { mathLines.append(afterDollar) }
-                i += 1
-                while i < lines.count {
-                    if Self.closesMath(Self.markerLine(lines[i])) {
-                        i += 1
-                        break
-                    }
-                    mathLines.append(lines[i])
-                    i += 1
-                }
+                mathLines.append(contentsOf: lines[(i + 1)..<closingLine])
+                if !closingText.isEmpty { mathLines.append(closingText) }
+                i = closingLine + 1
 
                 let latex = mathLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
                 if !latex.isEmpty {
@@ -1044,7 +1047,7 @@ struct MarkdownBlockParser: Sendable {
             || marker.range(of: MarkdownTheme.setextH2Pattern, options: .regularExpression) != nil {
             return false
         }
-        if Self.fenceOpening(marker) != nil || marker.hasPrefix("$$") || marker.hasPrefix(">") { return true }
+        if Self.fenceOpening(marker) != nil || Self.startsMathBlock(marker) || marker.hasPrefix(">") { return true }
         if Self.headerRegex.firstMatch(in: next, range: NSRange(next.startIndex..., in: next)) != nil { return true }
         if MarkdownRenderer.isThematicBreak(next) { return true }
         if MarkdownRenderer.isListItem(next) { return MarkdownRenderer.canInterruptParagraph(next) }
@@ -1181,7 +1184,7 @@ struct MarkdownBlockParser: Sendable {
 
         // Fences, quotes, display math
         if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") { return false }
-        if trimmed.hasPrefix(">") || trimmed.hasPrefix("$$") { return false }
+        if trimmed.hasPrefix(">") || Self.startsMathBlock(trimmed) { return false }
 
         // List items — bullets (task items included, they start `- [ ]`) and ordered
         if ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) { return false }
@@ -1601,15 +1604,58 @@ struct MarkdownBlockParser: Sendable {
             && MarkdownRenderer.isBlankLine(marker.drop(while: { $0 == fence.marker }))
     }
 
-    /// Whether `marker` opens a `$$` block that runs to a `$$` line — not a
-    /// one-line `$$…$$` formula.
-    static func opensMultilineMath(_ marker: String) -> Bool {
-        marker.hasPrefix("$$")
-            && !String(marker.dropFirst(2)).trimmingCharacters(in: .whitespaces).hasSuffix("$$")
+    /// What a line whose marker starts with `$$` is (v1.15; GitHub's output in
+    /// `MathInTextKindsTests`).
+    enum MathOpening: Equatable {
+        /// `$$x$$` alone on the line: a display formula (empty: nothing).
+        case singleLine(latex: String)
+        /// `$$`, LaTeX lines, then the line `closingLine` (an index in the
+        /// same array) that ends with the closing `$$`; `closingText` is
+        /// what precedes the `$$` on it (`v$$` closes with "v").
+        case block(closingLine: Int, closingText: String)
+        /// Paragraph text: `$$x$$ text after` (an inline formula, GitHub),
+        /// an opening `$$` whose next `$$` has text after it, or one never
+        /// closed. Until v1.15 the first two opened a block that swallowed
+        /// everything up to the next lone `$$` line — often the rest of the
+        /// document — and an unclosed one swallowed the rest.
+        case text
     }
 
-    /// Whether `marker` closes a `$$` block.
-    static func closesMath(_ marker: String) -> Bool { marker == "$$" }
+    /// `marker` (starting with `$$`) read with the first later line that holds
+    /// a `$$` (`nextMathLine`, its index; `nextMathMarker`, its marker).
+    static func mathOpening(_ marker: String, nextMathLine: Int?, nextMathMarker: String?) -> MathOpening {
+        let rest = marker.dropFirst(2)
+        if let close = rest.range(of: "$$") {
+            guard rest[close.upperBound...].trimmingCharacters(in: .whitespaces).isEmpty else { return .text }
+            return .singleLine(latex: rest[..<close.lowerBound].trimmingCharacters(in: .whitespaces))
+        }
+        guard let nextMathLine, let closing = nextMathMarker?.trimmingCharacters(in: .whitespaces),
+              let close = closing.range(of: "$$"),
+              closing[close.upperBound...].trimmingCharacters(in: .whitespaces).isEmpty else { return .text }
+        return .block(closingLine: nextMathLine,
+                      closingText: closing[..<close.lowerBound].trimmingCharacters(in: .whitespaces))
+    }
+
+    /// For each line, the index of the next LATER line holding `$$` — one
+    /// backward pass, so finding a `$$` block's end costs nothing per line.
+    static func nextMathLines(_ lines: [String]) -> [Int?] {
+        var result = [Int?](repeating: nil, count: lines.count)
+        var next: Int?
+        for index in stride(from: lines.count - 1, through: 0, by: -1) {
+            result[index] = next
+            if lines[index].contains("$$") { next = index }
+        }
+        return result
+    }
+
+    /// A `$$` line that is paragraph text whatever follows (`$$x$$ text`):
+    /// the context-free block-start tests (`paragraphEnds`, laziness, terms)
+    /// use it; an unclosed `$$` is only known with the whole document.
+    static func startsMathBlock(_ marker: String) -> Bool {
+        guard marker.hasPrefix("$$") else { return false }
+        if case .text = mathOpening(marker, nextMathLine: 0, nextMathMarker: "$$") { return false }
+        return true
+    }
 
     /// The fenced code and `$$` blocks of a document, followed line by line
     /// the way the block loop reads them (fence first, then `$$`; inside one,
@@ -1617,20 +1663,24 @@ struct MarkdownBlockParser: Sendable {
     /// lines alone: a definition inside one is that block's text.
     struct VerbatimRegions {
         private var fence: Fence?
-        private var inMath = false
+        /// Index of the line that closes the open `$$` block.
+        private var mathCloses: Int?
 
         /// Inside such a block: the next line is its text or its closing line.
-        var isOpen: Bool { fence != nil || inMath }
+        var isOpen: Bool { fence != nil || mathCloses != nil }
 
-        /// Whether the line (its `markerLine`) opens, continues or closes
-        /// such a block.
-        mutating func contains(_ marker: String) -> Bool {
+        /// Whether the line `index` (its `markerLine`) opens, continues or
+        /// closes such a block. `nextMath` is `nextMathLines` of the lines and
+        /// `markerAt` their markers: a `$$` line is read as the block loop
+        /// reads it (`mathOpening`).
+        mutating func contains(_ marker: String, at index: Int, nextMath: [Int?],
+                               markerAt: (Int) -> String) -> Bool {
             if let open = fence {
                 if MarkdownBlockParser.closesFence(marker, open) { fence = nil }
                 return true
             }
-            if inMath {
-                if MarkdownBlockParser.closesMath(marker) { inMath = false }
+            if let closes = mathCloses {
+                if index >= closes { mathCloses = nil }
                 return true
             }
             if let opening = MarkdownBlockParser.fenceOpening(marker) {
@@ -1638,8 +1688,14 @@ struct MarkdownBlockParser: Sendable {
                 return true
             }
             if marker.hasPrefix("$$") {
-                inMath = MarkdownBlockParser.opensMultilineMath(marker)
-                return true
+                let next = index < nextMath.count ? nextMath[index] : nil
+                switch MarkdownBlockParser.mathOpening(marker, nextMathLine: next, nextMathMarker: next.map(markerAt)) {
+                case .singleLine: return true
+                case .block(let closingLine, _):
+                    mathCloses = closingLine
+                    return true
+                case .text: return false
+                }
             }
             return false
         }
@@ -1787,7 +1843,7 @@ struct MarkdownBlockParser: Sendable {
     static func startsNoBlock(_ line: String) -> Bool {
         guard !isBlank(line) else { return false }
         let marker = markerLine(line)
-        if fenceOpening(marker) != nil || marker.hasPrefix("$$") { return false }
+        if fenceOpening(marker) != nil || startsMathBlock(marker) { return false }
         let nsRange = NSRange(line.startIndex..., in: line)
         if headerRegex.firstMatch(in: line, range: nsRange) != nil { return false }
         if MarkdownRenderer.isThematicBreak(line) || MarkdownRenderer.isListItem(line) { return false }

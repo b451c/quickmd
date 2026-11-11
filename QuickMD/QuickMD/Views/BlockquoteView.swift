@@ -63,6 +63,7 @@ struct BlockquoteView: View {
             searchTerm: searchText,
             focusedOccurrence: focusedOccurrence,
             preconverted: preconverted,
+            typesetsTextKindMath: true,
             onLink: onLink
         )
         .padding(.leading, CGFloat(level) * (Metrics.barWidth + Metrics.barGap))
