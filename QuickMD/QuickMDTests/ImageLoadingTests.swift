@@ -259,16 +259,30 @@ final class ImageLoadingTests: XCTestCase {
         let source = try XCTUnwrap(ImageSource.resolve(raw, documentURL: nil))
         _ = ImageLoader.loadSync(raw: raw, source: source, maxPixel: ImageLoader.displayMaxPixel)
 
-        let started = Date()
-        var hits = 0
-        for _ in 0..<200 {
-            guard let resolved = ImageSource.resolve(raw, documentURL: nil) else { continue }
-            if ImageLoader.cachedImage(for: raw, source: resolved, maxPixel: ImageLoader.displayMaxPixel) != nil {
-                hits += 1
+        func lookups(_ raw: String) -> Int {
+            var hits = 0
+            for _ in 0..<200 {
+                guard let resolved = ImageSource.resolve(raw, documentURL: nil) else { continue }
+                if ImageLoader.cachedImage(for: raw, source: resolved, maxPixel: ImageLoader.displayMaxPixel) != nil {
+                    hits += 1
+                }
             }
+            return hits
         }
-        XCTAssertEqual(hits, 200)
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5, "200 × (resolve + lookup) on a 5 MB data: URL")
+        XCTAssertEqual(lookups(raw), 200)
+        // Independent of the payload: 8× the payload costs about the same
+        // CPU time (a scan of it would cost ~8×) — `CostScaling`. Sizes other
+        // than the 5 MB above: an equal string in OTHER storage is a real
+        // key comparison of every byte (the app always looks up with the
+        // parser's own storage, as `lookups(raw)` above does).
+        let cost = CostScaling.compare(small: 600_000, limit: 3) { spaces in
+            let raw = "data:image/png;base64," + self.pngBase64 + String(repeating: " ", count: spaces)
+            if let source = ImageSource.resolve(raw, documentURL: nil) {
+                _ = ImageLoader.loadSync(raw: raw, source: source, maxPixel: ImageLoader.displayMaxPixel)
+            }
+            return { XCTAssertEqual(lookups(raw), 200) }
+        }
+        XCTAssertLessThanOrEqual(cost.ratio, 3, "200 × (resolve + lookup) on a data: URL: \(cost)")
     }
 
     func testLoadSyncRemoteNeverFetches() throws {
@@ -365,9 +379,7 @@ final class ImageLoadingTests: XCTestCase {
         let payload = marker + String(repeating: "A", count: 5_000_000)
         let doc = URL(fileURLWithPath: "/docs/readme.md")
 
-        let started = Date()
         for raw in [" data:image/png;base64,\(payload)", "<data:image/png;base64,\(payload)>"] {
-            for _ in 0..<50 { _ = ImageSource.resolve(raw, documentURL: doc) }
             let label = ImageLabel.errorText(alt: "", raw: raw, source: ImageSource.resolve(raw, documentURL: doc))
             XCTAssertFalse(label.contains(marker), label)
             XCTAssertFalse(label.contains("AAAAAAAA"), label)
@@ -376,7 +388,22 @@ final class ImageLoadingTests: XCTestCase {
         let unparsed = " data:image/png;base64" + payload
         XCTAssertNil(ImageSource.resolve(unparsed, documentURL: doc))
         XCTAssertEqual(ImageLabel.errorText(alt: "", raw: unparsed, source: nil), "Embedded image could not be shown")
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5)
+
+        // Cheap: the cost does not grow with the payload (`CostScaling`).
+        let cost = CostScaling.compare(small: 625_000, limit: 3) { count in
+            let payload = marker + String(repeating: "A", count: count)
+            let raws = [" data:image/png;base64,\(payload)", "<data:image/png;base64,\(payload)>"]
+            let unparsed = " data:image/png;base64" + payload
+            return {
+                for raw in raws {
+                    for _ in 0..<50 { _ = ImageSource.resolve(raw, documentURL: doc) }
+                    _ = ImageLabel.errorText(alt: "", raw: raw, source: ImageSource.resolve(raw, documentURL: doc))
+                }
+                _ = ImageSource.resolve(unparsed, documentURL: doc)
+                _ = ImageLabel.errorText(alt: "", raw: unparsed, source: nil)
+            }
+        }
+        XCTAssertLessThanOrEqual(cost.ratio, 3, cost.description)
     }
 
     func testKnownFailuresWithoutIO() async throws {
@@ -461,10 +488,14 @@ final class ImageLoadingTests: XCTestCase {
 
     func testMiddleTruncationIsBoundedOnHugeStrings() {
         let huge = "data:image/png;base64," + String(repeating: "A", count: 5_000_000)
-        let started = Date()
         let truncated = DisplayString.middleTruncated(huge, maxLength: 200)
         XCTAssertEqual(truncated.count, 200)
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.1)
+        // Bounded: the cost does not grow with the string (`CostScaling`).
+        let cost = CostScaling.compare(small: 625_000, limit: 3) { count in
+            let huge = "data:image/png;base64," + String(repeating: "A", count: count)
+            return { _ = DisplayString.middleTruncated(huge, maxLength: 200) }
+        }
+        XCTAssertLessThanOrEqual(cost.ratio, 3, cost.description)
     }
 
     func testErrorTextNeverShowsPayload() throws {

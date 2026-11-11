@@ -633,8 +633,10 @@ final class VerticalRhythmTests: XCTestCase {
     /// animation's completion is ignored by the token, a scroll after the
     /// stop is kept, and the next glide runs to its target. Before 1.15 the
     /// animation went on setting the origin and ended on its target.
-    /// No timing assertion: the glide is long (2 s) and the stop comes as
-    /// soon as the origin has left 0, whenever that is on this machine.
+    /// No timing assertion: the glide is long (20 s — at 2 s a main thread
+    /// starved for that long by a loaded machine would first see the origin
+    /// at the target) and the stop comes as soon as the origin has left 0,
+    /// whenever that is on this machine.
     /// (Probe on the dev Mac at the real 0.25 s, stop after 80 ms: stopped
     /// at 1168 of 5000 — window off screen — or 1270 — on screen — and
     /// stayed there.)
@@ -660,8 +662,8 @@ final class VerticalRhythmTests: XCTestCase {
         }
 
         let target: CGFloat = 5_000
-        let stopped = animate(to: target, duration: 2, token: glide.start())
-        let giveUp = Date(timeIntervalSinceNow: 5)
+        let stopped = animate(to: target, duration: 20, token: glide.start())
+        let giveUp = Date(timeIntervalSinceNow: 30)
         while clip.bounds.origin.y == 0, Date() < giveUp {
             RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01))
         }
@@ -673,7 +675,7 @@ final class VerticalRhythmTests: XCTestCase {
         let scale = window.backingScaleFactor
         XCTAssertEqual((stoppedAt * scale).rounded(), stoppedAt * scale, "a whole device pixel")
 
-        wait(for: [stopped], timeout: 5)
+        wait(for: [stopped], timeout: 30)
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
         XCTAssertEqual(clip.bounds.origin.y, stoppedAt, "no snap to the target after the stop")
 
@@ -688,7 +690,7 @@ final class VerticalRhythmTests: XCTestCase {
         XCTAssertEqual(clip.bounds.origin.y, (1_234.3 * scale).rounded() / scale, "rounded to a device pixel")
 
         let next = animate(to: 8_000, duration: 0.25, token: glide.start())
-        wait(for: [next], timeout: 5)
+        wait(for: [next], timeout: 30)
         XCTAssertEqual(clip.bounds.origin.y, 8_000, "the next glide arrives")
     }
 
@@ -696,8 +698,10 @@ final class VerticalRhythmTests: XCTestCase {
 
     /// Parses on a worker thread: a parser that never returns fails the test
     /// after `seconds` instead of stalling the suite (its thread keeps
-    /// spinning, so a failure here is worth stopping the run for).
-    private func parseReturning(_ markdown: String, within seconds: Double = 5,
+    /// spinning, so a failure here is worth stopping the run for). A hang
+    /// detector, not a speed bound: the parses take milliseconds, and the
+    /// generous default keeps a loaded machine from looking like a hang.
+    private func parseReturning(_ markdown: String, within seconds: Double = 30,
                                 file: StaticString = #filePath, line: UInt = #line) -> [MarkdownBlock]? {
         final class Box: @unchecked Sendable { var blocks: [MarkdownBlock]? }
         let box = Box()
@@ -1827,6 +1831,12 @@ final class VerticalRhythmTests: XCTestCase {
                     host.frame = NSRect(x: 0, y: 0, width: width, height: 900)
                     window.contentView = host
                     host.layoutSubtreeIfNeeded()
+                    // Until the probe has reported (not a fixed 20 ms: a
+                    // loaded machine may need longer), then one more turn.
+                    let giveUp = Date(timeIntervalSinceNow: 10)
+                    while box.height < 0, Date() < giveUp {
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+                    }
                     RunLoop.current.run(until: Date().addingTimeInterval(0.02))
                     host.layoutSubtreeIfNeeded()
                     XCTAssertEqual(box.height,
@@ -1841,8 +1851,12 @@ final class VerticalRhythmTests: XCTestCase {
     /// An SVG's size is known from its markup: the measurer decodes it once
     /// (cached for the view, which then never shows the loading view on a
     /// re-created row) and sizes the row as the view draws it. Markup that
-    /// does not decode stays at the loading view and reports.
+    /// does not decode stays at the loading view and reports. The image cache
+    /// holds its entries for this test: NSCache may evict at any moment, and
+    /// "it IS cached" must not depend on the machine's memory pressure.
     func testAnSVGIsMeasuredAtItsDecodedSize() {
+        SVGImageDecoder.retainCachedImagesForTesting(true)
+        defer { SVGImageDecoder.retainCachedImagesForTesting(false) }
         let markup = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\"><rect width=\"200\" height=\"100\"/></svg>"
         let blocks = parse("```svg\n\(markup)\n```")
         guard case .svgImage(let source) = blocks[0].content else { return XCTFail("not an SVG block") }
@@ -1905,8 +1919,11 @@ final class VerticalRhythmTests: XCTestCase {
     /// re-created row never shows the empty box the web view is for the half
     /// second it takes to render (seen while recording). Another diagram, or
     /// the other theme, has none; the exact key and the PDF exporter's key
-    /// are untouched.
+    /// are untouched. The store holds its entries for this test: NSCache may
+    /// evict at any moment, even right after `set`.
     func testADiagramWithoutASnapshotOfItsOwnFindsTheLatestOneAsAStandIn() {
+        MermaidSnapshotStore.retainSnapshotsForTesting(true)
+        defer { MermaidSnapshotStore.retainSnapshotsForTesting(false) }
         let diagram = "flowchart LR\n  Stand-->In"
         let image = NSImage(size: NSSize(width: 240, height: 70))
         MermaidSnapshotStore.set(image, source: "1.0|819.0|\(diagram)", isDark: false)

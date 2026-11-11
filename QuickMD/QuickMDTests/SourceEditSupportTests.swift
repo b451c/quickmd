@@ -122,23 +122,33 @@ final class SourceEditSupportTests: XCTestCase {
     // MARK: Large documents
     //
     // These catch QUADRATIC behaviour — which on 200k lines takes minutes, not
-    // seconds — not millisecond regressions: the bound is deliberately loose
-    // (Debug build, shared CI runner). Measured locally in Debug: well under
-    // half a second per test. The text is an NSMutableString, like the text
+    // seconds — not millisecond regressions. They compare costs instead of
+    // timing them, so a loaded machine or a Debug build cannot fail them
+    // (`CostScaling`): 8× the lines may cost at most 24× the CPU time
+    // (quadratic ≈ 64×). The text is an NSMutableString, like the text
     // storage the editor passes in.
 
     private static let largeLine = "Some *Markdown* line with ünïcödé and 😀 in it."
-    private static let quadraticGuard: TimeInterval = 10
 
-    private func largeDocument() -> NSMutableString {
-        NSMutableString(string: Array(repeating: Self.largeLine, count: 200_000).joined(separator: "\n"))
+    private func largeDocument(lines: Int = 200_000) -> NSMutableString {
+        NSMutableString(string: Array(repeating: Self.largeLine, count: lines).joined(separator: "\n"))
+    }
+
+    /// Every lookup the large-document test makes, on a document of `lines`.
+    private func largeLookups(in text: NSMutableString, lines: Int) {
+        _ = S.lineStart(lines - 1, in: text)
+        _ = S.line(containing: text.length - 1, in: text)
+        _ = S.lineRange(lines * 3 / 4, in: text)
+        _ = S.lineStarts(in: text)
+        _ = S.sourceRange(ofSelection: "ünïcödé", in: text, lines: (lines - 10)..<lines)
+        _ = S.indentUnit(for: text)
+        _ = S.newlineEdit(in: text, selection: NSRange(location: text.length, length: 0))
     }
 
     func testLargeDocumentLookupsAreLinear() {
         let text = largeDocument()
         let lineLength = utf16(Self.largeLine)
         XCTAssertGreaterThan(text.length, 9_000_000)
-        let started = Date()
         let lastStart = S.lineStart(199_999, in: text)
         let lineNumber = S.line(containing: text.length - 1, in: text)
         let range = S.lineRange(150_000, in: text)
@@ -146,8 +156,6 @@ final class SourceEditSupportTests: XCTestCase {
         let found = S.sourceRange(ofSelection: "ünïcödé", in: text, lines: 199_990..<200_000)
         let unit = S.indentUnit(for: text)
         let newline = S.newlineEdit(in: text, selection: NSRange(location: text.length, length: 0))
-        let elapsed = Date().timeIntervalSince(started)
-        print("SourceEditSupport large lookups: \(elapsed) s")
 
         XCTAssertEqual(lastStart, text.length - lineLength)
         XCTAssertEqual(lineNumber, 199_999)
@@ -158,26 +166,41 @@ final class SourceEditSupportTests: XCTestCase {
         XCTAssertEqual(found?.location, starts[199_990] + (Self.largeLine as NSString).range(of: "ünïcödé").location)
         XCTAssertEqual(unit, "    ")
         XCTAssertEqual(newline.replacement, "\n")
-        XCTAssertLessThan(elapsed, Self.quadraticGuard, "lookups on 200k lines took \(elapsed) s")
+
+        let cost = CostScaling.compare(small: 25_000, limit: 24) { lines in
+            let text = self.largeDocument(lines: lines)
+            return { self.largeLookups(in: text, lines: lines) }
+        }
+        XCTAssertLessThanOrEqual(cost.ratio, 24, "lookups, by lines: \(cost)")
     }
 
     func testLargeDocumentSelectAllIndentAndOutdent() {
         let text = largeDocument()
         let original = text.copy() as! NSString
         let all = NSRange(location: 0, length: text.length)
-        let started = Date()
         guard let indent = S.indentEdit(in: text, selection: all, unit: "\t") else { return XCTFail() }
         text.replaceCharacters(in: indent.range, with: indent.replacement)
         guard let outdent = S.outdentEdit(in: text, selection: indent.selection, unit: "\t") else { return XCTFail() }
         text.replaceCharacters(in: outdent.range, with: outdent.replacement)
-        let elapsed = Date().timeIntervalSince(started)
-        print("SourceEditSupport large indent + outdent: \(elapsed) s")
 
         XCTAssertEqual(indent.range, all)
         XCTAssertEqual(indent.selection, NSRange(location: 0, length: all.length + 200_000))
         XCTAssertEqual(text as NSString, original, "indent then outdent restores the text")
         XCTAssertEqual(outdent.selection, all)
-        XCTAssertLessThan(elapsed, Self.quadraticGuard, "indent + outdent of 200k lines took \(elapsed) s")
+
+        // Indent then outdent restores the text, so the round trip repeats on
+        // the same document.
+        let cost = CostScaling.compare(small: 25_000, limit: 24) { lines in
+            let text = self.largeDocument(lines: lines)
+            return {
+                let all = NSRange(location: 0, length: text.length)
+                guard let indent = S.indentEdit(in: text, selection: all, unit: "\t") else { return }
+                text.replaceCharacters(in: indent.range, with: indent.replacement)
+                guard let outdent = S.outdentEdit(in: text, selection: indent.selection, unit: "\t") else { return }
+                text.replaceCharacters(in: outdent.range, with: outdent.replacement)
+            }
+        }
+        XCTAssertLessThanOrEqual(cost.ratio, 24, "indent + outdent, by lines: \(cost)")
     }
 
     // MARK: - Batch line starts and the NSString core

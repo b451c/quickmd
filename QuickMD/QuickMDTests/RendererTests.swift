@@ -108,31 +108,39 @@ final class RendererTests: XCTestCase {
 
     /// Links cannot contain links: link text renders with links disabled, so
     /// nesting is bounded at one level however many brackets there are.
+    /// Linear, not a wall-clock bound: 8× the nesting may cost at most 24×
+    /// the CPU time (quadratic ≈ 64×) — `CostScaling`.
     func testDeeplyNestedLinkBracketsDoNotRecurse() {
-        let n = 5000
-        let markdown = String(repeating: "[", count: n) + "![a](b)" + String(repeating: "](u)", count: n)
+        func nested(_ n: Int) -> String {
+            String(repeating: "[", count: n) + "![a](b)" + String(repeating: "](u)", count: n)
+        }
+        let markdown = nested(5000)
         var text = ""
-        var elapsed: TimeInterval = 0
-        _ = renderer.render("warm *up* [x](y) ![i](j)")   // first-use font/regex setup is not the scan
         onSmallStack {
-            let start = Date()
             text = String(self.renderer.render(markdown).characters)
-            elapsed = Date().timeIntervalSince(start)
         }
         XCTAssertTrue(text.contains("[Image: a]"))
-        XCTAssertLessThan(elapsed, 1.0, "took \(elapsed) s")
+        let renderer = self.renderer
+        let cost = CostScaling.compare(small: 625, limit: 24) { n in
+            let markdown = nested(n)
+            return { _ = renderer.render(markdown) }
+        }
+        XCTAssertLessThanOrEqual(cost.ratio, 24, cost.description)
     }
 
     /// Unclosed brackets are matched once per text (pair table), not rescanned
-    /// to the end of the line at every `[`.
+    /// to the end of the line at every `[`. Linear: 8× the line may cost at
+    /// most 24× the CPU time (quadratic ≈ 64×) — `CostScaling`.
     func testUnclosedBracketsRenderInLinearTime() {
         let line = String(repeating: "[[a] ", count: 20_000)
-        _ = renderer.render("warm *up* [x](y) ![i](j)")
-        let start = Date()
         let text = String(renderer.render(line).characters)
-        let elapsed = Date().timeIntervalSince(start)
         XCTAssertTrue(text.hasPrefix("[[a] [[a]"))
-        XCTAssertLessThan(elapsed, 1.0, "took \(elapsed) s")
+        let renderer = self.renderer
+        let cost = CostScaling.compare(small: 2_500, limit: 24) { n in
+            let line = String(repeating: "[[a] ", count: n)
+            return { _ = renderer.render(line) }
+        }
+        XCTAssertLessThanOrEqual(cost.ratio, 24, cost.description)
     }
 
     func testInlineScreenshotImageWithSpaces() {

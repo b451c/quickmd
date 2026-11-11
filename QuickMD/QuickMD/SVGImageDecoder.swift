@@ -32,7 +32,9 @@ enum SVGImageDecoder {
     /// Decoded ```svg blocks, by their markup (an `NSString` key: hashing does
     /// not read the whole markup). NSCache is thread-safe and may evict;
     /// the sizes below never are, so a row keeps its height either way.
-    private static let images = NSCache<NSString, NSImage>()
+    /// Behind `ImageCache` only for its Debug test seam (same NSCache, no
+    /// limits, in Release).
+    private static let images = ImageCache<NSImage>()
     private static let lock = NSLock()
     /// Decoded size per markup; `.zero` = the markup does not decode.
     private static var sizes: [NSString: CGSize] = [:]
@@ -44,6 +46,19 @@ enum SVGImageDecoder {
     nonisolated static func cachedImage(_ source: String) -> NSImage? {
         images.object(forKey: source as NSString)
     }
+
+    #if DEBUG
+    /// Unit tests only: see `ImageCache.retainEntriesForTesting`. A test that
+    /// asserts the image IS cached must not depend on NSCache keeping it.
+    /// Starts the images AND the sizes empty, in both directions (a known
+    /// size skips the decode that would cache the image).
+    static func retainCachedImagesForTesting(_ retain: Bool) {
+        images.retainEntriesForTesting(retain)
+        lock.lock()
+        sizes.removeAll()
+        lock.unlock()
+    }
+    #endif
 
     /// The decoded size, if the markup was ever decoded and decodes.
     nonisolated static func cachedSize(_ source: String) -> CGSize? {

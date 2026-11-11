@@ -1076,9 +1076,18 @@ enum MermaidGeometryStore {
 /// back by MermaidBlockView on re-creation AND by the PDF exporter
 /// (MermaidPDFRenderer) as a fast path before spinning up an offscreen
 /// WebView. NSCache evicts under memory pressure. Here rather than in the
-/// view's file so the unit tests compile it.
+/// view's file so the unit tests compile it. Behind `ImageCache` only for its
+/// Debug test seam (same NSCache, no limits, in Release).
 enum MermaidSnapshotStore {
-    private static let cache = NSCache<NSString, NSImage>()
+    private static let cache = ImageCache<NSImage>()
+
+    #if DEBUG
+    /// Unit tests only: see `ImageCache.retainEntriesForTesting`. A test that
+    /// asserts a snapshot IS stored must not depend on NSCache keeping it.
+    static func retainSnapshotsForTesting(_ retain: Bool) {
+        cache.retainEntriesForTesting(retain)
+    }
+    #endif
 
     private static func key(source: String, isDark: Bool) -> NSString {
         "\(isDark)|\(source)" as NSString

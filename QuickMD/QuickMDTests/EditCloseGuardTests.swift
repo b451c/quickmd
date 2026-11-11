@@ -151,11 +151,13 @@ final class EditCloseGuardTests: XCTestCase {
         return { box.count }
     }
 
-    /// Lets the guard's next-turn work (clearing `isResolved`) run.
+    /// Lets the guard's next-turn work (clearing `isResolved`) run. The
+    /// timeout is only an upper bound (the wait ends with the block); short,
+    /// it failed on a loaded machine.
     private func drainMainQueue() {
         let drained = expectation(description: "main queue drained")
         DispatchQueue.main.async { drained.fulfill() }
-        wait(for: [drained], timeout: 2)
+        wait(for: [drained], timeout: 15)
     }
 
     // MARK: - Installation and forwarding
