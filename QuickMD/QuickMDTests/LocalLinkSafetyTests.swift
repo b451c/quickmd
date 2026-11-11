@@ -159,4 +159,37 @@ final class LocalLinkSafetyTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: doc.path)
         XCTAssertNotEqual(LocalLinkSafety.check(doc), before)
     }
+
+    // MARK: - Opening a local target (sandbox access, missing files)
+
+    func testLocalLinkOpeningOrder() throws {
+        let doc = try file("other.md", "# Other")
+        let missing = folder.appendingPathComponent("missing.md")
+        let locked = try file("locked.md", "x")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: locked.path) }
+        typealias Opening = LocalLinkOpening
+        // Unsandboxed: never asks; a missing file is said, an unreadable
+        // one is left to `NSWorkspace.open` (its failure is said too).
+        XCTAssertEqual(Opening.step(for: doc, isSandboxed: false), .open)
+        XCTAssertEqual(Opening.step(for: missing, isSandboxed: false), .notFound)
+        XCTAssertEqual(Opening.step(for: locked, isSandboxed: false), .open)
+        // Sandboxed: what cannot be read asks first (a missing file too —
+        // the sandbox hides whether it exists), then existence decides.
+        XCTAssertEqual(Opening.step(for: doc, isSandboxed: true), .open)
+        XCTAssertEqual(Opening.step(for: locked, isSandboxed: true), .askForAccess)
+        XCTAssertEqual(Opening.step(for: missing, isSandboxed: true), .askForAccess)
+        XCTAssertEqual(Opening.step(for: missing, isSandboxed: true, accessAvailable: true), .notFound)
+        XCTAssertEqual(Opening.step(for: locked, isSandboxed: true, accessAvailable: true), .open)
+        XCTAssertEqual(Opening.step(for: folder, isSandboxed: false), .open, "a folder link opens (Finder)")
+    }
+
+    func testLocalLinkFailureMessages() {
+        XCTAssertEqual(LocalLinkOpening.message(for: .accessDeclined, name: "other.md"),
+                       "Couldn\u{2019}t open \u{201C}other.md\u{201D} without folder access")
+        XCTAssertEqual(LocalLinkOpening.message(for: .notFound, name: "missing.md"),
+                       "Couldn\u{2019}t find \u{201C}missing.md\u{201D}")
+        XCTAssertEqual(LocalLinkOpening.message(for: .openFailed, name: "a\u{202E}b.pdf"),
+                       "Couldn\u{2019}t open \u{201C}ab.pdf\u{201D}")
+    }
 }

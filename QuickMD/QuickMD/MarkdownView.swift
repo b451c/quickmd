@@ -149,6 +149,8 @@ struct MarkdownView: View {
     /// the tab. Publishes only rare events (enter / leave, dirty, banner) — the
     /// body never reads anything per keystroke from it.
     @StateObject private var editSession = SourceEditSession()
+    /// This window's token in `SandboxAccessManager`'s Source Edit registry.
+    @State private var editAccessToken = UUID()
     /// The editor's find bar height (0 = hidden): the bar sits where the pills
     /// and banners float, so they move below it (`topChromeInset`).
     @State private var editorFindBarHeight: CGFloat = 0
@@ -640,6 +642,11 @@ struct MarkdownView: View {
     private var configuredDocumentStack: some View {
         documentStack
         .disabled(graphicPreview != nil)
+        // Pictures of a document in Source Edit never raise the folder panel
+        // by themselves (`SandboxAccessManager.setEditing`).
+        .onChange(of: editSession.isActive) { active in
+            SandboxAccessManager.shared.setEditing(documentURL, window: editAccessToken, active)
+        }
         .onChange(of: graphicPreview == nil) { closed in
             // Opened from the side-by-side preview while editing: the keyboard
             // goes back to the editor, not to the list — typing must land in
@@ -1088,6 +1095,7 @@ struct MarkdownView: View {
             fileWatcher?.stop()
             fileWatcher = nil
             previewScheduler.cancel()
+            SandboxAccessManager.shared.setEditing(documentURL, window: editAccessToken, false)
             releaseEditSession()
         }
         #if APPSTORE
@@ -1919,7 +1927,38 @@ struct MarkdownView: View {
             }
         }
 
-        // Open the resolved file URL
+        // Open the resolved file URL — access first (sandbox), then existence,
+        // then the program check; every failure says so (`LocalLinkOpening`).
+        let target = finalURL
+        Task { @MainActor in await openLocalTarget(target, link: url) }
+    }
+
+    /// A local link target, opened as `LocalLinkOpening` orders it: folder
+    /// access when the sandbox does not let us read it yet (a click is an
+    /// explicit request), a toast when it is missing, declined or fails to
+    /// open; Markdown in QuickMD, anything else after `LocalLinkSafety`.
+    @MainActor
+    private func openLocalTarget(_ finalURL: URL, link url: URL) async {
+        let name = finalURL.lastPathComponent
+        var step = LocalLinkOpening.step(for: finalURL, isSandboxed: SandboxAccessManager.isSandboxed)
+        if step == .askForAccess {
+            guard await SandboxAccessManager.shared.requestAccess(forFileAt: finalURL, documentURL: documentURL,
+                                                                  explicit: true) else {
+                showToast(LocalLinkOpening.message(for: .accessDeclined, name: name))
+                return
+            }
+            step = LocalLinkOpening.step(for: finalURL, isSandboxed: true, accessAvailable: true)
+        }
+        guard step == .open else {
+            showToast(LocalLinkOpening.message(for: .notFound, name: name))
+            return
+        }
+        // A failed open reports on a background queue: back to main, a toast.
+        let reportFailure: (Error?) -> Void = { error in
+            guard error != nil else { return }
+            DispatchQueue.main.async { showToast(LocalLinkOpening.message(for: .openFailed, name: name)) }
+        }
+
         let ext = finalURL.pathExtension.lowercased()
         if ext == "md" || ext == "markdown" || ext == "mdown" || ext == "mkd" {
             // `other.md#section`: the window that shows other.md scrolls there.
@@ -1929,12 +1968,16 @@ struct MarkdownView: View {
             // Force open with our own app
             let config = NSWorkspace.OpenConfiguration()
             config.activates = true
-            NSWorkspace.shared.open([finalURL], withApplicationAt: Bundle.main.bundleURL, configuration: config)
+            NSWorkspace.shared.open([finalURL], withApplicationAt: Bundle.main.bundleURL, configuration: config) { _, error in
+                reportFailure(error)
+            }
         } else {
             // Open in the default application for that file type — after a
             // confirmation when that RUNS something (an app, a `.command`, a
             // script, an installer, an executable): one click on a link or a
-            // badge must not start a program (`LocalLinkSafety`).
+            // badge must not start a program (`LocalLinkSafety`). Decided
+            // here, AFTER access: the file's type can be read now (without
+            // access only the extension fallback would have spoken).
             // Symlinks and aliases are resolved; what is opened is exactly
             // the file that was checked (`check.target`), never the link
             // again (no gap between the check and the open).
@@ -1950,7 +1993,9 @@ struct MarkdownView: View {
                     return
                 }
             }
-            NSWorkspace.shared.open(check.target)
+            NSWorkspace.shared.open(check.target, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                reportFailure(error)
+            }
         }
     }
 

@@ -195,6 +195,14 @@ struct PictureView: View {
         .task(id: url) {
             await loadImage()
         }
+        // A folder was granted (here, another picture, another window):
+        // a picture denied under it loads now, without another click.
+        .onReceive(NotificationCenter.default.publisher(for: SandboxAccessManager.folderAccessGranted)) { note in
+            guard let deniedURL = accessDeniedURL, let folder = note.object as? URL,
+                  FolderAccessBroker.covers(FolderAccessBroker.canonicalPath(folder),
+                                            FolderAccessBroker.canonicalPath(deniedURL)) else { return }
+            Task { await loadImage() }
+        }
     }
 
     /// What stands in for the picture until it shows (or for good).
@@ -440,14 +448,16 @@ struct PictureView: View {
     }
 
     /// Load through `ImageLoader` (decode off the main thread). A local file
-    /// that exists but can't be read is most likely the sandbox: prompt for
-    /// folder access and retry once — the pre-existing (1.x) flow, unchanged.
+    /// that exists but can't be read is most likely the sandbox: ask for
+    /// folder access (`SandboxAccessManager.requestAccess` — at most once
+    /// per folder per session; `explicitAccess` = a Grant button, which asks
+    /// even after a decline) and retry once.
     ///
     /// Explicitly `@MainActor`: `SandboxAccessManager` is main-actor isolated,
     /// and on older SDKs (the CI toolchain) a View's methods are nonisolated —
     /// only `body` is annotated — so the call would not compile there.
     @MainActor
-    private func loadImage() async {
+    private func loadImage(explicitAccess: Bool = false) async {
         guard let source else { return }
         if let known = ImageLoader.knownFailure(for: url, source: source) {
             // Already showing it when seeded in `init`; no spinner in between.
@@ -464,10 +474,17 @@ struct PictureView: View {
         if image !== seeded { image = seeded }
         if let seeded { heightCache?.setImageSize(seeded.size, for: url) }
 
+        // Source Edit: the preview re-renders a remote URL being typed after
+        // every pause; fetch only a URL that stood still for a second (a
+        // changed URL cancels this task, so a partial one is never fetched).
+        if seeded == nil, case .remote = source, SandboxAccessManager.shared.isEditing(documentURL) {
+            guard await RemoteFetchGate.waitUntilStable(url) else { return }
+        }
         let first = await ImageLoader.load(raw: url, source: source, maxPixel: ImageLoader.displayMaxPixel)
         if case .failure(.unreadable(let fileURL)) = first {
             // File exists but couldn't load — likely sandbox. Request access and retry.
-            let granted = SandboxAccessManager.shared.ensureAccess(forParentOf: fileURL)
+            let granted = await SandboxAccessManager.shared.requestAccess(
+                forFileAt: fileURL, documentURL: documentURL, explicit: explicitAccess)
             guard granted else {
                 guard !Task.isCancelled else { return }
                 image = nil
@@ -496,10 +513,12 @@ struct PictureView: View {
         }
     }
 
-    /// Retry loading after the user clicks "Grant Folder Access".
+    /// The Grant button / menu item: an explicit request, which asks even
+    /// for a folder declined earlier in this session.
+    @MainActor
     private func retryWithAccess() async {
         accessDeniedURL = nil
-        await loadImage()
+        await loadImage(explicitAccess: true)
     }
 
     // MARK: - Error View

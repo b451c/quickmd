@@ -7,9 +7,11 @@ import AppKit
 /// containing local resources (images, linked files) referenced by markdown documents.
 ///
 /// When a user opens a `.md` file, the sandbox only grants access to that specific file.
-/// This manager prompts the user (once per folder) via `NSOpenPanel` to grant access
-/// to the parent directory, then persists the bookmark so future launches restore
-/// access silently.
+/// This manager asks the user via `NSOpenPanel` to grant access to a folder,
+/// then persists the bookmark so future launches restore access silently.
+/// WHEN to ask, for WHICH folder, and when not to ask again is decided by
+/// `FolderAccessBroker` (`broker`); this type provides its effects: the
+/// panel, the bookmarks, the grant notification.
 @MainActor
 final class SandboxAccessManager {
     static let shared = SandboxAccessManager()
@@ -17,10 +19,45 @@ final class SandboxAccessManager {
     /// UserDefaults key prefix for stored bookmarks
     private static let bookmarkKeyPrefix = "SandboxBookmark_"
 
+    /// Posted (main thread) when the reader granted a folder; `object` is
+    /// the folder URL. Pictures denied under it reload (`PictureView`), in
+    /// every window.
+    static let folderAccessGranted = Notification.Name("QuickMDFolderAccessGranted")
+
+    /// The App Sandbox is on (App Store build). The GitHub/Homebrew build
+    /// runs without it and never asks.
+    nonisolated static var isSandboxed: Bool {
+        ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
+    }
+
     /// Directories currently being accessed (need to stop on cleanup)
     private var activeAccessURLs: [URL] = []
 
+    /// Folders with a saved bookmark, read from the defaults once.
+    private lazy var savedFolders: [URL] = UserDefaults.standard.dictionaryRepresentation().keys
+        .filter { $0.hasPrefix(Self.bookmarkKeyPrefix) }
+        .map { URL(fileURLWithPath: String($0.dropFirst(Self.bookmarkKeyPrefix.count)), isDirectory: true) }
+
+    /// The decisions (see `FolderAccessBroker`), with this manager's effects.
+    private(set) lazy var broker = FolderAccessBroker(environment: .init(
+        isSandboxed: Self.isSandboxed,
+        savedFolders: { [unowned self] in self.savedFolders },
+        restore: { [unowned self] in self.restoreAccess(for: $0) },
+        waitUntilReady: { await Self.waitUntilAppIsActive() },
+        prompt: { [unowned self] in self.promptForFolder(at: $0) },
+        save: { [unowned self] in self.saveGrant($0) },
+        didGrant: { NotificationCenter.default.post(name: Self.folderAccessGranted, object: $0) }))
+
     private init() {}
+
+    /// A panel for a background app would pop up over whatever the reader is
+    /// doing (a tab opened with `open -g`): wait until QuickMD is active.
+    private static func waitUntilAppIsActive() async {
+        guard !NSApp.isActive else { return }
+        for await _ in NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification) {
+            return
+        }
+    }
 
     // MARK: - Public API
 
@@ -61,32 +98,52 @@ final class SandboxAccessManager {
         return false
     }
 
-    /// Ensure we have access to the parent directory of a file URL.
-    /// If a bookmark exists, restores it silently. Otherwise, prompts the user.
-    /// Returns `true` if access is available after this call.
+    /// Access for a local picture (`file`) the sandbox would not read:
+    /// granted, declined, or asked for — at most once per folder per session
+    /// (`FolderAccessBroker`). `explicit`: the reader pressed a Grant
+    /// button, so an earlier decline does not count.
+    func requestAccess(forFileAt file: URL, documentURL: URL?, explicit: Bool) async -> Bool {
+        await broker.requestAccess(forFileAt: file, documentURL: documentURL, explicit: explicit,
+                                   mayAsk: explicit || !isEditing(documentURL))
+    }
+
+    // MARK: - Source Edit
+
+    /// Documents with an active Source Edit session, by the windows editing
+    /// them (`MarkdownView` reports start and end with its own token, so a
+    /// repeated report is harmless). Their pictures never raise a
+    /// panel by themselves: the side-by-side preview re-parses the buffer
+    /// after every pause, half-typed paths included (`![l](assets/)`), and
+    /// an app-modal panel would take the keyboard mid-edit. Remote pictures
+    /// wait until their URL stands still (`RemoteFetchGate`).
+    private var editing: [String: Set<UUID>] = [:]
+
+    func setEditing(_ documentURL: URL?, window: UUID, _ active: Bool) {
+        guard let documentURL else { return }
+        let key = documentURL.standardizedFileURL.path
+        var windows = editing[key] ?? []
+        if active { windows.insert(window) } else { windows.remove(window) }
+        editing[key] = windows.isEmpty ? nil : windows
+    }
+
+    func isEditing(_ documentURL: URL?) -> Bool {
+        guard let documentURL else { return false }
+        return editing[documentURL.standardizedFileURL.path] != nil
+    }
+
+    /// A saved grant covering `file`, restored silently; never a panel
+    /// (print/PDF).
     @discardableResult
-    func ensureAccess(forParentOf fileURL: URL) -> Bool {
-        let parentDir = fileURL.deletingLastPathComponent()
-
-        // Already have active access?
-        if activeAccessURLs.contains(where: { $0.path == parentDir.path }) {
-            return true
-        }
-
-        // Try restoring a saved bookmark
-        if restoreAccess(for: parentDir) {
-            return true
-        }
-
-        // No bookmark — prompt the user
-        return promptForAccess(to: parentDir)
+    func restoreSavedAccess(covering file: URL) -> Bool {
+        broker.restoreWithoutAsking(forFileAt: file)
     }
 
     // MARK: - Private
 
     /// Present an NSOpenPanel pre-navigated to the target directory.
-    /// The user must click "Grant Access" to allow the app to read from that folder.
-    private func promptForAccess(to directoryURL: URL) -> Bool {
+    /// The user must click "Grant Access" to allow the app to read from that
+    /// folder. The folder chosen (the reader may pick another), or nil.
+    private func promptForFolder(at directoryURL: URL) -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -95,17 +152,17 @@ final class SandboxAccessManager {
         panel.directoryURL = directoryURL
         panel.prompt = "Grant Access"
         panel.message = "QuickMD needs access to this folder to display local images and open linked files. This is a one-time prompt per folder."
+        guard panel.runModal() == .OK, let selectedURL = panel.url else { return nil }
+        return selectedURL
+    }
 
-        guard panel.runModal() == .OK, let selectedURL = panel.url else {
-            return false
-        }
-
-        // Save the bookmark
+    /// Saves the bookmark of a granted folder and starts access.
+    private func saveGrant(_ selectedURL: URL) -> Bool {
         do {
             let bookmarkData = try selectedURL.bookmarkData(options: .withSecurityScope)
             let key = Self.bookmarkKey(for: selectedURL)
             UserDefaults.standard.set(bookmarkData, forKey: key)
-
+            savedFolders.append(selectedURL)
             if selectedURL.startAccessingSecurityScopedResource() {
                 activeAccessURLs.append(selectedURL)
                 return true
@@ -113,7 +170,6 @@ final class SandboxAccessManager {
         } catch {
             // Failed to create bookmark — access denied
         }
-
         return false
     }
 

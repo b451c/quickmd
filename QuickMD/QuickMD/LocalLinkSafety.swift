@@ -169,3 +169,52 @@ enum LocalLinkSafety {
         "Open \u{201C}\(displayName(check.target.lastPathComponent))\u{201D}?"
     }
 }
+
+// MARK: - Opening a local link target
+
+/// What a click on a link to a LOCAL file or folder does before anything is
+/// opened — pure, so the order is tested (`LocalLinkSafetyTests`).
+///
+/// A click is an EXPLICIT action: in the sandboxed build a target the app
+/// cannot read yet asks for folder access through `SandboxAccessManager`
+/// (the document's folder when the target is in its subtree; even after an
+/// earlier decline), and opens on success. Before, `NSWorkspace.open` failed
+/// silently there — the panel's own text promises "open linked files". A
+/// target that does not exist, a declined panel and a failed open each say
+/// so in a toast (`message(for:name:)`) instead of nothing.
+enum LocalLinkOpening {
+    enum Step: Equatable {
+        /// Sandboxed and not readable yet: ask for folder access first.
+        case askForAccess
+        /// Nothing there.
+        case notFound
+        /// Go on: the program check (non-Markdown), then open.
+        case open
+    }
+
+    enum Failure: Equatable {
+        case accessDeclined
+        case notFound
+        case openFailed
+    }
+
+    /// `accessAvailable`: the access step is behind us (granted), so only
+    /// existence is left to check.
+    static func step(for target: URL, isSandboxed: Bool, accessAvailable: Bool = false,
+                     fileManager: FileManager = .default) -> Step {
+        if isSandboxed, !accessAvailable, !fileManager.isReadableFile(atPath: target.path) {
+            return .askForAccess
+        }
+        return fileManager.fileExists(atPath: target.path) ? .open : .notFound
+    }
+
+    /// The toast for a failure, naming the target (cleaned for display).
+    static func message(for failure: Failure, name: String) -> String {
+        let shown = "\u{201C}\(LocalLinkSafety.displayName(name))\u{201D}"
+        switch failure {
+        case .accessDeclined: return "Couldn\u{2019}t open \(shown) without folder access"
+        case .notFound: return "Couldn\u{2019}t find \(shown)"
+        case .openFailed: return "Couldn\u{2019}t open \(shown)"
+        }
+    }
+}

@@ -1016,8 +1016,24 @@ struct MarkdownRenderer: Sendable {
         var attr = AttributedString("────────────────────────────────")
         attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.secondaryTextColor)
+        attr[AttributeScopes.AppKitAttributes.ParagraphStyleAttribute.self] = Self.ruleParagraphStyle
         return attr
     }
+
+    /// The paragraph of a dash rule (a thematic break, the footnote list's
+    /// separator): ONE line that is clipped at the column's edge instead of
+    /// wrapping. The rule is 32 "─" characters; in a column narrower than
+    /// that (the half-width side-by-side preview, a narrow window) it used to
+    /// wrap into a second short dash line. Clipped, it keeps its look and
+    /// one-line height wherever it fits, shrinks with the column where it
+    /// does not, and its characters — what search, selection and copy see —
+    /// are unchanged. AppKit scope only, the documented paragraph-style
+    /// exception (print: SwiftUI `Text` ignores it; the 500 pt page fits).
+    static let ruleParagraphStyle: NSParagraphStyle = {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byClipping
+        return style
+    }()
 
     // MARK: - Inline Formatting (refactored into smaller methods)
 
