@@ -10,8 +10,9 @@ import AppKit
 /// The string and its cell layout come from `TableTextBuilder` — normally the
 /// very instance `BlockHeightMeasurer` laid out to size the row (`preconverted`,
 /// v1.9 D12), which is why the row is `.exact`. The view adds only what a text
-/// table cannot draw itself, all from `BlockLayout.Table`: the table background
-/// and the rounded clip (`TableTextView.draw`), and the 1 pt outline — a SwiftUI
+/// table cannot draw itself, all from `BlockLayout.Table`: the table background,
+/// the rounded clip and the rules between cells (`TableTextView.draw`; the
+/// rules since #56), and the 1 pt outline — a SwiftUI
 /// stroke overlay as in 1.12, centred on the edge so half of it lies outside the
 /// view's frame, where an AppKit subview would be clipped.
 struct TableTextBlockView: View {
@@ -109,6 +110,7 @@ private struct TableTextRepresentable: NSViewRepresentable {
             textView.cachedAttributed = table.string
             textView.tableLayout = table.layout
             textView.tableSource = table.source
+            textView.tableRuleColor = table.ruleColor
             textView.invalidateMeasurement()
         }
 
@@ -153,17 +155,22 @@ final class TableTextView: SelfSizingTextView {
     /// painted inside the rounded clip, and the theme colour it came from.
     var tableBackground: NSColor = .clear
     var tableBackgroundSource: Color?
+    /// The installed `TableText`'s rule colour; set with the string.
+    var tableRuleColor: NSColor = .clear
 
     /// Everything — background, header band, rules, selection, search
     /// highlights, text — is clipped to the rounded rect (1.12 `.clipShape`).
+    /// The rules come last, from our own pass (#56 — on macOS 27.2 AppKit did
+    /// not paint the cells' bottom borders; see `paintTableRules`). The
+    /// steps live in `drawTable` (TableTextBuilder.swift), so the unit tests
+    /// draw a table exactly as this view does — keep this a bare `drawTable`
+    /// call: the tests draw through a stand-in view with the same override
+    /// (this class is not in the test target), so anything added here would
+    /// be untested.
     override func draw(_ dirtyRect: NSRect) {
-        NSGraphicsContext.saveGraphicsState()
-        NSBezierPath(roundedRect: bounds, xRadius: BlockLayout.Table.cornerRadius,
-                     yRadius: BlockLayout.Table.cornerRadius).addClip()
-        tableBackground.setFill()
-        dirtyRect.fill()
-        super.draw(dirtyRect)
-        NSGraphicsContext.restoreGraphicsState()
+        drawTable(in: dirtyRect, background: tableBackground, layout: tableLayout, ruleColor: tableRuleColor) {
+            super.draw(dirtyRect)
+        }
     }
 
     override func layoutHeight(layoutManager: NSLayoutManager, container: NSTextContainer) -> CGFloat {
