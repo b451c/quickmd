@@ -5,6 +5,29 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] - 2026-11-12
+
+Edit side by side, separate windows, tables on macOS 27.2, and many documents shown more faithfully.
+
+### Added
+- **Edit side by side** (⌥⇧⌘E, or Option-click the Edit button): the editor and the rendered document next to each other. The rendered side follows what you type; only Save writes the file. Thanks to @shmuelzon (#55).
+- **Separate windows:** Settings ▸ General ▸ "Open documents in separate windows" gives every document its own window instead of a tab. Thanks to @atorresg (#57).
+- **Formulas** are typeset in quotes, alerts, table cells and headings, on screen and in print/PDF.
+- **Rows of images:** a paragraph of images (badges one per line, several images on a line) is drawn as a row that wraps with the window. An image that is a link opens its link when clicked; hover a large one for the enlarge button.
+- **Code inside list items**, indented or fenced, is shown as code under the item's text, and a second paragraph of an item lines up with it. Numbering continues after them.
+- **Footnotes** are numbered in the order they are first cited and can run over several lines and paragraphs. A footnote that is never cited is no longer listed.
+- E-mail addresses, `www.` addresses and `<https://…>` become links.
+
+### Fixed
+- **Tables on macOS 27.2:** the lines under the header and between rows are drawn again (#56).
+- **Links to apps, scripts and installers ask before opening them.**
+- Bold, italic and strikethrough follow Markdown's rules in rare cases: underscores inside words, nested and overlapping markers, `~single~` strikethrough. Inside bold or italic text, and in headings, inline code stays monospaced, footnote numbers keep their size, and bold and italic combine.
+- Links: a title with parentheses, a link inside a link, brackets inside code in a link's text. A period or bracket after a bare URL is no longer part of the link.
+- Text such as `$HOME/$USER` or `$5-$10` is no longer read as a formula, and `$…$` inside inline code stays code. A formula directly followed by a letter or digit is text (`$n$th`; write `$n$-th`). `$$x$$` inside a sentence is a formula, and a line that starts with it no longer swallows the lines below. A formula too wide for its place is scaled down or shows its source.
+- Code blocks marked `text` or `plaintext` are no longer coloured as source code.
+- Scrolling while a Find Next jump is under way stops the jump at once.
+- A line break inside a numbered item no longer turns the next item into plain text.
+
 ## [1.14.4] - 2026-11-05
 
 Comfortable spacing, done properly, and Markdown that reads like it does on GitHub.
