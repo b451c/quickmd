@@ -1931,13 +1931,22 @@ struct MarkdownView: View {
             // confirmation when that RUNS something (an app, a `.command`, a
             // script, an installer, an executable): one click on a link or a
             // badge must not start a program (`LocalLinkSafety`).
-            if LocalLinkSafety.verdict(for: finalURL) == .confirm {
-                let name = DisplayString.middleTruncated(finalURL.lastPathComponent, maxLength: 80)
-                guard confirmOpening(title: "Open \u{201C}\(name)\u{201D}?",
-                                     message: "This link opens a program or script on your Mac.",
+            // Symlinks and aliases are resolved; what is opened is exactly
+            // the file that was checked (`check.target`), never the link
+            // again (no gap between the check and the open).
+            let check = LocalLinkSafety.check(finalURL)
+            if check.verdict == .confirm {
+                guard confirmOpening(title: LocalLinkSafety.confirmationTitle(check: check),
+                                     message: LocalLinkSafety.confirmationMessage(link: finalURL, check: check),
                                      cancelIsDefault: true) else { return }
+                // The alert can stay up for minutes: the file must still be
+                // what the reader agreed to open.
+                guard LocalLinkSafety.check(finalURL) == check else {
+                    NSSound.beep()
+                    return
+                }
             }
-            NSWorkspace.shared.open(finalURL)
+            NSWorkspace.shared.open(check.target)
         }
     }
 

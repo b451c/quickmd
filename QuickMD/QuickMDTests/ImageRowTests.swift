@@ -186,6 +186,23 @@ final class ImageRowTests: XCTestCase {
             return XCTFail("from inside")
         }
         XCTAssertEqual(fromInside, count)
+        // The PARSE uses the marker: lines scanned grow linearly with the
+        // run. PLAIN image lines: the fallback emits each as an image block
+        // and leaves no paragraph open, so without `imageParagraphSkip` the
+        // next line would start a new attempt (a run of N costs ~N²/2).
+        func scans(_ n: Int) -> Int {
+            let before = MarkdownBlockParser.imageParagraphLineScans.count
+            _ = parser.parse((Array(repeating: "![b](b.svg)", count: n) + ["text"])
+                .joined(separator: "\n"))
+            return MarkdownBlockParser.imageParagraphLineScans.count - before
+        }
+        let small = scans(200)
+        let large = scans(400)
+        // The counter is per thread (another test's background parse cannot
+        // add to it); this parse ran here, so it counted.
+        XCTAssertGreaterThanOrEqual(small, 200, "the counter saw this thread's parse")
+        XCTAssertLessThanOrEqual(small, 2 * 201, "each line scanned at most twice (once per attempt)")
+        XCTAssertLessThanOrEqual(large, 2 * small + 4, "200: \(small) scans, 400: \(large)")
         // And the parse is the pre-1.15 paragraph of linked placeholders.
         let blocks = parser.parse(lines.joined(separator: "\n"))
         XCTAssertTrue(blocks.allSatisfy { if case .text = $0.content { return true } else { return false } })
@@ -367,8 +384,8 @@ final class ImageRowTests: XCTestCase {
                 XCTAssertEqual(size.height, Row.placeholderSide * scale)
                 let text = NSHostingView(rootView: Text(Row.chipLabel(alt: alt))
                     .font(.system(size: Row.chipFontSize * scale)).lineLimit(1).fixedSize()).fittingSize.width
-                XCTAssertLessThanOrEqual(text, size.width - 2 * Row.chipHorizontalPadding * scale + 0.5,
-                                         "\(alt) × \(scale)")
+                let slot = (2 * Row.chipHorizontalPadding + Row.chipGlyphSide + Row.chipGlyphSpacing) * scale
+                XCTAssertLessThanOrEqual(text, size.width - slot + 0.5, "\(alt) × \(scale)")
             }
         }
         XCTAssertEqual(Row.chipLabel(alt: ""), "Image")
@@ -394,5 +411,46 @@ final class ImageRowTests: XCTestCase {
         XCTAssertEqual(height(proposed: 400, wrap: nil), 20, "one line at the proposal")
         XCTAssertEqual(height(proposed: 400, wrap: 250), 20 + 4 + 20, "two lines at the measured width")
         XCTAssertEqual(height(proposed: 200, wrap: 400), 20, "a narrower live cell does not rewrap")
+    }
+
+    // MARK: - Review 2
+
+    /// GitHub (`mode=markdown`, 2026-11-11): touching tags have no gap
+    /// (`<a><img></a><a><img></a>` → `…</a><a…`), `&nbsp;` is a space,
+    /// `<img><br><img>` is a `<br>` between them.
+    func testHTMLSeparatorsFollowTheSource() {
+        XCTAssertEqual(shape("<a href=\"https://e.com\"><img src=\"a.png\" alt=\"a\"></a><a href=\"https://f.com\"><img src=\"b.png\" alt=\"b\"></a>"),
+                       ["row:a→https://e.com+b→https://f.com"])
+        XCTAssertEqual(shape("<img src=\"a.png\" alt=\"a\"><img src=\"b.png\" alt=\"b\">"), ["row:a+b"])
+        XCTAssertEqual(shape("<img src=\"a.png\" alt=\"a\">&nbsp;<img src=\"b.png\" alt=\"b\">"), ["row:a_b"])
+        XCTAssertEqual(shape("<img src=\"a.png\" alt=\"a\"><br><img src=\"b.png\" alt=\"b\">"), ["row:a|b"])
+        XCTAssertEqual(shape("<img src=\"a.png\" alt=\"a\"> <br> <img src=\"b.png\" alt=\"b\">"), ["row:a|b"])
+    }
+
+    /// `<img src="a.png">⏎![b](b.png)`: GitHub reads an HTML block and shows
+    /// `![b](b.png)` literally. QuickMD keeps its pre-1.15 two picture
+    /// blocks there (no row) — and still makes rows of HTML-only lines.
+    func testHTMLBlockFollowedByAMarkdownImageIsNotARow() {
+        XCTAssertEqual(shape("<img src=\"a.png\" alt=\"a\">\n![b](b.png)"), ["img:a", "img:b"])
+        XCTAssertEqual(shape("<p align=\"center\"><img src=\"a.png\" alt=\"a\"></p>\n![b](b.png)"), ["img:a", "img:b"])
+        XCTAssertEqual(shape("<img src=\"a.png\" alt=\"a\">\n<img src=\"b.png\" alt=\"b\">"), ["row:a_b"])
+        XCTAssertEqual(shape("![b](b.png)\n<img src=\"a.png\" alt=\"a\">"), ["row:b_a"], "Markdown first: a paragraph")
+    }
+
+    /// Print honours `<img width>` in a row (`PrintImageLayout`, used by
+    /// `PrintableImageView` for a lone image and each row picture): two
+    /// 2000 px pictures at `width="80"` are 80 pt each, side by side on
+    /// the 500 pt page column; without the width each fills the column.
+    func testPrintRowPicturesHonourTheirWidth() throws {
+        guard case .imageRow(let images)? = parse("<img src=\"big.png\" width=\"80\"> <img src=\"big2.png\" width=\"80\">").first?.content
+        else { return XCTFail("row") }
+        let widths = images.map { PrintImageLayout.displayWidth(imageWidth: 2000, requested: $0.width) }
+        XCTAssertEqual(widths, [80, 80])
+        let sizes = widths.map { CGSize(width: $0, height: $0 / 2) }
+        XCTAssertEqual(BlockLayout.ImageRow.lines(sizes: sizes, separators: images.map(\.separator),
+                                                  width: PrintImageLayout.maxWidth, fontScale: 1).map(\.range), [0..<2])
+        XCTAssertEqual(PrintImageLayout.displayWidth(imageWidth: 2000, requested: nil), 500)
+        XCTAssertEqual(PrintImageLayout.displayWidth(imageWidth: 90, requested: nil), 90)
+        XCTAssertEqual(PrintImageLayout.displayWidth(imageWidth: 90, requested: .fraction(0.5)), 250)
     }
 }

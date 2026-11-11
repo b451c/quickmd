@@ -69,4 +69,94 @@ final class LocalLinkSafetyTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: tool)
         XCTAssertEqual(LocalLinkSafety.verdict(for: link), .confirm, "a link named like a document")
     }
+
+    // MARK: - Review 2: aliases, stored URLs, names, re-check
+
+    private func alias(_ name: String, to target: URL) throws -> URL {
+        let url = folder.appendingPathComponent(name)
+        let data = try target.bookmarkData(options: .suitableForBookmarkFile,
+                                           includingResourceValuesForKeys: nil, relativeTo: nil)
+        try URL.writeBookmarkData(data, to: url)
+        return url
+    }
+
+    /// A Finder alias is followed to its target, whatever it is named.
+    func testAliasesAreResolvedAndJudgedByTheirTarget() throws {
+        let tool = try file("deploy", "#!/bin/sh\necho hi\n", executable: true)
+        let named = try alias("ReadMe.pdf", to: tool)
+        XCTAssertEqual(try named.resourceValues(forKeys: [.isAliasFileKey]).isAliasFile, true, "fixture is an alias")
+        let check = LocalLinkSafety.check(named)
+        XCTAssertEqual(check.verdict, .confirm)
+        XCTAssertEqual(check.target.lastPathComponent, "deploy")
+        let app = try directory("Tool.app")
+        XCTAssertEqual(LocalLinkSafety.verdict(for: try alias("Notes", to: app)), .confirm)
+        // An alias to a document opens the document, without asking.
+        let pdf = try file("paper.pdf")
+        let toPDF = LocalLinkSafety.check(try alias("Paper alias", to: pdf))
+        XCTAssertEqual(toPDF.verdict, .open)
+        XCTAssertEqual(toPDF.target.resolvingSymlinksInPath().path, pdf.resolvingSymlinksInPath().path)
+    }
+
+    /// alias → symlink → alias → tool: followed to the end.
+    func testAliasSymlinkAliasChainIsFollowed() throws {
+        let tool = try file("deploy", "#!/bin/sh\n", executable: true)
+        let inner = try alias("inner", to: tool)
+        let link = folder.appendingPathComponent("middle.txt")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: inner)
+        let outer = try alias("outer.pdf", to: link)
+        let check = LocalLinkSafety.check(outer)
+        XCTAssertEqual(check.verdict, .confirm)
+        XCTAssertEqual(check.target.lastPathComponent, "deploy")
+    }
+
+    /// An alias whose target is gone cannot be judged: ask.
+    func testUnresolvableAliasAsks() throws {
+        let doomed = try file("gone-soon.pdf")
+        let dangling = try alias("Report.pdf", to: doomed)
+        try FileManager.default.removeItem(at: doomed)
+        XCTAssertEqual(LocalLinkSafety.verdict(for: dangling), .confirm)
+    }
+
+    /// Files whose opening follows a stored URL or runs a session/script.
+    func testStoredURLsTerminalSessionsAndPythonLauncherFilesAsk() throws {
+        for name in ["a.webloc", "a.inetloc", "a.fileloc", "a.afploc", "a.ftploc", "a.vncloc", "a.mailloc",
+                     "a.newsloc", "a.url", "a.term", "a.pyw", "a.pyo", "a.pyz", "a.pyc"] {
+            XCTAssertEqual(LocalLinkSafety.verdict(for: try file(name)), .confirm, name)
+        }
+    }
+
+    /// The confirmation names the resolved file, says when the link's own
+    /// name differs, and never shows bidi controls or line breaks.
+    func testConfirmationNamesTheTargetSafely() throws {
+        let tool = try file("deploy", "#!/bin/sh\n", executable: true)
+        let link = folder.appendingPathComponent("innocent.txt")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: tool)
+        let check = LocalLinkSafety.check(link)
+        XCTAssertEqual(LocalLinkSafety.confirmationTitle(check: check), "Open \u{201C}deploy\u{201D}?")
+        XCTAssertEqual(LocalLinkSafety.confirmationMessage(link: link, check: check),
+                       "This link opens a program or script on your Mac.\n"
+                       + "\u{201C}innocent.txt\u{201D} points to \u{201C}deploy\u{201D}.")
+        let direct = LocalLinkSafety.check(tool)
+        XCTAssertEqual(LocalLinkSafety.confirmationMessage(link: tool, check: direct),
+                       "This link opens a program or script on your Mac.")
+
+        // RLO: `a<U+202E>txt.command` would read "adnammoc.txt".
+        let spoof = try file("a\u{202E}txt.command")
+        let spoofCheck = LocalLinkSafety.check(spoof)
+        XCTAssertEqual(spoofCheck.verdict, .confirm)
+        XCTAssertEqual(LocalLinkSafety.confirmationTitle(check: spoofCheck), "Open \u{201C}atxt.command\u{201D}?")
+        XCTAssertEqual(LocalLinkSafety.displayName("x\u{2066}y\u{2069}\u{200F}z\nw\tv\u{0007}.sh"), "xyz w v.sh")
+        XCTAssertEqual(LocalLinkSafety.displayName(String(repeating: "n", count: 300) + ".command").count, 80)
+        XCTAssertEqual(LocalLinkSafety.displayName("👨‍👩‍👧 Report.pdf"), "👨‍👩‍👧 Report.pdf", "ZWJ emoji kept")
+    }
+
+    /// The second check after the alert sees a file that changed.
+    func testCheckChangesWhenTheFileIsReplaced() throws {
+        let doc = try file("report", "words")
+        let before = LocalLinkSafety.check(doc)
+        XCTAssertEqual(before.verdict, .open)
+        XCTAssertEqual(LocalLinkSafety.check(doc), before, "stable while nothing changes")
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: doc.path)
+        XCTAssertNotEqual(LocalLinkSafety.check(doc), before)
+    }
 }
