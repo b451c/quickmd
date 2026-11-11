@@ -5,14 +5,16 @@ import AppKit
 
 /// Bridges into AppKit to configure the host NSWindow once it's available.
 ///
-/// Tabbing itself is AppKit's: `WindowTabbing.preferTabsAlways()` makes every
-/// new document window join the frontmost one as a tab while AppKit orders it
-/// in, in full screen and Split View too. SwiftUI already gives all
+/// Tabbing itself is AppKit's: by default (`WindowTabbing.preferTabsAlways()`
+/// at launch) every new document window joins the frontmost one as a tab while
+/// AppKit orders it in, in full screen and Split View too; with Settings ▸
+/// "Open documents in separate windows" on, AppKit tabs nothing on its own
+/// (`WindowTabbing.applyWindowPreferenceAtLaunch`). SwiftUI already gives all
 /// DocumentGroup windows one shared `tabbingIdentifier`, so it must be left as
 /// is. This callback can't do the tabbing: on macOS 26 it fires only after the
 /// window is on screen (and, in full screen, already in a Space of its own).
 /// For the same reason it never sets the window's `tabbingMode` — AppKit has
-/// already decided by then (see `WindowTabbing.applyWindowPreference`).
+/// already decided by then (see the levers on `WindowTabbing`).
 struct WindowConfigurator: NSViewRepresentable {
     let configure: (NSWindow) -> Void
 
@@ -49,22 +51,26 @@ struct WindowConfigurator: NSViewRepresentable {
 /// How document windows are grouped: as tabs of one window (default, PR #36)
 /// or one window per document (Settings ▸ General, PR #57).
 ///
-/// The levers, and what was measured about them (macOS 27, headless probe
-/// with invisible windows; full screen is not covered by it):
+/// The levers. MEASURED on macOS 27.0.1 with a standalone probe (plain
+/// NSWindows, invisible, ordered in outside full screen — full screen and
+/// SwiftUI's own windows are not covered):
 /// - `AppleWindowTabbingMode` in the argument domain becomes
 ///   `NSWindow.userTabbingPreference`. AppKit reads it ONCE per process and
 ///   keeps that value: rewriting the domain later changes neither the class
-///   property nor what a newly shown window does. So it is a launch-time
-///   lever only.
-/// - A window's own `tabbingMode = .disallowed` (or `.preferred`) works only
-///   if it is set BEFORE the window is ordered in. `WindowConfigurator` runs
-///   after that, so it cannot use this lever.
-/// - `NSWindow.allowsAutomaticWindowTabbing = false` stops automatic tabbing
-///   for every window shown afterwards, and is read live. It also takes the
-///   tab items out of the Window menu (WWDC 2016; not measurable headless —
-///   the E2E checks it).
-/// - `addTabbedWindow` (our fallback merge) ignores both the global flag and
-///   the windows' `tabbingMode`.
+///   property nor whether a newly shown window is tabbed. So it is a
+///   launch-time lever only.
+/// - A window's own `tabbingMode` decides when set before `orderFront`
+///   (`.disallowed` is not tabbed under "always", `.preferred` is tabbed
+///   under "manual"). Set right after `orderFront` it changes nothing in
+///   either direction.
+/// - `NSWindow.allowsAutomaticWindowTabbing = false`, set between two
+///   windows, stops the second one being tabbed.
+/// - `addTabbedWindow` (our fallback merge) works whatever the global flag
+///   and the windows' `tabbingMode`.
+/// INFERRED, not measured: `WindowConfigurator` fires after the window is
+/// ordered in (seen on macOS 26 in the #36 E2E), so a per-window mode set
+/// there comes too late; and the global flag also takes the tab items out of
+/// the Window menu (WWDC 2016) — the GUI E2E checks both.
 enum WindowTabbing {
     /// The defaults key behind `NSWindow.userTabbingPreference` (System
     /// Settings ▸ Desktop & Dock ▸ "Prefer tabs when opening documents").
@@ -90,7 +96,7 @@ enum WindowTabbing {
     /// The opposite of `preferTabsAlways()`: AppKit never tabs a new document
     /// on its own, whatever the system-wide setting. "manual" is the value
     /// macOS's own "Never" choice writes; an unknown value (e.g. "never")
-    /// reads as the system default, "In Full Screen" (measured).
+    /// reads as the system default, "In Full Screen" (measured on macOS 27.0.1).
     static func preferTabsNever(in defaults: UserDefaults = .standard) {
         setTabbingMode("manual", in: defaults)
     }
@@ -130,7 +136,9 @@ enum WindowTabbing {
     ///   the only lever left is the global `allowsAutomaticWindowTabbing =
     ///   false` (a per-window `.disallowed` from `WindowConfigurator` lands
     ///   too late). Cost until the next launch: the Window menu's tab items
-    ///   go away (existing groups still work by dragging tabs).
+    ///   (Merge All Windows, Move Tab to New Window, Show Tab Bar) go away —
+    ///   expected from the flag, confirmed only by the E2E — while existing
+    ///   groups still work by dragging tabs.
     /// - Switched OFF again in that process: the flag comes back, AppKit tabs
     ///   again — in full screen too.
     /// - Launched with separate windows ("manual"), switched ON again: nothing

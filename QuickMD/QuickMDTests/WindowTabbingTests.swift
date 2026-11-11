@@ -40,18 +40,17 @@ final class WindowTabbingTests: XCTestCase {
     private var savedAllowsAutomaticTabbing: Bool = true
     /// The separate-windows setting lives here, never in the test runner's
     /// saved defaults: a crash mid-test must not leave it on for later runs.
-    private var suiteName = ""
-    private var defaults: UserDefaults!
+    private var suite: TemporaryDefaults!
+    private var defaults: UserDefaults { suite.defaults }
 
-    override func setUp() {
-        super.setUp()
+    override func setUpWithError() throws {
+        try super.setUpWithError()
         let standard = UserDefaults.standard
         savedArguments = standard.volatileDomain(forName: UserDefaults.argumentDomain)
         savedSize = (standard.object(forKey: "lastWindowFrameWidth"),
                      standard.object(forKey: "lastWindowFrameHeight"))
         savedAllowsAutomaticTabbing = NSWindow.allowsAutomaticWindowTabbing
-        suiteName = "WindowTabbingTests.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)
+        suite = try TemporaryDefaults("WindowTabbing")
     }
 
     override func tearDown() {
@@ -61,8 +60,8 @@ final class WindowTabbingTests: XCTestCase {
         restore(savedSize.0, forKey: "lastWindowFrameWidth", in: standard)
         restore(savedSize.1, forKey: "lastWindowFrameHeight", in: standard)
         NSWindow.allowsAutomaticWindowTabbing = savedAllowsAutomaticTabbing
-        defaults.removePersistentDomain(forName: suiteName)
-        defaults = nil
+        suite?.remove()
+        suite = nil
         super.tearDown()
     }
 
@@ -88,10 +87,16 @@ final class WindowTabbingTests: XCTestCase {
 
     /// The root cause: with the system default ("In Full Screen") a new window
     /// arriving outside full screen, or one whose identifier no longer matched,
-    /// was never tabbed by AppKit. AppKit must report "always" for QuickMD.
-    func testPreferTabsAlwaysIsWhatAppKitReads() {
-        WindowTabbing.preferTabsAlways()
-        XCTAssertEqual(NSWindow.userTabbingPreference, .always)
+    /// was never tabbed by AppKit. QuickMD must ask for "always".
+    ///
+    /// Asserts the stored value, not `NSWindow.userTabbingPreference`: AppKit
+    /// reads the preference once per process and keeps it (measured on macOS
+    /// 27.0.1), so in a shared test runner that read depends on which test
+    /// touched AppKit first. That the stored "always" is what AppKit then
+    /// reports at launch is covered by the standalone probe and the E2E.
+    func testPreferTabsAlwaysStoresAlwaysInTheArgumentDomain() {
+        WindowTabbing.preferTabsAlways(in: defaults)
+        XCTAssertEqual(argumentTabbingMode, "always")
     }
 
     func testPreferTabsAlwaysKeepsOtherLaunchArguments() {
