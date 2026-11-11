@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="QuickMD">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#4C97FB"/><stop offset="0.5" stop-color="#2A66E6"/><stop offset="1" stop-color="#1A3FB8"/>
+  </linearGradient>
+  <radialGradient id="gloss" cx="0.5" cy="0" r="0.75">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.20"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#FBFCFF"/><stop offset="1" stop-color="#DCE3F4"/>
+  </linearGradient>
+  <linearGradient id="fold" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#E9EEFA"/><stop offset="1" stop-color="#B9C5E4"/>
+  </linearGradient>
+  <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#5FE0FF"/><stop offset="0.5" stop-color="#FFFFFF" stop-opacity="0"/><stop offset="1" stop-color="#8E6BFF"/>
+  </linearGradient>
+  <linearGradient id="ink" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="370" y2="0">
+    <stop offset="0" stop-color="#19B8F0"/><stop offset="0.5" stop-color="#3A7BF2"/><stop offset="1" stop-color="#7A55F0"/>
+  </linearGradient>
+  <clipPath id="tile"><path d="M383.41,100.00 L640.59,100.00 C722.19,100.00 763.00,100.00 806.92,113.89 C854.88,131.34 892.66,169.12 910.11,217.08 C924.00,261.00 924.00,301.81 924.00,383.41 L924.00,640.59 C924.00,722.19 924.00,763.00 910.11,806.92 C892.66,854.88 854.88,892.66 806.92,910.11 C763.00,924.00 722.19,924.00 640.59,924.00 L383.41,924.00 C301.81,924.00 261.00,924.00 217.08,910.11 C169.12,892.66 131.34,854.88 113.89,806.92 C100.00,763.00 100.00,722.19 100.00,640.59 L100.00,383.41 C100.00,301.81 100.00,261.00 113.89,217.08 C131.34,169.12 169.12,131.34 217.08,113.89 C261.00,100.00 301.81,100.00 383.41,100.00 Z"/></clipPath>
+  <filter id="tileShadow" x="-10%" y="-10%" width="120%" height="125%">
+    <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#081A52" flood-opacity="0.30"/>
+  </filter>
+  <filter id="pageShadow" x="-20%" y="-10%" width="140%" height="130%">
+    <feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#0A2A86" flood-opacity="0.34"/>
+  </filter>
+  <filter id="markShadow" x="-10%" y="-10%" width="120%" height="130%">
+    <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#0A2A86" flood-opacity="0.30"/>
+  </filter>
+</defs>
+<path d="M383.41,100.00 L640.59,100.00 C722.19,100.00 763.00,100.00 806.92,113.89 C854.88,131.34 892.66,169.12 910.11,217.08 C924.00,261.00 924.00,301.81 924.00,383.41 L924.00,640.59 C924.00,722.19 924.00,763.00 910.11,806.92 C892.66,854.88 854.88,892.66 806.92,910.11 C763.00,924.00 722.19,924.00 640.59,924.00 L383.41,924.00 C301.81,924.00 261.00,924.00 217.08,910.11 C169.12,892.66 131.34,854.88 113.89,806.92 C100.00,763.00 100.00,722.19 100.00,640.59 L100.00,383.41 C100.00,301.81 100.00,261.00 113.89,217.08 C131.34,169.12 169.12,131.34 217.08,113.89 C261.00,100.00 301.81,100.00 383.41,100.00 Z" fill="url(#bg)" filter="url(#tileShadow)"/>
+<g clip-path="url(#tile)"><rect x="100" y="100" width="824" height="520" fill="url(#gloss)"/></g>
+<path d="M383.41,100.00 L640.59,100.00 C722.19,100.00 763.00,100.00 806.92,113.89 C854.88,131.34 892.66,169.12 910.11,217.08 C924.00,261.00 924.00,301.81 924.00,383.41 L924.00,640.59 C924.00,722.19 924.00,763.00 910.11,806.92 C892.66,854.88 854.88,892.66 806.92,910.11 C763.00,924.00 722.19,924.00 640.59,924.00 L383.41,924.00 C301.81,924.00 261.00,924.00 217.08,910.11 C169.12,892.66 131.34,854.88 113.89,806.92 C100.00,763.00 100.00,722.19 100.00,640.59 L100.00,383.41 C100.00,301.81 100.00,261.00 113.89,217.08 C131.34,169.12 169.12,131.34 217.08,113.89 C261.00,100.00 301.81,100.00 383.41,100.00 Z" fill="none" stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="4"/><g filter="url(#markShadow)"><g transform="translate(234.50,384.50) scale(1.5)" fill="#FFFFFF"><path d="M0,170 V0 H42 L90,62 L138,0 H180 V170 H138 V68 L90,130 L42,68 V170 Z"/><path d="M279,0 H321 V86 H370 L300,170 L230,86 H279 Z"/></g></g>
+</svg>
