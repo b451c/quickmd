@@ -319,6 +319,13 @@ enum SideBySideLayout {
         minimumDocumentWidth + max(sidebars, 0)
     }
 
+    /// What entering Source Edit applies of `fit`: side by side → the fit
+    /// (grow, or join a grown group without growing); the editor alone →
+    /// nothing — it must not keep its group grown, and its minimum is unused.
+    static func fitToApply(enteringSideBySide: Bool, _ fit: Fit) -> Fit? {
+        enteringSideBySide ? fit : nil
+    }
+
     /// The window's minimum content width while side by side shows, decided
     /// right after `fit` was applied (`contentWidth`: the window's content
     /// width THEN, grown or not): what side by side needs when the window has
@@ -357,25 +364,35 @@ enum SideBySideLayout {
 /// (`WindowSizeMemory`) resolves a window's group at QUERY time
 /// (`tabbedWindows ?? [window]`), never from a list captured when it grew, so
 /// a tab that joins the group later belongs to it and a tab dragged out into
-/// its own window does not. No window is referenced, only ids.
+/// its own window does not take part in the growth logic. No window is
+/// referenced, only ids.
 ///
 /// Rules (each a test in `SideBySideTests`):
 /// - The first growth of a group records its pre-grow SIZE; a later growth
 ///   keeps it — unless the user resized the window by hand since the last
 ///   growth (its size is no longer the grown size, 1 pt tolerance; a move is
 ///   not a resize): then the user's size is the new pre-grow size.
-/// - The group is grown while at least one of its tabs shows side by side.
-/// - While grown, the size to remember (resize end, close, quit) is the
-///   pre-grow size — unless the user resized by hand: then theirs.
+/// - The group is grown while at least one of its tabs SHOWS side by side
+///   (Source Edit with the editor alone does not count).
+/// - While grown, the size `WindowSizeMemory` remembers (the end of a live
+///   resize, a window closing) is the pre-grow size — unless the user resized
+///   by hand: then theirs.
 /// - Only the LAST side-by-side tab leaving (toggle off, Done / Esc, closing
 ///   it) gives the width back, and only if the size is still the grown one;
-///   the caller keeps the current origin (`restoredFrame`). Never while
-///   another tab of the group still shows side by side.
+///   the caller keeps the current origin (`restoredFrame`). Never while a
+///   tab of the group — of ANY entry, after Merge All Windows joined two
+///   grown groups — still shows side by side.
+/// - The entry stays until the give-back really happened (`didGiveBack`):
+///   until then the size to remember is still the pre-grow one.
 /// - Full screen: nothing is remembered meanwhile; leaving side by side in
-///   full screen defers the give-back to the exit from full screen (AppKit
-///   puts the grown frame back then). Full screen ENTERED while side by side
-///   needs nothing: leaving full screen restores the grown size, the group is
-///   still grown.
+///   full screen defers the give-back to the exit from full screen. Full
+///   screen ENTERED while side by side needs nothing.
+/// - A group that lost its side-by-side tab some other way (the tab dragged
+///   out into a window of its own — AppKit sends no cheap notification for
+///   that) keeps remembering the pre-grow size for as long as its size is
+///   still the grown one (`knownGroup`, refreshed whenever a window of the
+///   group becomes key, grows, shows or leaves side by side). It is not given
+///   back automatically.
 struct SideBySideGrowthState: Equatable {
 
     struct Entry: Equatable {
@@ -385,11 +402,16 @@ struct SideBySideGrowthState: Equatable {
         var grownSize: NSSize
         /// The windows (tabs) of the group showing side by side.
         var sideBySide: Set<Int>
-        /// Nobody shows side by side any more, but the group was in full
-        /// screen: the give-back waits for its exit. The group's windows then.
-        var waitingForFullScreenExit: Set<Int> = []
+        /// Nobody shows side by side any more; the width goes back to these
+        /// windows (after the exit from full screen when `afterFullScreen`).
+        var awaitingGiveBack: Set<Int> = []
+        var afterFullScreen = false
+        /// Every window seen in the group while this entry lived — only for
+        /// the size to remember of a group left behind (see the type's doc).
+        var knownGroup: Set<Int> = []
 
-        var members: Set<Int> { sideBySide.union(waitingForFullScreenExit) }
+        /// The windows that make a group THIS entry's group.
+        var members: Set<Int> { sideBySide.union(awaitingGiveBack) }
     }
 
     private(set) var entries: [Entry] = []
@@ -399,75 +421,153 @@ struct SideBySideGrowthState: Equatable {
         abs(a.width - b.width) < 1 && abs(a.height - b.height) < 1
     }
 
-    private func index(of group: Set<Int>) -> Int? {
-        entries.firstIndex { !$0.members.isDisjoint(with: group) }
+    private func indices(of group: Set<Int>) -> [Int] {
+        entries.indices.filter { !entries[$0].members.isDisjoint(with: group) }
     }
 
-    func isGrown(group: Set<Int>) -> Bool { index(of: group) != nil }
+    func isGrown(group: Set<Int>) -> Bool { !indices(of: group).isEmpty }
+
+    /// Merge All Windows can put two grown groups into one: one group, one
+    /// entry — the smaller pre-grow width, the grown size that matches
+    /// `size` (the group's one frame) if any. Returns the entry's index.
+    private mutating func merged(group: Set<Int>, size: NSSize?) -> Int? {
+        let found = indices(of: group)
+        guard var first = found.first.map({ entries[$0] }) else { return nil }
+        for i in found.dropFirst() {
+            let other = entries[i]
+            if other.preGrowSize.width < first.preGrowSize.width { first.preGrowSize = other.preGrowSize }
+            if let size, Self.same(size, other.grownSize) { first.grownSize = other.grownSize }
+            first.sideBySide.formUnion(other.sideBySide)
+            first.awaitingGiveBack.formUnion(other.awaitingGiveBack)
+            first.knownGroup.formUnion(other.knownGroup)
+        }
+        for i in found.reversed() { entries.remove(at: i) }
+        first.knownGroup.formUnion(group)
+        entries.append(first)
+        return entries.count - 1
+    }
+
+    /// A window of `group` became key (or was otherwise seen in it): the
+    /// group a drag-out may leave behind is kept up to date.
+    mutating func noteGroup(_ group: Set<Int>) {
+        for i in indices(of: group) { entries[i].knownGroup.formUnion(group) }
+    }
 
     /// Window `window` (of `group`) grew from `before` to `after`.
     mutating func didGrow(window: Int, group: Set<Int>, from before: NSSize, to after: NSSize) {
-        guard let i = index(of: group) else {
-            entries.append(Entry(preGrowSize: before, grownSize: after, sideBySide: [window]))
+        guard let i = merged(group: group, size: before) else {
+            entries.append(Entry(preGrowSize: before, grownSize: after, sideBySide: [window], knownGroup: group))
             return
         }
         // Resized by hand since the last growth: that size is the user's.
         if !Self.same(before, entries[i].grownSize) { entries[i].preGrowSize = before }
         entries[i].grownSize = after
         entries[i].sideBySide.insert(window)
-        entries[i].waitingForFullScreenExit = []
+        entries[i].awaitingGiveBack = []
+        entries[i].afterFullScreen = false
     }
 
-    /// Window `window` shows side by side without growing (it fit): a grown
-    /// group stays grown until this tab leaves too.
+    /// Window `window` SHOWS side by side without growing (it fit): a grown
+    /// group stays grown until this tab leaves too. Never for the editor alone.
     mutating func didShowWithoutGrowing(window: Int, group: Set<Int>) {
-        guard let i = index(of: group) else { return }
+        guard let i = merged(group: group, size: nil) else { return }
         entries[i].sideBySide.insert(window)
+        entries[i].awaitingGiveBack = []
+        entries[i].afterFullScreen = false
     }
 
     /// Window `window` stops showing side by side — left it, or is closing.
     /// `remaining`: the windows of its group that stay (itself included when
     /// it only left side by side; its tabs when it closes). Returns the width
-    /// to give back to `remaining` now, or nil.
+    /// to give back to `remaining` now, or nil. A returned width keeps the
+    /// entry until `didGiveBack`.
     mutating func didLeave(window: Int, remaining: Set<Int>, size: NSSize, isFullScreen: Bool) -> CGFloat? {
+        // Two grown groups merged into one (Merge All Windows): one entry.
+        _ = merged(group: remaining.union([window]), size: size)
         guard let i = entries.firstIndex(where: { $0.sideBySide.contains(window) }) else { return nil }
         entries[i].sideBySide.remove(window)
-        // Another tab still shows side by side: it needs the width.
+        entries[i].knownGroup.formUnion(remaining)
+        // A tab of this group — or of another entry sharing its windows —
+        // still shows side by side: it needs the width.
         guard entries[i].sideBySide.isEmpty else { return nil }
-        if isFullScreen && !remaining.isEmpty {
-            entries[i].waitingForFullScreenExit = remaining
+        let othersShowing = entries.indices.contains {
+            $0 != i && !entries[$0].sideBySide.isEmpty && !entries[$0].members.isDisjoint(with: remaining)
+        }
+        guard !othersShowing else { return nil }
+        guard !remaining.isEmpty else {
+            entries.remove(at: i)
             return nil
         }
-        let entry = entries.remove(at: i)
-        guard !remaining.isEmpty, !isFullScreen, Self.same(size, entry.grownSize) else { return nil }
-        return entry.preGrowSize.width
+        if isFullScreen {
+            entries[i].awaitingGiveBack = remaining
+            entries[i].afterFullScreen = true
+            return nil
+        }
+        guard Self.same(size, entries[i].grownSize) else {
+            entries.remove(at: i)
+            return nil
+        }
+        entries[i].awaitingGiveBack = remaining
+        return entries[i].preGrowSize.width
     }
 
     /// The group left full screen and has size `size` again.
     mutating func didExitFullScreen(group: Set<Int>, size: NSSize) -> CGFloat? {
-        guard let i = index(of: group), entries[i].sideBySide.isEmpty,
-              !entries[i].waitingForFullScreenExit.isEmpty else { return nil }
-        let entry = entries.remove(at: i)
-        return Self.same(size, entry.grownSize) ? entry.preGrowSize.width : nil
+        guard let i = indices(of: group).first, entries[i].sideBySide.isEmpty, entries[i].afterFullScreen
+        else { return nil }
+        entries[i].afterFullScreen = false
+        guard Self.same(size, entries[i].grownSize) else {
+            entries.remove(at: i)
+            return nil
+        }
+        return entries[i].preGrowSize.width
+    }
+
+    /// The width really went back to `group` (or could not: no window was
+    /// left). Windows that were in the group earlier and are not in it now
+    /// (a tab dragged out) keep a residue: their remembered size stays the
+    /// pre-grow one while they still have the grown size.
+    mutating func didGiveBack(group: Set<Int>) {
+        for i in indices(of: group).reversed() where entries[i].sideBySide.isEmpty {
+            var residue = entries[i]
+            residue.knownGroup.subtract(group)
+            residue.knownGroup.subtract(residue.awaitingGiveBack)
+            residue.awaitingGiveBack = []
+            residue.afterFullScreen = false
+            if residue.knownGroup.isEmpty { entries.remove(at: i) } else { entries[i] = residue }
+        }
+    }
+
+    /// The windows a closing `window`'s entry knows besides itself — where a
+    /// give-back can go when AppKit no longer lists the tabs during a close.
+    func knownSiblings(of window: Int) -> Set<Int> {
+        entries.filter { $0.members.contains(window) || $0.knownGroup.contains(window) }
+            .reduce(into: Set<Int>()) { $0.formUnion($1.knownGroup) }
+            .subtracting([window])
     }
 
     /// A window closed (after its size was remembered and `didLeave` ran):
-    /// forget it; a group's state goes with its last window.
+    /// forget it; an entry goes with the last window it knows.
     mutating func didClose(window: Int) {
         for i in entries.indices.reversed() {
             entries[i].sideBySide.remove(window)
-            entries[i].waitingForFullScreenExit.remove(window)
-            if entries[i].members.isEmpty { entries.remove(at: i) }
+            entries[i].awaitingGiveBack.remove(window)
+            entries[i].knownGroup.remove(window)
+            if entries[i].members.isEmpty && entries[i].knownGroup.isEmpty { entries.remove(at: i) }
         }
     }
 
     /// What `WindowSizeMemory` may remember for a window of `group` whose size
-    /// is `size`: nil in full screen, the pre-grow size while grown and not
-    /// resized by hand, otherwise the size itself.
+    /// is `size`: nil in full screen; the pre-grow size while the group is
+    /// grown (or was left behind grown) and not resized by hand; otherwise
+    /// the size itself.
     func sizeToRemember(group: Set<Int>, size: NSSize, isFullScreen: Bool) -> NSSize? {
         guard !isFullScreen else { return nil }
-        guard let i = index(of: group), Self.same(size, entries[i].grownSize) else { return size }
-        return entries[i].preGrowSize
+        let matching = entries.filter {
+            (!$0.members.isDisjoint(with: group) || !$0.knownGroup.isDisjoint(with: group))
+                && Self.same(size, $0.grownSize)
+        }
+        return matching.min(by: { $0.preGrowSize.width < $1.preGrowSize.width })?.preGrowSize ?? size
     }
 
     /// The frame giving `width` back to a window at `current`: the current

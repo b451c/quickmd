@@ -588,6 +588,7 @@ final class SideBySideTests: XCTestCase {
         XCTAssertEqual(state.sizeToRemember(group: [tabA], size: wide, isFullScreen: false), narrow,
                        "closed / quit while grown: the size from before")
         XCTAssertEqual(state.didLeave(window: tabA, remaining: [tabA], size: wide, isFullScreen: false), 800)
+        state.didGiveBack(group: [tabA])
         XCTAssertTrue(state.entries.isEmpty)
         XCTAssertEqual(state.sizeToRemember(group: [tabA], size: narrow, isFullScreen: false), narrow)
     }
@@ -646,9 +647,91 @@ final class SideBySideTests: XCTestCase {
     func testATabDraggedOutStartsUngrown() {
         var state = SideBySideGrowthState()
         state.didGrow(window: tabA, group: [tabA, tabB], from: narrow, to: wide)
-        // B is now a window of its own: its group is just B.
+        // B is now a window of its own: its group is just B. It takes no part
+        // in the growth (showing side by side, it runs its own fit) …
         XCTAssertFalse(state.isGrown(group: [tabB]))
-        XCTAssertEqual(state.sizeToRemember(group: [tabB], size: wide, isFullScreen: false), wide)
+        state.didShowWithoutGrowing(window: tabB, group: [tabB])
+        XCTAssertNil(state.didLeave(window: tabA, remaining: [tabA, tabB], size: NSSize(width: 1, height: 1),
+                                    isFullScreen: false), "B never joined A's side-by-side tabs")
+        // … but the grown width it carries away is not remembered as B's.
+        var other = SideBySideGrowthState()
+        other.didGrow(window: tabA, group: [tabA, tabB], from: narrow, to: wide)
+        XCTAssertEqual(other.sizeToRemember(group: [tabB], size: wide, isFullScreen: false), narrow)
+        XCTAssertEqual(other.sizeToRemember(group: [tabB], size: NSSize(width: 990, height: 600), isFullScreen: false),
+                       NSSize(width: 990, height: 600), "resized by hand: B's own size")
+    }
+
+    // MARK: Review 4
+
+    /// should-fix 1: Source Edit with the editor alone never joins a grown
+    /// group's side-by-side tabs.
+    func testTheEditorAloneAppliesNoFit() {
+        let grow = SideBySideLayout.Fit.grow(to: NSRect(x: 0, y: 0, width: 1150, height: 600))
+        XCTAssertNil(SideBySideLayout.fitToApply(enteringSideBySide: false, grow))
+        XCTAssertNil(SideBySideLayout.fitToApply(enteringSideBySide: false, .fits))
+        XCTAssertEqual(SideBySideLayout.fitToApply(enteringSideBySide: true, grow), grow)
+        XCTAssertEqual(SideBySideLayout.fitToApply(enteringSideBySide: true, .fits), .fits)
+    }
+
+    func testASideBySideTabLeavingWhileAnotherTabEditsAloneGivesTheWidthBack() {
+        var state = SideBySideGrowthState()
+        state.didGrow(window: tabA, group: [tabA, tabB], from: narrow, to: wide)
+        // B enters the editor alone: nothing is registered for it.
+        XCTAssertEqual(state.didLeave(window: tabA, remaining: [tabA, tabB], size: wide, isFullScreen: false), 800)
+    }
+
+    /// should-fix 2: closing the last side-by-side tab — the entry stays
+    /// until the give-back really happened on the tab that stays visible.
+    func testTheEntryStaysUntilTheGiveBackHappened() {
+        var state = SideBySideGrowthState()
+        state.didGrow(window: tabA, group: [tabA, tabB, tabC], from: narrow, to: wide)
+        XCTAssertEqual(state.didLeave(window: tabA, remaining: [tabB, tabC], size: wide, isFullScreen: false), 800)
+        state.didClose(window: tabA)
+        XCTAssertEqual(state.sizeToRemember(group: [tabB, tabC], size: wide, isFullScreen: false), narrow,
+                       "a tab closed before the give-back ran still remembers the size from before")
+        state.didGiveBack(group: [tabB, tabC])
+        XCTAssertTrue(state.entries.isEmpty)
+        XCTAssertEqual(state.sizeToRemember(group: [tabB, tabC], size: narrow, isFullScreen: false), narrow)
+    }
+
+    /// should-fix 2: AppKit no longer lists the tabs during the close.
+    func testTheStateKnowsTheSiblingsOfAClosingTab() {
+        var state = SideBySideGrowthState()
+        state.didGrow(window: tabA, group: [tabA, tabB], from: narrow, to: wide)
+        state.noteGroup([tabA, tabB, tabC])  // C opened into the group, became key
+        XCTAssertEqual(state.knownSiblings(of: tabA), [tabB, tabC])
+    }
+
+    /// nit 3: Merge All Windows on two grown groups — one group: nothing is
+    /// given back while a tab of either still shows side by side; then the
+    /// smaller pre-grow width.
+    func testTwoGrownGroupsMergedAreOne() {
+        var state = SideBySideGrowthState()
+        state.didGrow(window: tabA, group: [tabA], from: narrow, to: wide)
+        state.didGrow(window: tabC, group: [tabC], from: NSSize(width: 900, height: 600), to: wide)
+        let merged: Set<Int> = [tabA, tabC]
+        XCTAssertNil(state.didLeave(window: tabA, remaining: merged, size: wide, isFullScreen: false),
+                     "C still shows side by side")
+        XCTAssertEqual(state.entries.count, 1)
+        XCTAssertEqual(state.sizeToRemember(group: merged, size: wide, isFullScreen: false), narrow)
+        XCTAssertEqual(state.didLeave(window: tabC, remaining: merged, size: wide, isFullScreen: false), 800)
+    }
+
+    /// nit 4: the side-by-side tab dragged out — the group it left keeps
+    /// remembering the size from before while it has the grown size.
+    func testTheGroupADraggedOutTabLeftRemembersThePreGrowSize() {
+        var state = SideBySideGrowthState()
+        state.didGrow(window: tabA, group: [tabA], from: narrow, to: wide)
+        state.noteGroup([tabA, tabB])  // B opened into the group
+        // A dragged out; A leaves side by side in its own window.
+        XCTAssertEqual(state.didLeave(window: tabA, remaining: [tabA], size: wide, isFullScreen: false), 800)
+        state.didGiveBack(group: [tabA])
+        XCTAssertEqual(state.sizeToRemember(group: [tabB], size: wide, isFullScreen: false), narrow)
+        XCTAssertEqual(state.sizeToRemember(group: [tabB], size: NSSize(width: 1000, height: 600), isFullScreen: false),
+                       NSSize(width: 1000, height: 600))
+        XCTAssertFalse(state.isGrown(group: [tabB]))
+        state.didClose(window: tabB)
+        XCTAssertTrue(state.entries.isEmpty)
     }
 
     /// Review 3 finding 2b / 3: A grew, B shows side by side too (re-grew or
@@ -680,6 +763,7 @@ final class SideBySideTests: XCTestCase {
         XCTAssertEqual(state.sizeToRemember(group: [tabA, tabB, tabC], size: wide, isFullScreen: false), narrow)
         XCTAssertEqual(state.didLeave(window: tabA, remaining: [tabB, tabC], size: wide, isFullScreen: false), 800)
         state.didClose(window: tabA)
+        state.didGiveBack(group: [tabB, tabC])
         XCTAssertTrue(state.entries.isEmpty)
     }
 
@@ -703,6 +787,7 @@ final class SideBySideTests: XCTestCase {
         XCTAssertEqual(state.sizeToRemember(group: [tabA], size: wide, isFullScreen: false), narrow,
                        "a quit right after the exit still remembers the size from before")
         XCTAssertEqual(state.didExitFullScreen(group: [tabA], size: wide), 800)
+        state.didGiveBack(group: [tabA])
         XCTAssertTrue(state.entries.isEmpty)
     }
 
@@ -729,7 +814,13 @@ final class SideBySideTests: XCTestCase {
         WindowSizeMemory.sideBySideDidGrow(window, from: NSSize(width: 800, height: window.frame.height))
         XCTAssertEqual(WindowSizeMemory.sizeToRemember(window)?.width, 800)
         WindowSizeMemory.sideBySideDidEnd(window)
+        XCTAssertEqual(WindowSizeMemory.sizeToRemember(window)?.width, 800, "until the give-back ran")
+        // The give-back runs on the next turn of the main queue.
+        var drained = false
+        DispatchQueue.main.async { drained = true }
+        while !drained { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
         XCTAssertFalse(WindowSizeMemory.sideBySideGrowth.isGrown(group: [ObjectIdentifier(window).hashValue]))
+        XCTAssertEqual(window.frame.width, 800, "the width went back")
     }
 
     // MARK: - Minimum width (second review, finding 4)

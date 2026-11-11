@@ -83,8 +83,11 @@ final class HeadingLayoutTests: XCTestCase {
     // MARK: - String
 
     /// The title view shows — and the selection copies — `renderHeader`'s
-    /// output converted for AppKit: same characters, the heading font on every
-    /// character, the theme's text colour, links kept, `$…$` literal.
+    /// output converted for AppKit: same characters, bold everywhere, the
+    /// heading font on the text, a colour on every character, links kept,
+    /// `$…$` literal. Since 1.15 (policy B, `emphasisKeepsContentLook`) a
+    /// code span stays monospaced at 13/14 of the heading size and italic
+    /// stays italic (before, every character had the heading font).
     func testHeadingStringIsRenderHeaderConvertedForAppKit() {
         let titles = ["Plain title", "Title with **bold** and *italic*", "Title with `code`",
                       "See [the docs](https://example.com/docs)", "Energy $E = mc^2$ literal"]
@@ -109,9 +112,14 @@ final class HeadingLayoutTests: XCTestCase {
                                 XCTFail("\(context): no font at \(index)")
                                 break
                             }
-                            XCTAssertEqual(font.pointSize, expectedSize, accuracy: 0.01, context)
-                            XCTAssertEqual(font, headerFont, "\(context): font at \(index)")
-                            XCTAssertTrue(font.fontDescriptor.symbolicTraits.contains(.bold), context)
+                            let isCode = ns.attribute(.backgroundColor, at: index, effectiveRange: nil) != nil
+                            let traits = font.fontDescriptor.symbolicTraits
+                            XCTAssertEqual(font.pointSize, expectedSize * (isCode ? 13.0 / 14.0 : 1), accuracy: 0.01, context)
+                            XCTAssertEqual(traits.contains(.monoSpace), isCode, "\(context): face at \(index)")
+                            if !isCode && !traits.contains(.italic) {
+                                XCTAssertEqual(font, headerFont, "\(context): font at \(index)")
+                            }
+                            XCTAssertTrue(traits.contains(.bold), context)
                             XCTAssertNotNil(ns.attribute(.foregroundColor, at: index, effectiveRange: nil),
                                             "\(context): no AppKit colour at \(index)")
                             XCTAssertNil(ns.attribute(.attachment, at: index, effectiveRange: nil), context)

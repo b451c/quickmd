@@ -389,8 +389,8 @@ struct PrintableImageView: View {
 
     /// Page column cap. The D4 rule applies as on screen: an image is never
     /// drawn wider than its own width, so icons stay icon-sized.
-    private static let maxWidth: CGFloat = 500
-    private static let maxHeight: CGFloat = 700
+    private static let maxWidth = PrintImageLayout.maxWidth
+    private static let maxHeight = PrintImageLayout.maxHeight
 
     var body: some View {
         let source = ImageSource.resolve(url, documentURL: documentURL)
@@ -426,9 +426,7 @@ struct PrintableImageView: View {
     /// Same rule as `ImageBlockView.displayWidth`, with the page cap and no
     /// zoom: a requested `<img width>` wins over the image's own width.
     private static func displayWidth(for image: NSImage, requested: ImageWidth?) -> CGFloat {
-        if let requested { return requested.displayWidth(cap: maxWidth, fontScale: 1) }
-        guard image.size.width > 0 else { return maxWidth }
-        return min(maxWidth, image.size.width)
+        PrintImageLayout.displayWidth(imageWidth: image.size.width, requested: requested)
     }
 
     /// Local files first get the folder's SAVED bookmark restored, silently:
@@ -458,8 +456,9 @@ struct PrintableImageRowView: View {
     var body: some View {
         ImageFlowLayout(separators: images.map(\.separator), fontScale: 1) {
             ForEach(images.indices, id: \.self) { index in
-                PrintableImageView(url: images[index].url, alt: images[index].alt, documentURL: documentURL,
-                                   showsCaption: false)
+                // The row's `<img width>` too, as the screen and a lone image honour it.
+                PrintableImageView(url: images[index].url, alt: images[index].alt, width: images[index].width,
+                                   documentURL: documentURL, showsCaption: false)
             }
         }
     }

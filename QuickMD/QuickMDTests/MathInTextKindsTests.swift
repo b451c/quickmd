@@ -444,6 +444,18 @@ final class MathInTextKindsTests: XCTestCase {
             ("text $$x$$ more", ["x"]), ("$$x$$ more", ["x"]), ("tab\t$a$ end", ["a"]),
         ]
         for (case_, expected) in math { XCTAssertEqual(formulas(case_), expected, case_) }
+        // The same through the renderer (run boundaries from real rendering):
+        // plain text renders as ONE run, so nothing above changes.
+        let renderer = MarkdownRenderer(theme: theme, fontScale: 1)
+        func rendered(_ text: String) -> [String] {
+            InlineMathSegmenter.pieces(of: renderer.renderInline(text)).compactMap {
+                if case .math(let latex) = $0.segment { return latex } else { return nil }
+            }
+        }
+        for case_ in text where !case_.contains("\\") && !case_.contains("\n") {
+            XCTAssertEqual(rendered(case_), [], "rendered: " + case_)
+        }
+        for (case_, expected) in math { XCTAssertEqual(rendered(case_), expected, "rendered: " + case_) }
         // The "needs the engine" test is the segmenter's own answer.
         XCTAssertFalse(BlockTextConverter.containsInlineMath("$5 and $10"))
         XCTAssertFalse(BlockTextConverter.containsInlineMath("$HOME/$USER"))

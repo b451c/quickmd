@@ -128,6 +128,8 @@
 		A1B2C3D40100004C /* InlineMathSegmenter.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000048 /* InlineMathSegmenter.swift */; };
 		A1B2C3D4010000A0 /* InlineSyntaxScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000A0 /* InlineSyntaxScanner.swift */; };
 		A1B2C3D4010000A1 /* InlineSyntaxScanner.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000A0 /* InlineSyntaxScanner.swift */; };
+		A1B2C3D401000481 /* InlineEmphasis.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000480 /* InlineEmphasis.swift */; };
+		A1B2C3D401000482 /* InlineEmphasis.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000480 /* InlineEmphasis.swift */; };
 		A1B2C3D4010000E0 /* HTMLImageSyntax.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000E0 /* HTMLImageSyntax.swift */; };
 		A1B2C3D4010000E1 /* HTMLImageSyntax.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000E0 /* HTMLImageSyntax.swift */; };
 		A1B2C3D4010000E2 /* HTMLImageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000E1 /* HTMLImageTests.swift */; };
@@ -145,6 +147,7 @@
 		A1B2C3D40100006A /* BlockHeightMeasurerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */; };
 		A1B2C3D4010002A2 /* VerticalRhythmTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000002A1 /* VerticalRhythmTests.swift */; };
 		A1B2C3D401000441 /* MathInTextKindsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000440 /* MathInTextKindsTests.swift */; };
+		A1B2C3D401000484 /* InlineSyntaxTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000483 /* InlineSyntaxTests.swift */; };
 		A1B2C3D401000462 /* ImageRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000462 /* ImageRowTests.swift */; };
 		A1B2C3D401000463 /* LocalLinkSafety.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000463 /* LocalLinkSafety.swift */; };
 		A1B2C3D401000464 /* LocalLinkSafety.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000463 /* LocalLinkSafety.swift */; };
@@ -207,6 +210,7 @@
 		A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockHeightMeasurerTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4000002A1 /* VerticalRhythmTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalRhythmTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000440 /* MathInTextKindsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MathInTextKindsTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000483 /* InlineSyntaxTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineSyntaxTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000462 /* ImageRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageRowTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000463 /* LocalLinkSafety.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLinkSafety.swift; sourceTree = "<group>"; };
 		A1B2C3D400000465 /* LocalLinkSafetyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLinkSafetyTests.swift; sourceTree = "<group>"; };
@@ -337,6 +341,7 @@
 		A1B2C3D400000047 /* TextBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextBlockView.swift; sourceTree = "<group>"; };
 		A1B2C3D400000048 /* InlineMathSegmenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineMathSegmenter.swift; sourceTree = "<group>"; };
 		A1B2C3D4000000A0 /* InlineSyntaxScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineSyntaxScanner.swift; sourceTree = "<group>"; };
+		A1B2C3D400000480 /* InlineEmphasis.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InlineEmphasis.swift; sourceTree = "<group>"; };
 		A1B2C3D4000000E0 /* HTMLImageSyntax.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTMLImageSyntax.swift; sourceTree = "<group>"; };
 		A1B2C3D4000000E1 /* HTMLImageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTMLImageTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000049 /* FileWatchManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileWatchManager.swift; sourceTree = "<group>"; };
@@ -389,6 +394,7 @@
 				A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */,
 				A1B2C3D4000002A1 /* VerticalRhythmTests.swift */,
 				A1B2C3D400000440 /* MathInTextKindsTests.swift */,
+				A1B2C3D400000483 /* InlineSyntaxTests.swift */,
 				A1B2C3D400000462 /* ImageRowTests.swift */,
 				A1B2C3D400000465 /* LocalLinkSafetyTests.swift */,
 				A1B2C3D400000400 /* TableRulesTests.swift */,
@@ -465,6 +471,7 @@
 				A1B2C3D40000003F /* WindowTabbing.swift */,
 				A1B2C3D400000048 /* InlineMathSegmenter.swift */,
 				A1B2C3D4000000A0 /* InlineSyntaxScanner.swift */,
+				A1B2C3D400000480 /* InlineEmphasis.swift */,
 				A1B2C3D4000000E0 /* HTMLImageSyntax.swift */,
 				A1B2C3D400000049 /* FileWatchManager.swift */,
 				A1B2C3D40000004A /* ExternalEditorManager.swift */,
@@ -728,6 +735,7 @@
 				A1B2C3D401000061 /* MermaidPDFRenderer.swift in Sources */,
 				A1B2C3D40100004B /* InlineMathSegmenter.swift in Sources */,
 				A1B2C3D4010000A0 /* InlineSyntaxScanner.swift in Sources */,
+				A1B2C3D401000481 /* InlineEmphasis.swift in Sources */,
 				A1B2C3D4010000E0 /* HTMLImageSyntax.swift in Sources */,
 				A1B2C3D40100004D /* FileWatchManager.swift in Sources */,
 				A1B2C3D40100004E /* ExternalEditorManager.swift in Sources */,
@@ -791,6 +799,7 @@
 				A1B2C3D401000049 /* DocumentSearch.swift in Sources (Tests) */,
 				A1B2C3D40100004C /* InlineMathSegmenter.swift in Sources (Tests) */,
 				A1B2C3D4010000A1 /* InlineSyntaxScanner.swift in Sources (Tests) */,
+				A1B2C3D401000482 /* InlineEmphasis.swift in Sources (Tests) */,
 				A1B2C3D4010000E1 /* HTMLImageSyntax.swift in Sources (Tests) */,
 				A1B2C3D401000051 /* FileWatcherTests.swift in Sources */,
 				A1B2C3D401000052 /* FileWatchManager.swift in Sources (Tests) */,
@@ -802,6 +811,7 @@
 				A1B2C3D40100006A /* BlockHeightMeasurerTests.swift in Sources */,
 				A1B2C3D4010002A2 /* VerticalRhythmTests.swift in Sources */,
 				A1B2C3D401000441 /* MathInTextKindsTests.swift in Sources */,
+				A1B2C3D401000484 /* InlineSyntaxTests.swift in Sources */,
 				A1B2C3D401000462 /* ImageRowTests.swift in Sources */,
 				A1B2C3D401000465 /* LocalLinkSafetyTests.swift in Sources */,
 				A1B2C3D401000400 /* TableRulesTests.swift in Sources */,

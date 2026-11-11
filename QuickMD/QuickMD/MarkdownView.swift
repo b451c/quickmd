@@ -172,6 +172,8 @@ struct MarkdownView: View {
     /// moment (not on every step of a live resize or a sidebar drag).
     @State private var showsPreviewPending = false
     @State private var previewPendingWork: DispatchWorkItem?
+    /// The 0.3 s were up during a live resize (`didEndLiveResize` shows it).
+    @State private var previewPendingOutlastedResize = false
     /// What the rendered list shows: the preview only while side by side.
     private var renderedSource: String {
         SideBySidePreview.renderedSource(isShowing: isSideBySideShowing, preview: preview.text,
@@ -755,21 +757,28 @@ struct MarkdownView: View {
         .onChange(of: isSideBySideShowing && isPreviewPending) { pending in
             previewPendingWork?.cancel()
             previewPendingWork = nil
+            previewPendingOutlastedResize = false
             guard pending else {
                 showsPreviewPending = false
                 return
             }
             let work = DispatchWorkItem {
-                guard !(hostWindow?.inLiveResize ?? false), isSideBySideShowing, isPreviewPending else { return }
+                guard isSideBySideShowing, isPreviewPending else { return }
+                // Pending 0.3 s, but inside a live resize: shown when it ends.
+                guard !(hostWindow?.inLiveResize ?? false) else {
+                    previewPendingOutlastedResize = true
+                    return
+                }
                 showsPreviewPending = true
             }
             previewPendingWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
         }
         // The 0.3 s check fell inside a live resize and the preview is still
-        // pending when it ends: show it now.
+        // pending when it ends: show it now. A resize shorter than that never
+        // shows it early — the work item has not fired yet and still will.
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEndLiveResizeNotification)) { note in
-            guard let window = note.object as? NSWindow, window === hostWindow,
+            guard let window = note.object as? NSWindow, window === hostWindow, previewPendingOutlastedResize,
                   isSideBySideShowing, isPreviewPending else { return }
             showsPreviewPending = true
         }
@@ -1241,7 +1250,10 @@ struct MarkdownView: View {
             return
         }
         isSideBySide = sideBySide
-        applySideBySideFit(fit)
+        // The editor alone never joins a grown group's side-by-side tabs.
+        if let fit = SideBySideLayout.fitToApply(enteringSideBySide: sideBySide, fit) {
+            applySideBySideFit(fit)
+        }
         // A landing still waiting for a parse belongs to the previous session.
         landing.cancel()
         isSearchVisible = false
@@ -1923,13 +1935,22 @@ struct MarkdownView: View {
             // confirmation when that RUNS something (an app, a `.command`, a
             // script, an installer, an executable): one click on a link or a
             // badge must not start a program (`LocalLinkSafety`).
-            if LocalLinkSafety.verdict(for: finalURL) == .confirm {
-                let name = DisplayString.middleTruncated(finalURL.lastPathComponent, maxLength: 80)
-                guard confirmOpening(title: "Open \u{201C}\(name)\u{201D}?",
-                                     message: "This link opens a program or script on your Mac.",
+            // Symlinks and aliases are resolved; what is opened is exactly
+            // the file that was checked (`check.target`), never the link
+            // again (no gap between the check and the open).
+            let check = LocalLinkSafety.check(finalURL)
+            if check.verdict == .confirm {
+                guard confirmOpening(title: LocalLinkSafety.confirmationTitle(check: check),
+                                     message: LocalLinkSafety.confirmationMessage(link: finalURL, check: check),
                                      cancelIsDefault: true) else { return }
+                // The alert can stay up for minutes: the file must still be
+                // what the reader agreed to open.
+                guard LocalLinkSafety.check(finalURL) == check else {
+                    NSSound.beep()
+                    return
+                }
             }
-            NSWorkspace.shared.open(finalURL)
+            NSWorkspace.shared.open(check.target)
         }
     }
 
