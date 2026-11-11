@@ -213,7 +213,14 @@ struct PictureView: View {
         return Image(nsImage: image).resizable()
             .aspectRatio(contentMode: .fit)
             .frame(width: size.width, height: size.height)
-            .clipShape(RoundedRectangle(cornerRadius: style == .inline ? 0 : 8))
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius(for: size)))
+    }
+
+    /// An image block's 8 pt corners; in a row the same, but never more than
+    /// 15 % of the picture's shorter side — a 20 pt badge gets 3 pt (its own
+    /// shape), not a capsule.
+    private func cornerRadius(for size: CGSize) -> CGFloat {
+        style == .block ? 8 : min(8, 0.15 * min(size.width, size.height))
     }
 
     private func graphicButton(_ image: NSImage) -> some View {
