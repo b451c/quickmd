@@ -185,11 +185,20 @@ enum BlockLayout {
             BlockLayout.singleLineHeight(for: languageLabelFont(fontScale: fontScale))
         }
 
-        /// The width the code text wraps at: the column, less the block's list
-        /// indent (`MarkdownBlock.listIndent` — the view pads by it) and the
-        /// horizontal padding on both sides.
+        /// How far the code box is moved in under a list item: the item's
+        /// text x (`MarkdownBlock.listIndent`), but never more than half the
+        /// column — a deep item at high zoom in a narrow window would
+        /// otherwise leave the box no width (or a negative one). The view pads
+        /// by exactly this, computed from the width the table was measured at.
+        static func leadingInset(listIndent: CGFloat, contentWidth: CGFloat) -> CGFloat {
+            max(0, min(listIndent, contentWidth / 2))
+        }
+
+        /// The width the code text wraps at: the column, less the block's
+        /// `leadingInset` and the horizontal padding on both sides.
         static func textWidth(contentWidth: CGFloat, listIndent: CGFloat) -> CGFloat {
-            BlockLayout.clampedWidth(contentWidth - listIndent - 2 * horizontalPadding)
+            BlockLayout.clampedWidth(contentWidth - leadingInset(listIndent: listIndent, contentWidth: contentWidth)
+                                     - 2 * horizontalPadding)
         }
 
         /// Fixed vertical chrome around the code text, language label included.

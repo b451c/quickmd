@@ -686,6 +686,15 @@ struct MarkdownRenderer: Sendable {
         return ListItemColumn(level: level, textIndent: scaled(Self.listGutter) + width(of: prefix))
     }
 
+    /// `MarkdownBlock.listIndent` for print/PDF, which parses at 1.0 and
+    /// draws text through SwiftUI `Text`: that ignores the paragraph style,
+    /// so there is no list gutter and an item's text starts after its
+    /// marker characters alone. A code block under the item lines up with
+    /// that text by leaving the gutter out.
+    static func printedListIndent(_ listIndent: CGFloat) -> CGFloat {
+        max(0, listIndent - listGutter)
+    }
+
     /// A paragraph of a list item after its first (CommonMark: indented to
     /// the item's content) — on GitHub it starts where the item's text does.
     /// The nesting lives in the CHARACTERS as for an item (one indent unit

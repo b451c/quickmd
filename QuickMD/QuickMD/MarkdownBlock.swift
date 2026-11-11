@@ -137,9 +137,12 @@ struct MarkdownBlock: Identifiable, Sendable {
     /// Points from the column's leading edge to the text of the list item
     /// that OWNS this block (`ListNesting`): a code block under a list item
     /// is drawn where the item's text starts, not at the margin. 0 outside a
-    /// list. Set by the parser for `.codeBlock` only, in points at the parse's
-    /// zoom (like every font size in the rendered strings: zoom re-parses).
-    /// The view pads by it and the measurer narrows the code by it.
+    /// list. Set by the parser on `.codeBlock` rows only (a ```` ```mermaid ````
+    /// or ```` ```svg ```` fence and every other kind under an item stay at
+    /// the margin), in points at the parse's zoom (like every font size in
+    /// the rendered strings: zoom re-parses). The view pads and the measurer
+    /// narrows the code by `BlockLayout.Code.leadingInset` of it; print by
+    /// `MarkdownRenderer.printedListIndent`.
     let listIndent: CGFloat
 
     init(id: String, content: BlockContent, sourceLine: Int, joinsPrevious: Bool = false,

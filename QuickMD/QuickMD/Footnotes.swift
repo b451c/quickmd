@@ -6,8 +6,8 @@ import Foundation
 // mode=markdown` on synthetic input (2026-11-11; the cases are the tests in
 // `FootnoteTests`). The parser's definition pre-pass drives all of it:
 // `FootnoteNumbering` decides the numbers, `FootnoteDefinitionBody` which
-// lines belong to a definition, `FootnoteContainerColumns` where its
-// continuation lines start.
+// lines belong to a definition; where its continuation lines start is the
+// list item's content column the definition sits in (`ListNesting`).
 
 /// The labels of the DEFINED footnotes a text references, in order, the
 /// way `MarkdownRenderer.tryParseFootnoteRef` finds them in the text it
@@ -167,73 +167,14 @@ struct FootnoteNumbering {
     }
 }
 
-// MARK: - Where a definition's lines start
-
-/// The column a footnote definition's content is nested at: 0 at the top
-/// level, the list item's content column inside a list item. GitHub counts
-/// a definition's continuation indent (4) from there: `  [^a]: x` at the
-/// top level goes on at 4 columns, the same line under `- item` at 6, and
-/// under `1.  Item` a paragraph indented 4 is the ITEM's next paragraph,
-/// not the footnote's.
-///
-/// A plain approximation of list nesting, enough for this one question:
-/// each list item line opens a content column (its indent + marker + the
-/// spaces after it, CommonMark); a line after a blank line that is
-/// indented less than a column closes it. Lazy lines keep the columns.
-struct FootnoteContainerColumns {
-    private var columns: [Int] = []
-    private var afterBlank = false
-
-    /// A blank line of the document.
-    mutating func blank() { afterBlank = true }
-
-    /// Any other line outside a definition.
-    mutating func line(_ line: String) {
-        let indent = MarkdownBlockParser.indentColumns(line)
-        if MarkdownRenderer.isListItem(line) {
-            close(above: indent)
-            columns.append(Self.contentColumn(of: line, indent: indent))
-        } else if afterBlank {
-            close(above: indent)
-        }
-        afterBlank = false
-    }
-
-    /// The column the footnote definition on `line` is nested at. A
-    /// definition indented less than an item's content is not in it (it
-    /// is not a lazy line: it starts a block).
-    mutating func definition(_ line: String) -> Int {
-        close(above: MarkdownBlockParser.indentColumns(line))
-        afterBlank = false
-        return columns.last ?? 0
-    }
-
-    private mutating func close(above indent: Int) {
-        while let last = columns.last, last > indent { columns.removeLast() }
-    }
-
-    /// CommonMark's content column of a list item line: the marker's width
-    /// plus 1–4 spaces after it (5+ means 1; an empty item, 1).
-    private static func contentColumn(of line: String, indent: Int) -> Int {
-        let body = MarkdownBlockParser.removingIndentation(line, upTo: indent)
-        var marker = 0
-        for character in body {
-            if character.isASCII, character.isNumber { marker += 1; continue }
-            break
-        }
-        marker += 1   // the bullet, or the `.` / `)` after the digits
-        let rest = body.dropFirst(marker)
-        let spaces = MarkdownBlockParser.indentColumns(String(rest))
-        let gap = (spaces == 0 || spaces > 4 || MarkdownRenderer.isBlankLine(rest)) ? 1 : spaces
-        return indent + marker + gap
-    }
-}
-
 // MARK: - Multi-line footnote definitions
 
 /// The lines a footnote definition (`[^n]: text`) goes on with, read as
 /// GitHub reads them (cmark-gfm's footnote container). Indents count from
-/// the definition's container column (`FootnoteContainerColumns`):
+/// the definition's container column — 0 at the top level, the content
+/// column of the list item it sits in (`ListNesting`): GitHub counts a
+/// definition's continuation indent (4) from there, so `  [^a]: x` at the
+/// top level goes on at 4 columns, the same line under `- item` at 6:
 /// - a line indented 4+ columns belongs to the definition, also after
 ///   blank lines (a new paragraph of the footnote). Inside it a fence or
 ///   an indented code block is code, an ATX heading, a rule or an HTML

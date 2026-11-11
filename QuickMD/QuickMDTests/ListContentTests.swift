@@ -326,6 +326,116 @@ final class ListContentTests: XCTestCase {
         }
     }
 
+    // MARK: - Review fixes
+
+    /// An image line is paragraph text (CommonMark): the item's paragraph
+    /// goes on, so a deeper line after it is more text, not code.
+    /// GitHub: `<li>item\n<a…><img alt="i"…></a>\nmore text</li>`
+    func testAnImageLineKeepsTheItemsParagraphOpen() throws {
+        for image in ["![i](https://x.org/a.png)", "<img src=\"https://x.org/a.png\" alt=\"i\">"] {
+            let blocks = parse("- item\n  \(image)\n      more text")
+            XCTAssertFalse(shape(blocks).contains { $0.hasPrefix("C") }, image)
+            let last = try XCTUnwrap(paragraphs(try XCTUnwrap(blocks.last)).first)
+            XCTAssertEqual(last.text, "    more text", image)
+            XCTAssertEqual(last.style?.headIndent ?? -1, try itemTextX(blocks[0]), accuracy: 0.01, image)
+        }
+    }
+
+    /// Definitions in an item's indented code are code: nothing is defined.
+    /// GitHub: `<pre><code>[ref]: https://example.com\n[^1]: note\n</code></pre>`
+    /// and `<p>See [ref] and x[^1].</p>`
+    func testDefinitionsInsideIndentedCodeStayCode() {
+        let blocks = parse("1. Step\n\n       [ref]: https://example.com\n       [^1]: note\n\nSee [ref] and x[^1].")
+        let shapes = shape(blocks)
+        XCTAssertEqual(shapes.count, 3, "\(shapes)")    // no footnotes block
+        XCTAssertEqual(shapes[1], "C>:[ref]: https://example.com\n[^1]: note")
+        XCTAssertEqual(shapes[2], "T:See [ref] and x[^1].")
+    }
+
+    /// A link definition at the margin ends the list: the indented line
+    /// after it is not the item's. GitHub: `<ul><li>a</li></ul><pre><code>  code`
+    /// (top-level indented code, which QuickMD keeps as text — out of scope).
+    func testALinkDefinitionAtTheMarginEndsTheList() {
+        let blocks = parse("- a\n\n[x]: http://y\n\n      code")
+        XCTAssertFalse(shape(blocks).contains { $0.hasPrefix("C") }, "\(shape(blocks))")
+    }
+
+    /// A picture, a table, a quote or a formula under an item stays at the
+    /// margin (only code is indented), but it is the item's: code after it
+    /// is still the item's code and the numbering goes on.
+    /// GitHub: all of them and every `<pre><code>code after …` inside the
+    /// first `<li>`, then `<li><p>Next</p></li>`.
+    func testOtherBlocksUnderAnItemKeepTheListGoing() throws {
+        let blocks = parse("""
+        1. Step
+
+           ![i](https://x.org/a.png)
+
+               code after image
+
+           | a | b |
+           |---|---|
+           | 1 | 2 |
+
+               code after table
+
+           > quote
+
+               code after quote
+
+           $$
+           x
+           $$
+
+               code after math
+
+        2. Next
+        """)
+        let codes = blocks.filter { if case .codeBlock = $0.content { return true }; return false }
+        XCTAssertEqual(codes.count, 4, "\(shape(blocks))")
+        let itemX = try itemTextX(blocks[0])
+        for code in codes { XCTAssertEqual(code.listIndent, itemX, accuracy: 0.01) }
+        let next = try XCTUnwrap(blocks.last)
+        XCTAssertEqual(try paragraphs(next).first?.text, "2. Next")
+        XCTAssertEqual(try itemTextX(next), itemX, accuracy: 0.01)
+    }
+
+    /// Only a code block is drawn at the item's text; a diagram fence under
+    /// an item is not indented (its views know nothing of an indent).
+    func testADiagramFenceUnderAnItemIsNotIndented() {
+        let blocks = parse("- item\n\n  ```mermaid\n  graph TD; A-->B\n  ```\n\n  ```svg\n  <svg/>\n  ```")
+        for block in blocks.dropFirst() { XCTAssertEqual(block.listIndent, 0, block.id) }
+    }
+
+    /// The code box never moves in more than half the column, in the
+    /// measurer and the view alike (one function), so a deep item in a
+    /// narrow column still leaves the code a width.
+    func testTheCodeIndentIsClampedToHalfTheColumn() {
+        let deep = (0..<9).map { String(repeating: "  ", count: $0) + "- level \($0)" }.joined(separator: "\n")
+        let blocks = parse(deep + "\n\n" + String(repeating: " ", count: 16 + 6) + "code", fontScale: 2)
+        let code = try! XCTUnwrap(blocks.last)
+        XCTAssertEqual(shape([code]).first, "C>:code")
+        let width: CGFloat = 200
+        XCTAssertGreaterThan(code.listIndent, width / 2)
+        XCTAssertEqual(BlockLayout.Code.leadingInset(listIndent: code.listIndent, contentWidth: width), width / 2)
+        XCTAssertEqual(BlockLayout.Code.textWidth(contentWidth: width, listIndent: code.listIndent),
+                       width / 2 - 2 * BlockLayout.Code.horizontalPadding)
+        // The row is measured at that width: as a flat block at half the column.
+        let flat = code.withListIndent(0)
+        XCTAssertEqual(measure([code], width: width).table.heights[0],
+                       measure([flat], width: width / 2).table.heights[0])
+        XCTAssertEqual(BlockLayout.Code.leadingInset(listIndent: 30, contentWidth: width), 30)
+    }
+
+    /// Print has no list gutter (SwiftUI `Text` ignores the paragraph
+    /// style): the code lines up with the item's characters there.
+    func testPrintedIndentLeavesTheGutterOut() throws {
+        let blocks = MarkdownBlockParser(colorScheme: .light).parse("1. Step\n\n       code")
+        let prefix = ("1. " as NSString).size(withAttributes: [.font: MarkdownTheme.exportTheme(for: .light).fonts.appKit(size: 14)]).width
+        XCTAssertEqual(MarkdownRenderer.printedListIndent(blocks[1].listIndent), prefix, accuracy: 0.01)
+        XCTAssertEqual(MarkdownRenderer.printedListIndent(0), 0)
+    }
+
     // MARK: - Content column
 
     func testContentColumnOfAnItem() {

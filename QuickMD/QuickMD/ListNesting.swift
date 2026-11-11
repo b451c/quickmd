@@ -77,6 +77,21 @@ struct ListNesting {
         return paragraphOwner
     }
 
+    /// Any line of the document, classified by itself: blank, an item or
+    /// paragraph text (`text`), or the start of a block (`block`) — a
+    /// fence, `$$`, heading, rule, HTML block or quote. For the definition
+    /// pre-pass, which reads the lines before the block loop decides them.
+    mutating func read(_ line: String, sourceLine: Int) {
+        if MarkdownRenderer.isBlankLine(line) {
+            blank()
+        } else if MarkdownRenderer.isListItem(line)
+                    || (MarkdownBlockParser.startsNoBlock(line) && !MarkdownBlockParser.markerLine(line).hasPrefix(">")) {
+            _ = text(line, sourceLine: sourceLine)
+        } else {
+            block(startingAt: line)
+        }
+    }
+
     /// A non-text block (fenced code, `$$`, heading, picture, table, quote,
     /// definition list) starting on `line`. Returns the item it belongs to.
     @discardableResult
