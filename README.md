@@ -34,11 +34,12 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ### Fix It in Place
 - **Source Edit (`⌥⌘E`)** — switch the window to the raw Markdown at the line you are reading, fix it, `⌘S`, `Esc`, and you are back in the rendered view at the same place. Select a word first and it is already selected in the source
+- **Side by side (`⌥⇧⌘E`)** — the editor and the rendered document next to each other; the rendered side follows what you type, and only `⌘S` writes the file
 - **Byte-faithful saves** — the file keeps its encoding (UTF-8, UTF-8 with BOM, UTF-16, Latin-1), line endings, permissions, Finder tags and symlinks; only what you typed changes
 - **Nothing lost, nothing overwritten** — closing a tab, a window or the app with unsaved text always asks; if another app changes the file while you edit, QuickMD offers both versions instead of picking one
 - **A real text editor underneath** — undo, system find and replace, indentation that follows the line, a light syntax tint from the same parser that renders the document
 - Limits: files up to 2 MB are edited in place (larger ones open in your editor with `⌘E`), the syntax tint covers documents up to about 100 KB, read-only files are not edited, and a file with mixed line endings is saved with its dominant style
-- Still a viewer first: no WYSIWYG, no split panes
+- Still a viewer first: no WYSIWYG, no formatting toolbar
 
 ### Works with Your Editor
 - **Auto-reload** — the document refreshes the moment another app saves it. Turn on auto-save in VS Code, Cursor or Zed, or let an AI agent write the file, and QuickMD is a live preview
@@ -47,15 +48,15 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 
 ### Complete Markdown Support
 - Headings (ATX `#` and setext), bold, italic, strikethrough, horizontal rules
-- Lists — nested, ordered, task lists (`- [ ]` / `- [x]`), definition lists (`Term` + `: definition`)
+- Lists — nested, ordered, task lists (`- [ ]` / `- [x]`), definition lists (`Term` + `: definition`); code blocks and further paragraphs inside list items
 - Tables with column alignment (headerless `| | |` tables too)
 - Code blocks with lightweight syntax highlighting (keywords, strings, comments, numbers, types) and a copy button
 - **GitHub-flavored alerts** — `[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]` as native callouts in GitHub's palette
-- **LaTeX math** — display (`$$...$$`) and inline (`$...$`) with TeX-quality rendering
+- **LaTeX math** — display (`$$...$$`) and inline (`$...$`) with TeX-quality rendering, also in tables, quotes, alerts and headings
 - **Mermaid diagrams** — flowcharts, sequence, pie, class diagrams and more; click any diagram or image for a window-filling preview with pinch-to-zoom
 - **Inline SVG** — fenced ```svg blocks and `.svg` image links render natively (no web view), scale with the text and print as vectors
-- Images — local files, remote URLs, embedded `data:` images, reference-style `![alt][ref]`, and HTML `<img>` tags with `width` (the logo/screenshot idiom of GitHub READMEs, `<p align="center">` wrappers included)
-- Links (inline, reference-style, autolinks), footnotes (`[^id]`), nested blockquotes; `#heading` links jump within the document, using GitHub's heading ids
+- Images — local files, remote URLs, embedded `data:` images, reference-style `![alt][ref]`, and HTML `<img>` tags with `width` (the logo/screenshot idiom of GitHub READMEs, `<p align="center">` wrappers included); a line of badges is a row of pictures, and an image that is a link opens it
+- Links (inline, reference-style, autolinks), footnotes (`[^id]`, numbered as cited), nested blockquotes; `#heading` links jump within the document, using GitHub's heading ids
 - YAML front matter as a table of its fields (title, tags, dates); anything more complex stays a code block
 - CommonMark soft breaks; Windows (CRLF) and legacy line endings; UTF-16 and Latin-1 files
 
@@ -67,6 +68,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Reading mode (`⌘⇧R`) — hides both sidebars and the hover buttons and centres the text in a comfortable column (720 pt at 100 %, growing with zoom); `Esc` brings everything back
 - **Select across the whole document** — drag through paragraphs, headings, lists, quotes, code and tables (a word, a cell or a range of cells), it scrolls for you, Shift-click to extend, `⌘A` / `⌘C` to copy clean text (table cells as tab-separated values, math as LaTeX). Every copy shows how many characters and words were copied; optional auto-copy of selections in Settings → General
 - Copy entire document (`⌘⇧C`) or individual sections (hover heading → copy icon)
+- Documents open as tabs of one window, or each in its own window (Settings → General)
 - Export to PDF (`⌘⇧E`) — **vector text** (selectable, searchable) with **rendered Mermaid diagrams** — and Print (`⌘P`)
 
 ### Custom Themes & Fonts
@@ -172,6 +174,7 @@ Now all your Markdown files will open instantly with QuickMD!
 | `⌘W` | Close tab (or window if last tab) |
 | `⌘R` | Reload the document from disk |
 | `⌥⌘E` | Edit the Markdown source in place / done editing |
+| `⌥⇧⌘E` | Edit side by side with the rendered document |
 | `⌘S` | Save (while editing the source) |
 | `⌘E` | Open in External Editor (at the line you are reading, where supported) |
 | `⌘F` | Find in document |
@@ -197,7 +200,7 @@ Now all your Markdown files will open instantly with QuickMD!
 - Per-block **vector PDF export** — selectable text, embedded fonts, Mermaid diagrams as images, multi-page pagination
 - Source Edit writes the file in place (inode, permissions and extended attributes survive) and re-encodes exactly what it decoded; the unsaved-changes guard sits in front of the window's own delegate, so the system's document machinery is untouched
 - The Mac App Store build runs in the App Sandbox (security-scoped bookmarks for local images); the GitHub and Homebrew build is Developer ID signed and notarized, not sandboxed
-- 800+ unit tests; GitHub Actions builds every flavor on each push
+- 1,200+ unit tests; GitHub Actions builds every flavor on each push
 
 ### Where Things Live
 
@@ -211,6 +214,7 @@ QuickMD/
 │   ├── MarkdownExport, ImageLoader, FileWatchManager, ...           # PDF/print, images, auto-reload
 │   ├── SwiftMath/                                                   # vendored math rendering
 │   └── Resources/                                                   # bundled Mermaid.js + template
+├── AppIcon/                    # App icon sources (SVG)
 ├── QuickMDTests/               # Unit tests
 ├── docs/themes/                # Custom theme schema + starter themes
 └── CHANGELOG.md                # Version history
