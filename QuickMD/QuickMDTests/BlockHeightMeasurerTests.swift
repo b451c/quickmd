@@ -700,16 +700,49 @@ final class BlockHeightMeasurerTests: XCTestCase {
     x = \\frac{1}{2}
     $$
 
-    > a quoted line mentioning $y$ but rendered without inline math
+    > a quoted line mentioning $y$, typeset since 1.15
+
+    > a quote that only costs $5 and $10
+
+    > before
+    >
+    > $$
+    > \\sum_{i=1}^n i
+    > $$
+
+    > [!NOTE]
+    > An alert with $z$ in it
+
+    ## Heading with $h$ math
+
+    ## Heading without math
+
+    | a | b |
+    |---|---|
+    | $t$ | plain |
+
+    | c | d |
+    |---|---|
+    | no | math |
     """
 
+    /// Rows that need the math engine: inline-math paragraphs, `$$` blocks
+    /// and (v1.15) quote and alert bodies, headings and tables with a formula.
     private func mathRowIndices(in blocks: [MarkdownBlock]) -> [Int] {
-        blocks.enumerated().compactMap { index, block in
+        let renderer = MarkdownRenderer(theme: theme, fontScale: 1)
+        return blocks.enumerated().compactMap { index, block in
             switch block.content {
             case .text(let attributed):
                 return BlockTextConverter.containsInlineMath(String(attributed.characters)) ? index : nil
             case .mathBlock:
                 return index
+            case .blockquote(let content, _), .alert(_, let content):
+                return BlockTextConverter.needsMath(renderer.renderQuotedBody(content)) ? index : nil
+            case .heading(let level, let title, _):
+                return BlockTextConverter.needsMath(renderer.renderHeader(title, level: level)) ? index : nil
+            case .table(let headers, let rows, _, let style):
+                return TableTextBuilder.needsMath(headers: headers, rows: rows, style: style, renderer: renderer)
+                    ? index : nil
             default:
                 return nil
             }
@@ -719,7 +752,11 @@ final class BlockHeightMeasurerTests: XCTestCase {
     func testMeasureWithoutMathEngineDefersExactlyTheMathRows() {
         let blocks = parse(Self.mathDocument)
         let expected = mathRowIndices(in: blocks)
-        XCTAssertEqual(expected.count, 2, "fixture stopped covering both math row kinds")
+        // Paragraph, `$$` block, quote ($y$), quote ("$5 and $10": the
+        // paragraphs' `containsInlineMath` test is looser than the segmenter,
+        // so it is deferred, then shows no formula), quote ($$ display),
+        // alert, heading, table — not the plain heading or the plain table.
+        XCTAssertEqual(expected.count, 8, "fixture stopped covering every math row kind")
 
         let deferred = measureWithoutMathEngine(blocks, width: 600)
         XCTAssertEqual(deferred.mathPendingRows, expected)
@@ -805,7 +842,7 @@ final class BlockHeightMeasurerTests: XCTestCase {
         let reused = BlockHeightMeasurer.measureMathRows(
             atFour.mathPendingRows, in: atFour, blocks: blocks, theme: theme,
             fontScale: 1.0, contentWidth: 400, math: refusingEngine,
-            reusing: built.converted)
+            reusing: built.converted, reusingTables: built.tables)
 
         XCTAssertTrue(reused.converted[mathBlockId] === builtString,
                       "the reused row must keep the very same NSAttributedString")

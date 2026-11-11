@@ -283,6 +283,11 @@ extension NSAttributedString.Key {
     /// writes `$<latex>$` in its place. A custom key draws nothing and changes
     /// no layout, so the measured height of the paragraph is unaffected.
     static let qmdInlineMathSource = NSAttributedString.Key("pl.falami.studio.QuickMD.inlineMathSource")
+
+    /// The LaTeX of a display formula inside a quote or alert body (v1.15,
+    /// `BlockTextConverter.makeMathString`): copied as `$$⏎<latex>⏎$$`, as a
+    /// `$$` block copies (`SelectionPiece.displayMath`).
+    static let qmdDisplayMathSource = NSAttributedString.Key("pl.falami.studio.QuickMD.displayMathSource")
 }
 
 // MARK: - Copy output (S-D8)
@@ -363,6 +368,7 @@ enum DocumentCopyBuilder {
         result.removeAttribute(.foregroundColor, range: full)
         result.removeAttribute(.backgroundColor, range: full)
         result.removeAttribute(.qmdInlineMathSource, range: full)
+        result.removeAttribute(.qmdDisplayMathSource, range: full)
         return DocumentCopyOutput(plain: result.string, rtf: result)
     }
 
@@ -417,9 +423,10 @@ enum DocumentCopyBuilder {
     }
 
     /// Inline-math attachments become `$<latex>$` in the font of the text
-    /// before them; any other attachment is dropped (RTF cannot carry it and a
-    /// U+FFFC in plain text is noise).
-    private static func replacingAttachments(in text: NSAttributedString) -> NSMutableAttributedString {
+    /// before them, display formulas (quote and alert bodies) `$$⏎<latex>⏎$$`;
+    /// any other attachment is dropped (RTF cannot carry it and a U+FFFC in
+    /// plain text is noise). Table cells use it too (`SelectionRows`).
+    static func replacingAttachments(in text: NSAttributedString) -> NSMutableAttributedString {
         let result = NSMutableAttributedString(attributedString: text)
         var attachmentRanges: [NSRange] = []
         result.enumerateAttribute(.attachment, in: NSRange(location: 0, length: result.length)) { value, range, _ in
@@ -437,6 +444,13 @@ enum DocumentCopyBuilder {
                     attributes[.link] = nil
                 }
                 replacement = NSAttributedString(string: "$" + latex + "$", attributes: attributes)
+            } else if let latex = result.attribute(.qmdDisplayMathSource, at: range.location,
+                                                   effectiveRange: nil) as? String {
+                var attributes = result.attributes(at: range.location, effectiveRange: nil)
+                attributes[.attachment] = nil
+                attributes[.qmdDisplayMathSource] = nil
+                attributes[.paragraphStyle] = nil
+                replacement = NSAttributedString(string: "$$\n" + latex + "\n$$", attributes: attributes)
             }
             result.replaceCharacters(in: range, with: replacement)
         }

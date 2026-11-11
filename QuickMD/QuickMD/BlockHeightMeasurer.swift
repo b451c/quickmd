@@ -38,8 +38,9 @@ import os
 // `MTFontManager` caches fonts check-then-act, and the main thread is already
 // inside that code displaying math while a background measure would enter it
 // again. So the off-main call passes `math: nil`: every row that needs the
-// engine — a paragraph whose plain text contains inline `$…$`, and every
-// `.mathBlock` — is left at a placeholder height and its index is listed in
+// engine — a paragraph whose plain text contains inline `$…$`, every
+// `.mathBlock`, and (v1.15) a quote or alert body, heading or table with a
+// formula — is left at a placeholder height and its index is listed in
 // `MeasuredBlocks.mathPendingRows`, with no `converted` entry. The caller then
 // finishes exactly those rows on the main actor with `measureMathRows` before
 // the table is used for layout. Passing a non-nil engine off the main thread is
@@ -657,10 +658,12 @@ enum BlockLayout {
 /// `MathRendering.swiftMath` is MAIN-ACTOR-ONLY — see the thread rule in the
 /// file header. An off-main `measure` takes `math: nil` and defers those rows.
 struct MathRendering {
-    /// Renders one inline `$…$` segment for an `NSTextAttachment`, or nil when
-    /// the LaTeX does not typeset (the caller then falls back to an italic
-    /// literal).
-    let inlineImage: (_ latex: String, _ theme: MarkdownTheme, _ fontScale: CGFloat) -> NSImage?
+    /// Renders one inline `$…$` segment for an `NSTextAttachment` at
+    /// `fontSize` points (the text around it: 14 × zoom in paragraphs, quotes
+    /// and table cells, the heading's size in a heading), in the theme's text
+    /// colour, or nil when the LaTeX does not typeset (the caller then falls
+    /// back to an italic literal).
+    let inlineImage: (_ latex: String, _ theme: MarkdownTheme, _ fontSize: CGFloat) -> NSImage?
     /// Height `MTMathUILabel` will take for a display-math block.
     let displayHeight: (_ latex: String, _ theme: MarkdownTheme, _ fontScale: CGFloat) -> CGFloat
     /// False when the engine cannot typeset this display formula at all (an
@@ -668,6 +671,11 @@ struct MathRendering {
     /// empty row for it, so `substitutingUntypesettableMath` shows the source
     /// instead. Defaults to "always typesets" so stubs keep their old behaviour.
     var typesets: (_ latex: String) -> Bool = { _ in true }
+    /// Renders a display formula inside a quote or alert body
+    /// (`DisplayMathAttribute`) at `fontSize` points, display style, or nil
+    /// when it does not typeset. nil = `inlineImage` stands in (stubs, the
+    /// search placeholder: only the attachment character matters there).
+    var displayImage: ((_ latex: String, _ theme: MarkdownTheme, _ fontSize: CGFloat) -> NSImage?)?
 
     /// No math engine: inline math degrades to the italic-literal fallback and
     /// display math to zero intrinsic height. Only for tests and previews.
@@ -727,11 +735,17 @@ enum BlockTextConverter {
     /// and embedded as `NSTextAttachment` — which NSTextView renders natively
     /// (the old SwiftUI `Text` pipeline dropped attachments; that constraint no
     /// longer applies).
+    ///
+    /// `mathFontSize`: the size formulas are typeset at and centred against —
+    /// nil is the body text's, 14 × `fontScale` (paragraphs, quotes, table
+    /// cells); a heading passes its own (`makeMathString`).
     static func makeNSAttributedString(from attributed: AttributedString,
                                        hasInlineMath: Bool,
                                        theme: MarkdownTheme,
                                        fontScale: CGFloat,
+                                       mathFontSize: CGFloat? = nil,
                                        math: MathRendering) -> NSAttributedString {
+        let mathFontSize = mathFontSize ?? 14 * fontScale
         guard hasInlineMath else {
             return (try? NSAttributedString(attributed, including: \.appKit))
                 ?? NSAttributedString(string: String(attributed.characters))
@@ -761,11 +775,12 @@ enum BlockTextConverter {
                     attrIndex = end
                 }
 
-                if let image = math.inlineImage(latex, theme, fontScale) {
+                if let image = math.inlineImage(latex, theme, mathFontSize) {
                     let attachment = NSTextAttachment()
                     attachment.image = image
-                    // Center the math image against the 14pt body cap height
-                    let bodyFont = theme.fonts.appKit(size: 14 * fontScale)
+                    // Center the math image against the cap height of the
+                    // text around it (14 pt body × zoom, or the heading's).
+                    let bodyFont = theme.fonts.appKit(size: mathFontSize)
                     let yOffset = (bodyFont.capHeight - image.size.height) / 2
                     attachment.bounds = CGRect(x: 0, y: yOffset,
                                                width: image.size.width, height: image.size.height)
@@ -779,7 +794,7 @@ enum BlockTextConverter {
                 } else {
                     // Fallback: italic literal, same as the legacy pipeline
                     var attr = AttributedString(latex)
-                    attr.setDualFont(size: 14 * fontScale, italic: true, fonts: theme.fonts)
+                    attr.setDualFont(size: mathFontSize, italic: true, fonts: theme.fonts)
                     attr.setDualForeground(theme.textColor)
                     if let ns = try? NSAttributedString(attr, including: \.appKit) {
                         result.append(ns)
@@ -789,6 +804,123 @@ enum BlockTextConverter {
         }
 
         return result
+    }
+
+    // MARK: Math in quotes, alerts, headings and table cells (v1.15)
+
+    /// Does this quote or alert body, heading title or table cell need the
+    /// math engine: an inline `$…$` formula (`containsInlineMath`, the
+    /// paragraphs' test) or a display formula `renderQuotedBody` marked. A
+    /// string without `$` is rejected at once.
+    static func needsMath(_ attributed: AttributedString) -> Bool {
+        let plain = String(attributed.characters)
+        guard plain.contains("$") else { return false }
+        return containsInlineMath(plain)
+            || attributed.runs.contains { $0[DisplayMathAttribute.self] != nil }
+    }
+
+    /// The string a quote or alert body, a heading title or a table cell
+    /// shows — view, measurer, selection, copy and search alike: the plain
+    /// conversion when `needsMath` says no (byte-identical to 1.14), else
+    /// every formula typeset.
+    ///
+    /// Inline math is found LINE BY LINE with the paragraphs' segmenter
+    /// (`makeNSAttributedString`, `InlineMathSegmenter` — one `$` rule
+    /// everywhere): a quote's lines are its paragraphs and hard breaks, and a
+    /// formula never spans two of them (a `$` at the end of one paragraph
+    /// must not pair with one in the next). A line carrying
+    /// `DisplayMathAttribute` is one display formula: centred, typeset at
+    /// `BlockLayout.Math.fontSize` × zoom like a `$$` block, its source on the
+    /// attachment for copy (`.qmdDisplayMathSource`); one that does not
+    /// typeset shows its LaTeX in the code font, as a `$$` block that does
+    /// not typeset becomes a ```latex block. Lines without `$` are converted
+    /// in runs, as one string.
+    ///
+    /// `mathFontSize`: inline formulas' size (nil = body text; a heading
+    /// passes its own). Same thread rule as every converter call: pass the
+    /// real engine only on the main thread.
+    static func makeMathString(from attributed: AttributedString,
+                               mathFontSize: CGFloat? = nil,
+                               theme: MarkdownTheme,
+                               fontScale: CGFloat,
+                               math: MathRendering) -> NSAttributedString {
+        guard needsMath(attributed) else {
+            return makeNSAttributedString(from: attributed, hasInlineMath: false, theme: theme,
+                                          fontScale: fontScale, math: math)
+        }
+        let result = NSMutableAttributedString()
+        let characters = attributed.characters
+        func appendPlain(_ range: Range<AttributedString.Index>) {
+            guard !range.isEmpty else { return }
+            result.append(makeNSAttributedString(from: AttributedString(attributed[range]), hasInlineMath: false,
+                                                 theme: theme, fontScale: fontScale, math: math))
+        }
+        var plainStart = attributed.startIndex
+        var lineStart = attributed.startIndex
+        while lineStart < attributed.endIndex {
+            let lineEnd = characters[lineStart...].firstIndex(of: "\n") ?? attributed.endIndex
+            let line = AttributedString(attributed[lineStart..<lineEnd])
+            let linePlain = String(line.characters)
+            if linePlain.contains("$") {
+                let display = line.runs.first(where: { $0[DisplayMathAttribute.self] != nil })?[DisplayMathAttribute.self]
+                if display != nil || containsInlineMath(linePlain) {
+                    appendPlain(plainStart..<lineStart)
+                    if let display {
+                        result.append(displayFormula(display, theme: theme, fontScale: fontScale, math: math))
+                    } else {
+                        result.append(makeNSAttributedString(from: line, hasInlineMath: true, theme: theme,
+                                                             fontScale: fontScale, mathFontSize: mathFontSize,
+                                                             math: math))
+                    }
+                    plainStart = lineEnd
+                }
+            }
+            guard lineEnd < attributed.endIndex else { break }
+            lineStart = characters.index(after: lineEnd)
+        }
+        appendPlain(plainStart..<attributed.endIndex)
+        return result
+    }
+
+    /// A quote or alert body as its text view shows it: `renderQuotedBody`'s
+    /// output (`attributed`) through `makeMathString` at the body size.
+    static func quotedBody(_ attributed: AttributedString, renderer: MarkdownRenderer,
+                           math: MathRendering) -> NSAttributedString {
+        makeMathString(from: attributed, theme: renderer.theme, fontScale: renderer.fontScale, math: math)
+    }
+
+    /// A heading title as its text view shows it: `renderHeader`'s output
+    /// (`attributed`) through `makeMathString`, formulas at the heading's size.
+    static func headingTitle(_ attributed: AttributedString, level: Int, renderer: MarkdownRenderer,
+                             math: MathRendering) -> NSAttributedString {
+        makeMathString(from: attributed, mathFontSize: renderer.headerFontSize(level: level),
+                       theme: renderer.theme, fontScale: renderer.fontScale, math: math)
+    }
+
+    /// One display formula of a quote or alert body (see `makeMathString`).
+    private static func displayFormula(_ latex: String, theme: MarkdownTheme, fontScale: CGFloat,
+                                       math: MathRendering) -> NSAttributedString {
+        let render = math.displayImage ?? math.inlineImage
+        guard let image = render(latex, theme, BlockLayout.Math.fontSize * fontScale) else {
+            return NSAttributedString(string: latex, attributes: [
+                .font: theme.fonts.appKit(size: BlockLayout.Code.codeFontSize * fontScale, monospaced: true),
+                .foregroundColor: NSColor(theme.textColor),
+            ])
+        }
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        // Centred on the body text's cap height, as an inline formula: the
+        // line is as tall as the formula, whatever its depth.
+        let bodyFont = theme.fonts.appKit(size: 14 * fontScale)
+        attachment.bounds = CGRect(x: 0, y: (bodyFont.capHeight - image.size.height) / 2,
+                                   width: image.size.width, height: image.size.height)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let embedded = NSMutableAttributedString(attachment: attachment)
+        let range = NSRange(location: 0, length: embedded.length)
+        embedded.addAttributes([.qmdDisplayMathSource: latex, .paragraphStyle: paragraph,
+                                .font: bodyFont], range: range)
+        return embedded
     }
 
     /// Base font + text color only. This is what `CodeBlockView` installs while
@@ -1308,14 +1440,18 @@ enum BlockHeightMeasurer {
                 }
 
             case .blockquote(let content, let level):
-                // The quote body is inline-rendered exactly as BlockquoteView
-                // does it, and passed to TextBlockView WITHOUT inline math (the
-                // view does not opt in), so we must not opt in either — which is
-                // also why a quote never needs the math engine. A string the
-                // previous measurement built is only laid out again (`reusing`).
-                let ns = reusing[block.id] ?? BlockTextConverter.makeNSAttributedString(
-                    from: renderer.renderQuotedBody(content), hasInlineMath: false,
-                    theme: theme, fontScale: fontScale, math: engine)
+                // The quote body is rendered exactly as BlockquoteView renders
+                // it (`quotedBodyString`). A body with formulas needs the math
+                // engine (v1.15): deferred like a math paragraph. A string the
+                // previous measurement built is only laid out again
+                // (`reusing`) — off-main only when it holds no formula image.
+                guard let ns = quotedBodyString(content, block: block, renderer: renderer,
+                                                reusing: reusing, math: math) else {
+                    mathPendingRows.append(heights.count)
+                    heights.append(pendingParagraphHeight + 2 * BlockLayout.Quote.verticalPadding)
+                    kinds.append(.exact)
+                    break
+                }
                 converted[block.id] = ns
                 let width = BlockLayout.Quote.bodyWidth(contentWidth: contentWidth, level: level)
                 let ink = textInk(text: ns, width: width)
@@ -1328,12 +1464,16 @@ enum BlockHeightMeasurer {
                     + 2 * BlockLayout.Alert.verticalPadding
                     + 2 * BlockLayout.Document.alertOuterVerticalPadding
                 if !content.isEmpty {
-                    let ns = reusing[block.id] ?? BlockTextConverter.makeNSAttributedString(
-                        from: renderer.renderQuotedBody(content), hasInlineMath: false,
-                        theme: theme, fontScale: fontScale, math: engine)
-                    converted[block.id] = ns
-                    height += BlockLayout.Alert.stackSpacing
-                        + exactHeight(text: ns, width: alertBodyWidth)
+                    // As a quote body (deferred when it has formulas).
+                    if let ns = quotedBodyString(content, block: block, renderer: renderer,
+                                                 reusing: reusing, math: math) {
+                        converted[block.id] = ns
+                        height += BlockLayout.Alert.stackSpacing
+                            + exactHeight(text: ns, width: alertBodyWidth)
+                    } else {
+                        mathPendingRows.append(heights.count)
+                        height += BlockLayout.Alert.stackSpacing + pendingParagraphHeight
+                    }
                 }
                 heights.append(height)
                 kinds.append(.exact)
@@ -1346,9 +1486,18 @@ enum BlockHeightMeasurer {
                 kinds.append(.exact)
 
             case .heading(let level, let title, _):
-                let heading = headingRow(title: title, level: level,
-                                         renderer: renderer, contentWidth: contentWidth)
-                converted[block.id] = heading.string
+                // A title with formulas needs the engine (v1.15): without it,
+                // the row gets the title's height with the formulas' source
+                // as an estimate (the row reports anyway) and no string.
+                let attributed = renderer.renderHeader(title, level: level)
+                let deferred = math == nil && BlockTextConverter.needsMath(attributed)
+                let heading = headingRow(attributed, level: level, renderer: renderer,
+                                         contentWidth: contentWidth, math: engine)
+                if deferred {
+                    mathPendingRows.append(heights.count)
+                } else {
+                    converted[block.id] = heading.string
+                }
                 heights.append(heading.height)
                 kinds.append(.reported)
                 textEdges = heading.edges
@@ -1358,8 +1507,18 @@ enum BlockHeightMeasurer {
                 // instance), at the width its frame gets: the whole column.
                 // A `.properties` key column's 40 % cap depends on that width,
                 // so it is part of this measurement like wrapping is.
+                // A table with a formula in a cell is built on the main
+                // actor (v1.15): the cells' formulas need the engine.
+                if math == nil, TableTextBuilder.needsMath(headers: headers, rows: rows, style: style,
+                                                           renderer: renderer) {
+                    mathPendingRows.append(heights.count)
+                    heights.append(pendingParagraphHeight + 2 * BlockLayout.Document.tableOuterVerticalPadding)
+                    kinds.append(.exact)
+                    break
+                }
                 let table = TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments,
-                                                   style: style, theme: theme, fontScale: fontScale)
+                                                   style: style, theme: theme, fontScale: fontScale,
+                                                   math: engine)
                 tables[block.id] = table
                 heights.append(TableTextBuilder.height(of: table.string, width: textWidth)
                                + 2 * BlockLayout.Document.tableOuterVerticalPadding)
@@ -1534,7 +1693,8 @@ enum BlockHeightMeasurer {
                                 fontScale: CGFloat,
                                 contentWidth: CGFloat,
                                 math: MathRendering,
-                                reusing: [String: NSAttributedString] = [:]) -> MeasuredBlocks {
+                                reusing: [String: NSAttributedString] = [:],
+                                reusingTables: [String: TableText] = [:]) -> MeasuredBlocks {
         guard !pending.isEmpty else {
             return MeasuredBlocks(table: measured.table, converted: measured.converted,
                                   tables: measured.tables, mathPendingRows: [], rhythm: measured.rhythm)
@@ -1550,6 +1710,8 @@ enum BlockHeightMeasurer {
         var heights = measured.table.heights
         var kinds = measured.table.kinds
         var converted = measured.converted
+        var tables = measured.tables
+        let renderer = MarkdownRenderer(theme: theme, fontScale: fontScale)
         // Row for row with `blocks` whenever `measured` came from them; the
         // guard only keeps a mismatched call from trapping.
         var rhythm = measured.rhythm.count == blocks.count
@@ -1585,6 +1747,50 @@ enum BlockHeightMeasurer {
                 heights[index] = ink.height
                 rhythm[index] = rhythmRow(block, edges: .text(ink))
 
+            case .blockquote(let content, let level):
+                // A body with formulas (v1.15) — as `measure` with a live engine.
+                let ns = reusing[block.id]
+                    ?? BlockTextConverter.quotedBody(renderer.renderQuotedBody(content), renderer: renderer,
+                                                     math: math)
+                converted[block.id] = ns
+                let ink = textInk(text: ns, width: BlockLayout.Quote.bodyWidth(contentWidth: contentWidth,
+                                                                               level: level))
+                heights[index] = ink.height + 2 * BlockLayout.Quote.verticalPadding
+                rhythm[index] = boxRhythm(block, fontScale: fontScale, quoteInk: ink)
+
+            case .alert(_, let content):
+                let ns = reusing[block.id]
+                    ?? BlockTextConverter.quotedBody(renderer.renderQuotedBody(content), renderer: renderer,
+                                                     math: math)
+                converted[block.id] = ns
+                heights[index] = BlockLayout.Alert.titleRowHeight(theme: theme, fontScale: fontScale)
+                    + 2 * BlockLayout.Alert.verticalPadding
+                    + 2 * BlockLayout.Document.alertOuterVerticalPadding
+                    + BlockLayout.Alert.stackSpacing
+                    + exactHeight(text: ns, width: BlockLayout.clampedWidth(
+                        contentWidth - 2 * BlockLayout.Alert.horizontalPadding))
+
+            case .heading(let level, let title, _):
+                let heading = headingRow(renderer.renderHeader(title, level: level), level: level,
+                                         renderer: renderer, contentWidth: contentWidth, math: math,
+                                         built: reusing[block.id])
+                converted[block.id] = heading.string
+                heights[index] = heading.height
+                rhythm[index] = rhythmRow(block, edges: heading.edges)
+
+            case .table(let headers, let rows, let alignments, let style):
+                // A table with formulas (v1.15): built here, where the engine
+                // may run — or the previous pass's, when it is this very table
+                // (a width change re-wraps, it does not re-typeset).
+                let table = reusingTables[block.id].flatMap {
+                    $0.matches(headers: headers, rows: rows, alignments: alignments, style: style,
+                               theme: theme, fontScale: fontScale) ? $0 : nil
+                } ?? TableTextBuilder.build(headers: headers, rows: rows, alignments: alignments, style: style,
+                                            theme: theme, fontScale: fontScale, math: math)
+                tables[block.id] = table
+                heights[index] = TableTextBuilder.height(of: table.string, width: textWidth)
+                    + 2 * BlockLayout.Document.tableOuterVerticalPadding
+
             case .mathBlock(let latex):
                 heights[index] = math.displayHeight(latex, theme, fontScale)
                     + 2 * BlockLayout.Math.verticalPadding
@@ -1613,9 +1819,31 @@ enum BlockHeightMeasurer {
                                     contentWidth: measured.table.contentWidth,
                                     spacingAbove: BlockLayout.Spacing.column(rhythm, fontScale: fontScale)),
             converted: converted,
-            tables: measured.tables,
+            tables: tables,
             mathPendingRows: [],
             rhythm: rhythm)
+    }
+
+    // MARK: - Quote and alert bodies
+
+    /// The string a quote or alert body shows (`BlockTextConverter.quotedBody`),
+    /// or nil when building it needs the math engine and `math` is nil (the
+    /// off-main pass: the row is deferred to `measureMathRows`). A string the
+    /// previous measurement built (`reusing`) is taken as it is — unless it
+    /// holds formula images and this pass is off-main: then the main-actor
+    /// step lays it out (`measureMathRows` reuses it too).
+    private static func quotedBodyString(_ content: String, block: MarkdownBlock, renderer: MarkdownRenderer,
+                                         reusing: [String: NSAttributedString],
+                                         math: MathRendering?) -> NSAttributedString? {
+        if let reused = reusing[block.id] {
+            return math == nil && reused.containsAttachments ? nil : reused
+        }
+        let attributed = renderer.renderQuotedBody(content)
+        guard let math else {
+            return BlockTextConverter.needsMath(attributed) ? nil
+                : BlockTextConverter.quotedBody(attributed, renderer: renderer, math: .none)
+        }
+        return BlockTextConverter.quotedBody(attributed, renderer: renderer, math: math)
     }
 
     // MARK: - Headings
@@ -1628,15 +1856,16 @@ enum BlockHeightMeasurer {
     /// as the button's bottom edge. The row stays `.reported`: the placed view
     /// still has the last word.
     /// `string` is the title exactly as the view shows and the selection
-    /// copies it: `BlockTextConverter.makeNSAttributedString` of the same
-    /// `renderHeader` output, which without inline math (a heading shows
-    /// `$…$` literally) is this one conversion.
-    private static func headingRow(title: String, level: Int, renderer: MarkdownRenderer,
-                                   contentWidth: CGFloat)
+    /// copies it: `BlockTextConverter.headingTitle` of the same `renderHeader`
+    /// output (formulas typeset at the heading's size since v1.15; without
+    /// one it is the plain conversion). `attributed` is that output.
+    /// `built`: the title string a previous pass of the same content built
+    /// (`reusing` — a width change re-wraps a title, it never re-typesets it).
+    private static func headingRow(_ attributed: @autoclosure () -> AttributedString, level: Int,
+                                   renderer: MarkdownRenderer, contentWidth: CGFloat, math: MathRendering,
+                                   built: NSAttributedString? = nil)
         -> (height: CGFloat, edges: BlockLayout.Spacing.Edges, string: NSAttributedString) {
-        let attributed = renderer.renderHeader(title, level: level)
-        let ns = (try? NSAttributedString(attributed, including: \.appKit))
-            ?? NSAttributedString(string: String(attributed.characters))
+        let ns = built ?? BlockTextConverter.headingTitle(attributed(), level: level, renderer: renderer, math: math)
         let geometry = BlockLayout.Heading.titleGeometry(
             titleFirstBaseline: BlockLayout.Heading.titleFirstBaseline(font: renderer.headerAppKitFont(level: level)))
         let ink = textInk(text: ns, width: BlockLayout.Heading.titleWrapWidth(rowWidth: contentWidth))

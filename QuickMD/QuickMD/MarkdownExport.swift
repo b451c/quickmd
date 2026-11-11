@@ -291,8 +291,8 @@ struct PrintableTableView: View, TableAlignmentProvider {
                 // Header row
                 HStack(spacing: 0) {
                     ForEach(0..<columnCount, id: \.self) { index in
-                        Text(TableTextBuilder.printableCell(index < headers.count ? headers[index] : "",
-                                                            isHeader: true, renderer: renderer))
+                        PrintableMath.text(from: TableTextBuilder.printableCell(
+                            index < headers.count ? headers[index] : "", isHeader: true, renderer: renderer))
                             .foregroundColor(.black)
                             .multilineTextAlignment(textAlignmentFor(index))
                             .frame(maxWidth: .infinity, alignment: alignmentFor(index))
@@ -315,7 +315,8 @@ struct PrintableTableView: View, TableAlignmentProvider {
                 HStack(spacing: 0) {
                     ForEach(0..<columnCount, id: \.self) { colIndex in
                         let cell = colIndex < row.count ? row[colIndex] : ""
-                        Text(TableTextBuilder.printableCell(cell, isHeader: false, renderer: renderer))
+                        PrintableMath.text(from: TableTextBuilder.printableCell(cell, isHeader: false,
+                                                                                renderer: renderer))
                             .foregroundColor(.black)
                             .multilineTextAlignment(textAlignmentFor(colIndex))
                             .frame(maxWidth: .infinity, alignment: alignmentFor(colIndex))
@@ -498,7 +499,9 @@ struct MarkdownPrintableBlockView: View {
                 PrintableAlertView(kind: kind, content: content)
 
             case .heading(let level, let title, _):
-                Text(renderer.renderHeader(title, level: level))
+                // Formulas typeset at the heading's size, as on screen (v1.15).
+                PrintableMath.text(from: renderer.renderHeader(title, level: level),
+                                   fontSize: renderer.headerFontSize(level: level))
                     .foregroundColor(.black)
 
             case .mathBlock(let latex):
@@ -565,14 +568,18 @@ struct PrintableBlockquoteView: View {
 
             // Same soft-break pre-pass as the on-screen BlockquoteView, so a
             // quote written one sentence per line prints as one paragraph.
+            // Display formulas (v1.15) are the screen's: `quotedBodyLines`.
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(MarkdownRenderer.joinSoftBreaks(content.components(separatedBy: "\n")).enumerated()), id: \.offset) { _, line in
-                    if MarkdownRenderer.isBlankLine(line) {
+                ForEach(Array(MarkdownRenderer.quotedBodyLines(content).enumerated()), id: \.offset) { _, line in
+                    switch line {
+                    case .blank:
                         Text(" ").font(renderer.theme.fonts.swiftUI(size: 12))
-                    } else {
-                        Text(renderer.renderInline(line))
+                    case .text(let text):
+                        PrintableMath.text(from: renderer.renderInline(text))
                             .font(renderer.theme.fonts.swiftUI(size: 12, italic: true))
                             .foregroundColor(Color(white: 0.3))
+                    case .displayMath(let latex):
+                        PrintableQuotedFormula(latex: latex)
                     }
                 }
             }
@@ -604,14 +611,18 @@ struct PrintableAlertView: View {
             }
             .foregroundColor(accent)
 
-            // Soft breaks joined first — mirrors AlertBlockView on screen.
-            ForEach(Array(MarkdownRenderer.joinSoftBreaks(content.components(separatedBy: "\n")).enumerated()), id: \.offset) { _, line in
-                if MarkdownRenderer.isBlankLine(line) {
+            // Soft breaks joined first — mirrors AlertBlockView on screen
+            // (display formulas too, `quotedBodyLines`).
+            ForEach(Array(MarkdownRenderer.quotedBodyLines(content).enumerated()), id: \.offset) { _, line in
+                switch line {
+                case .blank:
                     Text(" ").font(renderer.theme.fonts.swiftUI(size: 12))
-                } else {
-                    Text(renderer.renderInline(line))
+                case .text(let text):
+                    PrintableMath.text(from: renderer.renderInline(text))
                         .font(renderer.theme.fonts.swiftUI(size: 12))
                         .foregroundColor(Color(white: 0.2))
+                case .displayMath(let latex):
+                    PrintableQuotedFormula(latex: latex)
                 }
             }
         }
@@ -916,8 +927,8 @@ enum PrintableMath {
         return error == nil ? image : nil
     }
 
-    static func inlineImage(_ latex: String) -> (image: NSImage, descent: CGFloat)? {
-        var mathImage = MathImage(latex: latex, fontSize: 14, textColor: .black,
+    static func inlineImage(_ latex: String, fontSize: CGFloat = 14) -> (image: NSImage, descent: CGFloat)? {
+        var mathImage = MathImage(latex: latex, fontSize: fontSize, textColor: .black,
                                   labelMode: .text, textAlignment: .left)
         let (error, image, info) = mathImage.asImage()
         // Nothing drawn: the italic literal, as on screen (`MathInk`).
@@ -928,8 +939,9 @@ enum PrintableMath {
     /// The paragraph as SwiftUI `Text`, with every `$…$` segment replaced by its
     /// rendered image (or an italic literal when it does not typeset). Same
     /// segmentation as `BlockTextConverter.makeNSAttributedString`, so screen and
-    /// PDF agree on what is math.
-    static func text(from attributed: AttributedString) -> Text {
+    /// PDF agree on what is math. `fontSize`: the text around the formulas
+    /// (a heading passes its own, v1.15).
+    static func text(from attributed: AttributedString, fontSize: CGFloat = 14) -> Text {
         let plain = String(attributed.characters)
         guard BlockTextConverter.containsInlineMath(plain) else { return Text(attributed) }
 
@@ -948,7 +960,7 @@ enum PrintableMath {
                                                          limitedBy: attributed.endIndex) {
                     index = end
                 }
-                if let rendered = inlineImage(latex) {
+                if let rendered = inlineImage(latex, fontSize: fontSize) {
                     // Sit the image on the baseline: its own descent goes below.
                     result = result + Text(Image(nsImage: rendered.image)).baselineOffset(-rendered.descent)
                 } else {
@@ -957,6 +969,24 @@ enum PrintableMath {
             }
         }
         return result
+    }
+}
+
+/// A display formula inside a printed quote or alert body (v1.15): centred
+/// like `PrintableMathBlockView`, without its block padding (it is a line of
+/// the body); the LaTeX in monospace when it does not typeset.
+struct PrintableQuotedFormula: View {
+    let latex: String
+
+    var body: some View {
+        if let image = PrintableMath.displayImage(latex) {
+            Image(nsImage: image)
+                .frame(maxWidth: .infinity, alignment: .center)
+        } else {
+            Text(latex)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(.black)
+        }
     }
 }
 

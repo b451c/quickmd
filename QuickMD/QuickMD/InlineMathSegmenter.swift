@@ -14,6 +14,18 @@ enum EscapedCharacterAttribute: AttributedStringKey {
     static let name = "qmdEscapedCharacter"
 }
 
+/// Marks a display formula inside a quote or alert body (v1.15): a paragraph
+/// that is nothing but `$$…$$` formulas (`MarkdownRenderer.quotedBodyLines`).
+/// The value is the formula's LaTeX as written (line breaks kept); the
+/// characters it covers are its source on one line, so a body line is still
+/// one line. `BlockTextConverter.makeMathString` draws it as a centred
+/// display formula. Not part of the AppKit scope, like
+/// `EscapedCharacterAttribute`.
+enum DisplayMathAttribute: AttributedStringKey {
+    typealias Value = String
+    static let name = "qmdDisplayMath"
+}
+
 /// Splits paragraph text into alternating plain-text and inline-math segments.
 /// Math is delimited by single `$` (never `$$` — that's display math).
 /// Pure Foundation — shared by TextBlockView (app) and the unit tests.

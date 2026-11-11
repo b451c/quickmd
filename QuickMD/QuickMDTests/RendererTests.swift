@@ -1011,9 +1011,11 @@ final class RendererTests: XCTestCase {
 
     // MARK: - Formula source in headings (review R14)
 
-    /// Headings show a formula's SOURCE (no inline math there yet), and it
-    /// keeps its LaTeX escapes: `# H \% $a\,b$` shows "H % $a\,b$". The
-    /// heading view, ids, the Contents sidebar and search all read this text.
+    /// A heading's formula keeps its LaTeX escapes in `renderHeader`:
+    /// `# H \% $a\,b$` reads "H % $a\,b$" — the text ids and the Contents
+    /// sidebar read. Since v1.15 the title view typesets the formulas (from
+    /// that same text, with the escapes), so search counts them as a
+    /// paragraph's: one attachment each, the LaTeX is not text.
     func testHeadingFormulaSourceKeepsItsEscapes() {
         let title = "H \\% $a\\,b$ and $50\\%$"
         let shown = String(renderer.renderHeader(title, level: 1).characters)
@@ -1025,8 +1027,19 @@ final class RendererTests: XCTestCase {
         let theme = MarkdownTheme.cached(for: .light)
         let blocks = MarkdownBlockParser(theme: theme).parse("# " + title)
         XCTAssertEqual(HeadingAnchors.headings(of: blocks, renderer: renderer).map(\.text), [shown])
-        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "a\\,b").matchBlockIds.count, 1,
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "a\\,b").matchBlockIds.count, 0,
+                       "a typeset formula is not text (as in a paragraph)")
+        XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "H %").matchBlockIds.count, 1,
                        "search finds what the heading shows")
+        var typeset: [String] = []
+        let engine = MathRendering(inlineImage: { latex, _, _ in
+            typeset.append(latex)
+            return NSImage(size: NSSize(width: 1, height: 1))
+        }, displayHeight: { _, _, _ in 0 })
+        let typesetTitle = BlockTextConverter.headingTitle(renderer.renderHeader(title, level: 1), level: 1,
+                                                    renderer: renderer, math: engine)
+        XCTAssertEqual(typesetTitle.string, "H % \u{FFFC} and \u{FFFC}")
+        XCTAssertEqual(typeset, ["a\\,b", "50\\%"], "the LaTeX keeps its escapes")
     }
 
     // MARK: - References in link destinations (review R10)

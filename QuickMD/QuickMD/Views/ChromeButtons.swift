@@ -57,13 +57,17 @@ struct HeadingBlockView: View {
         TextBlockView(
             blockId: id,
             attributed: headingAttr,
-            hasInlineMath: false,
             theme: theme,
             fontScale: fontScale,
             contentVersion: contentVersion,
             searchTerm: searchText,
             focusedOccurrence: focusedOccurrence,
             cacheScope: "\(level)|\(title)",
+            // Formulas typeset at the heading's size (v1.15) — the
+            // conversion `BlockTextConverter.headingTitle` gives the
+            // measurer and the selection.
+            typesetsTextKindMath: true,
+            mathFontSize: renderer.headerFontSize(level: level),
             onLink: onLink
         )
         .padding(.trailing, Metrics.titleTrailingPadding(isReadingMode: isReadingMode))
@@ -124,8 +128,10 @@ struct HeadingBlockView: View {
         let usedWidth = Metrics.titleUsedWidth(
             cachedAs: key, wrapWidth: Metrics.titleWrapWidth(rowWidth: rowWidth)
         ) {
-            TextBlockView.makeNSAttributedString(from: headingAttr, hasInlineMath: false,
-                                                 theme: theme, fontScale: fontScale)
+            TextBlockView.makeMathString(from: headingAttr,
+                                         mathFontSize: MarkdownRenderer(theme: theme, fontScale: fontScale)
+                                            .headerFontSize(level: level),
+                                         theme: theme, fontScale: fontScale)
         }
         return Metrics.copyButtonLeading(titleUsedWidth: usedWidth, rowWidth: rowWidth)
     }
