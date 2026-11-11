@@ -18,75 +18,48 @@ import Foundation
 /// `a`. Emphasis and strikethrough do not hide a reference (GitHub numbers
 /// `~~x[^a]~~`).
 ///
-/// Linear in the text: one pass, the next `]` and the next backtick run of
-/// each length are found with pointers that only move forward (a line of
-/// thousands of `[^` without a `]` searched to its end at every one).
+/// It uses the renderer's own scanners, so the two cannot disagree: code
+/// spans through `InlineSyntaxScanner.CodeSpanTable`, a `<…>` autolink
+/// (`angleAutolink`) is skipped whole (its text is no reference), and the
+/// `]` comes from `NextClosingBracket`. Linear in the text: each scanner
+/// looks at every byte a bounded number of times.
 enum FootnoteReferenceScan {
     static func labels(in text: String, defined: Set<String>) -> [String] {
         guard !defined.isEmpty, text.contains("[^") else { return [] }
-        let bytes = Array(text.utf8)
-        let count = bytes.count
-        let backslash = UInt8(ascii: "\\"), backtick = UInt8(ascii: "`")
-        let open = UInt8(ascii: "["), caret = UInt8(ascii: "^"), close = UInt8(ascii: "]")
-
-        // Every maximal backtick run, by length: the candidates to close a
-        // code span (backslashes do not escape inside one).
-        var runStarts: [Int: [Int]] = [:]
-        var index = 0
-        while index < count {
-            guard bytes[index] == backtick else { index += 1; continue }
-            var end = index
-            while end < count, bytes[end] == backtick { end += 1 }
-            runStarts[end - index, default: []].append(index)
-            index = end
-        }
-        var runCursor: [Int: Int] = [:]
-        /// The first run of exactly `length` backticks starting at or after
-        /// `position`.
-        func closingRun(length: Int, from position: Int) -> Int? {
-            guard let starts = runStarts[length] else { return nil }
-            var cursor = runCursor[length, default: 0]
-            while cursor < starts.count, starts[cursor] < position { cursor += 1 }
-            runCursor[length] = cursor
-            return cursor < starts.count ? starts[cursor] : nil
-        }
-
+        var text = text
+        text.makeContiguousUTF8()
+        let utf8 = text.utf8
+        let codeSpans = InlineSyntaxScanner.CodeSpanTable(text)
+        let closing = InlineSyntaxScanner.NextClosingBracket(text)
         var labels: [String] = []
-        var nextClose = -1     // index of the next `]` at or after the last search, `count` when none
-        index = 0
-        while index < count {
-            let byte = bytes[index]
-            if byte == backslash, index + 1 < count, isEscapable(bytes[index + 1]) {
-                index += 2
+        var index = text.startIndex
+        while index < text.endIndex {
+            let byte = utf8[index]
+            let next = utf8.index(after: index)
+            if byte == UInt8(ascii: "\\"), next < text.endIndex, isEscapable(utf8[next]) {
+                index = utf8.index(after: next)
                 continue
             }
-            if byte == backtick {
-                var end = index
-                while end < count, bytes[end] == backtick { end += 1 }
-                let length = end - index
-                if let closing = closingRun(length: length, from: end) {
-                    index = closing + length
-                } else {
-                    index = end
-                }
+            if byte == UInt8(ascii: "`") {
+                index = codeSpans.span(at: text[index...]).end
                 continue
             }
-            if byte == open, index + 1 < count, bytes[index + 1] == caret {
-                if nextClose < index + 2 {
-                    var search = index + 2
-                    while search < count, bytes[search] != close { search += 1 }
-                    nextClose = search
-                }
-                if nextClose < count, nextClose > index + 2 {
-                    let label = ReferenceLabel.normalized(String(decoding: bytes[(index + 2)..<nextClose], as: UTF8.self))
+            if byte == UInt8(ascii: "<"), let autolink = InlineSyntaxScanner.angleAutolink(atStartOf: text[index...]) {
+                index = autolink.end
+                continue
+            }
+            if byte == UInt8(ascii: "["), next < text.endIndex, utf8[next] == UInt8(ascii: "^") {
+                let labelStart = utf8.index(after: next)
+                if let close = closing.at(orAfter: labelStart), close > labelStart {
+                    let label = ReferenceLabel.normalized(text[labelStart..<close])
                     if defined.contains(label) {
                         labels.append(label)
-                        index = nextClose + 1
+                        index = utf8.index(after: close)
                         continue
                     }
                 }
             }
-            index += 1
+            index = next
         }
         return labels
     }

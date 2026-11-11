@@ -170,6 +170,25 @@ final class SectionExtractorTests: XCTestCase {
         ])
     }
 
+    /// Titles whose rendered text changed with the 1.15 inline rules slug
+    /// to GitHub's ids (`gh api markdown -f mode=markdown`, 2026-11-11):
+    /// `5__6__78` (intraword `_` stays), `[a <a>b</a> c](y)` → `a-b-cy`
+    /// (inner link wins), `<code>a``b</code> and <code>c</code>` →
+    /// `ab-and-c`, `see <a>www.x.example</a>.` → `see-wwwxexample`,
+    /// `<a>https://x.example/p</a>` → `httpsxexamplep`, `foo<em>bar</em>`.
+    func testHeadingIdsFollowTheInlineRules() {
+        let md = """
+        ## 5__6__78
+        ## [a [b](x) c](y)
+        ## `a``b` and ``c``
+        ## see www.x.example.
+        ## <https://x.example/p>
+        ## foo*bar*
+        """
+        XCTAssertEqual(HeadingAnchors.ids(for: anchorHeadings(of: md).map(\.text)),
+                       ["5__6__78", "a-b-cy", "ab-and-c", "see-wwwxexample", "httpsxexamplep", "foobar"])
+    }
+
     /// Character references in a heading show as their characters (GitHub
     /// decodes them before its slug) — ids from GitHub's renderer
     /// (`gh api markdown`, 2026-11-04). A code span keeps the reference, and a

@@ -75,12 +75,14 @@ enum ReferenceLabel {
 /// they cannot disagree.
 ///
 /// The scan mirrors `MarkdownRenderer.renderInlineFormatting` where it
-/// matters: escapes and code spans are copied as written, `***…***` and
-/// `~~…~~` (rendered without inline parsing) too, inline links are copied
-/// whole, the reference rules are `tryParseLink`'s (full, collapsed, then
-/// shortcut, ids lowercased) and `InlineSyntaxScanner.image`'s, and a link's
-/// text is only rewritten when it holds an image (`[![b][img]][link]`), as
-/// only then does the renderer parse it. The destination is `<url>` with
+/// decides brackets: escapes, code spans and autolinks are copied as
+/// written (they hide brackets), and links are resolved the renderer's way —
+/// a bracket stack, `InlineSyntaxScanner.linkTail` at every `]` (inline,
+/// full, collapsed, shortcut; an undefined full label is no link), and a
+/// link deactivates the `[`s before it (the inner link wins). Images use
+/// `InlineSyntaxScanner.image`'s rules. A resolved reference becomes
+/// `](<url>)` right at its `]`; the text before it was already rewritten
+/// by the same walk (`[![b][img]][link]`). The destination is `<url>` with
 /// `\ < > ( )` backslash-escaped, which `InlineSyntaxScanner` reads back as
 /// exactly `url` (an escaped paren does not count for pairing either).
 enum ReferenceLinks {
@@ -115,13 +117,13 @@ enum ReferenceLinks {
         let sources = Sources(definitions: definitions, footnoteIds: footnoteIds)
         let lines = text.components(separatedBy: "\n")
         guard quoteBody else {
-            return lines.map { inlinedLine($0, sources: sources, linksDisabled: false) }.joined(separator: "\n")
+            return lines.map { inlinedLine($0, sources: sources) }.joined(separator: "\n")
         }
         let groups = MarkdownRenderer.joinSoftBreaksIndexed(lines)
         var out: [String] = []
         for (index, group) in groups.enumerated() {
             let end = index + 1 < groups.count ? groups[index + 1].first : lines.count
-            let rewritten = inlinedLine(group.line, sources: sources, linksDisabled: false)
+            let rewritten = inlinedLine(group.line, sources: sources)
             if rewritten == group.line {
                 out.append(contentsOf: lines[group.first..<end])
             } else {
@@ -141,22 +143,29 @@ enum ReferenceLinks {
     static func inlinedHeading(_ title: String, definitions: [String: String],
                                footnoteIds: [String] = []) -> String {
         guard !definitions.isEmpty || !footnoteIds.isEmpty, title.contains("[") else { return title }
-        return inlinedLine(title, sources: Sources(definitions: definitions, footnoteIds: footnoteIds),
-                           linksDisabled: false)
+        return inlinedLine(title, sources: Sources(definitions: definitions, footnoteIds: footnoteIds))
     }
 
-    private static func inlinedLine(_ line: String, sources: Sources, linksDisabled: Bool) -> String {
+    private static func inlinedLine(_ line: String, sources: Sources) -> String {
         let definitions = sources.definitions
         guard line.contains("[") else { return line }
         var text = line
         text.makeContiguousUTF8()
+        let utf8 = text.utf8
         let pairs = InlineSyntaxScanner.PairTable(text)
+        let codeSpans = InlineSyntaxScanner.CodeSpanTable(text)
+        let closingBrackets = InlineSyntaxScanner.NextClosingBracket(text)
+        let autolinks = MarkdownRenderer.AutolinkScan()
         var out = ""
         var remaining = text[...]
+        /// The open `[`s (where each one's label starts) and, as in the
+        /// renderer, the stack position below which they are inactive.
+        var openers: [String.Index] = []
+        var activeFrom = 0
 
         while let first = remaining.first {
             // Escapes first, as the renderer: `\[` never opens anything.
-            if first == "\\", remaining.count >= 2 {
+            if first == "\\", remaining.utf8.count >= 2 {  // O(1), not a Character count
                 let escaped = remaining[remaining.index(after: remaining.startIndex)]
                 if MarkdownTheme.escapableChars.contains(escaped) {
                     out += remaining.prefix(2)
@@ -164,19 +173,26 @@ enum ReferenceLinks {
                     continue
                 }
             }
+            // Code spans and autolinks hide brackets, as in the renderer.
             if first == "`" {
-                let span = codeSpanLength(remaining)
-                out += remaining.prefix(span)
-                remaining = remaining.dropFirst(span)
+                let end = codeSpans.span(at: remaining).end
+                out += remaining[..<end]
+                remaining = text[end...]
                 continue
             }
-            if let verbatim = unparsedSpanLength(remaining) {
-                out += remaining.prefix(verbatim)
-                remaining = remaining.dropFirst(verbatim)
+            if first == "<", let autolink = InlineSyntaxScanner.angleAutolink(atStartOf: remaining) {
+                out += remaining[..<autolink.end]
+                remaining = text[autolink.end...]
                 continue
             }
-            // `tryParseFootnoteRef` runs before emphasis and links.
-            if remaining.hasPrefix("[^"), let (numbered, rest) = footnote(remaining, sources: sources) {
+            if first == "h" || first == "w",
+               let autolink = MarkdownRenderer.bareAutolink(remaining, in: text, scan: autolinks) {
+                out += remaining[..<autolink.end]
+                remaining = text[autolink.end...]
+                continue
+            }
+            // `tryParseFootnoteRef` runs before links.
+            if remaining.hasPrefix("[^"), let (numbered, rest) = footnote(remaining, sources: sources, closing: closingBrackets) {
                 out += numbered
                 remaining = rest
                 continue
@@ -197,10 +213,33 @@ enum ReferenceLinks {
                 remaining = remaining.dropFirst()
                 continue
             }
-            if first == "[", !linksDisabled,
-               let (rewritten, rest) = link(remaining, pairs: pairs, sources: sources) {
-                out += rewritten
-                remaining = rest
+            if first == "[" {
+                let labelStart = utf8.index(after: remaining.startIndex)
+                openers.append(labelStart)
+                out.append("[")
+                remaining = text[labelStart...]
+                continue
+            }
+            if first == "]", let opener = openers.popLast() {
+                let afterClose = utf8.index(after: remaining.startIndex)
+                let active = openers.count >= activeFrom
+                activeFrom = min(activeFrom, openers.count)
+                if active, let tail = InlineSyntaxScanner.linkTail(after: text[afterClose...],
+                                                                    label: text[opener..<remaining.startIndex],
+                                                                    references: definitions, pairs: pairs) {
+                    switch tail {
+                    case .inline(_, let end):
+                        out += text[remaining.startIndex..<end]  // the `](…)` as written
+                        remaining = text[end...]
+                    case .reference(let url, let end):
+                        out += "](\(inlineDestination(url)))"
+                        remaining = text[end...]
+                    }
+                    activeFrom = openers.count
+                    continue
+                }
+                out.append("]")
+                remaining = text[afterClose...]
                 continue
             }
             out.append(first)
@@ -209,89 +248,16 @@ enum ReferenceLinks {
         return out
     }
 
-    /// `tryParseLink`'s three forms at a `[`: the text to emit and what
-    /// follows, or nil when the renderer would not see a link here.
-    private static func link(_ remaining: Substring, pairs: InlineSyntaxScanner.PairTable,
-                             sources: Sources) -> (String, Substring)? {
-        let definitions = sources.definitions
-        guard let closeBracket = InlineSyntaxScanner.closingBracket(in: remaining, pairs: pairs) else { return nil }
-        let afterBracket = remaining.index(after: closeBracket)
-        let linkText = String(remaining[remaining.index(after: remaining.startIndex)..<closeBracket])
-
-        // Inline link: its destination is copied as written; its text is
-        // rewritten (links disabled) because the renderer parses a link's text
-        // as inline Markdown — `[![build][badge]](https://ci…)`, the usual
-        // README badge, needs its image reference inlined.
-        if remaining[afterBracket...].hasPrefix("(") {
-            guard let inline = InlineSyntaxScanner.parenthesizedDestination(remaining[afterBracket...],
-                                                                           pairs: pairs) else { return nil }
-            let text = inlinedLine(linkText, sources: sources, linksDisabled: true)
-            return ("[\(text)]" + remaining[afterBracket..<inline.end], remaining[inline.end...])
-        }
-
-        func resolved(_ url: String, rest: Substring) -> (String, Substring) {
-            let destination = inlineDestination(url)
-            // The renderer parses a link's text (links disabled): rewrite it
-            // under the same rule.
-            let text = inlinedLine(linkText, sources: sources, linksDisabled: true)
-            return ("[\(text)](\(destination))", rest)
-        }
-
-        // Full / collapsed reference: [text][id], [text][]
-        if remaining[afterBracket...].hasPrefix("[") {
-            let afterSecondOpen = remaining.index(after: afterBracket)
-            if afterSecondOpen < remaining.endIndex,
-               let closeSecondBracket = ReferenceLabel.closingBracket(in: remaining, from: afterSecondOpen) {
-                let refId = String(remaining[afterSecondOpen..<closeSecondBracket])
-                let effectiveId = ReferenceLabel.normalized(refId.isEmpty ? linkText : refId)
-                if let url = definitions[effectiveId] {
-                    return resolved(url, rest: remaining[remaining.index(after: closeSecondBracket)...])
-                }
-            }
-        }
-
-        // Shortcut reference: [text]
-        if let url = definitions[ReferenceLabel.normalized(linkText)] {
-            return resolved(url, rest: remaining[afterBracket...])
-        }
-        return nil
-    }
-
     /// `tryParseFootnoteRef` at a `[^`: the id runs to the first `]`; a known
     /// id becomes its numbered form, anything else is left to the link scan.
-    private static func footnote(_ remaining: Substring, sources: Sources) -> (String, Substring)? {
+    private static func footnote(_ remaining: Substring, sources: Sources,
+                                 closing: InlineSyntaxScanner.NextClosingBracket) -> (String, Substring)? {
         let afterBracket = remaining.dropFirst(2)
-        guard let close = afterBracket.firstIndex(of: "]") else { return nil }
+        guard let close = closing.at(orAfter: afterBracket.startIndex) else { return nil }
         let id = String(afterBracket[..<close])
         guard !id.isEmpty,
               let index = sources.footnoteIds.firstIndex(of: ReferenceLabel.normalized(id)) else { return nil }
         return ("[^\(MarkdownRenderer.numberedFootnoteMarker)\(index + 1)]", afterBracket[afterBracket.index(after: close)...])
-    }
-
-    /// `tryParseInlineCode`'s extent at a backtick: the whole span when it
-    /// closes, otherwise the characters the renderer consumes literally (a
-    /// run of 3+ backticks, or one unmatched backtick).
-    private static func codeSpanLength(_ remaining: Substring) -> Int {
-        let run = remaining.prefix(while: { $0 == "`" }).count
-        guard run <= 2 else { return run }
-        let marker = String(repeating: "`", count: run)
-        let afterOpening = remaining.dropFirst(run)
-        guard let close = afterOpening.range(of: marker) else { return 1 }
-        if run == 2, close.upperBound < afterOpening.endIndex, afterOpening[close.upperBound] == "`" {
-            return 1
-        }
-        return remaining.distance(from: remaining.startIndex, to: close.upperBound)
-    }
-
-    /// `***…***` / `___…___` and `~~…~~`: the renderer draws their content as
-    /// plain text, so a reference inside stays as written there too.
-    private static func unparsedSpanLength(_ remaining: Substring) -> Int? {
-        for marker in ["***", "___", "~~"] where remaining.hasPrefix(marker) {
-            let after = remaining.dropFirst(marker.count)
-            guard let close = after.range(of: marker) else { return nil }
-            return remaining.distance(from: remaining.startIndex, to: close.upperBound)
-        }
-        return nil
     }
 
     /// `<url>`, which `InlineSyntaxScanner.linkDestination` reads back as

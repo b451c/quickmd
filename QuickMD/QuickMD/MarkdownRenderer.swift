@@ -134,17 +134,10 @@ struct MarkdownRenderer: Sendable {
     let fontScale: CGFloat
     let referenceDefinitions: [String: String]
     let footnoteDefinitions: [(id: String, content: String)]
-    /// True while rendering a LINK'S TEXT: links cannot contain links
-    /// (CommonMark), so `tryParseLink` declines and nesting stays at depth 1.
-    /// Without it `[[[…![a](b)…](u)](u)](u)` recursed once per bracket level
-    /// (makeLink → renderInlineFormatting → tryParseLink → makeLink …) and
-    /// overflowed the parse task's stack at a few hundred levels.
-    private var linksDisabled = false
     /// True for a front-matter VALUE (`renderInline(_:literalBackslashes:)`):
     /// YAML has no Markdown escapes — a plain scalar's backslash is a
     /// character (`C:\_tmp`) — so `\` starts no escape there and shows as
-    /// written; every other inline form still renders. Copied into the link
-    /// text renderer with the rest of `self`.
+    /// written; every other inline form still renders.
     private var escapesDisabled = false
     /// Character references (`AT&amp;T`, `&copy;`, `&#169;`) are decoded in
     /// every piece of inline TEXT this renderer draws — plain runs, emphasis,
@@ -163,7 +156,6 @@ struct MarkdownRenderer: Sendable {
 
     // Static precompiled regex for parsing (avoid recompilation per line)
     private static let taskListRegex = try! NSRegularExpression(pattern: MarkdownTheme.taskListPattern)
-    private static let autolinkRegex = try! NSRegularExpression(pattern: MarkdownTheme.autolinkPattern)
     private static let headerRegex = try! NSRegularExpression(pattern: MarkdownTheme.headerPattern)
 
     init(theme: MarkdownTheme, fontScale: CGFloat = 1.0, referenceDefinitions: [String: String] = [:], footnoteDefinitions: [(id: String, content: String)] = []) {
@@ -523,10 +515,38 @@ struct MarkdownRenderer: Sendable {
     }
 
     func renderHeader(_ text: String, level: Int) -> AttributedString {
-        var attr = Self.formulaSourceWithEscapes(renderInlineFormatting(Self.shownHeadingTitle(text)))
-        attr.setDualFont(size: headerFontSize(level: level), bold: true, fonts: theme.fonts)
-        attr.setDualForeground(theme.textColor)
-        return attr
+        headingLook(Self.formulaSourceWithEscapes(renderInlineFormatting(Self.shownHeadingTitle(text))),
+                    size: headerFontSize(level: level))
+    }
+
+    /// A heading is bold throughout, like an emphasis over its whole title,
+    /// and follows the same switch (`emphasisKeepsContentLook`):
+    /// - on (1.15): each run keeps its look and gains bold at the heading
+    ///   size — code stays monospaced on its chip at 13/14 of the heading
+    ///   size (the body ratio), a footnote number at 11/14, italic stays
+    ///   italic, colours stay (a link keeps the link colour);
+    /// - off: the whole title in the bold body font and the text colour
+    ///   (every release before 1.15).
+    /// Only attributes change, never the characters: ids, Contents and
+    /// search read the same text either way.
+    private func headingLook(_ title: AttributedString, size: CGFloat) -> AttributedString {
+        guard Self.emphasisKeepsContentLook else {
+            var attr = title
+            attr.setDualFont(size: size, bold: true, fonts: theme.fonts)
+            attr.setDualForeground(theme.textColor)
+            return attr
+        }
+        var result = AttributedString()
+        for run in title.runs {
+            var piece = AttributedString(title[run.range])
+            let isCode = run[AttributeScopes.AppKitAttributes.BackgroundColorAttribute.self] != nil
+            let ratio: CGFloat = isCode ? 13.0 / 14.0 : run[FootnoteNumberAttribute.self] != nil ? 11.0 / 14.0 : 1
+            let italic = run[AttributeScopes.AppKitAttributes.FontAttribute.self]?
+                .fontDescriptor.symbolicTraits.contains(.italic) ?? false
+            piece.setDualFont(size: size * ratio, bold: true, italic: italic, monospaced: isCode, fonts: theme.fonts)
+            result.append(piece)
+        }
+        return result
     }
 
     /// Headings typeset no inline math (the title view converts with
@@ -572,8 +592,9 @@ struct MarkdownRenderer: Sendable {
         return scaled(sizes[safeLevel - 1])
     }
 
-    /// The AppKit font `renderHeader` sets on EVERY character of a heading
-    /// (the same `DocumentFonts.appKit` call `setDualFont(bold: true)` makes).
+    /// The AppKit font `renderHeader` sets on a heading's text (the same
+    /// `DocumentFonts.appKit` call `setDualFont(bold: true)` makes; code spans
+    /// and footnote numbers are smaller, italic runs keep their slant).
     /// `HeadingBlockView` aligns its copy button to this font's first
     /// baseline; read here rather than back from the AttributedString run.
     func headerAppKitFont(level: Int) -> NSFont {
@@ -907,284 +928,437 @@ struct MarkdownRenderer: Sendable {
         return literal.renderInlineFormatting(text)
     }
 
+    /// One line of inline Markdown, CommonMark's way: ONE left-to-right pass
+    /// cuts the line into nodes — text, finished atoms (escape, code span,
+    /// footnote number, image placeholder, autolink) and delimiter runs —
+    /// while a bracket stack resolves links at their `]` and the delimiter
+    /// stack (`InlineDelimiterStack`) resolves emphasis and strikethrough;
+    /// then the nodes are drawn with the styles of the spans covering them.
+    ///
+    /// Why not "find the closing marker": precedence. A code span outranks
+    /// emphasis (`*a `*`*`), a link outranks emphasis (`*[foo*](u)`), the
+    /// INNER link wins (`[a [b](x) c](y)` links only "b"), and a run's
+    /// neighbours decide whether it may open or close (`a * b*`, `5__6__78`).
+    /// Linear in the line, no recursion (a link's text is part of the same
+    /// pass), so 10 000 `[` or `*` cannot overflow the parse task's stack.
     private func renderInlineFormatting(_ text: String) -> AttributedString {
-        var result = AttributedString()
         // Native contiguous UTF-8 storage up front (a no-op unless the line is
         // a lazily bridged NSString, e.g. from `components(separatedBy:)`):
         // `InlineSyntaxScanner` reads that storage directly, and would
         // otherwise copy the rest of the line at every `[` / `![`.
         var text = text
         text.makeContiguousUTF8()
+        var parse = InlineParse(text: text)
         var remaining = text[...]
-        // Bracket/paren matches of this text, computed once (lazily) so every
-        // `[` is a lookup, not a forward scan — O(n) per call, not O(n²).
-        let pairs = InlineSyntaxScanner.PairTable(text)
-        var plainTextBuffer = ""
+        let utf8 = text.utf8
 
-        // Helper to flush buffered plain text
-        func flushPlainText() {
-            guard !plainTextBuffer.isEmpty else { return }
-            var attr = AttributedString(decodedText(plainTextBuffer))
-            attr.setDualFont(size: scaled(14), fonts: theme.fonts)
-            attr.setDualForeground(theme.textColor)
-            result.append(attr)
-            plainTextBuffer = ""
+        while let byte = remaining.utf8.first {
+            switch byte {
+            case UInt8(ascii: "\\"):
+                if !escapesDisabled, let (attr, rest) = tryParseEscape(&remaining) {
+                    parse.append(.atom(attr, .body))
+                    remaining = rest
+                    continue
+                }
+            case UInt8(ascii: "`"):
+                let span = parse.codeSpans.span(at: remaining)
+                if let content = span.content {
+                    parse.append(.atom(codeSpan(content), .code))
+                } else {
+                    parse.addPlain(remaining.startIndex..<span.end)  // a run that closes nowhere is text
+                }
+                remaining = text[span.end...]
+                continue
+            case UInt8(ascii: "*"), UInt8(ascii: "_"), UInt8(ascii: "~"):
+                let length = remaining.utf8.prefix(while: { $0 == byte }).count
+                let end = utf8.index(remaining.startIndex, offsetBy: length)
+                parse.pushDelimiter(byte, length: length, from: remaining.startIndex, to: end)
+                remaining = text[end...]
+                continue
+            case UInt8(ascii: "!"):
+                if let (attr, rest) = tryParseImage(&remaining, pairs: parse.pairs) {
+                    parse.append(.atom(attr, .imagePlaceholder))
+                    remaining = rest
+                    continue
+                }
+            case UInt8(ascii: "["):
+                if let (attr, rest) = tryParseFootnoteRef(&remaining, closing: parse.closingBrackets) {
+                    parse.append(.atom(attr, .footnoteNumber))
+                    remaining = rest
+                    continue
+                }
+                let afterOpen = utf8.index(after: remaining.startIndex)
+                parse.openBracket(labelStart: afterOpen)
+                remaining = text[afterOpen...]
+                continue
+            case UInt8(ascii: "]"):
+                let afterClose = utf8.index(after: remaining.startIndex)
+                if let end = parse.closeBracket(at: remaining.startIndex, rest: text[afterClose...],
+                                                references: referenceDefinitions) {
+                    remaining = text[end...]
+                } else {
+                    parse.addPlain(remaining.startIndex..<afterClose)
+                    remaining = text[afterClose...]
+                }
+                continue
+            case UInt8(ascii: "<"):
+                if let (attr, rest) = tryParseAngleAutolink(remaining) {
+                    parse.append(.atom(attr, .body))
+                    remaining = rest
+                    continue
+                }
+            case UInt8(ascii: "h"), UInt8(ascii: "w"):
+                if let (attr, rest) = tryParseAutolink(remaining, in: text, scan: parse.autolinks) {
+                    parse.append(.atom(attr, .body))
+                    remaining = rest
+                    continue
+                }
+            default:
+                break
+            }
+            // Plain text up to the next byte some parser starts on (all of
+            // them ASCII, so the cut is never inside a multi-byte scalar).
+            let next = remaining.utf8.dropFirst().firstIndex(where: Self.startsInlineSyntax) ?? remaining.endIndex
+            parse.addPlain(remaining.startIndex..<next)
+            remaining = text[next...]
+        }
+        return draw(parse.finished())
+    }
+
+    /// Bytes the loop in `renderInlineFormatting` dispatches on.
+    private static func startsInlineSyntax(_ byte: UInt8) -> Bool {
+        switch byte {
+        case UInt8(ascii: "\\"), UInt8(ascii: "`"), UInt8(ascii: "*"), UInt8(ascii: "_"), UInt8(ascii: "~"),
+             UInt8(ascii: "!"), UInt8(ascii: "["), UInt8(ascii: "]"), UInt8(ascii: "<"),
+             UInt8(ascii: "h"), UInt8(ascii: "w"):
+            return true
+        default:
+            return false
+        }
+    }
+
+    // MARK: - Inline parse state
+
+    /// One piece of a line between parsing and drawing.
+    private enum InlineNode {
+        /// Source text, drawn in the body style (character references decoded).
+        case text(Substring)
+        /// A finished piece: escape, code span, footnote number, image
+        /// placeholder, autolink — with the font it was drawn in, so
+        /// emphasis can add its traits to that font (`restyle`).
+        case atom(AttributedString, AtomFont)
+        /// A delimiter run (index into the stack's runs): the characters no
+        /// match used are text.
+        case delimiter(Int)
+    }
+
+    /// Nodes `start..<end` are one link's text.
+    private struct LinkSpan {
+        let start: Int
+        let end: Int
+        let url: URL?
+    }
+
+    /// The state of one `renderInlineFormatting` pass (parsing only; no
+    /// fonts or colours).
+    private struct InlineParse {
+        let text: String
+        /// Bracket/paren matches of this text, computed once (lazily) so every
+        /// `![` and `](` is a lookup, not a forward scan — O(n) per call.
+        let pairs: InlineSyntaxScanner.PairTable
+        let codeSpans: InlineSyntaxScanner.CodeSpanTable
+        let closingBrackets: InlineSyntaxScanner.NextClosingBracket
+        let autolinks = AutolinkScan()
+        private(set) var nodes: [InlineNode] = []
+        private(set) var delimiters = InlineDelimiterStack()
+        private(set) var links: [LinkSpan] = []
+        /// Source text not yet made a node — always one contiguous stretch,
+        /// so a node is a slice of the line, never a copy per character.
+        private var plain: Range<String.Index>?
+
+        private struct Opener {
+            /// The "[" text node (emptied when the link is made).
+            let node: Int
+            let labelStart: String.Index
+            /// The delimiter stack's size at the "[": emphasis inside the
+            /// link text is processed above it, never across it.
+            let delimiterBottom: Int
+        }
+        private var openers: [Opener] = []
+        /// Openers below this stack position are inactive: a link closed
+        /// after them, and links never contain links.
+        private var activeFrom = 0
+
+        init(text: String) {
+            self.text = text
+            pairs = InlineSyntaxScanner.PairTable(text)
+            codeSpans = InlineSyntaxScanner.CodeSpanTable(text)
+            closingBrackets = InlineSyntaxScanner.NextClosingBracket(text)
         }
 
-        while !remaining.isEmpty {
-            // Try each inline format in order (escape first, then bold+italic to catch ***)
-            var parsed: (AttributedString, Substring)?
+        private mutating func flush() {
+            guard let range = plain else { return }
+            nodes.append(.text(text[range]))
+            plain = nil
+        }
 
-            if parsed == nil, !escapesDisabled { parsed = tryParseEscape(&remaining) }
-            if parsed == nil { parsed = tryParseInlineCode(&remaining) }
-            if parsed == nil { parsed = tryParseFootnoteRef(&remaining) }
-            if parsed == nil { parsed = tryParseBoldItalic(&remaining) }
-            if parsed == nil { parsed = tryParseBold(&remaining) }
-            if parsed == nil { parsed = tryParseItalic(&remaining) }
-            if parsed == nil { parsed = tryParseStrikethrough(&remaining) }
-            if parsed == nil { parsed = tryParseImage(&remaining, pairs: pairs) }
-            if parsed == nil { parsed = tryParseLink(&remaining, pairs: pairs) }
-            if parsed == nil { parsed = tryParseAutolink(&remaining) }
-
-            if let (attr, newRemaining) = parsed {
-                flushPlainText()  // Flush buffer before formatted content
-                result.append(attr)
-                remaining = newRemaining
+        /// `range` of the source as text (it continues the pending stretch).
+        mutating func addPlain(_ range: Range<String.Index>) {
+            if let pending = plain, pending.upperBound == range.lowerBound {
+                plain = pending.lowerBound..<range.upperBound
             } else {
-                // Buffer plain characters instead of creating AttributedString per char
-                plainTextBuffer.append(remaining.removeFirst())
+                flush()
+                plain = range
             }
         }
 
-        flushPlainText()  // Flush any remaining plain text
+        mutating func append(_ node: InlineNode) {
+            flush()
+            nodes.append(node)
+        }
+
+        /// A run of `byte` (`*`, `_`, `~`) over `start..<end`, classified by
+        /// the source scalars around it.
+        mutating func pushDelimiter(_ byte: UInt8, length: Int, from start: String.Index, to end: String.Index) {
+            flush()
+            let scalars = text.unicodeScalars
+            let beforeIndex = start > text.startIndex ? scalars.index(before: start) : nil
+            let before = beforeIndex.map { scalars[$0] }
+            let after = end < text.endIndex ? scalars[end] : nil
+            // A variation selector's base character decides CJK-ness.
+            var cjkBefore = before
+            if let selector = beforeIndex, let scalar = before, InlineDelimiterStack.isVariationSelector(scalar),
+               selector > text.startIndex {
+                cjkBefore = scalars[scalars.index(before: selector)]
+            }
+            if let run = delimiters.push(character: byte, length: length, node: nodes.count,
+                                         before: before, after: after,
+                                         beforeIsCJK: cjkBefore.map(InlineDelimiterStack.isCJK) ?? false,
+                                         afterIsCJK: after.map(InlineDelimiterStack.isCJK) ?? false) {
+                nodes.append(.delimiter(run))
+            } else {
+                nodes.append(.text(text[start..<end]))
+            }
+        }
+
+        mutating func openBracket(labelStart: String.Index) {
+            flush()
+            openers.append(Opener(node: nodes.count, labelStart: labelStart, delimiterBottom: delimiters.count))
+            nodes.append(.text("["))
+        }
+
+        /// A `]` at `close`: the end of the link it completes, or nil (the
+        /// `]` is text). CommonMark: the nearest opener; an inactive one is
+        /// dropped; else `InlineSyntaxScanner.linkTail` decides, and a link
+        /// deactivates every opener before it.
+        mutating func closeBracket(at close: String.Index, rest: Substring,
+                                   references: [String: String]) -> String.Index? {
+            guard let opener = openers.popLast() else { return nil }
+            defer { activeFrom = min(activeFrom, openers.count) }
+            guard openers.count >= activeFrom,
+                  let tail = InlineSyntaxScanner.linkTail(after: rest, label: text[opener.labelStart..<close],
+                                                          references: references, pairs: pairs) else { return nil }
+            flush()
+            delimiters.process(above: opener.delimiterBottom)
+            nodes[opener.node] = .text("")
+            let url: String
+            let end: String.Index
+            switch tail {
+            case .inline(let destination, let tailEnd): (url, end) = (destination, tailEnd)
+            case .reference(let destination, let tailEnd): (url, end) = (destination, tailEnd)
+            }
+            links.append(LinkSpan(start: opener.node + 1, end: nodes.count, url: MarkdownRenderer.linkURL(for: url)))
+            activeFrom = openers.count
+            return end
+        }
+
+        /// Flushes the text and resolves the emphasis outside links.
+        mutating func finished() -> InlineParse {
+            flush()
+            delimiters.process(above: 0)
+            return self
+        }
+    }
+
+    // MARK: - Inline drawing
+
+    /// What covers one node.
+    private struct InlineStyle: Equatable {
+        var bold = false
+        var italic = false
+        var strikethrough = false
+        /// Index into `InlineParse.links`, -1 outside links.
+        var link = -1
+    }
+
+    /// The nodes as one AttributedString: consecutive text with one style is
+    /// ONE run (decoded once), atoms keep their own look under the rules of
+    /// `restyle`.
+    private func draw(_ parse: InlineParse) -> AttributedString {
+        let nodes = parse.nodes
+        var strong = [Int](repeating: 0, count: nodes.count + 1)
+        var emphasis = strong
+        var strike = strong
+        for span in parse.delimiters.spans {
+            switch span.style {
+            case .strong: strong[span.start] += 1; strong[span.end] -= 1
+            case .emphasis: emphasis[span.start] += 1; emphasis[span.end] -= 1
+            case .strikethrough: strike[span.start] += 1; strike[span.end] -= 1
+            }
+        }
+        // Links never nest or overlap, so filling them is linear.
+        var linkOf = [Int](repeating: -1, count: nodes.count)
+        for (index, link) in parse.links.enumerated() {
+            for node in link.start..<link.end { linkOf[node] = index }
+        }
+
+        var styles: [InlineStyle] = []
+        styles.reserveCapacity(nodes.count)
+        var depth = (strong: 0, emphasis: 0, strike: 0)
+        for index in nodes.indices {
+            depth.strong += strong[index]
+            depth.emphasis += emphasis[index]
+            depth.strike += strike[index]
+            styles.append(InlineStyle(bold: depth.strong > 0, italic: depth.emphasis > 0,
+                                      strikethrough: depth.strike > 0, link: linkOf[index]))
+        }
+        // Whether a link sits INSIDE emphasis (only option A draws it in the
+        // text colour, see `finish`): emphasis covers the link's emptied "["
+        // node exactly then.
+        let linkInEmphasis = parse.links.map { link in
+            link.start > 0 && (styles[link.start - 1].bold || styles[link.start - 1].italic)
+        }
+
+        var result = AttributedString()
+        var pending = ""
+        var pendingStyle = InlineStyle()
+        func flushText() {
+            guard !pending.isEmpty else { return }
+            let decoded = decodedText(pending)
+            pending = ""
+            // E-mail addresses in text outside links are links (GFM).
+            let emails = pendingStyle.link < 0 && decoded.utf8.contains(UInt8(ascii: "@"))
+                ? Self.emailAutolinks(in: decoded) : []
+            var start = decoded.startIndex
+            for email in emails + [decoded.endIndex..<decoded.endIndex] {
+                if start < email.lowerBound {
+                    var attr = AttributedString(String(decoded[start..<email.lowerBound]))
+                    attr.setDualFont(size: scaled(14), bold: pendingStyle.bold, italic: pendingStyle.italic,
+                                     fonts: theme.fonts)
+                    attr.setDualForeground(theme.textColor)
+                    finish(&attr, pendingStyle, parse.links, linkInEmphasis)
+                    result.append(attr)
+                }
+                if !email.isEmpty {
+                    let address = String(decoded[email])
+                    var attr = autolinkText(address, url: URL(string: "mailto:" + address))
+                    restyle(&attr, .body, pendingStyle)
+                    finish(&attr, pendingStyle, parse.links, linkInEmphasis)
+                    result.append(attr)
+                }
+                start = email.upperBound
+            }
+        }
+        for (index, node) in nodes.enumerated() {
+            let style = styles[index]
+            switch node {
+            case .text(let text):
+                guard !text.isEmpty else { continue }
+                if style != pendingStyle { flushText(); pendingStyle = style }
+                pending += text
+            case .delimiter(let run):
+                let count = parse.delimiters.runs[run].count
+                guard count > 0 else { continue }
+                if style != pendingStyle { flushText(); pendingStyle = style }
+                pending += String(repeating: Character(Unicode.Scalar(parse.delimiters.runs[run].character)),
+                                  count: count)
+            case .atom(var attr, let font):
+                flushText()
+                restyle(&attr, font, style)
+                finish(&attr, style, parse.links, linkInEmphasis)
+                result.append(attr)
+            }
+        }
+        flushText()
         return result
+    }
+
+    /// The font an atom was drawn in (its own parser's `setDualFont` call),
+    /// so emphasis can ADD traits to it instead of replacing it.
+    private struct AtomFont {
+        let size: CGFloat
+        var bold = false
+        var italic = false
+        var monospaced = false
+
+        /// Escapes, autolinks, e-mail links: the body font.
+        static let body = AtomFont(size: 14)
+        /// `codeSpan`.
+        static let code = AtomFont(size: 13, monospaced: true)
+        /// `tryParseFootnoteRef`'s superscript number.
+        static let footnoteNumber = AtomFont(size: 11, bold: true)
+        /// `tryParseImage`'s "[Image: alt]" placeholder.
+        static let imagePlaceholder = AtomFont(size: 14, italic: true)
+    }
+
+    /// THE switch for what emphasis does to what it covers (decided for
+    /// 1.15, option B; set to false to get the pre-1.15 look back, A):
+    /// - true: emphasis only ADDS bold / italic to each piece's own font —
+    ///   code stays monospaced on its chip, a footnote number keeps its
+    ///   size, a link keeps the link colour (`**see [docs](u)**`);
+    /// - false: emphasis re-stamps everything inside it with the body font
+    ///   and the text colour, as every release before 1.15 did (code lost
+    ///   its monospace, a bold link was drawn in the text colour).
+    /// Nested emphasis combines its traits either way.
+    private static let emphasisKeepsContentLook = true
+
+    /// Emphasis over an atom (code span, footnote number, image placeholder,
+    /// autolink, escape) — see `emphasisKeepsContentLook`. Fonts come from
+    /// `DocumentFonts` (the Settings / theme family; a family without a
+    /// bold-italic cut resolves to its closest face, never NSFontManager),
+    /// both scopes; colours stay the atom's own.
+    private func restyle(_ attr: inout AttributedString, _ font: AtomFont, _ style: InlineStyle) {
+        guard style.bold || style.italic else { return }
+        guard Self.emphasisKeepsContentLook else {
+            attr.setDualFont(size: scaled(14), bold: style.bold, italic: style.italic, fonts: theme.fonts)
+            attr.setDualForeground(theme.textColor)
+            return
+        }
+        attr.setDualFont(size: scaled(font.size), bold: font.bold || style.bold, italic: font.italic || style.italic,
+                         monospaced: font.monospaced, fonts: theme.fonts)
+    }
+
+    /// Strikethrough and the link over a styled piece: link colour (unless
+    /// `emphasisKeepsContentLook` is off and the link sits inside emphasis —
+    /// the pre-1.15 text colour), underline and URL; the OUTER link's URL
+    /// replaces an inner autolink's or image's.
+    private func finish(_ attr: inout AttributedString, _ style: InlineStyle,
+                        _ links: [LinkSpan], _ linkInEmphasis: [Bool]) {
+        if style.strikethrough { attr.setDualStrikethrough() }
+        guard style.link >= 0 else { return }
+        let textColored = !Self.emphasisKeepsContentLook && linkInEmphasis[style.link]
+        attr.setDualForeground(textColored ? theme.textColor : theme.linkColor)
+        attr.setDualUnderline()
+        if let url = links[style.link].url { attr.link = url }
     }
 
     // MARK: - Inline Parsers
 
-    private func tryParseInlineCode(_ remaining: inout Substring) -> (AttributedString, Substring)? {
-        guard remaining.hasPrefix("`") else { return nil }
-
-        // Count opening backticks (support 1 or 2)
-        let backtickCount = remaining.prefix(while: { $0 == "`" }).count
-        guard backtickCount <= 2 else {
-            // 3+ backticks in inline context — render as literal backtick characters
-            let backticks = String(repeating: "`", count: backtickCount)
-            var attr = AttributedString(backticks)
-            attr.setDualFont(size: scaled(14), fonts: theme.fonts)
-            attr.setDualForeground(theme.textColor)
-            return (attr, remaining.dropFirst(backtickCount))
-        }
-
-        let closingMarker = String(repeating: "`", count: backtickCount)
-        let afterOpening = remaining.dropFirst(backtickCount)
-
-        // Find closing backticks of same count
-        guard let closeRange = afterOpening.range(of: closingMarker) else { return nil }
-
-        // For double-backtick, ensure we found exactly 2 closing backticks (not 3+)
-        if backtickCount == 2 {
-            let endIdx = closeRange.upperBound
-            if endIdx < afterOpening.endIndex && afterOpening[endIdx] == "`" {
-                return nil  // Part of a triple-backtick, skip
-            }
-        }
-
-        // A line break inside a code span is a space (CommonMark). Only a
-        // Setext title's anchor text still has one here
-        // (`headingAnchorText`): `code⏎span` is `code-span` on GitHub.
-        var code = String(afterOpening[..<closeRange.lowerBound]).replacingOccurrences(of: "\n", with: " ")
-
-        // Strip one leading and one trailing space for double-backtick (CommonMark spec)
-        if backtickCount == 2 && code.hasPrefix(" ") && code.hasSuffix(" ") && code.count > 1 {
+    /// A code span's look. The content as CommonMark reads it: a line break
+    /// is a space (only a Setext title's anchor text still has one here —
+    /// `code⏎span` is `code-span` on GitHub), and ONE space comes off both
+    /// ends when it starts and ends with a space and is not all spaces
+    /// (`` ` `` `` ` `` shows "``", `` `  ` `` keeps both spaces).
+    private func codeSpan(_ content: Substring) -> AttributedString {
+        var code = content.replacingOccurrences(of: "\n", with: " ")
+        if code.count >= 2, code.hasPrefix(" "), code.hasSuffix(" "), code.contains(where: { $0 != " " }) {
             code = String(code.dropFirst().dropLast())
         }
-
         var attr = AttributedString(code)
         attr.setDualFont(size: scaled(13), monospaced: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
         attr.setDualBackground(theme.codeBackgroundColor)
-        return (attr, afterOpening[closeRange.upperBound...])
-    }
-
-    private func tryParseBoldItalic(_ remaining: inout Substring) -> (AttributedString, Substring)? {
-        guard remaining.hasPrefix("***") || remaining.hasPrefix("___") else { return nil }
-
-        let marker = String(remaining.prefix(3))
-        let afterMarker = remaining.dropFirst(3)
-        guard let endRange = afterMarker.range(of: marker) else { return nil }
-
-        let text = String(afterMarker[..<endRange.lowerBound])
-        var attr = AttributedString(decodedText(text))
-        attr.setDualFont(size: scaled(14), bold: true, italic: true, fonts: theme.fonts)
-        attr.setDualForeground(theme.textColor)
-        return (attr, afterMarker[endRange.upperBound...])
-    }
-
-    private func tryParseBold(_ remaining: inout Substring) -> (AttributedString, Substring)? {
-        guard (remaining.hasPrefix("**") && !remaining.hasPrefix("***")) ||
-              (remaining.hasPrefix("__") && !remaining.hasPrefix("___")) else { return nil }
-
-        let marker = String(remaining.prefix(2))
-        let afterMarker = remaining.dropFirst(2)
-        guard let endRange = afterMarker.range(of: marker) else { return nil }
-
-        let boldText = String(afterMarker[..<endRange.lowerBound])
-        // Recursively parse inner text for nested emphasis (e.g., **bold *and italic* text**)
-        var attr = renderInlineFormatting(boldText)
-        attr.setDualFont(size: scaled(14), bold: true, fonts: theme.fonts)
-        attr.setDualForeground(theme.textColor)
-        return (attr, afterMarker[endRange.upperBound...])
-    }
-
-    private func tryParseItalic(_ remaining: inout Substring) -> (AttributedString, Substring)? {
-        guard (remaining.hasPrefix("*") && !remaining.hasPrefix("**")) ||
-              (remaining.hasPrefix("_") && !remaining.hasPrefix("__")),
-              let marker = remaining.first else { return nil }
-
-        // Word boundary check for underscore delimiter
-        if marker == "_" {
-            let fullText = remaining.base
-            let indexInFull = fullText.distance(from: fullText.startIndex, to: remaining.startIndex)
-            if indexInFull > 0 {
-                let prevChar = fullText[fullText.index(fullText.startIndex, offsetBy: indexInFull - 1)]
-                if prevChar.isLetter || prevChar.isNumber {
-                    return nil  // Mid-word underscore, skip
-                }
-            }
-        }
-
-        let afterMarker = remaining.dropFirst()
-        guard let endIndex = afterMarker.firstIndex(of: marker) else { return nil }
-
-        // Word boundary check for closing underscore
-        if marker == "_" {
-            let closeIdx = afterMarker.index(after: endIndex)
-            if closeIdx < remaining.endIndex {
-                let afterClose = remaining[closeIdx]
-                if afterClose.isLetter || afterClose.isNumber {
-                    return nil  // Mid-word closing underscore, skip
-                }
-            }
-        }
-
-        let italicText = String(afterMarker[..<endIndex])
-        // Recursively parse inner text for nested emphasis (e.g., *italic **and bold** text*)
-        var attr = renderInlineFormatting(italicText)
-        attr.setDualFont(size: scaled(14), italic: true, fonts: theme.fonts)
-        attr.setDualForeground(theme.textColor)
-        return (attr, afterMarker[afterMarker.index(after: endIndex)...])
-    }
-
-    private func tryParseStrikethrough(_ remaining: inout Substring) -> (AttributedString, Substring)? {
-        guard remaining.hasPrefix("~~") else { return nil }
-
-        let afterMarker = remaining.dropFirst(2)
-        guard let endRange = afterMarker.range(of: "~~") else { return nil }
-
-        let strikeText = String(afterMarker[..<endRange.lowerBound])
-        var attr = AttributedString(decodedText(strikeText))
-        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
-        attr.setDualForeground(theme.textColor)
-        attr.setDualStrikethrough()
-        return (attr, afterMarker[endRange.upperBound...])
-    }
-
-    private func tryParseLink(_ remaining: inout Substring,
-                              pairs: InlineSyntaxScanner.PairTable) -> (AttributedString, Substring)? {
-        // The link text's `]` is found by bracket DEPTH (escaped brackets don't
-        // count), so the text may itself contain an image — `[![b](img)](link)`,
-        // the badge idiom. A first-`]` scan stopped inside the image and printed
-        // `![b` as the link followed by a literal `](link)`.
-        guard !linksDisabled, remaining.hasPrefix("["),
-              let closeBracket = InlineSyntaxScanner.closingBracket(in: remaining, pairs: pairs) else { return nil }
-        let afterBracket = remaining.index(after: closeBracket)
-
-        let linkText = String(remaining[remaining.index(after: remaining.startIndex)..<closeBracket])
-
-        // 1. Standard inline link: [text](url "title") — CommonMark destination,
-        //    title discarded (InlineSyntaxScanner.linkDestination).
-        if remaining[afterBracket...].hasPrefix("(") {
-            guard let inline = InlineSyntaxScanner.parenthesizedDestination(remaining[afterBracket...], pairs: pairs) else { return nil }
-            return makeLink(text: linkText, url: inline.url, remaining: remaining[inline.end...])
-        }
-
-        // 2. Reference link: [text][id] or [text][] (collapsed)
-        if remaining[afterBracket...].hasPrefix("[") {
-            let afterSecondOpen = remaining.index(after: afterBracket)
-            if afterSecondOpen < remaining.endIndex,
-               let closeSecondBracket = ReferenceLabel.closingBracket(in: remaining, from: afterSecondOpen) {
-                let refId = String(remaining[afterSecondOpen..<closeSecondBracket])
-                let effectiveId = ReferenceLabel.normalized(refId.isEmpty ? linkText : refId)
-                if let url = referenceDefinitions[effectiveId] {
-                    return makeLink(text: linkText, url: url,
-                                    remaining: remaining[remaining.index(after: closeSecondBracket)...])
-                }
-            }
-        }
-
-        // 3. Shortcut reference: [text] where text matches a definition ID
-        if let url = referenceDefinitions[ReferenceLabel.normalized(linkText)] {
-            return makeLink(text: linkText, url: url, remaining: remaining[afterBracket...])
-        }
-
-        return nil
-    }
-
-    private func makeLink(text: String, url: String, remaining: Substring) -> (AttributedString, Substring) {
-        // A link's text is inline Markdown, as on GitHub: `[**Docs**](u)` is
-        // bold, ``[`npm install`](u)`` code, `[~~old~~](u)` struck through, an
-        // escape loses its backslash (an escaped `$` is never math), an image
-        // becomes its "[Image: b]" placeholder (`[![b](img)](link)`). The
-        // whole run then carries the OUTER link (set below, over any inner
-        // one, an autolink's or an image's). Rendered with links disabled: a
-        // link inside a link is literal text (bounds the recursion).
-        // `ReferenceLinks` rewrites a link's text by the same rule.
-        var attr = renderLinkText(text)
-        attr.setDualForeground(theme.linkColor)
-        attr.setDualUnderline()
-
-        if let parsedUrl = Self.linkURL(for: url) {
-            attr.link = parsedUrl
-        }
-        return (attr, remaining)
-    }
-
-    /// A link's text before the link colour, underline and URL go on:
-    /// inline-parsed with links disabled — or, when `parse` is false, the one
-    /// plain run that parse produces for text with no syntax in it (the
-    /// renderer's font, the colour is replaced by the caller). `parse: nil`
-    /// picks the plain run exactly when `linkTextNeedsParsing` is false, which
-    /// keeps the common `[Install](…)` from a full inline pass (+25 % on a
-    /// link-heavy document, review R15). Tests compare both paths.
-    func renderLinkText(_ text: String, parse: Bool? = nil) -> AttributedString {
-        if parse ?? Self.linkTextNeedsParsing(text) {
-            var linkText = self
-            linkText.linksDisabled = true
-            return linkText.renderInlineFormatting(text)
-        }
-        var attr = AttributedString(decodedText(text))
-        attr.setDualFont(size: scaled(14), fonts: theme.fonts)
-        attr.setDualForeground(theme.textColor)
         return attr
-    }
-
-    /// Whether `renderInlineFormatting` could do anything but one plain run:
-    /// a character some inline parser starts on — `\` escape, `` ` `` code,
-    /// `*` / `_` emphasis, `~` strikethrough, `!` image, `[` footnote or
-    /// link, `h` an autolink (`http://`, `https://`). Character references
-    /// (`&`) are decoded on the plain run too; `$` is only looked at later
-    /// (inline math, on the rendered text), as on the parsed path.
-    static func linkTextNeedsParsing(_ text: String) -> Bool {
-        text.utf8.contains { byte in
-            switch byte {
-            case UInt8(ascii: "\\"), UInt8(ascii: "`"), UInt8(ascii: "*"), UInt8(ascii: "_"),
-                 UInt8(ascii: "~"), UInt8(ascii: "!"), UInt8(ascii: "["):
-                return true
-            default:
-                return false
-            }
-        } || text.contains("http://") || text.contains("https://")
     }
 
     /// The URL of a link destination as written.
@@ -1269,7 +1443,7 @@ struct MarkdownRenderer: Sendable {
     }
 
     private func tryParseEscape(_ remaining: inout Substring) -> (AttributedString, Substring)? {
-        guard remaining.hasPrefix("\\"), remaining.count >= 2 else { return nil }
+        guard remaining.hasPrefix("\\"), remaining.utf8.count >= 2 else { return nil }  // O(1), not a Character count
         let escaped = remaining[remaining.index(after: remaining.startIndex)]
         guard MarkdownTheme.escapableChars.contains(escaped) else { return nil }
 
@@ -1282,28 +1456,216 @@ struct MarkdownRenderer: Sendable {
         return (attr, remaining.dropFirst(2))
     }
 
-    private func tryParseAutolink(_ remaining: inout Substring) -> (AttributedString, Substring)? {
-        // Quick prefix check to avoid expensive String conversion
-        guard remaining.hasPrefix("http://") || remaining.hasPrefix("https://") else {
+    /// A CommonMark autolink, `<https://x.example>` or `<a@b.example>`: the
+    /// address without its brackets, as a link (e-mail → `mailto:`). It
+    /// outranks emphasis and links (`[a<https://x/?q=](u)>` is text + one
+    /// autolink, as on GitHub).
+    private func tryParseAngleAutolink(_ remaining: Substring) -> (AttributedString, Substring)? {
+        guard let autolink = InlineSyntaxScanner.angleAutolink(atStartOf: remaining) else { return nil }
+        // Character references are decoded in the text AND the URL, as on
+        // GitHub (`<https://a.example/?a=1&amp;b=2>` opens `?a=1&b=2`);
+        // bare autolinks keep them as written (GitHub does too).
+        let address = decodedText(String(autolink.address))
+        let url = autolink.isEmail ? URL(string: "mailto:" + address) : Self.linkURL(for: address)
+        return (autolinkText(address, url: url), remaining[autolink.end...])
+    }
+
+    /// A bare URL — GFM's extended autolink for `http://`, `https://` and
+    /// `www.` (linked as `http://`), with GitHub's edges: not inside a word
+    /// (`www.` only after white space, `*`, `_`, `~`, `(`; a scheme not right
+    /// after a letter); the domain must be valid (no `_` in its last two
+    /// labels); the link runs to white space or `<` — and in QuickMD to `>`,
+    /// `[`, `]`, so an autolink inside a link's text never eats its `]` —
+    /// then loses trailing `?!.,:*_~'"`, a `)` it has no `(` for, and a
+    /// trailing entity-like `&name;`. "See https://x.example." links
+    /// without the period; `*https://x.example*` is emphasis around a link.
+    private func tryParseAutolink(_ remaining: Substring, in text: String,
+                                  scan: AutolinkScan) -> (AttributedString, Substring)? {
+        guard let autolink = Self.bareAutolink(remaining, in: text, scan: scan) else { return nil }
+        return (autolinkText(autolink.shown, url: Self.linkURL(for: autolink.url)), text[autolink.end...])
+    }
+
+    /// State of the bare-autolink attempts on ONE line (the renderer and
+    /// `ReferenceLinks` keep one per line). A `www.` attempt whose domain
+    /// failed (an `_` in its last two labels) is remembered: every later
+    /// `www.` inside that domain runs to the same end and has the same last
+    /// two labels (its own "www" label has no `_`), so it fails too —
+    /// without rescanning. Without this `_www.a.` × N + `_x_` was quadratic
+    /// (112 KB: 44 s). `work` counts the scalars examined, for the tests.
+    final class AutolinkScan {
+        fileprivate var failedDomain: Range<String.Index>?
+        private(set) var work = 0
+        fileprivate func examined(_ count: Int = 1) { work += count }
+        init() {}
+    }
+
+    /// `tryParseAutolink`'s grammar: for `remaining` (a suffix of `text`)
+    /// the link as shown, its URL as written, and its end. Static for
+    /// `ReferenceLinks`, which must skip what the renderer links.
+    static func bareAutolink(_ remaining: Substring, in text: String,
+                             scan: AutolinkScan) -> (shown: String, url: String, end: String.Index)? {
+        let utf8 = remaining.utf8
+        let www = utf8.starts(with: "www.".utf8)
+        let hostStart: String.Index
+        if www {
+            hostStart = remaining.startIndex
+        } else if utf8.starts(with: "http://".utf8) {
+            hostStart = utf8.index(remaining.startIndex, offsetBy: 7)
+        } else if utf8.starts(with: "https://".utf8) {
+            hostStart = utf8.index(remaining.startIndex, offsetBy: 8)
+        } else {
             return nil
         }
-        let str = String(remaining)
-        let nsRange = NSRange(str.startIndex..., in: str)
+        let scalars = text.unicodeScalars
+        if remaining.startIndex > text.startIndex {
+            let previous = scalars[scalars.index(before: remaining.startIndex)]
+            if www {
+                guard InlineDelimiterStack.isWhitespace(previous) || "*_~(".unicodeScalars.contains(previous) else {
+                    return nil
+                }
+            } else if previous.isASCII, previous.properties.isAlphabetic {
+                return nil
+            }
+        }
 
-        guard let match = Self.autolinkRegex.firstMatch(in: str, range: nsRange),
-              match.range.location == 0,
-              let range = Range(match.range, in: str) else { return nil }
+        if www, let failed = scan.failedDomain, failed.contains(remaining.startIndex) { return nil }
 
-        let urlText = String(str[range])
-        var attr = AttributedString(urlText)
+        // The domain (cmark-gfm `check_domain`).
+        var index = www ? utf8.index(hostStart, offsetBy: 4) : hostStart
+        let domainStart = index
+        var periods = www ? 1 : 0
+        var underscores = (last: 0, previous: 0)
+        while index < text.endIndex {
+            let scalar = scalars[index]
+            if scalar == "." {
+                periods += 1
+                underscores = (0, underscores.last)
+            } else if scalar == "_" {
+                underscores.last += 1
+            } else if scalar != "-",
+                      InlineDelimiterStack.isWhitespace(scalar) || InlineDelimiterStack.isPunctuation(scalar)
+                        || scalar.properties.generalCategory == .control {
+                break
+            }
+            scan.examined()
+            index = scalars.index(after: index)
+        }
+        guard index > domainStart, underscores.last == 0, underscores.previous == 0, periods > 0 || !www else {
+            if www { scan.failedDomain = remaining.startIndex..<index }
+            return nil
+        }
+
+        // The rest of the link, then GitHub's trailing trim (`autolink_delim`).
+        while index < text.endIndex {
+            let scalar = scalars[index]
+            if InlineDelimiterStack.isWhitespace(scalar) || scalar.properties.generalCategory == .control
+                || "<>[]".unicodeScalars.contains(scalar) { break }
+            scan.examined()
+            index = scalars.index(after: index)
+        }
+        var end = index
+        var parens = (open: 0, close: 0)
+        for scalar in scalars[remaining.startIndex..<end] {
+            scan.examined()
+            if scalar == "(" { parens.open += 1 } else if scalar == ")" { parens.close += 1 }
+        }
+        trim: while end > domainStart {
+            scan.examined()
+            let lastIndex = scalars.index(before: end)
+            switch scalars[lastIndex] {
+            case "?", "!", ".", ",", ":", "*", "_", "~", "'", "\"":
+                end = lastIndex
+            case ";":
+                var entityStart = lastIndex
+                while entityStart > remaining.startIndex {
+                    let before = scalars[scalars.index(before: entityStart)]
+                    guard before.isASCII, before.properties.isAlphabetic else { break }
+                    entityStart = scalars.index(before: entityStart)
+                }
+                if entityStart < lastIndex, entityStart > remaining.startIndex,
+                   scalars[scalars.index(before: entityStart)] == "&" {
+                    end = scalars.index(before: entityStart)
+                } else {
+                    end = lastIndex
+                }
+            case ")" where parens.close > parens.open:
+                parens.close -= 1
+                end = lastIndex
+            default:
+                break trim
+            }
+        }
+        guard end > domainStart else { return nil }
+
+        let shown = String(text[remaining.startIndex..<end])
+        return (shown, www ? "http://" + shown : shown, end)
+    }
+
+    /// The e-mail addresses GFM links in plain text (cmark-gfm's autolink
+    /// extension): a local part of letters, digits and `.+-_` before an
+    /// `@`, a domain of letters, digits, `-`, `_` with at least one `.`
+    /// followed by a letter or digit, ending in a letter (a final `.` is
+    /// dropped by the trailing trim): `a.b-c_d@a.b.` links `a.b-c_d@a.b`,
+    /// `x@y.z_` and `hello@mail+xyz.example` link nothing.
+    static func emailAutolinks(in text: String) -> [Range<String.Index>] {
+        var work = 0
+        return emailAutolinks(in: text, work: &work)
+    }
+
+    /// `emailAutolinks`, counting in `work` the bytes looked at around each
+    /// `@` (each byte is walked back at most once and forward at most once:
+    /// a local part never contains `@`, a domain stops at the next one) —
+    /// for the tests.
+    static func emailAutolinks(in text: String, work: inout Int) -> [Range<String.Index>] {
+        let bytes = Array(text.utf8)
+        func isAlnum(_ byte: UInt8) -> Bool {
+            (byte >= 0x30 && byte <= 0x39) || ((byte | 0x20) >= 0x61 && (byte | 0x20) <= 0x7A)
+        }
+        var found: [Range<String.Index>] = []
+        var searchFrom = 0  // nothing before here is part of an address any more
+        var at = 0
+        while at < bytes.count {
+            guard bytes[at] == UInt8(ascii: "@") else { at += 1; continue }
+            var start = at
+            while start > searchFrom,
+                  isAlnum(bytes[start - 1]) || ".+-_".utf8.contains(bytes[start - 1]) { start -= 1; work += 1 }
+            var end = at + 1
+            var periods = 0
+            // A local part right after `/` is part of a URL (`ftp://user@host`
+            // is text on GitHub).
+            var valid = start < at && (start == 0 || bytes[start - 1] != UInt8(ascii: "/"))
+            while end < bytes.count {
+                work += 1
+                let byte = bytes[end]
+                if isAlnum(byte) || byte == UInt8(ascii: "-") || byte == UInt8(ascii: "_") {
+                    end += 1
+                } else if byte == UInt8(ascii: "."), end + 1 < bytes.count, isAlnum(bytes[end + 1]) {
+                    periods += 1
+                    end += 1
+                } else {
+                    if byte == UInt8(ascii: "@") { valid = false }
+                    break
+                }
+            }
+            let last = bytes[end - 1]
+            if valid, end - at > 1, periods > 0, (last | 0x20) >= 0x61, (last | 0x20) <= 0x7A {
+                let utf8 = text.utf8
+                found.append(utf8.index(text.startIndex, offsetBy: start)..<utf8.index(text.startIndex, offsetBy: end))
+                searchFrom = end
+            }
+            at = end
+        }
+        return found
+    }
+
+    /// An autolink's look: body size, link colour, underlined.
+    private func autolinkText(_ shown: String, url: URL?) -> AttributedString {
+        var attr = AttributedString(shown)
         attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.linkColor)
         attr.setDualUnderline()
-        if let url = URL(string: urlText) {
-            attr.link = url
-        }
-
-        return (attr, remaining.dropFirst(urlText.count))
+        if let url { attr.link = url }
+        return attr
     }
 
     // MARK: - Footnote References
@@ -1314,11 +1676,13 @@ struct MarkdownRenderer: Sendable {
     /// footnote id starts with it in practice.
     static let numberedFootnoteMarker: Unicode.Scalar = "\u{E000}"
 
-    private func tryParseFootnoteRef(_ remaining: inout Substring) -> (AttributedString, Substring)? {
+    private func tryParseFootnoteRef(_ remaining: inout Substring,
+                                     closing: InlineSyntaxScanner.NextClosingBracket) -> (AttributedString, Substring)? {
         guard remaining.hasPrefix("[^") else { return nil }
 
         let afterBracket = remaining.dropFirst(2)
-        guard let closeIndex = afterBracket.firstIndex(of: "]") else { return nil }
+        // The first `]` — from the line's shared lookup, linear per line.
+        guard let closeIndex = closing.at(orAfter: afterBracket.startIndex) else { return nil }
 
         let fnId = String(afterBracket[..<closeIndex])
         guard !fnId.isEmpty else { return nil }
