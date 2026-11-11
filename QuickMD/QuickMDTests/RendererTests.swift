@@ -858,9 +858,9 @@ final class RendererTests: XCTestCase {
 
     // MARK: - LaTeX escapes inside inline math (review R11)
 
-    /// Inline math is found in the RENDERED text, after every `\<punct>`
-    /// escape ran; the formula must still reach the engine with its LaTeX
-    /// escapes (`$50\%$` typesets "50%": a bare `%` starts a TeX comment).
+    /// Inline math is found on the SOURCE line, before the escapes run (a
+    /// formula is an atom whose characters are its source), so the formula
+    /// reaches the engine with its LaTeX escapes (`$50\%$` typesets "50%": a bare `%` starts a TeX comment).
     /// Text outside the formula keeps Markdown's escapes. The copy tag carries
     /// the same LaTeX, and print uses the same `pieces(of:)`.
     func testInlineMathKeepsItsLaTeXEscapes() throws {
@@ -886,7 +886,8 @@ final class RendererTests: XCTestCase {
             if let value = value as? String { tags.append(value) }
         }
         XCTAssertEqual(tags, ["50\\%"])
-        XCTAssertEqual(InlineMathSegmenter.pieces(of: attributed).map(\.length), [2, 5], "spans in the rendered text: $50%$")
+        XCTAssertEqual(InlineMathSegmenter.pieces(of: attributed).map(\.length), [2, 6],
+                       "the formula atom is its source: $50\\%$")
     }
 
     // MARK: - Formatting inside link text (review R13)
@@ -1068,7 +1069,9 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(runs("![a`b](i.png) [c](u) x`y"), "![a|`b](i.png) [c](u) x`|y")
         XCTAssertEqual(runs("[x](u) `` [y]` `` [z](v)"), "<u>x| |`[y]``| |<v>z")
         XCTAssertEqual(runs("[a ``b]`` c](u)"), "<u>a |<u>`b]`|<u> c")
-        XCTAssertEqual(runs("[a \\`b](u) c`"), "<u>a |<u>`|<u>b| c`")
+        // The escaped backtick is one run with its text (no escape tag since
+        // the v1.15 seam review).
+        XCTAssertEqual(runs("[a \\`b](u) c`"), "<u>a `b| c`")
         XCTAssertEqual(runs("[^n`] [d](u) `"), "[^n|`] [d](u) `")
         XCTAssertEqual(runs("`[` [a](u) `]`"), "`[`| |<u>a| |`]`")
         // Code outranks emphasis and strikethrough, and a ``` run is a code
@@ -1112,10 +1115,12 @@ final class RendererTests: XCTestCase {
     // MARK: - Formula source in headings (review R14)
 
     /// A heading's formula keeps its LaTeX escapes in `renderHeader`:
-    /// `# H \% $a\,b$` reads "H % $a\,b$" — the text ids and the Contents
-    /// sidebar read. Since v1.15 the title view typesets the formulas (from
-    /// that same text, with the escapes), so search counts them as a
-    /// paragraph's: one attachment each, the LaTeX is not text.
+    /// `# H \% $a\,b$` reads "H % $a\,b$" — the text the Contents sidebar
+    /// reads. Since v1.15 the title view typesets the formulas (from that
+    /// same text, with the escapes), so search counts them as a paragraph's:
+    /// one attachment each, the LaTeX is not text. The id reads GitHub's text,
+    /// which has no math: "H % $a,b$ and $50%$" (`headingAnchorText`; the
+    /// slug is `h--ab-and-50` either way).
     func testHeadingFormulaSourceKeepsItsEscapes() {
         let title = "H \\% $a\\,b$ and $50\\%$"
         let shown = String(renderer.renderHeader(title, level: 1).characters)
@@ -1126,7 +1131,7 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(entry.shownTitle(renderer: renderer), shown)
         let theme = MarkdownTheme.cached(for: .light)
         let blocks = MarkdownBlockParser(theme: theme).parse("# " + title)
-        XCTAssertEqual(HeadingAnchors.headings(of: blocks, renderer: renderer).map(\.text), [shown])
+        XCTAssertEqual(HeadingAnchors.headings(of: blocks, renderer: renderer).map(\.text), ["H % $a,b$ and $50%$"])
         XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "a\\,b").matchBlockIds.count, 0,
                        "a typeset formula is not text (as in a paragraph)")
         XCTAssertEqual(DocumentSearch.computeMatches(in: blocks, term: "H %").matchBlockIds.count, 1,
@@ -1221,8 +1226,8 @@ final class RendererTests: XCTestCase {
                                                 style: .grid, theme: theme, fontScale: 1)
         XCTAssertTrue(cell.contains("$5 and $10\n"))
         XCTAssertEqual(String(renderer.renderQuotedBody("Pay \\$5").characters), "Pay $5")
-        // The segmenter itself: offsets of escaped dollars never delimit.
-        XCTAssertEqual(InlineMathSegmenter.split("a $5 and $6", escaped: [2, 9]), [.text("a $5 and $6")])
+        // The segmenter itself, on source: an escaped dollar never delimits.
+        XCTAssertEqual(InlineMathSegmenter.split("a \\$5 and \\$6$"), [.text("a \\$5 and \\$6$")])
     }
 
 }
@@ -1281,8 +1286,8 @@ extension RendererTests {
     ///   `other(r,g,b,a)` only for a colour no role has;
     /// - fonts as size (0.01) + bold / italic / mono traits — no names;
     /// - every other attribute the renderer sets: underline, strikethrough,
-    ///   link URL, baseline offset, superscript, the escape and footnote
-    ///   tags, and whether the SwiftUI scope carries font / colour /
+    ///   link URL, baseline offset, superscript, the footnote tag, and
+    ///   whether the SwiftUI scope carries font / colour /
     ///   background too.
     static func runDump(_ markdown: String) -> String {
         let theme = MarkdownTheme.cached(for: .light)
@@ -1327,7 +1332,6 @@ extension RendererTests {
                     line += " sup=\(superscript)"
                 }
                 if let link = run.link { line += " link=\(link.absoluteString)" }
-                if run[EscapedCharacterAttribute.self] != nil { line += " esc" }
                 if let number = run[FootnoteNumberAttribute.self] { line += " fn=\(number)" }
                 line += " ui=\(run.font != nil ? "f" : "-")\(run.foregroundColor != nil ? "c" : "-")"
                     + "\(run.backgroundColor != nil ? "b" : "-")"
@@ -1356,7 +1360,10 @@ extension RendererTests {
     /// exactly this. One run changed on
     /// purpose: the heading's code span `quickmd` is bold MONOSPACED at 13/14
     /// of the heading size (policy B, owner's board) — it was the bold body
-    /// font at full size.
+    /// font at full size. The escapes' tag (`EscapedCharacterAttribute`) is
+    /// gone since formulas are decided on the source (v1.15 seam review):
+    /// with nothing left to tell them apart, the escaped characters are one
+    /// run with the text around them — same characters, same look.
     static let ordinaryDocumentDump = #"""
     h1
       "Release notes for QuickMD and " font=32.00 bold fg=text bg=- ui=fc-
@@ -1388,21 +1395,7 @@ extension RendererTests {
       "docs" font=14.00 fg=link bg=- u link=https://docs.example.com ui=fc-
       " as a shortcut. Snake_case_names and 2" font=14.00 fg=text bg=- ui=fc-
       "3" font=14.00 italic fg=text bg=- ui=fc-
-      "4 stay plain. Escapes: " font=14.00 fg=text bg=- ui=fc-
-      "*" font=14.00 fg=text bg=- esc ui=fc-
-      "not italic" font=14.00 fg=text bg=- ui=fc-
-      "*" font=14.00 fg=text bg=- esc ui=fc-
-      ", " font=14.00 fg=text bg=- ui=fc-
-      "_" font=14.00 fg=text bg=- esc ui=fc-
-      "not" font=14.00 fg=text bg=- ui=fc-
-      "_" font=14.00 fg=text bg=- esc ui=fc-
-      ", " font=14.00 fg=text bg=- ui=fc-
-      "[" font=14.00 fg=text bg=- esc ui=fc-
-      "not a link" font=14.00 fg=text bg=- ui=fc-
-      "]" font=14.00 fg=text bg=- esc ui=fc-
-      ", 50" font=14.00 fg=text bg=- ui=fc-
-      "%" font=14.00 fg=text bg=- esc ui=fc-
-      " and AT&T © 2026. A bare " font=14.00 fg=text bg=- ui=fc-
+      "4 stay plain. Escapes: *not italic*, _not_, [not a link], 50% and AT&T © 2026. A bare " font=14.00 fg=text bg=- ui=fc-
       "https://example.com/page" font=14.00 fg=link bg=- u link=https://example.com/page ui=fc-
       " link, an image " font=14.00 fg=text bg=- ui=fc-
       "[Image: logo]" font=14.00 italic fg=secondary bg=- link=logo.png ui=fc-

@@ -268,9 +268,11 @@ final class SectionExtractorTests: XCTestCase {
     }
 
     /// Merge check: every consumer of a multi-line Setext title reads one
-    /// text. The heading, Contents and the id's source differ only in the
-    /// kept line break: entities decoded, a link's text, and a formula's
-    /// source WITH its LaTeX escapes (R14) — also in the id's text.
+    /// text. The heading and Contents read the same: entities decoded, a
+    /// link's text, and a formula's source WITH its LaTeX escapes (R14). The
+    /// id's text is GitHub's (seam review S2: GitHub takes it from its inline
+    /// pass, which has no math, so a formula's escapes are consumed there)
+    /// with the line break kept.
     func testMultiLineSetextTitleIsOneTextForEveryConsumer() {
         let md = "Q&amp;A \\% $a\\,b$\n[the *link*](https://e.x) &lt;end&gt;\n===\n\nOne $x\\,\ny$ two\n---\n"
         let theme = MarkdownTheme.cached(for: .light)
@@ -282,8 +284,9 @@ final class SectionExtractorTests: XCTestCase {
         }
         XCTAssertEqual(shown[0], "Q&A % $a\\,b$ the link <end>")
         let anchors = anchorHeadings(of: md)
-        XCTAssertEqual(anchors.map { $0.text.replacingOccurrences(of: "\n", with: " ") }, shown)
-        XCTAssertEqual(anchors[0].text, "Q&A % $a\\,b$\nthe link <end>")
+        XCTAssertEqual(anchors.map { $0.text.replacingOccurrences(of: "\n", with: " ") },
+                       ["Q&A % $a,b$ the link <end>", "One $x, y$ two"])
+        XCTAssertEqual(anchors[0].text, "Q&A % $a,b$\nthe link <end>")
         XCTAssertEqual(headings(of: md).map { $0.shownTitle(renderer: renderer) }, shown)
     }
 

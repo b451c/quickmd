@@ -376,7 +376,8 @@ enum TableTextBuilder {
                           renderer: MarkdownRenderer) -> Bool {
         guard style == .grid else { return false }
         func cellNeedsMath(_ cell: String) -> Bool {
-            cell.contains("$") && BlockTextConverter.needsMath(renderer.renderInline(cell))
+            // A formula needs a `$` or a `&#…;` dollar: other cells cost nothing.
+            (cell.contains("$") || cell.contains("&#")) && BlockTextConverter.needsMath(renderer.renderInline(cell))
         }
         return headers.contains(where: cellNeedsMath) || rows.contains { $0.contains(where: cellNeedsMath) }
     }

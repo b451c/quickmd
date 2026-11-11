@@ -134,7 +134,7 @@ final class MathInTextKindsTests: XCTestCase {
 
     /// GitHub: `<p>code <code>$x$</code> span and <math-renderer class="js-inline-math">$y$</math-renderer></p>`
     /// — the same in a quote. A code span's `$` was typeset as a formula in
-    /// paragraphs before v1.15 (the segmenter reads the rendered text).
+    /// paragraphs before v1.15 (the segmenter read the rendered text).
     @MainActor
     func testCodeSpanDollarsAreNoFormulaInParagraphsAndQuotes() {
         let recorder = Recorder()
@@ -473,7 +473,8 @@ final class MathInTextKindsTests: XCTestCase {
         XCTAssertTrue(BlockTextConverter.containsInlineMath("a $x$ b"))
     }
 
-    /// Markup the rendered text has lost is still a boundary: GitHub
+    /// Markup after a closer is no letter (formulas are found on the
+    /// source, where the markup still is): GitHub
     /// (`gh api`, case12) `<M>$x$</M><strong>bold</strong>`,
     /// `<M>$x$</M><a href="https://e.com">l</a>`, `<M>$x$</M><sup>2</sup>`,
     /// `<M>$x$</M><code>c</code>` — all formulas (and in 1.14.4). A formula
@@ -806,6 +807,213 @@ final class MathInTextKindsTests: XCTestCase {
         // The whole source still copies.
         let whole = SelectionRows.tablePiece(table, covered: NSRange(location: 0, length: table.string.length))
         XCTAssertTrue(whole.map { DocumentCopyBuilder.build([$0]).plain }?.contains("a_{1} & a_{1}") ?? false)
+    }
+
+    // MARK: - Formulas before the inline pass (seam review S2)
+
+    /// The cases, as written, with the LaTeX each formula must reach the
+    /// engine with and the text shown (U+FFFC per formula).
+    private static let atomCases: [(source: String, latex: [String], shown: String)] = [
+        ("$f^*$ and $g^*$", ["f^*", "g^*"], "\u{FFFC} and \u{FFFC}"),
+        ("$a*b$ and $c*d$", ["a*b", "c*d"], "\u{FFFC} and \u{FFFC}"),
+        ("$(a)_n + x_{i}$", ["(a)_n + x_{i}"], "\u{FFFC}"),
+        ("$x_1$ and $y_2$", ["x_1", "y_2"], "\u{FFFC} and \u{FFFC}"),
+        ("$\\mathbf{A}^* \\cdot \\mathbf{B}^*$", ["\\mathbf{A}^* \\cdot \\mathbf{B}^*"], "\u{FFFC}"),
+        ("$a < b$ and $c > d$", ["a < b", "c > d"], "\u{FFFC} and \u{FFFC}"),
+        ("$[a,b]$ and $[c,d](u)$", ["[a,b]", "[c,d](u)"], "\u{FFFC} and \u{FFFC}"),
+        ("$a ~ b$ and $c ~ d$", ["a ~ b", "c ~ d"], "\u{FFFC} and \u{FFFC}"),
+    ]
+
+    /// A formula is decided on the SOURCE line and drawn as one atom, before
+    /// emphasis, strikethrough, brackets and autolinks can take its
+    /// characters — in a paragraph, a quote, a table cell and a heading.
+    ///
+    /// GitHub (`gh api markdown -f mode=gfm`, 2026-11-11; `<M>` is
+    /// `<math-renderer class="js-inline-math">`), the same in `<p>`,
+    /// `<blockquote><p>`, `<td>` and `<h1>`:
+    /// - `$f^<em>$ and $g^</em>$`, `$a<em>b$ and $c</em>d$`,
+    ///   `$(a)<em>n + x</em>{i}$`, `<M>$[a,b]$</M> and $<a href="u">c,d</a>$`
+    ///   — GitHub finds math AFTER its inline pass, so emphasis and the link
+    ///   break these; QuickMD typesets them (a formula beats emphasis and
+    ///   links — the owner's rule: no defect kept for GitHub's sake);
+    /// - `<M>$x_1$</M> and <M>$y_2$</M>`,
+    ///   `<M>$\mathbf{A}^* \cdot \mathbf{B}^*$</M>`,
+    ///   `<M>$a &lt; b$</M> and <M>$c &gt; d$</M>`,
+    ///   `<M>$a ~ b$</M> and <M>$c ~ d$</M>` — formulas, as here.
+    /// Before the fix the first case was "f^" + italic + "g^" in every kind.
+    @MainActor
+    func testFormulasAreAtomsBeforeEmphasisLinksAndAutolinks() {
+        for kind in ["paragraph", "quote", "cell", "heading"] {
+            for (source, latex, shown) in Self.atomCases {
+                let markdown: String
+                switch kind {
+                case "quote": markdown = "> " + source
+                case "cell": markdown = "| A |\n|---|\n| \(source) |"
+                case "heading": markdown = "# " + source
+                default: markdown = source
+                }
+                let recorder = Recorder()
+                let blocks = parse(markdown)
+                let measured = measure(blocks, math: engine(recorder))
+                XCTAssertEqual(recorder.latex, latex, "\(kind): \(source)")
+                let string = kind == "cell" ? measured.tables[blocks[0].id]?.string.string
+                                            : measured.converted[blocks[0].id]?.string
+                XCTAssertEqual(string, kind == "cell" ? "A\n\(shown)\n" : shown, "\(kind): \(source)")
+            }
+        }
+    }
+
+    /// What stays as before around the atoms — the negative control: text
+    /// with dollars that are no formula keeps its emphasis and links
+    /// (`*a* $5 and $10 **b**`), a code span beats a formula (GitHub:
+    /// `<code>$x$</code>`, `$a <code>x</code> b$`), a formula never cuts a
+    /// link in two (GitHub: `<a href="u">a $b</a>$ and $q <a href="u">r$</a>`),
+    /// brackets inside one are LaTeX (`<M>$(a,b]$</M> and <M>$[a,b)$</M>`),
+    /// a closer glued to `_` closes only an emphasis opened before the
+    /// formula (GitHub: `$x$_ end`, `$a$_b` text; `_$g$_` is
+    /// `<em>$g$</em>` there, a formula here as in 1.14.4).
+    @MainActor
+    func testWhatIsNoFormulaKeepsItsMarkup() {
+        let recorder = Recorder()
+        let blocks = parse("""
+        *a* $5 and $10 **b** [l](https://e.com)
+
+        `$x$` and $a `x` b$
+
+        [a $b](https://e.com)$ and $q [r$](https://e.com) and $(a,b]$ and $[a,b)$
+
+        $x$_ end and _$g$_ and $a$_b
+        """)
+        let measured = measure(blocks, math: engine(recorder))
+        XCTAssertEqual(recorder.latex, ["(a,b]", "[a,b)", "g"])
+        guard case .text(let first) = blocks[0].content else { return XCTFail("paragraph") }
+        XCTAssertEqual(String(first.characters), "a $5 and $10 b l")
+        let looks = first.runs.map { run -> String in
+            let traits = run[AttributeScopes.AppKitAttributes.FontAttribute.self]?.fontDescriptor.symbolicTraits ?? []
+            return (traits.contains(.italic) ? "i" : "") + (traits.contains(.bold) ? "b" : "")
+                + (run.link != nil ? "l" : "")
+        }
+        XCTAssertEqual(looks.filter { !$0.isEmpty }, ["i", "b", "l"])
+        XCTAssertEqual(measured.converted[blocks[1].id]?.string, "$x$ and $a x b$")
+        XCTAssertEqual(measured.converted[blocks[2].id]?.string,
+                       "a $b$ and $q r$ and \u{FFFC} and \u{FFFC}")
+        XCTAssertEqual(measured.converted[blocks[3].id]?.string, "$x$_ end and \u{FFFC} and $a$_b")
+        XCTAssertFalse(BlockTextConverter.containsInlineMath(first))
+    }
+
+    /// The formula atom's characters are its source: LaTeX escapes and
+    /// character references inside reach the engine as written
+    /// (GitHub: `<M>$a &amp;amp; b$</M>` — the reference is not decoded), a
+    /// `&#36;` delimiter is a dollar (`<M>$x^2$</M>`), and an escaped dollar
+    /// stays in the LaTeX.
+    @MainActor
+    func testFormulaCharactersAreItsSource() {
+        let recorder = Recorder()
+        let blocks = parse("$50\\%$ and $a\\,b$ and $a &amp; b$ and &#36;x^2&#36; and $a\\$b$ and \\$5")
+        let measured = measure(blocks, math: engine(recorder))
+        XCTAssertEqual(recorder.latex, ["50\\%", "a\\,b", "a &amp; b", "x^2", "a\\$b"])
+        XCTAssertEqual(measured.converted[blocks[0].id]?.string,
+                       "\u{FFFC} and \u{FFFC} and \u{FFFC} and \u{FFFC} and \u{FFFC} and $5")
+        guard case .text(let attributed) = blocks[0].content else { return XCTFail("paragraph") }
+        XCTAssertEqual(InlineMathSegmenter.pieces(of: attributed).compactMap { piece -> String? in
+            if case .math = piece.segment { return String(repeating: "x", count: piece.length) } else { return nil }
+        }.map(\.count), [6, 6, 11, 5, 6], "the rendered atoms: the source, a `&#36;` delimiter as `$`")
+    }
+
+    /// A heading's id is GitHub's, which reads the title after its inline
+    /// pass, with no math (`gh api markdown -f mode=markdown`):
+    /// `# $f^*$ and $g^*$` → `f-and-g`, `# $(a)_n + x_{i}$` → `an--xi`,
+    /// `# $x_1$ and $y_2$` → `x_1-and-y_2`. Contents lists the source.
+    func testHeadingIdsStayGitHubsWhenFormulasAreAtoms() {
+        let blocks = parse("# $f^*$ and $g^*$\n\n# $(a)_n + x_{i}$\n\n# $x_1$ and $y_2$")
+        let renderer = MarkdownRenderer(theme: theme, fontScale: 1)
+        let headings = HeadingAnchors.headings(of: blocks, renderer: renderer)
+        XCTAssertEqual(HeadingAnchors.ids(for: headings.map(\.text)), ["f-and-g", "an--xi", "x_1-and-y_2"])
+        XCTAssertEqual(ToCEntry.entries(of: blocks).map { $0.shownTitle(renderer: renderer) },
+                       ["$f^*$ and $g^*$", "$(a)_n + x_{i}$", "$x_1$ and $y_2$"])
+    }
+
+    // MARK: - A formula in link text (seam review N2)
+
+    /// GitHub: `See <a href="https://e.com">$x$</a> here` in `<p>`, `<h1>`,
+    /// `<blockquote><p>` and `<td>` (GitHub does not typeset it; QuickMD
+    /// does, as 1.14.4 did in paragraphs): the attachment is part of the
+    /// link — clickable and underlined — and so is the source shown when
+    /// the formula does not typeset, in the link colour.
+    @MainActor
+    func testFormulaInLinkTextKeepsTheLink() {
+        let markdown = """
+        See [$x$](https://e.com) here
+
+        # See [$x$](https://e.com) here
+
+        > See [$x$](https://e.com) here
+
+        | A |
+        |---|
+        | See [$x$](https://e.com) here |
+        """
+        let linkColor = NSColor(theme.linkColor).usingColorSpace(.sRGB)
+        for typesets in [true, false] {
+            let blocks = parse(markdown)
+            let measured = measure(blocks, math: engine(typesets: typesets))
+            let strings = [measured.converted[blocks[0].id], measured.converted[blocks[1].id],
+                           measured.converted[blocks[2].id], measured.tables[blocks[3].id]?.string]
+            for (kind, string) in zip(["paragraph", "heading", "quote", "cell"], strings) {
+                guard let string else { XCTFail(kind); continue }
+                let formula = (string.string as NSString).range(of: typesets ? "\u{FFFC}" : " x ")
+                XCTAssertNotEqual(formula.location, NSNotFound, kind)
+                let at = typesets ? formula.location : formula.location + 1
+                XCTAssertEqual((string.attribute(.link, at: at, effectiveRange: nil) as? URL)?.absoluteString,
+                               "https://e.com", "\(kind) typesets=\(typesets)")
+                XCTAssertNotNil(string.attribute(.underlineStyle, at: at, effectiveRange: nil), kind)
+                if !typesets {
+                    let color = (string.attribute(.foregroundColor, at: at, effectiveRange: nil) as? NSColor)?
+                        .usingColorSpace(.sRGB)
+                    XCTAssertEqual(color, linkColor, "\(kind): the fallback in the link colour")
+                }
+            }
+        }
+    }
+
+    // MARK: - Heading baseline with a tall formula (seam review N1)
+
+    /// `# $\frac{a}{b}$ Title`: the formula is taller than the heading's
+    /// text, so TextKit sets the first baseline at its top — the copy button
+    /// follows (`titleFirstBaseline(of:headerFont:shown:)`, the view's and
+    /// the measurer's one call), equal to the laid-out baseline; the row's
+    /// title inset uses it.
+    @MainActor
+    func testHeadingBaselineIncludesATallFormula() {
+        for level in [1, 3, 6] {
+            let renderer = MarkdownRenderer(theme: theme, fontScale: 1)
+            let attributed = renderer.renderHeader("$\\frac{a}{b}$ Title", level: level)
+            let ns = BlockTextConverter.headingTitle(attributed, level: level, renderer: renderer, math: engine())
+            let storage = NSTextStorage(attributedString: ns)
+            let layoutManager = NSLayoutManager()
+            storage.addLayoutManager(layoutManager)
+            let container = NSTextContainer(size: NSSize(width: 2000, height: CGFloat.greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            layoutManager.addTextContainer(container)
+            layoutManager.ensureLayout(for: container)
+            // The baseline of the line's TEXT (an attachment glyph's own
+            // location is its image's bottom, not the baseline).
+            let text = layoutManager.glyphIndexForCharacter(at: (ns.string as NSString).range(of: "Title").location)
+            let fragment = layoutManager.lineFragmentRect(forGlyphAt: text, effectiveRange: nil)
+            let laidOut = fragment.minY + layoutManager.location(forGlyphAt: text).y
+            let headerFont = renderer.headerAppKitFont(level: level)
+            let computed = BlockLayout.Heading.titleFirstBaseline(of: attributed, headerFont: headerFont,
+                                                                  shown: { ns })
+            XCTAssertEqual(computed, laidOut, accuracy: 0.01, "H\(level)")
+            XCTAssertGreaterThan(computed, BlockLayout.Heading.titleFirstBaseline(of: attributed,
+                                                                                  headerFont: headerFont),
+                                 "H\(level): the formula is taller than the text")
+            // A title without a formula never builds the shown string.
+            let plain = renderer.renderHeader("Title", level: level)
+            XCTAssertEqual(BlockLayout.Heading.titleFirstBaseline(of: plain, headerFont: headerFont,
+                                                                  shown: { XCTFail("built"); return ns }),
+                           BlockLayout.Heading.titleFirstBaseline(of: plain, headerFont: headerFont))
+        }
     }
 
     // MARK: - What a quote body is made of (new API)

@@ -359,17 +359,20 @@ enum BlockLayout {
             if let hit = usedWidthCache.object(forKey: widthKey) {
                 return CGFloat(hit.doubleValue)
             }
-            let titleKey = key as NSString
-            let title: NSAttributedString
-            if let cached = titleCache.object(forKey: titleKey) {
-                title = cached
-            } else {
-                title = makeTitle()
-                titleCache.setObject(title, forKey: titleKey)
-            }
-            let width = titleUsedWidth(title, wrapWidth: wrapWidth)
+            let width = titleUsedWidth(cachedTitle(key, makeTitle: makeTitle), wrapWidth: wrapWidth)
             usedWidthCache.setObject(NSNumber(value: Double(width)), forKey: widthKey)
             return width
+        }
+
+        /// The converted title cached under `key` (`titleLayoutKey`), made by
+        /// `makeTitle` on a miss — for `HeadingBlockView.body`, whose hover
+        /// toggles must not typeset a title's formulas again.
+        static func cachedTitle(_ key: String, makeTitle: () -> NSAttributedString) -> NSAttributedString {
+            let titleKey = key as NSString
+            if let cached = titleCache.object(forKey: titleKey) { return cached }
+            let title = makeTitle()
+            titleCache.setObject(title, forKey: titleKey)
+            return title
         }
 
         private static let titleCache: NSCache<NSString, NSAttributedString> = {
@@ -443,6 +446,27 @@ enum BlockLayout {
             }
             guard !fonts.isEmpty else { return titleFirstBaseline(font: headerFont) }
             return fonts.map { titleFirstBaseline(font: $0) }.max() ?? titleFirstBaseline(font: headerFont)
+        }
+
+        /// `titleFirstBaseline(of:headerFont:)` with the title's formulas: a
+        /// typeset formula taller than the text pushes the line's baseline
+        /// down to its own top (`# $\frac{a}{b}$ Title`), so the copy button
+        /// follows it. `shown` is the title as its text view shows it
+        /// (`BlockTextConverter.headingTitle`), asked for only when the title
+        /// has a formula. Read, like the fonts, from the whole title at its
+        /// natural size — width-independent, so the view and the measurer
+        /// agree before layout; it differs from the laid-out first line only
+        /// when a tall formula sits on a later line or is shrunk to fit.
+        static func titleFirstBaseline(of title: AttributedString, headerFont: NSFont,
+                                       shown: () -> NSAttributedString) -> CGFloat {
+            let fonts = titleFirstBaseline(of: title, headerFont: headerFont)
+            guard BlockTextConverter.needsMath(title) else { return fonts }
+            let string = shown()
+            var ascent: CGFloat = 0
+            string.enumerateAttribute(.attachment, in: NSRange(location: 0, length: string.length)) { value, _, _ in
+                if let attachment = value as? NSTextAttachment { ascent = max(ascent, attachment.bounds.maxY) }
+            }
+            return max(fonts, ascent)
         }
     }
 
@@ -872,19 +896,18 @@ enum BlockTextConverter {
     /// measurement taken without meta classifies the paragraph identically.
     /// `$` alone is cheap to reject, which most paragraphs are.
     ///
-    /// The segmenter's own answer (`InlineMathSegmenter.hasMath`), escapes
-    /// and code spans included: true exactly when the converter will embed a
+    /// The segmenter's own answer (`InlineMathSegmenter.hasMath`: a formula
+    /// atom the renderer drew): true exactly when the converter will embed a
     /// formula. Until v1.15 this was a looser regex, so "$5 and $10" sent a
     /// row to the main actor to typeset nothing.
     static func containsInlineMath(_ attributed: AttributedString) -> Bool {
         InlineMathSegmenter.hasMath(attributed)
     }
 
-    /// The same rule on plain text (no escape information) — for callers
-    /// that only have characters (tests).
+    /// The same rule on plain source text — for callers that only have
+    /// characters (tests).
     static func containsInlineMath(_ plain: String) -> Bool {
-        guard plain.contains("$") else { return false }
-        return InlineMathSegmenter.split(plain).contains { if case .math = $0 { return true } else { return false } }
+        !InlineMathSegmenter.formulas(in: plain).isEmpty
     }
 
     /// Converts the renderer's dual-scope AttributedString into the
@@ -928,8 +951,10 @@ enum BlockTextConverter {
 
             case .math(let latex):
                 // Skip past the $latex$ in the source AttributedString
+                var link: LinkLook?
                 if let end = attributed.characters.index(attrIndex, offsetBy: piece.length,
                                                          limitedBy: attributed.endIndex) {
+                    link = LinkLook(of: attributed[attrIndex..<end])
                     attrIndex = end
                 }
 
@@ -940,7 +965,7 @@ enum BlockTextConverter {
                     // does not fit (`FittingMathAttachment`).
                     let attachment = FittingMathAttachment(
                         image: image, capHeight: theme.fonts.appKit(size: mathFontSize).capHeight,
-                        source: inlineFallback(latex, theme: theme, fontSize: mathFontSize))
+                        source: inlineFallback(latex, theme: theme, fontSize: mathFontSize, link: link))
                     // Tagged with its source so a copy can write `$latex$`
                     // instead of U+FFFC (DocumentCopyBuilder). Draws nothing,
                     // lays out nothing — the measured height is unchanged.
@@ -952,10 +977,13 @@ enum BlockTextConverter {
                         embedded.addAttribute(.qmdInlineMathDelimiter, value: piece.delimiter,
                                               range: NSRange(location: 0, length: embedded.length))
                     }
+                    // A formula in link text is part of the link: clickable,
+                    // underlined like the text around it.
+                    link?.apply(to: embedded, colors: false)
                     result.append(embedded)
                 } else {
                     // Fallback: italic literal, same as the legacy pipeline
-                    result.append(inlineFallback(latex, theme: theme, fontSize: mathFontSize))
+                    result.append(inlineFallback(latex, theme: theme, fontSize: mathFontSize, link: link))
                 }
             }
         }
@@ -967,11 +995,43 @@ enum BlockTextConverter {
     /// italic literal in the text's size and colour. Also what a typeset one
     /// shows when even half its size does not fit its line
     /// (`FittingMathAttachment`).
-    static func inlineFallback(_ latex: String, theme: MarkdownTheme, fontSize: CGFloat) -> NSAttributedString {
+    static func inlineFallback(_ latex: String, theme: MarkdownTheme, fontSize: CGFloat,
+                               link: LinkLook? = nil) -> NSAttributedString {
         var attr = AttributedString(latex)
         attr.setDualFont(size: fontSize, italic: true, fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
-        return (try? NSAttributedString(attr, including: \.appKit)) ?? NSAttributedString(string: latex)
+        let fallback = (try? NSAttributedString(attr, including: \.appKit)) ?? NSAttributedString(string: latex)
+        guard let link else { return fallback }
+        let linked = NSMutableAttributedString(attributedString: fallback)
+        link.apply(to: linked, colors: true)
+        return linked
+    }
+
+    /// The link a formula's run sits in (the renderer's `finish` gave the
+    /// formula atom the link's URL, colour and underline), carried onto the
+    /// attachment that replaces it and onto its source fallback — so a
+    /// formula in link text (`[$x$](u)`) is clickable like the text.
+    struct LinkLook {
+        let url: URL
+        let color: NSColor?
+        let underline: Int?
+
+        /// Nil when the formula is not in a link.
+        init?(of source: AttributedSubstring) {
+            guard let run = source.runs.first, let url = run.link else { return nil }
+            self.url = url
+            color = run[AttributeScopes.AppKitAttributes.ForegroundColorAttribute.self]
+            underline = run[AttributeScopes.AppKitAttributes.UnderlineStyleAttribute.self]?.rawValue
+        }
+
+        /// `colors`: also the link's colour (text, the fallback) — an
+        /// attachment draws its own image, so it takes the URL and underline.
+        func apply(to string: NSMutableAttributedString, colors: Bool) {
+            let range = NSRange(location: 0, length: string.length)
+            string.addAttribute(.link, value: url, range: range)
+            if let underline { string.addAttribute(.underlineStyle, value: underline, range: range) }
+            if colors, let color { string.addAttribute(.foregroundColor, value: color, range: range) }
+        }
     }
 
     /// How a quote's display formula that does not typeset shows: its LaTeX
@@ -987,12 +1047,10 @@ enum BlockTextConverter {
 
     /// Does this quote or alert body, heading title or table cell need the
     /// math engine: an inline `$…$` formula (`containsInlineMath`, the
-    /// paragraphs' test) or a display formula `renderQuotedBody` marked. A
-    /// string without `$` is rejected at once.
+    /// paragraphs' test) or a display formula `renderQuotedBody` marked.
+    /// Runs are walked, not characters.
     static func needsMath(_ attributed: AttributedString) -> Bool {
-        guard attributed.characters.contains("$") else { return false }
-        return containsInlineMath(attributed)
-            || attributed.runs.contains { $0[DisplayMathAttribute.self] != nil }
+        attributed.runs.contains { $0[InlineFormulaAttribute.self] != nil || $0[DisplayMathAttribute.self] != nil }
     }
 
     /// The string a quote or alert body, a heading title or a table cell
@@ -2137,17 +2195,16 @@ enum BlockHeightMeasurer {
     /// one it is the plain conversion). `attributed` is that output.
     /// `built`: the title string a previous pass of the same content built
     /// (`reusing` — a width change re-wraps a title, it never re-typesets it).
-    private static func headingRow(_ attributed: @autoclosure () -> AttributedString, level: Int,
+    private static func headingRow(_ title: AttributedString, level: Int,
                                    renderer: MarkdownRenderer, contentWidth: CGFloat, math: MathRendering,
                                    built: NSAttributedString? = nil)
         -> (height: CGFloat, edges: BlockLayout.Spacing.Edges, string: NSAttributedString) {
-        // Rendered once: the baseline reads the title's fonts (code in a title
-        // is smaller and monospaced), the string only when none was built yet.
-        let title = attributed()
         let ns = built ?? BlockTextConverter.headingTitle(title, level: level, renderer: renderer, math: math)
+        // The baseline reads the title's fonts (code in a title is smaller and
+        // monospaced) and its formulas (`HeadingBlockView` makes the same call).
         let geometry = BlockLayout.Heading.titleGeometry(
-            titleFirstBaseline: BlockLayout.Heading.titleFirstBaseline(of: title,
-                                                                       headerFont: renderer.headerAppKitFont(level: level)))
+            titleFirstBaseline: BlockLayout.Heading.titleFirstBaseline(
+                of: title, headerFont: renderer.headerAppKitFont(level: level), shown: { ns }))
         let ink = textInk(text: ns, width: BlockLayout.Heading.titleWrapWidth(rowWidth: contentWidth))
         let height = max(geometry.titleTopInset + ink.height, geometry.minimumHeight)
         return (height, .text(ink, top: geometry.titleTopInset, rowHeight: height), ns)
