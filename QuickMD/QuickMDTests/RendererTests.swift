@@ -910,6 +910,78 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(String(renderer.renderQuotedBody(quote).characters), "a * b and c $5")
     }
 
+    // MARK: - Plain-text code blocks draw no token colours (1.15)
+
+    /// Numbers, quoted strings, keyword-looking words and comment-looking
+    /// lines — everything the generic highlighter colours.
+    private static let colourBait = """
+        Build finished in 42.5 s with 3 warnings
+        Error: "config.yaml" not found, using 'defaults'
+        if true then return nil for each Class
+        # this looks like a comment
+        // so does this one
+        """
+
+    /// The foreground colours of `string`, one per run.
+    private func foregroundColours(_ string: NSAttributedString) -> Set<NSColor> {
+        var colours = Set<NSColor>()
+        string.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: string.length)) { value, _, _ in
+            if let colour = value as? NSColor { colours.insert(colour) }
+        }
+        return colours
+    }
+
+    /// ```` ```text ```` / ```` ```plaintext ```` (+ Linguist's one-word
+    /// aliases of "Text"): GitHub draws them without any token colour —
+    /// `gh api markdown -f mode=gfm` gives `<pre lang="text"><code>Build
+    /// finished in 42.5 s …</code></pre>`, no `pl-*` span — so the block is
+    /// `plainCode` exactly: one colour (the text colour), the same font, the
+    /// same characters. Case and words after the language do not matter
+    /// (`text title=a` → `<pre lang="text" data-meta="title=a">`).
+    func testPlainTextCodeBlocksHaveNoTokenColours() {
+        for scheme in [ColorScheme.light, .dark] {
+            let theme = MarkdownTheme.cached(for: scheme)
+            let plain = BlockTextConverter.plainCode(Self.colourBait, theme: theme, fontScale: 1.25)
+            for language in ["text", "plaintext", "Text", "PLAINTEXT", "text title=a", "text\t{.x}",
+                             "fundamental", "parindent"] {
+                let shown = BlockTextConverter.highlightedCode(Self.colourBait, language: language,
+                                                               theme: theme, fontScale: 1.25)
+                XCTAssertTrue(shown.isEqual(to: plain), "```\(language) (\(scheme)) is plainCode")
+                XCTAssertEqual(foregroundColours(shown), [NSColor(theme.textColor)], "```\(language)")
+                XCTAssertFalse(BlockTextConverter.colorsCodeTokens(language: language))
+            }
+        }
+    }
+
+    /// Every other info string keeps the generic colouring, unchanged: real
+    /// languages, and also what GitHub leaves uncoloured or colours its own
+    /// way — no info string, an unknown word, `txt` (GitHub: Adblock Filter
+    /// List), `console` (shell session), `plain`, `textile` (a prefix is not
+    /// the word). Only the colours differ from `plainCode`: characters and
+    /// fonts are the same, so the measured height and search are unchanged.
+    func testOtherCodeBlocksKeepTheirTokenColours() {
+        let theme = MarkdownTheme.cached(for: .light)
+        let plain = BlockTextConverter.plainCode(Self.colourBait, theme: theme, fontScale: 1)
+        for language in ["swift", "", "foobar", "txt", "console", "plain", "textile", "python text"] {
+            XCTAssertTrue(BlockTextConverter.colorsCodeTokens(language: language), "```\(language)")
+            let shown = BlockTextConverter.highlightedCode(Self.colourBait, language: language,
+                                                           theme: theme, fontScale: 1)
+            XCTAssertEqual(shown.string, plain.string)
+            XCTAssertFalse(shown.isEqual(to: plain), "```\(language) is coloured")
+            let colours = foregroundColours(shown)
+            for token in [theme.numberColor, theme.stringColor, theme.keywordColor, theme.commentColor] {
+                XCTAssertTrue(colours.contains(NSColor(token)), "```\(language)")
+            }
+            var fontsMatch = true
+            shown.enumerateAttribute(.font, in: NSRange(location: 0, length: shown.length)) { value, range, _ in
+                if (value as? NSFont) != (plain.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont) {
+                    fontsMatch = false
+                }
+            }
+            XCTAssertTrue(fontsMatch, "```\(language): colours only")
+        }
+    }
+
     // MARK: - Code spans outrank brackets (review R16)
 
     /// A `]` or `[` inside a code span pairs with nothing (CommonMark); cases
