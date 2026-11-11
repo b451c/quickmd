@@ -42,6 +42,12 @@ enum HTMLImageSyntax {
         /// decoded, whitespace trimmed; nil otherwise. An `<a>` on a line of
         /// its own is a wrapper-only line and its link is not carried over.
         var link: String? = nil
+        /// Whitespace or a no-break space between this tag and the previous
+        /// image of the scanned text (GitHub: a gap; touching tags: none).
+        var spaceBefore = false
+        /// A `<br>` between this tag and the previous image (GitHub: `<br>`,
+        /// the next line of an image row).
+        var breakBefore = false
         /// Line breaks between the start of the scanned text and this tag's
         /// `<` — the parser maps it to the line the tag STARTS on, which is
         /// the block's `sourceLine` (a multi-line tag is scanned joined).
@@ -233,6 +239,9 @@ enum HTMLImageSyntax {
         var onlyLineBreaks = true
         // The href of the `<a>` open at this point of the text, if any.
         var openLink: Range<Int>?
+        // What stood between the previous image and the next one.
+        var pendingSpace = false
+        var pendingBreak = false
         while i < bytes.count {
             guard bytes[i] == UInt8(ascii: "<") else { return nil }
             while counted < i {
@@ -246,6 +255,7 @@ enum HTMLImageSyntax {
                 return .unterminatedImage
             case .wrapper(let end, let isLineBreak, let link, let closesLink):
                 onlyLineBreaks = onlyLineBreaks && isLineBreak
+                if isLineBreak { pendingBreak = true }
                 if let link { openLink = link }
                 if closesLink { openLink = nil }
                 i = end
@@ -255,10 +265,16 @@ enum HTMLImageSyntax {
                     let href = decodeEntities(string(bytes, openLink)).trimmingCharacters(in: .whitespacesAndNewlines)
                     if !href.isEmpty { tag.link = href }
                 }
+                tag.spaceBefore = pendingSpace
+                tag.breakBefore = pendingBreak
+                pendingSpace = false
+                pendingBreak = false
                 images.append(tag)
                 i = end
             }
-            i = skipSeparators(bytes, from: i)
+            let next = skipSeparators(bytes, from: i)
+            if next > i { pendingSpace = true }
+            i = next
         }
         return .tags(images: images, lineBreakOnly: images.isEmpty && onlyLineBreaks)
     }

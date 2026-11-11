@@ -1076,15 +1076,23 @@ struct MarkdownBlockParser: Sendable {
     /// as a line of images too, with each `<img>`'s width and same-line
     /// `<a href>`: GitHub draws `<a href><img></a> <a href><img></a>` on one
     /// line, such lines one under the other, and `![a](x)` over an `<img>`
-    /// line as one `<p>` of inline pictures. Between two tags of one line
-    /// the scanner does not keep the whitespace, so they always get a
-    /// space. A wrapper-only line (`<p align="center">`, `<br>`) is not
-    /// images: the paragraph keeps its pre-1.15 shape.
+    /// line as one `<p>` of inline pictures. Between two tags of one line:
+    /// whitespace or `&nbsp;` = a space, touching = none, `<br>` = a line
+    /// break (as GitHub draws them). A wrapper-only line (`<p align=
+    /// "center">`, `<br>`) is not images: the paragraph keeps its pre-1.15
+    /// shape. A paragraph that STARTS with a line CommonMark reads as an
+    /// HTML block (`<img src="a">` alone, `<p …><img></p>`) takes no
+    /// Markdown image line after it: GitHub shows that line as literal text
+    /// inside the HTML block; QuickMD keeps its pre-1.15 picture blocks.
     func imageParagraph(at start: Int, in lines: [String], references: [String: String]) -> ImageParagraph {
         var images: [RowImage] = []
         var lineBreakBefore = false
+        var startsHTMLBlock = false
         var index = start
         while index < lines.count {
+            #if DEBUG
+            Self.imageParagraphLineScans.add()
+            #endif
             if index > start, paragraphEnds(after: index - 1, in: lines) {
                 // A `\` hard break needs a line after it IN the paragraph.
                 return Self.endsWithBackslashBreak(lines[index - 1])
@@ -1097,9 +1105,16 @@ struct MarkdownBlockParser: Sendable {
                 guard !backslash, let html = htmlImageLine(lines, at: index), !html.images.isEmpty else {
                     return .notImages(checkedUntil: index)
                 }
+                if index == start { startsHTMLBlock = Self.startsHTMLBlock(Self.markerLine(line)) }
                 for (offset, tag) in html.images.enumerated() {
-                    let separator: RowImage.Separator = images.isEmpty
-                        ? .none : (offset == 0 && lineBreakBefore ? .lineBreak : .space)
+                    let separator: RowImage.Separator
+                    if images.isEmpty {
+                        separator = .none
+                    } else if offset == 0 {
+                        separator = lineBreakBefore ? .lineBreak : .space
+                    } else {
+                        separator = tag.breakBefore ? .lineBreak : (tag.spaceBefore ? .space : .none)
+                    }
                     images.append(RowImage(url: tag.url, alt: tag.alt,
                                            link: tag.link.flatMap { MarkdownRenderer.linkURL(for: $0) },
                                            separator: separator, width: tag.width))
@@ -1108,6 +1123,7 @@ struct MarkdownBlockParser: Sendable {
                 index = html.end
                 continue
             }
+            if startsHTMLBlock { return .notImages(checkedUntil: index) }
             for (offset, image) in found.enumerated() {
                 let separator: RowImage.Separator
                 if images.isEmpty {
@@ -1127,6 +1143,20 @@ struct MarkdownBlockParser: Sendable {
         return Self.endsWithBackslashBreak(lines[index - 1])
             ? .notImages(checkedUntil: index) : .images(images, end: index)
     }
+
+    #if DEBUG
+    /// Lines `imageParagraph` has looked at, for the test that the parse
+    /// scans each line of a failed run once (`imageParagraphSkip`).
+    /// Locked: parses run off-main, several documents at once.
+    static let imageParagraphLineScans = ScanCounter()
+
+    final class ScanCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func add() { lock.lock(); value += 1; lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+    }
+    #endif
 
     /// A line ending in ONE backslash (CommonMark's hard line break when a
     /// paragraph line follows; `\\` is an escaped backslash).

@@ -34,6 +34,12 @@ extension BlockLayout {
         static let chipFontSize: CGFloat = 11
         /// Text inset left and right, × zoom.
         static let chipHorizontalPadding: CGFloat = 6
+        /// The slot before the text for the `photo` glyph (the single image
+        /// placeholder's), or a small spinner while loading — one fixed size
+        /// either way, so loading → failed never changes the chip. × zoom.
+        static let chipGlyphSide: CGFloat = 12
+        /// Between the glyph slot and the text, × zoom.
+        static let chipGlyphSpacing: CGFloat = 3
         static let chipCornerRadius: CGFloat = 3
         /// The widest a chip gets, × zoom (never wider than the column).
         static let chipMaxWidth: CGFloat = 240
@@ -50,7 +56,7 @@ extension BlockLayout {
         }
 
         /// The chip's frame: its label's width (CoreText, thread-safe — the
-        /// measurer runs off-main) plus the insets and a 2 pt allowance for
+        /// measurer runs off-main) plus the insets, the glyph slot and a 2 pt allowance for
         /// SwiftUI's own text width, capped; `placeholderSide` tall. The view
         /// FRAMES the chip with this, so the measurer's row is exact.
         static func chipSize(alt: String, fontScale: CGFloat, contentWidth: CGFloat) -> CGSize {
@@ -58,7 +64,7 @@ extension BlockLayout {
                                            attributes: [.font: chipFont(fontScale: fontScale)])
             let line = CTLineCreateWithAttributedString(label)
             let text = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))
-            let width = (text + 2).rounded(.up) + 2 * chipHorizontalPadding * fontScale
+            let width = (text + 2).rounded(.up) + (2 * chipHorizontalPadding + chipGlyphSide + chipGlyphSpacing) * fontScale
             let cap = min(clampedWidth(contentWidth), chipMaxWidth * fontScale)
             return CGSize(width: min(width, cap), height: placeholderSide * fontScale)
         }
@@ -143,6 +149,24 @@ extension BlockLayout {
                               width: clampedWidth(contentWidth), fontScale: fontScale)
             return height(of: lines, fontScale: fontScale) + 2 * Document.imageOuterVerticalPadding
         }
+    }
+}
+
+// MARK: - Print sizes
+
+/// An image's width in print/PDF (`PrintableImageView`, also each picture of
+/// `PrintableImageRowView`): the D4 rule with the page column cap and no
+/// zoom — an HTML `<img width>` wins over the image's own width, a picture
+/// is never wider than itself. Here, not in MarkdownExport, so it is tested.
+enum PrintImageLayout {
+    /// Page column cap.
+    static let maxWidth: CGFloat = 500
+    static let maxHeight: CGFloat = 700
+
+    static func displayWidth(imageWidth: CGFloat, requested: ImageWidth?) -> CGFloat {
+        if let requested { return requested.displayWidth(cap: maxWidth, fontScale: 1) }
+        guard imageWidth > 0 else { return maxWidth }
+        return min(maxWidth, imageWidth)
     }
 }
 
