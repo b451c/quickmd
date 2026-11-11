@@ -198,6 +198,9 @@ final class ImageRowTests: XCTestCase {
         }
         let small = scans(200)
         let large = scans(400)
+        // The counter is per thread (another test's background parse cannot
+        // add to it); this parse ran here, so it counted.
+        XCTAssertGreaterThanOrEqual(small, 200, "the counter saw this thread's parse")
         XCTAssertLessThanOrEqual(small, 2 * 201, "each line scanned at most twice (once per attempt)")
         XCTAssertLessThanOrEqual(large, 2 * small + 4, "200: \(small) scans, 400: \(large)")
         // And the parse is the pre-1.15 paragraph of linked placeholders.

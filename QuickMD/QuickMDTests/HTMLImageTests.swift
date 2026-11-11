@@ -388,47 +388,68 @@ final class HTMLImageTests: XCTestCase {
     // MARK: - Performance
 
     /// Multi-MB lines that START with `<` but are not a recognised line must
-    /// be rejected in one linear pass (bounds are generous for CI runners).
+    /// be rejected in one linear pass. Costs are compared, never timed
+    /// (`CostScaling`): 8× the line may cost at most 24× (quadratic ≈ 64×).
     func testHugeLinesStartingWithAngleBracketAreRejectedFast() {
-        let filler = String(repeating: "word ", count: 1_000_000)          // 5 MB
+        func cases(_ words: Int) -> [String] {
+            let filler = String(repeating: "word ", count: words)
+            let attributes = String(repeating: "a=b ", count: words * 5 / 4)
+            return [
+                "<" + filler,                       // `<word` — unknown tag name, stops at once
+                "<p " + attributes,                 // scanned to the end, unterminated wrapper → nil
+                "<p>" + filler,                     // text after a wrapper
+                "<img src=a.png>" + filler,         // text after an image
+                "<!--" + filler,
+            ]
+        }
         let attributes = String(repeating: "a=b ", count: 1_250_000)       // 5 MB of valid attributes
-        let cases = [
-            "<" + filler,                       // `<word` — unknown tag name, stops at once
-            "<p " + attributes,                 // scanned to the end, unterminated wrapper → nil
-            "<p>" + filler,                     // text after a wrapper
-            "<img src=a.png>" + filler,         // text after an image
-            "<!--" + filler,
-        ]
-        let start = Date()
-        for line in cases { XCTAssertNil(HTMLImageSyntax.scan(line[...]), String(line.prefix(16))) }
+        for line in cases(1_000_000) { XCTAssertNil(HTMLImageSyntax.scan(line[...]), String(line.prefix(16))) }
         // An unterminated `<img` with megabytes of attributes and no `>` on the
         // following lines goes through the parser's join loop and stays text.
         XCTAssertEqual(HTMLImageSyntax.scan(("<img " + attributes)[...]), .unterminatedImage)
-        XCTAssertLessThan(Date().timeIntervalSince(start), 5.0)
+        let linear = CostScaling.compare(small: 125_000, limit: 24) { words in
+            let lines = cases(words) + ["<img " + String(repeating: "a=b ", count: words * 5 / 4)]
+            return { for line in lines { _ = HTMLImageSyntax.scan(line[...]) } }
+        }
+        XCTAssertLessThanOrEqual(linear.ratio, 24, linear.description)
 
-        // And the cheap reject for a line that does not start with `<`.
-        let rejectStart = Date()
+        // And the cheap reject for a line that does not start with `<`: its
+        // cost does not grow with the line (a scan would cost ~8×).
+        let filler = String(repeating: "word ", count: 1_000_000)          // 5 MB
         for _ in 0..<200 { XCTAssertNil(HTMLImageSyntax.scan(filler[...])) }
-        XCTAssertLessThan(Date().timeIntervalSince(rejectStart), 2.0, "the prefix check must not scan the line")
+        let reject = CostScaling.compare(small: 125_000, limit: 3) { words in
+            let filler = String(repeating: "word ", count: words)
+            return { for _ in 0..<200 { _ = HTMLImageSyntax.scan(filler[...]) } }
+        }
+        XCTAssertLessThanOrEqual(reject.ratio, 3, "the prefix check must not scan the line: \(reject)")
     }
 
     func testHugeDataURIInImgTagParsesInLinearTime() {
-        let payload = String(repeating: "QUJD", count: 512 * 1024)   // 2 MiB
-        let url = "data:image/png;base64," + payload
-        let start = Date()
-        let blocks = parse("<p align=\"center\">\n<img src=\"\(url)\" width=\"64\">\n</p>\n\nAfter.")
-        XCTAssertLessThan(Date().timeIntervalSince(start), 1.0)
+        func document(_ quads: Int) -> (url: String, markdown: String) {
+            let url = "data:image/png;base64," + String(repeating: "QUJD", count: quads)
+            return (url, "<p align=\"center\">\n<img src=\"\(url)\" width=\"64\">\n</p>\n\nAfter.")
+        }
+        let (url, markdown) = document(512 * 1024)   // 2 MiB
+        let blocks = parse(markdown)
         XCTAssertEqual(images(blocks).map(\.url), [url])
         XCTAssertEqual(images(blocks).first?.width, .points(64))
         XCTAssertEqual(kinds(blocks), ["image", "text"])
+        let cost = CostScaling.compare(small: 64 * 1024, limit: 24) { quads in
+            let markdown = document(quads).markdown
+            return { _ = self.parse(markdown) }
+        }
+        XCTAssertLessThanOrEqual(cost.ratio, 24, cost.description)
     }
 
-    /// A line that starts like a wrapper but carries text: one linear pass
-    /// that stops at the first non-tag byte.
+    /// A line that starts like a wrapper but carries text: one pass that
+    /// stops at the first non-tag byte, so its cost does not grow with the
+    /// text after it (a scan of the line would cost ~8×) — `CostScaling`.
     func testHugeLineStartingWithATagIsRejectedLinearly() {
-        let line = "<div>" + String(repeating: "QUJD", count: 512 * 1024)
-        let start = Date()
-        XCTAssertNil(HTMLImageSyntax.scan(line[...]))
-        XCTAssertLessThan(Date().timeIntervalSince(start), 2.0)
+        XCTAssertNil(HTMLImageSyntax.scan(("<div>" + String(repeating: "QUJD", count: 512 * 1024))[...]))
+        let cost = CostScaling.compare(small: 64 * 1024, limit: 3) { quads in
+            let line = "<div>" + String(repeating: "QUJD", count: quads)
+            return { _ = HTMLImageSyntax.scan(line[...]) }
+        }
+        XCTAssertLessThanOrEqual(cost.ratio, 3, cost.description)
     }
 }

@@ -536,9 +536,10 @@ enum ImageLoader {
 
 // MARK: - Cache
 
-/// The loader's caches: an `NSCache` keyed by `NSString` (why NSString: see
-/// `ImageLoader.displayCache`) behind a forwarder whose only purpose is a
-/// Debug-build test seam. In Release every method is a plain forward to the
+/// The loader's caches — and the ```svg block (`SVGImageDecoder`) and Mermaid
+/// snapshot (`MermaidSnapshotStore`) stores: an `NSCache` keyed by `NSString`
+/// (why NSString: see `ImageLoader.displayCache`) behind a forwarder whose
+/// only purpose is a Debug-build test seam. In Release every method is a plain forward to the
 /// NSCache — same keys, same costs, same limits, same eviction.
 ///
 /// Why the seam exists: `NSCache` may evict ANY object at any moment under

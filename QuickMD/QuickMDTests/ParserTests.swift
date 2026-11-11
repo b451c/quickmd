@@ -512,23 +512,15 @@ final class ParserTests: XCTestCase {
     /// An image line whose alt holds many inner `[a](` that never close: the
     /// bracket scan must stay linear (a depth scan per `](` to the end of the
     /// line made it quadratic, review round 7). Relative, not absolute: 8×
-    /// the input may take at most ~3× the linear share.
+    /// the input may take at most ~3× the linear share — CPU time of this
+    /// thread, so a loaded machine cannot fail it (`CostScaling`).
     func testImageLineWithUnclosedInnerLinksParsesInLinearTime() {
         let parser = MarkdownBlockParser(theme: MarkdownTheme.cached(for: .light))
-        func time(_ count: Int) -> TimeInterval {
+        let cost = CostScaling.compare(small: 5_000, limit: 24) { count in
             let line = "![x" + String(repeating: "[a](", count: count) + "]"
-            _ = parser.parse(line)  // warm
-            var best = TimeInterval.infinity
-            for _ in 0..<3 {
-                let start = Date()
-                _ = parser.parse(line)
-                best = min(best, Date().timeIntervalSince(start))
-            }
-            return best
+            return { _ = parser.parse(line) }
         }
-        let small = time(5_000)
-        let large = time(40_000)
-        XCTAssertLessThan(large, max(small, 0.005) * 24, "5k: \(small) s, 40k: \(large) s (quadratic would be ~64×)")
+        XCTAssertLessThanOrEqual(cost.ratio, 24, "\(cost) (quadratic would be ~64×)")
     }
 
     /// Badges one per line are ONE paragraph on GitHub (`gh api markdown`:
@@ -1112,19 +1104,23 @@ final class ParserTests: XCTestCase {
         XCTAssertTrue(images(parse("![logo]")).isEmpty)
     }
 
-    /// A multi-MB `data:` URL on one line is scanned once, linearly.
+    /// A multi-MB `data:` URL on one line is scanned once, linearly: 8× the
+    /// payload may cost at most 24× the CPU time (`CostScaling`).
     func testHugeDataURIImageLineParsesInLinearTime() {
-        let payload = String(repeating: "QUJD", count: 512 * 1024)   // 2 MiB of base64
-        let url = "data:image/png;base64," + payload
-        let markdown = "# Title\n\n![embedded](\(url))\n\nAfter."
-        let start = Date()
-        let blocks = parse(markdown)
-        let elapsed = Date().timeIntervalSince(start)
-        let found = images(blocks)
+        func markdown(_ quads: Int) -> (url: String, markdown: String) {
+            let url = "data:image/png;base64," + String(repeating: "QUJD", count: quads)
+            return (url, "# Title\n\n![embedded](\(url))\n\nAfter.")
+        }
+        let (url, document) = markdown(512 * 1024)   // 2 MiB of base64
+        let found = images(parse(document))
         XCTAssertEqual(found.count, 1)
         XCTAssertEqual(found.first?.url.utf8.count, url.utf8.count)
         XCTAssertEqual(found.first?.url == url, true)
-        XCTAssertLessThan(elapsed, 1.0, "2 MB data: line took \(elapsed) s")
+        let cost = CostScaling.compare(small: 64 * 1024, limit: 24) { quads in
+            let document = markdown(quads).markdown
+            return { _ = self.parse(document) }
+        }
+        XCTAssertLessThanOrEqual(cost.ratio, 24, cost.description)
     }
 
     /// D11 (until 1.14) a badge line was a paragraph of linked placeholders;

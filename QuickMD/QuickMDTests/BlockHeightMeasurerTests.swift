@@ -403,9 +403,7 @@ final class BlockHeightMeasurerTests: XCTestCase {
 
     func testMixedDocumentProducesOneRowPerBlockWithCorrectKinds() {
         let blocks = parse(Self.mixedDocument)
-        let started = Date()
         let measured = measure(blocks, width: 800, seeds: [:])
-        let elapsedMS = Date().timeIntervalSince(started) * 1000
 
         XCTAssertEqual(measured.table.heights.count, blocks.count)
         XCTAssertEqual(measured.table.kinds.count, blocks.count)
@@ -455,11 +453,16 @@ final class BlockHeightMeasurerTests: XCTestCase {
             }
         }
 
-        // ~0.065 ms/block measured on an M-series MBP (1001 blocks in 65 ms;
-        // the 21-block fixture reads higher because it pays the one-off font and
-        // regex warm-up). The bound is deliberately loose — it exists to catch an
-        // accidental O(n²), not to police a few milliseconds.
-        XCTAssertLessThan(elapsedMS, 500, "measuring \(blocks.count) blocks took \(elapsedMS) ms")
+        // ~0.065 ms/block measured on an M-series MBP (1001 blocks in 65 ms).
+        // The check exists to catch an accidental O(n²), not to police a few
+        // milliseconds — and it compares costs instead of timing them, so a
+        // loaded machine cannot fail it (`CostScaling`): 8× the blocks may
+        // cost at most 24× the CPU time (quadratic ≈ 64×).
+        let cost = CostScaling.compare(small: 2, limit: 24) { copies in
+            let blocks = self.parse(Array(repeating: Self.mixedDocument, count: copies).joined(separator: "\n\n"))
+            return { _ = self.measure(blocks, width: 800, seeds: [:]) }
+        }
+        XCTAssertLessThanOrEqual(cost.ratio, 24, "measuring the fixture × copies: \(cost)")
     }
 
     private func exemplar(_ block: MarkdownBlock) -> String {
