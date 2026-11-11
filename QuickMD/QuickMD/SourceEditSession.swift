@@ -63,6 +63,9 @@ final class SourceEditSession: ObservableObject {
         /// text that is on disk.
         var commitText: (String) -> Void = { _ in }
         var toast: (String) -> Void = { _ in }
+        /// Every buffer change, the session's own included (split view's live
+        /// preview). Never writes or commits anything.
+        var bufferChanged: () -> Void = {}
     }
 
     var environment = Environment()
@@ -198,7 +201,10 @@ final class SourceEditSession: ObservableObject {
     static var beep: () -> Void = { NSSound.beep() }
 
     init() {
-        editor.onChange = { [weak self] in self?.bufferDidChange() }
+        editor.onChange = { [weak self] in
+            self?.bufferDidChange()
+            self?.environment.bufferChanged()
+        }
         editor.onEscape = { [weak self] in self?.escape() }
     }
 
