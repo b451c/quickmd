@@ -856,14 +856,14 @@ struct MarkdownRenderer: Sendable {
             switch byte {
             case UInt8(ascii: "\\"):
                 if !escapesDisabled, let (attr, rest) = tryParseEscape(&remaining) {
-                    parse.append(.atom(attr))
+                    parse.append(.atom(attr, .body))
                     remaining = rest
                     continue
                 }
             case UInt8(ascii: "`"):
                 let span = parse.codeSpans.span(at: remaining)
                 if let content = span.content {
-                    parse.append(.atom(codeSpan(content)))
+                    parse.append(.atom(codeSpan(content), .code))
                 } else {
                     parse.addPlain(remaining.startIndex..<span.end)  // a run that closes nowhere is text
                 }
@@ -877,13 +877,13 @@ struct MarkdownRenderer: Sendable {
                 continue
             case UInt8(ascii: "!"):
                 if let (attr, rest) = tryParseImage(&remaining, pairs: parse.pairs) {
-                    parse.append(.atom(attr))
+                    parse.append(.atom(attr, .imagePlaceholder))
                     remaining = rest
                     continue
                 }
             case UInt8(ascii: "["):
                 if let (attr, rest) = tryParseFootnoteRef(&remaining) {
-                    parse.append(.atom(attr))
+                    parse.append(.atom(attr, .footnoteNumber))
                     remaining = rest
                     continue
                 }
@@ -903,13 +903,13 @@ struct MarkdownRenderer: Sendable {
                 continue
             case UInt8(ascii: "<"):
                 if let (attr, rest) = tryParseAngleAutolink(remaining) {
-                    parse.append(.atom(attr))
+                    parse.append(.atom(attr, .body))
                     remaining = rest
                     continue
                 }
             case UInt8(ascii: "h"), UInt8(ascii: "w"):
                 if let (attr, rest) = tryParseAutolink(remaining, in: text) {
-                    parse.append(.atom(attr))
+                    parse.append(.atom(attr, .body))
                     remaining = rest
                     continue
                 }
@@ -944,8 +944,9 @@ struct MarkdownRenderer: Sendable {
         /// Source text, drawn in the body style (character references decoded).
         case text(Substring)
         /// A finished piece: escape, code span, footnote number, image
-        /// placeholder, autolink.
-        case atom(AttributedString)
+        /// placeholder, autolink — with the font it was drawn in, so
+        /// emphasis can add its traits to that font (`restyle`).
+        case atom(AttributedString, AtomFont)
         /// A delimiter run (index into the stack's runs): the characters no
         /// match used are text.
         case delimiter(Int)
@@ -1109,8 +1110,9 @@ struct MarkdownRenderer: Sendable {
             styles.append(InlineStyle(bold: depth.strong > 0, italic: depth.emphasis > 0,
                                       strikethrough: depth.strike > 0, link: linkOf[index]))
         }
-        // A link INSIDE emphasis is drawn in the text colour (see `finish`):
-        // emphasis covers the link's emptied "[" node exactly then.
+        // Whether a link sits INSIDE emphasis (only option A draws it in the
+        // text colour, see `finish`): emphasis covers the link's emptied "["
+        // node exactly then.
         let linkInEmphasis = parse.links.map { link in
             link.start > 0 && (styles[link.start - 1].bold || styles[link.start - 1].italic)
         }
@@ -1138,7 +1140,7 @@ struct MarkdownRenderer: Sendable {
                 if !email.isEmpty {
                     let address = String(decoded[email])
                     var attr = autolinkText(address, url: URL(string: "mailto:" + address))
-                    restyle(&attr, pendingStyle)
+                    restyle(&attr, .body, pendingStyle)
                     finish(&attr, pendingStyle, parse.links, linkInEmphasis)
                     result.append(attr)
                 }
@@ -1158,9 +1160,9 @@ struct MarkdownRenderer: Sendable {
                 if style != pendingStyle { flushText(); pendingStyle = style }
                 pending += String(repeating: Character(Unicode.Scalar(parse.delimiters.runs[run].character)),
                                   count: count)
-            case .atom(var attr):
+            case .atom(var attr, let font):
                 flushText()
-                restyle(&attr, style)
+                restyle(&attr, font, style)
                 finish(&attr, style, parse.links, linkInEmphasis)
                 result.append(attr)
             }
@@ -1169,26 +1171,61 @@ struct MarkdownRenderer: Sendable {
         return result
     }
 
-    /// Emphasis over an atom (code span, footnote number, image placeholder,
-    /// autolink, escape): the body font with the emphasis traits and the text
-    /// colour — exactly the look emphasis gave its content before 1.15,
-    /// when a bold run re-stamped everything inside it. Nested emphasis now
-    /// COMBINES (`**a *b* c**`: b is bold italic).
-    private func restyle(_ attr: inout AttributedString, _ style: InlineStyle) {
-        guard style.bold || style.italic else { return }
-        attr.setDualFont(size: scaled(14), bold: style.bold, italic: style.italic, fonts: theme.fonts)
-        attr.setDualForeground(theme.textColor)
+    /// The font an atom was drawn in (its own parser's `setDualFont` call),
+    /// so emphasis can ADD traits to it instead of replacing it.
+    private struct AtomFont {
+        let size: CGFloat
+        var bold = false
+        var italic = false
+        var monospaced = false
+
+        /// Escapes, autolinks, e-mail links: the body font.
+        static let body = AtomFont(size: 14)
+        /// `codeSpan`.
+        static let code = AtomFont(size: 13, monospaced: true)
+        /// `tryParseFootnoteRef`'s superscript number.
+        static let footnoteNumber = AtomFont(size: 11, bold: true)
+        /// `tryParseImage`'s "[Image: alt]" placeholder.
+        static let imagePlaceholder = AtomFont(size: 14, italic: true)
     }
 
-    /// Strikethrough and the link over a styled piece. A link takes the link
-    /// colour unless it sits inside emphasis (the emphasis' text colour won
-    /// there before 1.15 — kept), underline and URL always; the OUTER link's
-    /// URL replaces an inner autolink's or image's.
+    /// THE switch for what emphasis does to what it covers (decided for
+    /// 1.15, option B; set to false to get the pre-1.15 look back, A):
+    /// - true: emphasis only ADDS bold / italic to each piece's own font —
+    ///   code stays monospaced on its chip, a footnote number keeps its
+    ///   size, a link keeps the link colour (`**see [docs](u)**`);
+    /// - false: emphasis re-stamps everything inside it with the body font
+    ///   and the text colour, as every release before 1.15 did (code lost
+    ///   its monospace, a bold link was drawn in the text colour).
+    /// Nested emphasis combines its traits either way.
+    private static let emphasisKeepsContentLook = true
+
+    /// Emphasis over an atom (code span, footnote number, image placeholder,
+    /// autolink, escape) — see `emphasisKeepsContentLook`. Fonts come from
+    /// `DocumentFonts` (the Settings / theme family; a family without a
+    /// bold-italic cut resolves to its closest face, never NSFontManager),
+    /// both scopes; colours stay the atom's own.
+    private func restyle(_ attr: inout AttributedString, _ font: AtomFont, _ style: InlineStyle) {
+        guard style.bold || style.italic else { return }
+        guard Self.emphasisKeepsContentLook else {
+            attr.setDualFont(size: scaled(14), bold: style.bold, italic: style.italic, fonts: theme.fonts)
+            attr.setDualForeground(theme.textColor)
+            return
+        }
+        attr.setDualFont(size: scaled(font.size), bold: font.bold || style.bold, italic: font.italic || style.italic,
+                         monospaced: font.monospaced, fonts: theme.fonts)
+    }
+
+    /// Strikethrough and the link over a styled piece: link colour (unless
+    /// `emphasisKeepsContentLook` is off and the link sits inside emphasis —
+    /// the pre-1.15 text colour), underline and URL; the OUTER link's URL
+    /// replaces an inner autolink's or image's.
     private func finish(_ attr: inout AttributedString, _ style: InlineStyle,
                         _ links: [LinkSpan], _ linkInEmphasis: [Bool]) {
         if style.strikethrough { attr.setDualStrikethrough() }
         guard style.link >= 0 else { return }
-        attr.setDualForeground(linkInEmphasis[style.link] ? theme.textColor : theme.linkColor)
+        let textColored = !Self.emphasisKeepsContentLook && linkInEmphasis[style.link]
+        attr.setDualForeground(textColored ? theme.textColor : theme.linkColor)
         attr.setDualUnderline()
         if let url = links[style.link].url { attr.link = url }
     }

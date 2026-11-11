@@ -135,8 +135,8 @@ final class InlineSyntaxTests: XCTestCase {
     /// Code spans and links bind tighter than emphasis, escapes count as
     /// text. GitHub: `<em>a <code>*</code></em>`, `*<a>foo*</a>`,
     /// `_foo <a>bar_</a>`, `foo <em>*</em>`, `<strong>foo <a><em>bar</em></a></strong>`.
-    /// (Inside emphasis a code span keeps its chip but takes the emphasis
-    /// font, as before 1.15 — hence "BC"/"IC".)
+    /// (Inside emphasis a code span stays monospaced on its chip and gains
+    /// the emphasis traits — "IC".)
     func testCodeAndLinksOutrankEmphasis() {
         check([
             ("*a `*`*", "I{a }IC{*}"),                          // spec 487
@@ -146,6 +146,36 @@ final class InlineSyntaxTests: XCTestCase {
             ("foo __\\___", "foo B{_}"),                        // spec 461
             ("**foo [*bar*](/url)**", "B{foo }BI</url>{bar}"),  // spec 442
         ])
+    }
+
+    /// Emphasis ADDS its traits to what it covers and keeps its look
+    /// (option B, decided for 1.15): GitHub draws `<strong><a>docs</a></strong>`
+    /// as a link, `<strong><code>make</code></strong>` as code, a footnote
+    /// reference as its superscript. Fonts in both scopes.
+    func testEmphasisKeepsTheLookOfWhatItCovers() {
+        let renderer = MarkdownRenderer(theme: theme, fontScale: 1.5,
+                                        footnoteDefinitions: [(id: "1", content: "note")])
+        let attributed = renderer.renderInline("**see [docs](u)** *see [it](v)* **run `make`** **a[^1]** ***`x`***")
+        func run(_ text: String) -> AttributedString.Runs.Run? {
+            attributed.runs.first { String(attributed[$0.range].characters) == text }
+        }
+        func font(_ text: String) -> NSFont? { run(text)?[AttributeScopes.AppKitAttributes.FontAttribute.self] }
+        func traits(_ text: String) -> NSFontDescriptor.SymbolicTraits { font(text)?.fontDescriptor.symbolicTraits ?? [] }
+        let linkColor = NSColor(theme.linkColor)
+        for link in ["docs", "it"] {
+            XCTAssertEqual(run(link)?[AttributeScopes.AppKitAttributes.ForegroundColorAttribute.self], linkColor, link)
+            XCTAssertNotNil(run(link)?.foregroundColor, link)
+        }
+        XCTAssertTrue(traits("docs").contains(.bold))
+        XCTAssertTrue(traits("it").contains(.italic))
+        XCTAssertTrue(traits("make").isSuperset(of: [.bold, .monoSpace]), "\(traits("make"))")
+        XCTAssertEqual(font("make")?.pointSize, 13 * 1.5)
+        XCTAssertNotNil(run("make")?[AttributeScopes.AppKitAttributes.BackgroundColorAttribute.self])
+        XCTAssertEqual(font("\u{00B9}")?.pointSize, 11 * 1.5, "footnote number keeps its size")
+        XCTAssertTrue(traits("x").isSuperset(of: [.bold, .italic, .monoSpace]), "\(traits("x"))")
+        XCTAssertNotNil(run("make")?.font, "SwiftUI scope too")
+        // Text around them is the ordinary bold body font.
+        XCTAssertEqual(font("run "), theme.fonts.appKit(size: 14 * 1.5, weight: .bold))
     }
 
     // MARK: - Strikethrough (GFM)
@@ -243,7 +273,8 @@ final class InlineSyntaxTests: XCTestCase {
     func testQuotesResolveBracketsLikeParagraphs() {
         let definitions = "\n\n[r]: https://r.example\n[^n]: note"
         let lines = ["[a [b][r] c][r]", "[foo][nope] and [r]", "`[r]` and [x `]`][r]", "<https://y.example/[r]> [r]",
-                     "***[r]*** and ~~[r]~~", "see [![i][r]][r]"]
+                     "***[r]*** and ~~[r]~~", "see [![i][r]][r]",
+                     "~~x[^n]~~ and ***y[^n]*** and `[^n]`"]
         for line in lines {
             let paragraph = structure(line + definitions)
             let blocks = MarkdownBlockParser(theme: theme).parse("> " + line + definitions)
@@ -253,6 +284,10 @@ final class InlineSyntaxTests: XCTestCase {
         }
         XCTAssertEqual(structure("[a [b][r] c][r]" + definitions),
                        "[a <https://r.example>{b} c]<https://r.example>{r}")
+        // A footnote reference inside `~~…~~` / `***…***` is a reference
+        // (their content is parsed since 1.15); inside code it is text.
+        XCTAssertEqual(structure("~~x[^n]~~ and ***y[^n]*** and `[^n]`" + definitions),
+                       "S{x}BS{\u{00B9}} and BI{y\u{00B9}} and C{[^n]}")
     }
 
     // MARK: - Autolinks
