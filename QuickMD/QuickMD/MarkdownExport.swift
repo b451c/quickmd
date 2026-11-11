@@ -474,7 +474,9 @@ enum PrintFolderAccess {
     static func restoreSavedAccess(forParentOf fileURL: URL) {
         let folder = fileURL.deletingLastPathComponent()
         guard attempted.insert(folder.standardizedFileURL.path).inserted else { return }
-        SandboxAccessManager.shared.restoreAccess(for: folder)
+        // A saved grant of the folder OR any folder above it (the
+        // document's folder covers `images/`), never a panel.
+        SandboxAccessManager.shared.restoreSavedAccess(covering: fileURL)
     }
 }
 
