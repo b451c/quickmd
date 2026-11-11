@@ -2132,9 +2132,12 @@ enum BlockHeightMeasurer {
                                    renderer: MarkdownRenderer, contentWidth: CGFloat, math: MathRendering,
                                    built: NSAttributedString? = nil)
         -> (height: CGFloat, edges: BlockLayout.Spacing.Edges, string: NSAttributedString) {
-        let ns = built ?? BlockTextConverter.headingTitle(attributed(), level: level, renderer: renderer, math: math)
+        // Rendered once: the baseline reads the title's fonts (code in a title
+        // is smaller and monospaced), the string only when none was built yet.
+        let title = attributed()
+        let ns = built ?? BlockTextConverter.headingTitle(title, level: level, renderer: renderer, math: math)
         let geometry = BlockLayout.Heading.titleGeometry(
-            titleFirstBaseline: BlockLayout.Heading.titleFirstBaseline(of: attributed,
+            titleFirstBaseline: BlockLayout.Heading.titleFirstBaseline(of: title,
                                                                        headerFont: renderer.headerAppKitFont(level: level)))
         let ink = textInk(text: ns, width: BlockLayout.Heading.titleWrapWidth(rowWidth: contentWidth))
         let height = max(geometry.titleTopInset + ink.height, geometry.minimumHeight)
