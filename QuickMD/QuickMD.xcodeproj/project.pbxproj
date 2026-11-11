@@ -134,6 +134,7 @@
 		A1B2C3D401000069 /* BlockHeightMeasurer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000069 /* BlockHeightMeasurer.swift */; };
 		A1B2C3D40100006A /* BlockHeightMeasurerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */; };
 		A1B2C3D4010002A2 /* VerticalRhythmTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000002A1 /* VerticalRhythmTests.swift */; };
+		A1B2C3D401000400 /* TableRulesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000400 /* TableRulesTests.swift */; };
 		A1B2C3D40100006B /* BlockHeightMeasurer.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000069 /* BlockHeightMeasurer.swift */; };
 		A1B2C3D40100006C /* VirtualBlockList.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000006C /* VirtualBlockList.swift */; };
 		A1B2C3D40100006D /* SVGBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000006D /* SVGBlockView.swift */; };
@@ -189,6 +190,7 @@
 		A1B2C3D400000069 /* BlockHeightMeasurer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockHeightMeasurer.swift; sourceTree = "<group>"; };
 		A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockHeightMeasurerTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4000002A1 /* VerticalRhythmTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerticalRhythmTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000400 /* TableRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableRulesTests.swift; sourceTree = "<group>"; };
 		A1B2C3D40000006C /* VirtualBlockList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualBlockList.swift; sourceTree = "<group>"; };
 		A1B2C3D40000006D /* SVGBlockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SVGBlockView.swift; sourceTree = "<group>"; };
 		A1B2C3D40000006E /* SVGImageDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SVGImageDecoder.swift; sourceTree = "<group>"; };
@@ -359,6 +361,7 @@
 				A1B2C3D400000067 /* ChromeHoverTests.swift */,
 				A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */,
 				A1B2C3D4000002A1 /* VerticalRhythmTests.swift */,
+				A1B2C3D400000400 /* TableRulesTests.swift */,
 				A1B2C3D400000082 /* ImageLoadingTests.swift */,
 				A1B2C3D4000000E1 /* HTMLImageTests.swift */,
 				A1B2C3D4000000F0 /* HeadingLayoutTests.swift */,
@@ -755,6 +758,7 @@
 				A1B2C3D401000068 /* ChromeHoverState.swift in Sources (Tests) */,
 				A1B2C3D40100006A /* BlockHeightMeasurerTests.swift in Sources */,
 				A1B2C3D4010002A2 /* VerticalRhythmTests.swift in Sources */,
+				A1B2C3D401000400 /* TableRulesTests.swift in Sources */,
 				A1B2C3D40100006B /* BlockHeightMeasurer.swift in Sources (Tests) */,
 				A1B2C3D4010001B1 /* TableTextBuilder.swift in Sources (Tests) */,
 				A1B2C3D401000221 /* FrontMatter.swift in Sources (Tests) */,

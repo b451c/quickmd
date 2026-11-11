@@ -112,6 +112,11 @@ struct TableText {
     let string: NSAttributedString
     let layout: TableTextLayout
     let source: Source
+    /// The colour of the rules between cells (`theme.borderColor`), drawn by
+    /// `paintTableRules` — the string's own cell borders are clear (#56, see
+    /// `TableTextBuilder`). Built with the string, so the rules and the
+    /// header band always come from the same theme.
+    let ruleColor: NSColor
 
     func matches(headers: [String], rows: [[String]], alignments: [TextAlignment], style: TableStyle,
                  theme: MarkdownTheme, fontScale: CGFloat) -> Bool {
@@ -196,7 +201,12 @@ final class FullWidthTextTable: NSTextTable {
 /// - a cell's padding is 1.12's `.padding`; its 1 pt rule is a BORDER on its
 ///   trailing edge (not the last column) and its bottom edge (not the last
 ///   data row — the header always has one, as 1.12's header separator), so
-///   neighbouring cells never draw a rule twice;
+///   neighbouring cells never draw a rule twice. The border WIDTHS stay in the
+///   blocks (they are layout: cell rects and row heights depend on them), but
+///   the border COLOUR is clear and the rules are painted by
+///   `paintTableRules` from the laid-out cells (#56: on macOS 27.2 AppKit
+///   painted the dividers but none of the bottom borders — every horizontal
+///   rule was gone; not reproducible on 27.0, so we no longer depend on it);
 /// - cells are centred vertically in their band (`.middleAlignment` — the
 ///   HStack's default alignment in 1.12), not top-aligned as text tables are
 ///   by default;
@@ -274,7 +284,10 @@ enum TableTextBuilder {
                 if isHeader || bandIndex < lastDataBand {
                     block.setWidth(Metrics.separatorHeight, type: .absoluteValueType, for: .border, edge: .maxY)
                 }
-                block.setBorderColor(border)
+                // Clear: AppKit must not paint the rules (#56) — the view
+                // paints them, once, in `paintTableRules`. A translucent theme
+                // colour painted by both would show darker.
+                block.setBorderColor(.clear)
                 block.verticalAlignment = .middleAlignment
                 if isHeader { block.backgroundColor = headerBackground }
 
@@ -291,7 +304,8 @@ enum TableTextBuilder {
             string: result,
             layout: TableTextLayout(columnCount: columnCount, showsHeader: showsHeader, cellRanges: cellRanges),
             source: TableText.Source(headers: headers, rows: rows, alignments: alignments, style: style,
-                                     theme: theme, fontScale: fontScale))
+                                     theme: theme, fontScale: fontScale),
+            ruleColor: border)
     }
 
     /// The key column's fixed width for a widest key of `textWidth`: the text
@@ -576,6 +590,12 @@ extension NSTextView {
     /// The bounds of a cell (padding + its borders) in view coordinates, or nil
     /// when the text view does not hold the table `layout` describes.
     func tableCellBounds(band: Int, column: Int, layout: TableTextLayout) -> NSRect? {
+        tableCell(band: band, column: column, layout: layout)?.bounds
+    }
+
+    /// `tableCellBounds` plus the cell's text block (its border widths).
+    private func tableCell(band: Int, column: Int, layout: TableTextLayout)
+        -> (bounds: NSRect, block: NSTextBlock)? {
         guard let layoutManager, let storage = textStorage,
               band >= 0, band < layout.bandCount, column >= 0, column < layout.columnCount else { return nil }
         let range = layout.cellRanges[band][column]
@@ -585,8 +605,99 @@ extension NSTextView {
         let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: range.location,
                                                                          length: range.length + 1),
                                               actualCharacterRange: nil)
-        return layoutManager.boundsRect(for: block, glyphRange: glyphs)
+        let bounds = layoutManager.boundsRect(for: block, glyphRange: glyphs)
             .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        return (bounds, block)
+    }
+
+    // MARK: Rules (#56)
+
+    /// The table's rules in view coordinates, for the bands that intersect
+    /// `rect` (all of them when nil): each cell's trailing divider and bottom
+    /// rule, from its laid-out bounds and its block's border widths.
+    ///
+    /// The rects are the ones AppKit filled while it painted the borders
+    /// itself (logged on macOS 27.0 through `fillBackgroundRectArray`): the
+    /// divider spans the cell's whole height, the bottom rule the cell's width
+    /// up to the divider — so where they meet, one rect covers the corner and
+    /// a translucent colour is never painted twice.
+    func tableRuleRects(layout: TableTextLayout, in rect: NSRect? = nil) -> [NSRect] {
+        guard layout.bandCount > 0, layout.columnCount > 0 else { return [] }
+        // Bands stack top to bottom (as in `characterIndex(confinedToCellAt:)`):
+        // a binary search finds the first band that reaches into `rect`, so a
+        // 200-row table costs only the visible bands per draw.
+        var first = 0
+        if let rect {
+            var high = layout.bandCount - 1
+            while first < high {
+                let mid = (first + high) / 2
+                let bounds = tableCellBounds(band: mid, column: 0, layout: layout) ?? .zero
+                if bounds.maxY > rect.minY { high = mid } else { first = mid + 1 }
+            }
+        }
+        var rules: [NSRect] = []
+        for band in first..<layout.bandCount {
+            for column in 0..<layout.columnCount {
+                guard let (bounds, block) = tableCell(band: band, column: column, layout: layout) else { continue }
+                if column == 0, let rect, bounds.minY >= rect.maxY { return rules }
+                let trailing = block.width(for: .border, edge: .maxX)
+                let bottom = block.width(for: .border, edge: .maxY)
+                if trailing > 0 {
+                    rules.append(NSRect(x: bounds.maxX - trailing, y: bounds.minY,
+                                        width: trailing, height: bounds.height))
+                }
+                if bottom > 0 {
+                    rules.append(NSRect(x: bounds.minX, y: bounds.maxY - bottom,
+                                        width: bounds.width - trailing, height: bottom))
+                }
+            }
+        }
+        return rules
+    }
+
+    /// Paints the table's rules (`tableRuleRects`) in `color`. Call from
+    /// `draw(_:)` AFTER `super.draw`, so nothing AppKit paints for the text
+    /// (cell backgrounds, the selection, search highlights) can cover them.
+    ///
+    /// Why our own pass (#56): the cell borders were AppKit's job until 1.14.4,
+    /// and on macOS 27.2 the bottom ones were not painted (the horizontal
+    /// rules vanished, the dividers — the same mechanism on another edge —
+    /// stayed; not reproducible on 27.0, so the cause inside AppKit is
+    /// unknown). Here a rule depends only on the laid-out cell rects, which
+    /// hit-testing and the measurer already rely on, and is painted last, in
+    /// our own clip, by a plain fill. Each rect is snapped to whole device
+    /// pixels (at least one), so a rule at a fractional position can never be
+    /// rounded away or smeared to a faint pair of pixel rows; rules already on
+    /// the pixel grid (every case measured) draw exactly as before.
+    func paintTableRules(layout: TableTextLayout, color: NSColor, in dirtyRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let rules = tableRuleRects(layout: layout, in: dirtyRect).filter { $0.intersects(dirtyRect) }
+        guard !rules.isEmpty else { return }
+        color.setFill()
+        for rule in rules {
+            TableTextBuilder.pixelAligned(rule, in: context).fill(using: .sourceOver)
+        }
+    }
+
+    /// The whole of `TableTextView.draw`, here so the unit tests draw a table
+    /// through the very same steps: everything clipped to the rounded rect
+    /// (1.12 `.clipShape`), the table's background, then `drawText` (the
+    /// view's `super.draw`: header band, selection, search highlights, text),
+    /// then the rules on top (`paintTableRules`). The rules need `layout` to
+    /// describe the installed string; while it does not (no table yet), only
+    /// the text is drawn.
+    func drawTable(in dirtyRect: NSRect, background: NSColor, layout: TableTextLayout?, ruleColor: NSColor,
+                   drawText: () -> Void) {
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(roundedRect: bounds, xRadius: BlockLayout.Table.cornerRadius,
+                     yRadius: BlockLayout.Table.cornerRadius).addClip()
+        background.setFill()
+        dirtyRect.fill()
+        drawText()
+        if let layout, layout.length == (textStorage?.length ?? 0) {
+            paintTableRules(layout: layout, color: ruleColor, in: dirtyRect)
+        }
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     /// The insertion index for `point` (view coordinates), confined to the cell
@@ -640,5 +751,20 @@ extension NSTextView {
         // with the end of the string for the right end of a last-band cell's
         // last line (once in 36 probes), so keep the answer in the cell.
         return min(max(characterIndexForInsertion(at: clamped), range.location), NSMaxRange(range))
+    }
+}
+
+extension TableTextBuilder {
+    /// `rect` with every edge moved to the nearest device pixel of `context`,
+    /// and never thinner than one pixel — the grid of whatever the view draws
+    /// into (window backing store, layer, bitmap), not the screen's guess.
+    static func pixelAligned(_ rect: NSRect, in context: CGContext) -> NSRect {
+        let device = context.convertToDeviceSpace(rect).standardized
+        var minX = device.minX.rounded(), maxX = device.maxX.rounded()
+        var minY = device.minY.rounded(), maxY = device.maxY.rounded()
+        // Thinner than a pixel after rounding: the pixel holding its centre.
+        if maxX - minX < 1 { minX = device.midX.rounded(.down); maxX = minX + 1 }
+        if maxY - minY < 1 { minY = device.midY.rounded(.down); maxY = minY + 1 }
+        return context.convertToUserSpace(CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY))
     }
 }
