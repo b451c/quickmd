@@ -942,8 +942,7 @@ enum PrintableMath {
     /// PDF agree on what is math. `fontSize`: the text around the formulas
     /// (a heading passes its own, v1.15).
     static func text(from attributed: AttributedString, fontSize: CGFloat = 14) -> Text {
-        let plain = String(attributed.characters)
-        guard BlockTextConverter.containsInlineMath(plain) else { return Text(attributed) }
+        guard BlockTextConverter.containsInlineMath(attributed) else { return Text(attributed) }
 
         var result = Text("")
         var index = attributed.startIndex
@@ -973,15 +972,23 @@ enum PrintableMath {
 }
 
 /// A display formula inside a printed quote or alert body (v1.15): centred
-/// like `PrintableMathBlockView`, without its block padding (it is a line of
-/// the body); the LaTeX in monospace when it does not typeset.
+/// like `PrintableMathBlockView`, with the same `Math.verticalPadding` the
+/// screen gives it as paragraph spacing; the LaTeX in monospace when it does
+/// not typeset.
 struct PrintableQuotedFormula: View {
     let latex: String
 
     var body: some View {
         if let image = PrintableMath.displayImage(latex) {
+            // Never wider than the column: scaled down to fit, as on screen
+            // (`FittingMathAttachment`).
             Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: image.size.width)
                 .frame(maxWidth: .infinity, alignment: .center)
+                // The screen's paragraph spacing around it (`Math.verticalPadding`).
+                .padding(.vertical, BlockLayout.Math.verticalPadding)
         } else {
             Text(latex)
                 .font(.system(size: 12, design: .monospaced))

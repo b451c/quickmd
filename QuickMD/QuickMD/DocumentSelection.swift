@@ -284,6 +284,10 @@ extension NSAttributedString.Key {
     /// no layout, so the measured height of the paragraph is unaffected.
     static let qmdInlineMathSource = NSAttributedString.Key("pl.falami.studio.QuickMD.inlineMathSource")
 
+    /// The delimiter of an in-text `$$…$$` formula (v1.15; absent = `$`).
+    /// Copy writes it around `qmdInlineMathSource`.
+    static let qmdInlineMathDelimiter = NSAttributedString.Key("pl.falami.studio.QuickMD.inlineMathDelimiter")
+
     /// The LaTeX of a display formula inside a quote or alert body (v1.15,
     /// `BlockTextConverter.makeMathString`): copied as `$$⏎<latex>⏎$$`, as a
     /// `$$` block copies (`SelectionPiece.displayMath`).
@@ -369,6 +373,7 @@ enum DocumentCopyBuilder {
         result.removeAttribute(.backgroundColor, range: full)
         result.removeAttribute(.qmdInlineMathSource, range: full)
         result.removeAttribute(.qmdDisplayMathSource, range: full)
+        result.removeAttribute(.qmdInlineMathDelimiter, range: full)
         return DocumentCopyOutput(plain: result.string, rtf: result)
     }
 
@@ -441,9 +446,12 @@ enum DocumentCopyBuilder {
                     attributes = result.attributes(at: range.location - 1, effectiveRange: nil)
                     attributes[.attachment] = nil
                     attributes[.qmdInlineMathSource] = nil
+                    attributes[.qmdInlineMathDelimiter] = nil
                     attributes[.link] = nil
                 }
-                replacement = NSAttributedString(string: "$" + latex + "$", attributes: attributes)
+                let delimiter = result.attribute(.qmdInlineMathDelimiter, at: range.location,
+                                                 effectiveRange: nil) as? String ?? "$"
+                replacement = NSAttributedString(string: delimiter + latex + delimiter, attributes: attributes)
             } else if let latex = result.attribute(.qmdDisplayMathSource, at: range.location,
                                                    effectiveRange: nil) as? String {
                 var attributes = result.attributes(at: range.location, effectiveRange: nil)

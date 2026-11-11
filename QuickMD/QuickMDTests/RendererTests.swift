@@ -621,9 +621,12 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(segments, [.text("costs $100 and $200 total")])
     }
 
-    func testDoubleDollarSkipped() {
+    /// v1.15: `$$…$$` inside text is an inline formula, as on GitHub
+    /// (`para <math-renderer class="js-inline-math">$$v$$</math-renderer> inline`);
+    /// until then the segmenter skipped it.
+    func testDoubleDollarInTextIsInlineMath() {
         let segments = InlineMathSegmenter.split("a $$display$$ b")
-        XCTAssertEqual(segments, [.text("a $$display$$ b")])
+        XCTAssertEqual(segments, [.text("a "), .math("display"), .text(" b")])
     }
 
     // MARK: - Headers
@@ -1089,7 +1092,7 @@ final class RendererTests: XCTestCase {
         guard case .text(let attributed)? = blocks.first?.content else { return ("", []) }
         let plain = String(attributed.characters)
         let ns = BlockTextConverter.makeNSAttributedString(
-            from: attributed, hasInlineMath: BlockTextConverter.containsInlineMath(plain),
+            from: attributed, hasInlineMath: BlockTextConverter.containsInlineMath(attributed),
             theme: theme, fontScale: 1, math: engine)
         return (ns.string, formulas)
     }

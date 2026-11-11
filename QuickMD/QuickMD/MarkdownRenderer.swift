@@ -493,7 +493,7 @@ struct MarkdownRenderer: Sendable {
     /// slug reads the heading's text, `Note<sup>1</sup>` is `note1`, and the
     /// superscript digit drawn here is not a word character for the slug.
     func headingAnchorText(_ title: String) -> String {
-        let attributed = Self.formulaSourceWithEscapes(renderInlineFormatting(title))
+        let attributed = Self.formulaSourceWithEscapes(renderInlineFormatting(title), softBreaks: true)
         var text = ""
         for run in attributed.runs {
             if let number = run[FootnoteNumberAttribute.self] {
@@ -519,9 +519,10 @@ struct MarkdownRenderer: Sendable {
     /// view typesets the formulas (`BlockTextConverter.makeMathString`, which
     /// splits this text the same way); the heading's id and the Contents
     /// sidebar still read these characters, so they keep the source.
-    private static func formulaSourceWithEscapes(_ attributed: AttributedString) -> AttributedString {
+    private static func formulaSourceWithEscapes(_ attributed: AttributedString,
+                                                 softBreaks: Bool = false) -> AttributedString {
         guard attributed.characters.contains("$") else { return attributed }
-        let pieces = InlineMathSegmenter.pieces(of: attributed)
+        let pieces = InlineMathSegmenter.pieces(of: attributed, softBreaks: softBreaks)
         guard pieces.contains(where: { if case .math = $0.segment { return true } else { return false } }) else {
             return attributed
         }
@@ -535,7 +536,7 @@ struct MarkdownRenderer: Sendable {
                 result.append(attributed[index..<end])
             case .math(let latex):
                 // The formula's own attributes (its first run), its source with escapes.
-                var source = AttributedString("$" + latex + "$")
+                var source = AttributedString(piece.delimiter + latex + piece.delimiter)
                 if let first = attributed[index..<end].runs.first {
                     source.setAttributes(first.attributes)
                 }
@@ -617,9 +618,12 @@ struct MarkdownRenderer: Sendable {
     /// Display math inside a quote, as GitHub decides it (v1.15, checked with
     /// `gh api markdown`): a PARAGRAPH (lines between blank lines) made only
     /// of `$$…$$` formulas — `$$a+b$$`, or `$$` / LaTeX lines / `$$`, or
-    /// several formulas — shows each formula as display math. A `$$` that
-    /// shares its paragraph with text ("Text⏎$$⏎x⏎$$", "$$x$$⏎after") is
-    /// text, as on GitHub. The formula is read from the RAW lines, before the
+    /// several formulas — shows each formula as display math. A `$$…$$` that
+    /// shares its paragraph with text stays in the text, where the segmenter
+    /// reads it as an INLINE formula ("Before⏎$$E$$⏎after", as GitHub's
+    /// `js-inline-math`), or as text when its `$$` stands alone on a line
+    /// ("Text⏎$$⏎x⏎$$": joined, the opener is followed by a space — text on
+    /// GitHub too). The formula is read from the RAW lines, before the
     /// soft-break join, so a LaTeX `\\` at a line end stays LaTeX (the join
     /// would read it as a hard break).
     ///

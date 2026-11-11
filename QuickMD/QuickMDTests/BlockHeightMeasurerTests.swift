@@ -125,7 +125,7 @@ final class BlockHeightMeasurerTests: XCTestCase {
                     // The converted string must be the one the view would build.
                     let expectedNS = BlockTextConverter.makeNSAttributedString(
                         from: attributed,
-                        hasInlineMath: BlockTextConverter.containsInlineMath(String(attributed.characters)),
+                        hasInlineMath: BlockTextConverter.containsInlineMath(attributed),
                         theme: theme, fontScale: 1.0, math: math)
                     XCTAssertEqual(ns.string, expectedNS.string, fixture.name)
 
@@ -733,7 +733,7 @@ final class BlockHeightMeasurerTests: XCTestCase {
         return blocks.enumerated().compactMap { index, block in
             switch block.content {
             case .text(let attributed):
-                return BlockTextConverter.containsInlineMath(String(attributed.characters)) ? index : nil
+                return BlockTextConverter.containsInlineMath(attributed) ? index : nil
             case .mathBlock:
                 return index
             case .blockquote(let content, _), .alert(_, let content):
@@ -752,11 +752,10 @@ final class BlockHeightMeasurerTests: XCTestCase {
     func testMeasureWithoutMathEngineDefersExactlyTheMathRows() {
         let blocks = parse(Self.mathDocument)
         let expected = mathRowIndices(in: blocks)
-        // Paragraph, `$$` block, quote ($y$), quote ("$5 and $10": the
-        // paragraphs' `containsInlineMath` test is looser than the segmenter,
-        // so it is deferred, then shows no formula), quote ($$ display),
-        // alert, heading, table — not the plain heading or the plain table.
-        XCTAssertEqual(expected.count, 8, "fixture stopped covering every math row kind")
+        // Paragraph, `$$` block, quote ($y$), quote ($$ display), alert,
+        // heading, table — not the "$5 and $10" quote (no formula: the
+        // segmenter decides, built off-main), the plain heading or table.
+        XCTAssertEqual(expected.count, 7, "fixture stopped covering every math row kind")
 
         let deferred = measureWithoutMathEngine(blocks, width: 600)
         XCTAssertEqual(deferred.mathPendingRows, expected)

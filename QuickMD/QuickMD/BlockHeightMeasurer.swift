@@ -710,6 +710,45 @@ struct MathRendering {
     }
 }
 
+// MARK: - Formula attachments
+
+/// The attachment a typeset formula is embedded as (inline and quote display
+/// formulas, every kind). An attachment cannot wrap: wider than the line it
+/// sits on — a matrix in a narrow table column, a long sum in a narrow window
+/// — it would draw over the neighbouring cell or past the text's edge. So it
+/// is scaled down, aspect kept, to the width of the line fragment TextKit
+/// offers (the cell's or the text's width), and drawn at its natural size
+/// otherwise. Decided in layout, from the same string, so the measurer and
+/// the view agree at every width; centred on `capHeight` like any formula.
+final class FittingMathAttachment: NSTextAttachment {
+    private let capHeight: CGFloat
+
+    init(image: NSImage, capHeight: CGFloat) {
+        self.capHeight = capHeight
+        super.init(data: nil, ofType: nil)
+        self.image = image
+        bounds = Self.bounds(for: image.size, capHeight: capHeight, availableWidth: .greatestFiniteMagnitude)
+    }
+
+    required init?(coder: NSCoder) {
+        capHeight = 0
+        super.init(coder: coder)
+    }
+
+    /// `size` scaled to fit `availableWidth` (never up), centred on `capHeight`.
+    static func bounds(for size: NSSize, capHeight: CGFloat, availableWidth: CGFloat) -> CGRect {
+        let scale = size.width > availableWidth && availableWidth > 0 ? availableWidth / size.width : 1
+        let width = size.width * scale, height = size.height * scale
+        return CGRect(x: 0, y: (capHeight - height) / 2, width: width, height: height)
+    }
+
+    override func attachmentBounds(for textContainer: NSTextContainer?, proposedLineFragment lineFrag: CGRect,
+                                   glyphPosition position: CGPoint, characterIndex charIndex: Int) -> CGRect {
+        guard let size = image?.size else { return bounds }
+        return Self.bounds(for: size, capHeight: capHeight, availableWidth: floor(lineFrag.width))
+    }
+}
+
 // MARK: - AttributedString → NSAttributedString
 
 /// The conversions that decide a block's laid-out text. Shared by the views that
@@ -722,12 +761,21 @@ enum BlockTextConverter {
     /// Same test the parse task applies when it fills `TextBlockMeta`, so a
     /// measurement taken without meta classifies the paragraph identically.
     /// `$` alone is cheap to reject, which most paragraphs are.
-    static func containsInlineMath(_ plain: String) -> Bool {
-        guard plain.contains("$"), let regex = inlineMathRegex else { return false }
-        return regex.firstMatch(in: plain, range: NSRange(plain.startIndex..., in: plain)) != nil
+    ///
+    /// The segmenter's own answer (`InlineMathSegmenter.hasMath`), escapes
+    /// and code spans included: true exactly when the converter will embed a
+    /// formula. Until v1.15 this was a looser regex, so "$5 and $10" sent a
+    /// row to the main actor to typeset nothing.
+    static func containsInlineMath(_ attributed: AttributedString) -> Bool {
+        InlineMathSegmenter.hasMath(attributed)
     }
 
-    private static let inlineMathRegex = try? NSRegularExpression(pattern: #"\$[^\s$].*?\$"#)
+    /// The same rule on plain text (no escape information) — for callers
+    /// that only have characters (tests).
+    static func containsInlineMath(_ plain: String) -> Bool {
+        guard plain.contains("$") else { return false }
+        return InlineMathSegmenter.split(plain).contains { if case .math = $0 { return true } else { return false } }
+    }
 
     /// Converts the renderer's dual-scope AttributedString into the
     /// NSAttributedString an `NSTextView`-backed block installs. For paragraphs
@@ -776,20 +824,22 @@ enum BlockTextConverter {
                 }
 
                 if let image = math.inlineImage(latex, theme, mathFontSize) {
-                    let attachment = NSTextAttachment()
-                    attachment.image = image
-                    // Center the math image against the cap height of the
-                    // text around it (14 pt body × zoom, or the heading's).
-                    let bodyFont = theme.fonts.appKit(size: mathFontSize)
-                    let yOffset = (bodyFont.capHeight - image.size.height) / 2
-                    attachment.bounds = CGRect(x: 0, y: yOffset,
-                                               width: image.size.width, height: image.size.height)
+                    // Centred against the cap height of the text around it
+                    // (14 pt body × zoom, or the heading's); scaled down when
+                    // wider than the line (`FittingMathAttachment`).
+                    let attachment = FittingMathAttachment(
+                        image: image, capHeight: theme.fonts.appKit(size: mathFontSize).capHeight)
                     // Tagged with its source so a copy can write `$latex$`
                     // instead of U+FFFC (DocumentCopyBuilder). Draws nothing,
                     // lays out nothing — the measured height is unchanged.
                     let embedded = NSMutableAttributedString(attachment: attachment)
                     embedded.addAttribute(.qmdInlineMathSource, value: latex,
                                           range: NSRange(location: 0, length: embedded.length))
+                    if piece.delimiter != "$" {
+                        // An in-text `$$…$$` copies back with its own delimiter.
+                        embedded.addAttribute(.qmdInlineMathDelimiter, value: piece.delimiter,
+                                              range: NSRange(location: 0, length: embedded.length))
+                    }
                     result.append(embedded)
                 } else {
                     // Fallback: italic literal, same as the legacy pipeline
@@ -813,9 +863,8 @@ enum BlockTextConverter {
     /// paragraphs' test) or a display formula `renderQuotedBody` marked. A
     /// string without `$` is rejected at once.
     static func needsMath(_ attributed: AttributedString) -> Bool {
-        let plain = String(attributed.characters)
-        guard plain.contains("$") else { return false }
-        return containsInlineMath(plain)
+        guard attributed.characters.contains("$") else { return false }
+        return containsInlineMath(attributed)
             || attributed.runs.contains { $0[DisplayMathAttribute.self] != nil }
     }
 
@@ -863,7 +912,7 @@ enum BlockTextConverter {
             let linePlain = String(line.characters)
             if linePlain.contains("$") {
                 let display = line.runs.first(where: { $0[DisplayMathAttribute.self] != nil })?[DisplayMathAttribute.self]
-                if display != nil || containsInlineMath(linePlain) {
+                if display != nil || containsInlineMath(line) {
                     appendPlain(plainStart..<lineStart)
                     if let display {
                         result.append(displayFormula(display, theme: theme, fontScale: fontScale, math: math))
@@ -901,21 +950,33 @@ enum BlockTextConverter {
     private static func displayFormula(_ latex: String, theme: MarkdownTheme, fontScale: CGFloat,
                                        math: MathRendering) -> NSAttributedString {
         let render = math.displayImage ?? math.inlineImage
+        // Fallback limits (accepted, as for a `$$` block that becomes a
+        // ```latex block): the LaTeX keeps its own line breaks, so one body
+        // line can show as several; the search fallback before the first
+        // layout (`DocumentSearch.searchMathPlaceholder`) counts it as ONE
+        // attachment character instead of its text; a copy writes the bare
+        // LaTeX (no `$$`), as the paragraphs' italic fallback copies its
+        // LaTeX without `$`.
         guard let image = render(latex, theme, BlockLayout.Math.fontSize * fontScale) else {
             return NSAttributedString(string: latex, attributes: [
                 .font: theme.fonts.appKit(size: BlockLayout.Code.codeFontSize * fontScale, monospaced: true),
                 .foregroundColor: NSColor(theme.textColor),
             ])
         }
-        let attachment = NSTextAttachment()
-        attachment.image = image
         // Centred on the body text's cap height, as an inline formula: the
         // line is as tall as the formula, whatever its depth.
         let bodyFont = theme.fonts.appKit(size: 14 * fontScale)
-        attachment.bounds = CGRect(x: 0, y: (bodyFont.capHeight - image.size.height) / 2,
-                                   width: image.size.width, height: image.size.height)
+        let attachment = FittingMathAttachment(image: image, capHeight: bodyFont.capHeight)
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
+        // The air a `$$` block keeps around its formula (`MathBlockView`'s
+        // `.padding(.vertical, Math.verticalPadding)`, unscaled there too),
+        // as paragraph spacing of the formula's own line: it is part of the
+        // string, so the measurer lays it out exactly as the view does.
+        // Print gives the printed formula the same padding
+        // (`PrintableQuotedFormula`).
+        paragraph.paragraphSpacingBefore = BlockLayout.Math.verticalPadding
+        paragraph.paragraphSpacing = BlockLayout.Math.verticalPadding
         let embedded = NSMutableAttributedString(attachment: attachment)
         let range = NSRange(location: 0, length: embedded.length)
         embedded.addAttributes([.qmdDisplayMathSource: latex, .paragraphStyle: paragraph,
@@ -1419,7 +1480,7 @@ enum BlockHeightMeasurer {
             switch block.content {
 
             case .text(let attributed):
-                let hasMath = BlockTextConverter.containsInlineMath(String(attributed.characters))
+                let hasMath = BlockTextConverter.containsInlineMath(attributed)
                 if hasMath, math == nil {
                     // Building the string means rendering `$…$` segments through
                     // the math engine, which this thread may not touch. The
@@ -1738,7 +1799,7 @@ enum BlockHeightMeasurer {
                 // Re-derive the flag rather than assuming it: the row is pending
                 // *because* this test was true, and re-running it guarantees the
                 // same string `measure` would have built with a live engine.
-                let hasMath = BlockTextConverter.containsInlineMath(String(attributed.characters))
+                let hasMath = BlockTextConverter.containsInlineMath(attributed)
                 let ns = BlockTextConverter.makeNSAttributedString(
                     from: attributed, hasInlineMath: hasMath,
                     theme: theme, fontScale: fontScale, math: math)

@@ -302,7 +302,7 @@ enum DocumentSearch {
         case .text(let attributed):
             if let shown = converted[block.id] { return shown.string }
             let plain = String(attributed.characters)
-            guard BlockTextConverter.containsInlineMath(plain) else { return plain }
+            guard BlockTextConverter.containsInlineMath(attributed) else { return plain }
             return BlockTextConverter.makeNSAttributedString(
                 from: attributed, hasInlineMath: true,
                 theme: renderer.theme, fontScale: renderer.fontScale,

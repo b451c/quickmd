@@ -680,7 +680,7 @@ struct MarkdownView: View {
                         // hosts disagree about inline math.
                         meta[block.id] = TextBlockMeta(
                             plain: plain,
-                            hasInlineMath: BlockTextConverter.containsInlineMath(plain))
+                            hasInlineMath: BlockTextConverter.containsInlineMath(attr))
                     }
                 }
                 // Measure in the SAME task, so blocks and their heights reach the
@@ -1317,7 +1317,7 @@ struct MarkdownView: View {
             if let cached { return cached }
             return TextBlockView.makeNSAttributedString(
                 from: attributed,
-                hasInlineMath: BlockTextConverter.containsInlineMath(String(attributed.characters)),
+                hasInlineMath: BlockTextConverter.containsInlineMath(attributed),
                 theme: theme, fontScale: scale)
         case .blockquote(let content, _):
             if let cached { return cached }

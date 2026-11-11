@@ -21,6 +21,8 @@ final class MathInTextKindsTests: XCTestCase {
 
     static let smallSize = NSSize(width: 20, height: 12)
     static let tallSize = NSSize(width: 30, height: 44)
+    /// Wider than any column or quote used here: a long matrix.
+    static let wideSize = NSSize(width: 900, height: 60)
 
     /// What the stub engine was asked for.
     final class Recorder {
@@ -32,6 +34,7 @@ final class MathInTextKindsTests: XCTestCase {
         MathRendering(inlineImage: { latex, theme, size in
             recorder.calls.append((latex, size, theme.isDark))
             guard typesets else { return nil }
+            if latex.contains("matrix") { return NSImage(size: Self.wideSize) }
             let tall = latex.contains("\\frac") || latex.contains("\\sum")
             return NSImage(size: tall ? Self.tallSize : Self.smallSize)
         }, displayHeight: { _, _, _ in 40 })
@@ -383,6 +386,176 @@ final class MathInTextKindsTests: XCTestCase {
         XCTAssertEqual(recorder.calls.map(\.latex), ["a", "b", "d"])
         XCTAssertEqual(recorder.calls.map(\.size), [21, 39, 21], "14 × 1.5, H2 26 × 1.5, 14 × 1.5")
         XCTAssertEqual(recorder.calls.map(\.isDark), [true, true, true])
+    }
+
+    // MARK: - Review fixes (2026-11-11)
+
+    /// The one segmenter follows GitHub's delimiter rules — every expected
+    /// value from `gh api markdown -f mode=gfm` (scratch gh/case6-11.html):
+    /// `<p>p1 $HOME/$USER end</p>`, `<p>p2 $5-$10 end</p>`,
+    /// `<p>p3 $a$1 end</p>`, `<p>p13 $a$_ end</p>`, `<p>t1 $a$b c$ end</p>`,
+    /// `<p>p8 x$a$ end</p>`, `<p>p15 é$a$ end</p>`, `<p>q1 -$a$ end</p>`,
+    /// `<p>p21 a$$x$$b</p>`, `<p>n8 $$a$</p>` — text;
+    /// `<M>$a$</M>é`, `(<M>$a$</M>)`, `<M>$a$</M>.`, `<M>$a$</M>$b$`,
+    /// `$a <M>$b$</M>`, `<M>$5$</M>`, `<M>$1.5$</M>`,
+    /// `text <M>$$x$$</M> more`, `$$a$$b <M>$$c$$</M>` — math.
+    func testSegmenterFollowsGitHubsDelimiterRules() {
+        func formulas(_ text: String) -> [String] {
+            InlineMathSegmenter.split(text).compactMap { if case .math(let latex) = $0 { return latex } else { return nil } }
+        }
+        let text = ["$HOME/$USER end", "$5-$10 end", "$a$1 end", "$a$b end", "$a$_ end", "$\\alpha$x",
+                    "$a$b c$ end", "$a$b$c$ end", "x$a$ end", "1$a$ end", "é$a$ end", "€$a$ end", "-$a$ end",
+                    "\"$a$\" end", ".$a$ end", "/$a$ end", ":$a$ end", "[$a$] end", "$ a$ end", "$a $ end",
+                    "a$$x$$b", "$$x$$1 end", "1$$x$$ end", "$$a$ end", "$$ x $$ mid", "$5 and $10 end",
+                    "$x\ny$ end"]
+        for case_ in text { XCTAssertEqual(formulas(case_), [], case_) }
+        let math: [(String, [String])] = [
+            ("$a$é end", ["a"]), ("($a$) end", ["a"]), ("$a$. end", ["a"]), ("$a$, end", ["a"]),
+            ("$a$) end", ["a"]), ("$a$-b end", ["a"]), ("$a$'s end", ["a"]), ("$a$€ end", ["a"]),
+            ("$a$$ end", ["a"]), ("$a$$b$ end", ["a"]), ("$a$$$b$$", ["a"]), ("$a $b$ end", ["b"]),
+            ("$a$b $c$ end", ["c"]), ("x$a$ $b$ end", ["b"]), ("$HOME/$USER and $x$ end", ["x"]),
+            ("$5-$10 and $y$", ["y"]), ("$5$ end", ["5"]), ("$1,000$ end", ["1,000"]), ("$1.5$ end", ["1.5"]),
+            ("text $$x$$ more", ["x"]), ("$$x$$ more", ["x"]), ("$$a$$b $$c$$", ["c"]),
+            ("$5 or $x$ end", ["x"]), ("tab\t$a$ end", ["a"]), ("$a$/b end", ["a"]), ("$a$! end", ["a"]),
+        ]
+        for (case_, expected) in math { XCTAssertEqual(formulas(case_), expected, case_) }
+        // The "needs the engine" test is the segmenter's own answer.
+        XCTAssertFalse(BlockTextConverter.containsInlineMath("$5 and $10"))
+        XCTAssertFalse(BlockTextConverter.containsInlineMath("$HOME/$USER"))
+        XCTAssertTrue(BlockTextConverter.containsInlineMath("a $x$ b"))
+    }
+
+    /// Prices and shell variables in a cell, quote, alert or heading are no
+    /// formula on GitHub (`<td>$HOME/$USER</td><td>$5-$10</td>`,
+    /// `<h1>Env $HOME/$USER and $5-$10</h1>`,
+    /// `<blockquote><p>Path $HOME/$USER costs $5-$10</p>`): shown as text,
+    /// and their rows are measured — tables built — off the main actor,
+    /// exactly as in 1.14.4.
+    @MainActor
+    func testPricesAndShellVariablesAreTextAndNotDeferred() {
+        let recorder = Recorder()
+        let blocks = parse("""
+        | A | B |
+        |---|---|
+        | $HOME/$USER | $5-$10 |
+        | $5 and $10 | $a$1 |
+
+        # Env $HOME/$USER and $5-$10
+
+        > Path $HOME/$USER costs $5-$10
+
+        > [!TIP]
+        > $5 and $10
+        """)
+        let raw = BlockHeightMeasurer.measure(blocks: blocks, theme: theme, fontScale: 1, contentWidth: 600, math: nil)
+        XCTAssertEqual(raw.mathPendingRows, [], "nothing to typeset, nothing deferred")
+        XCTAssertEqual(raw.tables[blocks[0].id]?.string.string, "A\nB\n$HOME/$USER\n$5-$10\n$5 and $10\n$a$1\n")
+        XCTAssertEqual(raw.converted[blocks[1].id]?.string, "Env $HOME/$USER and $5-$10")
+        XCTAssertEqual(raw.converted[blocks[2].id]?.string, "Path $HOME/$USER costs $5-$10")
+        XCTAssertEqual(raw.converted[blocks[3].id]?.string, "$5 and $10")
+        _ = measure(blocks, math: engine(recorder))
+        XCTAssertEqual(recorder.latex, [])
+        // Paragraphs follow the same rule (they shared the defect before).
+        let paragraph = parse("Set $HOME/$USER, pay $5-$10.")
+        XCTAssertEqual(BlockHeightMeasurer.measure(blocks: paragraph, theme: theme, fontScale: 1,
+                                                   contentWidth: 600, math: nil).mathPendingRows, [])
+    }
+
+    /// `$$…$$` that shares its paragraph with text is an INLINE formula on
+    /// GitHub, in every kind: `<p>para <M>$$v$$</M> inline</p>`,
+    /// `<blockquote><p>Text <M>$$x$$</M> more</p>`,
+    /// `<blockquote><p><M>$$y$$</M><br>after</p>`, `<td><M>$$z$$</M></td>`,
+    /// `<td>in <M>$$w$$</M> cell</td>`. It copies back with `$$`.
+    @MainActor
+    func testInTextDoubleDollarIsInlineMathEverywhere() {
+        let recorder = Recorder()
+        let blocks = parse("""
+        para $$v$$ inline
+
+        > Text $$x$$ more
+
+        > $$y$$
+        > after
+
+        | A | B |
+        |---|---|
+        | $$z$$ | in $$w$$ cell |
+        """)
+        let measured = measure(blocks, math: engine(recorder))
+        XCTAssertEqual(measured.converted[blocks[0].id]?.string, "para \u{FFFC} inline")
+        XCTAssertEqual(measured.converted[blocks[1].id]?.string, "Text \u{FFFC} more")
+        XCTAssertEqual(measured.converted[blocks[2].id]?.string, "\u{FFFC} after")
+        XCTAssertEqual(measured.tables[blocks[3].id]?.string.string, "A\nB\n\u{FFFC}\nin \u{FFFC} cell\n")
+        XCTAssertEqual(recorder.latex, ["v", "x", "y", "z", "w"])
+        XCTAssertEqual(recorder.calls.map(\.size), [14, 14, 14, 14, 14], "inline size")
+        XCTAssertEqual(DocumentCopyBuilder.build([.text(measured.converted[blocks[1].id]!)]).plain, "Text $$x$$ more")
+    }
+
+    /// A display formula in a quote keeps the air a `$$` block keeps around
+    /// its formula — `BlockLayout.Math.verticalPadding`, as paragraph spacing
+    /// of its own line, so the measured height includes it.
+    @MainActor
+    func testQuoteDisplayFormulaHasTheMathBlockAir() {
+        let blocks = parse("> above\n>\n> $$\\sum_{i=1}^n i$$\n>\n> below")
+        let shown = measure(blocks, math: engine()).converted[blocks[0].id] ?? NSAttributedString()
+        let at = (shown.string as NSString).range(of: "\u{FFFC}").location
+        let style = shown.attribute(.paragraphStyle, at: at, effectiveRange: nil) as? NSParagraphStyle
+        XCTAssertEqual(style?.paragraphSpacingBefore, BlockLayout.Math.verticalPadding)
+        XCTAssertEqual(style?.paragraphSpacing, BlockLayout.Math.verticalPadding)
+        let width = BlockLayout.Quote.bodyWidth(contentWidth: 600, level: 1)
+        let tight = NSMutableAttributedString(attributedString: shown)
+        let plain = NSMutableParagraphStyle()
+        plain.alignment = .center
+        tight.addAttribute(.paragraphStyle, value: plain, range: NSRange(location: at, length: 1))
+        XCTAssertEqual(BlockHeightMeasurer.exactHeight(text: shown, width: width)
+                        - BlockHeightMeasurer.exactHeight(text: tight, width: width),
+                       2 * BlockLayout.Math.verticalPadding, accuracy: 0.5, "the air is laid out, so measured")
+    }
+
+    /// A formula wider than its line — a long matrix in a narrow table column
+    /// or quote — is scaled down to the line's width (an attachment cannot
+    /// wrap): it never reaches into the neighbouring cell, and the table's
+    /// measured height is still its drawn height.
+    @MainActor
+    func testWideFormulaIsScaledToFitItsCellAndLine() {
+        let blocks = parse("""
+        | A | B | C |
+        |---|---|---|
+        | x | $\\begin{matrix} a & b \\end{matrix}$ | y |
+
+        > $\\begin{matrix} c \\end{matrix}$
+        """)
+        let width: CGFloat = 400
+        let measured = measure(blocks, math: engine(), width: width)
+        guard let table = measured.tables[blocks[0].id] else { return XCTFail("no table") }
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: width, height: 10))
+        textView.configureForSelfSizing()
+        textView.installDocumentSelectionLayoutManager()
+        textView.textStorage?.setAttributedString(table.string)
+        let layoutManager = textView.layoutManager!
+        layoutManager.ensureLayout(for: textView.textContainer!)
+        let cell = table.layout.cellRanges[1][1]
+        let cellBounds = textView.tableCellBounds(band: 1, column: 1, layout: table.layout) ?? .zero
+        let glyphs = layoutManager.glyphRange(forCharacterRange: cell, actualCharacterRange: nil)
+        let drawn = layoutManager.boundingRect(forGlyphRange: glyphs, in: textView.textContainer!)
+        XCTAssertGreaterThan(drawn.width, 0)
+        XCTAssertLessThanOrEqual(drawn.maxX, cellBounds.maxX + 0.5, "inside its cell: \(drawn) in \(cellBounds)")
+        XCTAssertGreaterThanOrEqual(drawn.minX, cellBounds.minX - 0.5)
+        XCTAssertEqual(measured.table.heights[0] - 2 * BlockLayout.Document.tableOuterVerticalPadding,
+                       TableTextBuilder.tableHeight(layoutManager: layoutManager, container: textView.textContainer!))
+
+        let quote = measured.converted[blocks[1].id] ?? NSAttributedString()
+        let quoteWidth = BlockLayout.Quote.bodyWidth(contentWidth: width, level: 1)
+        let storage = NSTextStorage(attributedString: quote)
+        let quoteLayout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: quoteWidth, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        quoteLayout.addTextContainer(container)
+        storage.addLayoutManager(quoteLayout)
+        let formula = quoteLayout.boundingRect(forGlyphRange: NSRange(location: 0, length: 1), in: container)
+        // Scaled with its aspect to the quote's width: 900×60 → w × 60·w/900.
+        XCTAssertEqual(formula.width, floor(quoteWidth), accuracy: 0.5, "fills, never exceeds, the quote's width")
+        XCTAssertEqual(formula.height, 60 * floor(quoteWidth) / 900, accuracy: 0.5)
     }
 
     // MARK: - What a quote body is made of (new API)
