@@ -240,11 +240,72 @@ enum WindowSizeMemory {
         return NSSize(width: w, height: h)
     }
 
+    // MARK: Side by side's grown width (#55)
+
+    /// The one owner of the width side by side added, for every window group.
+    /// Ids, not windows: nothing here keeps a window alive.
+    private(set) static var sideBySideGrowth = SideBySideGrowthState()
+
+    private static func id(_ window: NSWindow) -> Int { ObjectIdentifier(window).hashValue }
+
+    /// The window's group NOW: its tabs, or itself.
+    private static func group(_ window: NSWindow) -> Set<Int> {
+        Set((window.tabbedWindows ?? [window]).map(id))
+    }
+
+    /// Side by side grew `window` (and so its tab group) from `before`.
+    static func sideBySideDidGrow(_ window: NSWindow, from before: NSSize) {
+        sideBySideGrowth.didGrow(window: id(window), group: group(window), from: before, to: window.frame.size)
+    }
+
+    /// `window` shows side by side without having grown (it fit).
+    static func sideBySideDidShow(_ window: NSWindow) {
+        sideBySideGrowth.didShowWithoutGrowing(window: id(window), group: group(window))
+    }
+
+    /// `window` no longer shows side by side (toggled off, left Source Edit):
+    /// the group gets its width back if this was its last side-by-side tab.
+    static func sideBySideDidEnd(_ window: NSWindow) {
+        if let width = sideBySideGrowth.didLeave(window: id(window), remaining: group(window),
+                                                 size: window.frame.size,
+                                                 isFullScreen: window.styleMask.contains(.fullScreen)) {
+            giveBack(width, toAnyOf: [window])
+        }
+    }
+
+    /// On the next turn: SwiftUI lowers the window's minimum in the same
+    /// update that ended side by side, and after a close AppKit has selected
+    /// the tab that stays visible. The frame is set on THAT tab (the group's
+    /// visible window), at its current origin clamped to the screen; only then
+    /// does the state forget the growth (until then the size to remember is
+    /// still the pre-grow one).
+    private static func giveBack(_ width: CGFloat, toAnyOf candidates: [NSWindow]) {
+        let weakCandidates = candidates.map { WeakWindow(window: $0) }
+        DispatchQueue.main.async {
+            guard let host = weakCandidates.lazy.compactMap(\.window).first(where: { $0.isVisible })
+                    ?? weakCandidates.lazy.compactMap(\.window).first else { return }
+            let target = host.tabGroup?.selectedWindow ?? host
+            guard !target.styleMask.contains(.fullScreen) else { return }
+            let frame = SideBySideGrowthState.restoredFrame(current: target.frame, width: width,
+                                                           screen: (target.screen ?? NSScreen.main)?.visibleFrame)
+            target.setFrame(frame, display: true, animate: false)
+            sideBySideGrowth.didGiveBack(group: group(target))
+        }
+    }
+
+    private struct WeakWindow { weak var window: NSWindow? }
+
+    /// The size `persist` remembers for `window`, nil for none: a full-screen
+    /// (or Split View) frame is the screen's size, not one the user chose —
+    /// saving it would open later standalone windows screen-sized; a window
+    /// side by side grew remembers its size from before.
+    static func sizeToRemember(_ window: NSWindow) -> NSSize? {
+        sideBySideGrowth.sizeToRemember(group: group(window), size: window.frame.size,
+                                        isFullScreen: window.styleMask.contains(.fullScreen))
+    }
+
     private static func persist(_ window: NSWindow) {
-        // A full-screen (or Split View) frame is the screen's size, not one the
-        // user chose; saving it would open later standalone windows screen-sized.
-        guard !window.styleMask.contains(.fullScreen) else { return }
-        let size = window.frame.size
+        guard let size = sizeToRemember(window) else { return }
         guard size.width >= minSize.width, size.height >= minSize.height else { return }
         let defaults = UserDefaults.standard
         defaults.set(Double(size.width), forKey: widthKey)
@@ -279,15 +340,51 @@ enum WindowSizeMemory {
             guard let w = note.object as? NSWindow else { return }
             persist(w)
         }
+        // Side by side left in full screen gives its width back here.
+        let fullScreenToken = center.addObserver(
+            forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main
+        ) { note in
+            guard let w = note.object as? NSWindow,
+                  let width = sideBySideGrowth.didExitFullScreen(group: group(w), size: w.frame.size) else { return }
+            giveBack(width, toAnyOf: [w])
+        }
+        // Keeps the group a dragged-out side-by-side tab may leave behind
+        // known (`SideBySideGrowthState.knownGroup`): a tab opened into the
+        // group becomes key.
+        let keyToken = center.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+        ) { note in
+            guard let w = note.object as? NSWindow else { return }
+            sideBySideGrowth.noteGroup(group(w))
+        }
         final class TokenBox { var token: NSObjectProtocol? }
         let closeBox = TokenBox()
         closeBox.token = center.addObserver(
             forName: NSWindow.willCloseNotification, object: window, queue: .main
         ) { note in
             if let w = note.object as? NSWindow {
+                // Remembered first (the pre-grow size while grown), then a
+                // closing side-by-side tab hands the width back to the tabs
+                // that stay, and the window is forgotten.
                 persist(w)
+                // The tabs that stay. If AppKit no longer lists them during
+                // the close, the ones the state knew in the group and that
+                // are still open.
+                var siblings = (w.tabbedWindows ?? w.tabGroup?.windows ?? []).filter { $0 !== w }
+                if siblings.isEmpty {
+                    let known = sideBySideGrowth.knownSiblings(of: id(w))
+                    siblings = WindowTabbing.documentWindows.filter { $0 !== w && known.contains(id($0)) }
+                }
+                if let width = sideBySideGrowth.didLeave(window: id(w), remaining: Set(siblings.map(id)),
+                                                         size: w.frame.size,
+                                                         isFullScreen: w.styleMask.contains(.fullScreen)) {
+                    giveBack(width, toAnyOf: siblings)
+                }
+                sideBySideGrowth.didClose(window: id(w))
             }
             center.removeObserver(resizeToken)
+            center.removeObserver(fullScreenToken)
+            center.removeObserver(keyToken)
             if let token = closeBox.token { center.removeObserver(token) }
         }
     }
