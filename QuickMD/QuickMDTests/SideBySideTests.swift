@@ -63,14 +63,20 @@ final class SideBySideTests: XCTestCase {
         let buffer = "# A\na\n" + String(repeating: "new\n", count: 10) + "\n## B\nb\n\n## C\nc\n"
         let toc = headings(of: buffer)
         let entry = try XCTUnwrap(toc.first { $0.title == "B" })
-        let source = SideBySidePreview.sectionSource(installed: buffer, current: disk)
+        let source = SideBySidePreview.sectionSource(isShowing: true, installed: buffer, current: disk)
         XCTAssertEqual(SectionExtractor.extractSection(from: source, entry: entry, headings: toc), "## B\nb")
         // What the merged PR did: the disk text at the buffer's line numbers.
         XCTAssertNotEqual(SectionExtractor.extractSection(from: disk, entry: entry, headings: toc), "## B\nb")
     }
 
     func testSectionCopyWithoutAnInstalledParseUsesTheCurrentText() {
-        XCTAssertEqual(SideBySidePreview.sectionSource(installed: nil, current: "disk"), "disk")
+        XCTAssertEqual(SideBySidePreview.sectionSource(isShowing: true, installed: nil, current: "disk"), "disk")
+    }
+
+    func testSectionCopyOutsideSideBySideIsTheSavedTextAsBefore() {
+        // Reading and the editor alone: unchanged from 1.14.4.
+        XCTAssertEqual(SideBySidePreview.sectionSource(isShowing: false, installed: "older parse", current: "disk"),
+                       "disk")
     }
 
     // MARK: - Menu state

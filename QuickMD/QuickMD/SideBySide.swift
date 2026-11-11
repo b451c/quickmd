@@ -87,8 +87,10 @@ struct SideBySidePreview: Equatable {
     /// parsed from (`installedText`). In the split that is the buffer the
     /// preview shows — slicing the disk text at the buffer's heading lines
     /// copied the wrong lines (or nothing) after an edit above the heading.
-    static func sectionSource(installed: String?, current: String) -> String {
-        installed ?? current
+    /// Outside side by side (reading, the editor alone) exactly as before:
+    /// the saved text.
+    static func sectionSource(isShowing: Bool, installed: String?, current: String) -> String {
+        isShowing ? (installed ?? current) : current
     }
 }
 

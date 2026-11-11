@@ -1476,9 +1476,11 @@ struct MarkdownView: View {
 
     /// Copy section (heading button, Contents ▸ Copy): sliced from the text the
     /// headings were parsed from — side by side the buffer the preview shows,
-    /// never the disk text at the buffer's line numbers.
+    /// never the disk text at the buffer's line numbers. Reading and the
+    /// editor alone: the saved text, as in 1.14.4.
     private func copySection(_ entry: ToCEntry) {
-        let source = SideBySidePreview.sectionSource(installed: installedText, current: currentText)
+        let source = SideBySidePreview.sectionSource(isShowing: isSideBySideShowing, installed: installedText,
+                                                     current: currentText)
         if let section = SectionExtractor.extractSection(from: source, entry: entry, headings: headings) {
             copyToClipboard(section)
         }
