@@ -2,6 +2,8 @@
 
 <div align="center">
 
+<img src="QuickMD/AppIcon/quickmd-icon.svg" width="128" height="128" alt="QuickMD app icon">
+
 **Lightning-fast native macOS Markdown viewer**
 
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey.svg)](https://www.apple.com/macos)
@@ -122,11 +124,11 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 </tr>
 <tr>
 <td align="center"><img src="QuickMD/Screenshots/screenshot-7.png" width="400" alt="Table of Contents and search"></td>
-<td align="center"><img src="QuickMD/Screenshots/screenshot-8.png" width="400" alt="Source Edit"></td>
+<td align="center"><img src="QuickMD/Screenshots/screenshot-8.png" width="400" alt="Edit side by side"></td>
 </tr>
 <tr>
 <td align="center"><em>Table of Contents and search</em></td>
-<td align="center"><em>Source Edit</em></td>
+<td align="center"><em>Edit side by side</em></td>
 </tr>
 </table>
 </div>
