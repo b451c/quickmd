@@ -343,6 +343,110 @@ final class TableRulesTests: XCTestCase {
         }
     }
 
+    // MARK: - Ragged rows and the suspected macOS 27.2 behaviour
+
+    private static let ragged = """
+    | Short | A cell long enough to wrap onto several lines in a narrow table column | x |
+    |---|---|---|
+    | a | This one wraps as well, over two or three lines at the test width, while its neighbours stay one line | b |
+    | c | d | e |
+    """
+
+    /// The top of the band below `band` — where `band`'s rule must end —
+    /// taken from the NEXT band's cells, i.e. without `tableRuleRects`.
+    private func nextBandTop(_ view: NSTextView, _ layout: TableTextLayout, after band: Int) throws -> CGFloat {
+        try (0..<layout.columnCount).map {
+            try XCTUnwrap(view.tableCellBounds(band: band + 1, column: $0, layout: layout)).minY
+        }.min()!
+    }
+
+    /// Pixels along the 1 pt row ending at `bottom`, every 3 pt across the
+    /// table (dividers included — one rect covers the corner), must all be
+    /// the rule colour: one straight rule, no gap, no step.
+    /// `colours`: what a rule pixel may be (the rule over the table
+    /// background, or — under a header whose band reaches the last point —
+    /// over the header background).
+    private func assertStraightRule(in rep: NSBitmapImageRep, bottom: CGFloat, width: CGFloat, backing: CGFloat,
+                                    colours: [NSColor], _ label: String) {
+        var x: CGFloat = 6
+        while x < width - 6 {
+            let pixel = rep.colorAt(x: Int(x * backing), y: Int((bottom - 0.5) * backing))
+            let nearest = colours.map { distance(pixel, $0) }.min()!
+            XCTAssertLessThan(nearest, 2.5 / 255, "\(label): x=\(x) y=\(bottom - 0.5)")
+            x += 3
+        }
+    }
+
+    /// A wrapped cell next to one-line cells: every bottom rule of that band
+    /// sits on the band's last point (the top of the next band), and the
+    /// drawn rule is one straight line across the whole table.
+    func testWrappedCellNextToShortOnesGivesOneStraightRule() throws {
+        let theme = MarkdownTheme.cached(for: .light)
+        let text = try table(Self.ragged, theme: theme)
+        let view = view(text, theme: theme, width: 300)
+        let layout = text.layout
+        let ruleOnBackground = composite(NSColor(theme.borderColor), over: NSColor(theme.backgroundColor),
+                                         appearance: .aqua)
+        let rules = view.tableRuleRects(layout: layout)
+        let rep = render(view, backing: 2)
+        for band in 0..<(layout.bandCount - 1) {
+            let bottom = try nextBandTop(view, layout, after: band)
+            let heights = try (0..<layout.columnCount).map {
+                try XCTUnwrap(view.tableCellBounds(band: band, column: $0, layout: layout)).height
+            }
+            XCTAssertGreaterThan(heights.max()!, 40, "band \(band) wraps") // one line is ~30 pt
+            let bandRules = rules.filter { $0.width > $0.height && abs($0.maxY - bottom) < 20 }
+            XCTAssertEqual(bandRules.count, layout.columnCount, "band \(band): one rule piece per cell")
+            for rule in bandRules {
+                XCTAssertEqual(rule.maxY, bottom, "band \(band): \(rule)")
+                XCTAssertEqual(rule.height, BlockLayout.Table.separatorHeight)
+            }
+            assertStraightRule(in: rep, bottom: bottom, width: view.bounds.width, backing: 2,
+                               colours: [ruleOnBackground], "band \(band)")
+        }
+    }
+
+    /// Simulates one suspected 27.2 behaviour: the blocks lose their bottom
+    /// border widths (0 — AppKit neither reserves nor reports them). Our pass
+    /// decides from the layout, not from the blocks, so every rule under a
+    /// band is still painted, straight, on the band's last point — under the
+    /// header over the header band's background, which now reaches that
+    /// point (the look of the rule changes there, it does not vanish).
+    func testRulesSurviveBlocksWithoutBottomBorders() throws {
+        for scheme in [ColorScheme.light, .dark] {
+            let theme = MarkdownTheme.cached(for: scheme)
+            let appearance: NSAppearance.Name = theme.isDark ? .darkAqua : .aqua
+            let ruleOnBackground = composite(NSColor(theme.borderColor), over: NSColor(theme.backgroundColor),
+                                             appearance: appearance)
+            let headerBand = composite(NSColor(theme.headerBackgroundColor), over: NSColor(theme.backgroundColor),
+                                       appearance: appearance)
+            let ruleOnHeader = composite(NSColor(theme.borderColor), over: headerBand, appearance: appearance)
+            for markdown in [Self.simple, Self.ragged, Self.headerless, Self.frontMatter] {
+                let text = try table(markdown, theme: theme)
+                var stripped = 0
+                text.string.enumerateAttribute(.paragraphStyle,
+                                               in: NSRange(location: 0, length: text.string.length)) { value, _, _ in
+                    guard let block = (value as? NSParagraphStyle)?.textBlocks.first else { return }
+                    if block.width(for: .border, edge: .maxY) > 0 { stripped += 1 }
+                    block.setWidth(0, type: .absoluteValueType, for: .border, edge: .maxY)
+                }
+                XCTAssertGreaterThan(stripped, 0)
+                let view = view(text, theme: theme, width: 360)
+                let layout = text.layout
+                for backing in [1, 2] {
+                    let rep = render(view, backing: backing)
+                    for band in 0..<(layout.bandCount - 1) {
+                        assertStraightRule(in: rep, bottom: try nextBandTop(view, layout, after: band),
+                                           width: view.bounds.width, backing: CGFloat(backing),
+                                           colours: layout.showsHeader && band == 0
+                                               ? [ruleOnHeader, ruleOnBackground] : [ruleOnBackground],
+                                           "\(scheme) \(backing)x \(markdown.prefix(12)) band \(band)")
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Device pixels
 
     /// A rule lands on whole device pixels of the context it is drawn into

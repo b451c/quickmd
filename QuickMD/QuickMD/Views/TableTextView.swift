@@ -163,7 +163,10 @@ final class TableTextView: SelfSizingTextView {
     /// The rules come last, from our own pass (#56 — on macOS 27.2 AppKit did
     /// not paint the cells' bottom borders; see `paintTableRules`). The
     /// steps live in `drawTable` (TableTextBuilder.swift), so the unit tests
-    /// draw a table exactly as this view does.
+    /// draw a table exactly as this view does — keep this a bare `drawTable`
+    /// call: the tests draw through a stand-in view with the same override
+    /// (this class is not in the test target), so anything added here would
+    /// be untested.
     override func draw(_ dirtyRect: NSRect) {
         drawTable(in: dirtyRect, background: tableBackground, layout: tableLayout, ruleColor: tableRuleColor) {
             super.draw(dirtyRect)

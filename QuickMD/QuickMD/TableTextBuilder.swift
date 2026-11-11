@@ -590,12 +590,6 @@ extension NSTextView {
     /// The bounds of a cell (padding + its borders) in view coordinates, or nil
     /// when the text view does not hold the table `layout` describes.
     func tableCellBounds(band: Int, column: Int, layout: TableTextLayout) -> NSRect? {
-        tableCell(band: band, column: column, layout: layout)?.bounds
-    }
-
-    /// `tableCellBounds` plus the cell's text block (its border widths).
-    private func tableCell(band: Int, column: Int, layout: TableTextLayout)
-        -> (bounds: NSRect, block: NSTextBlock)? {
         guard let layoutManager, let storage = textStorage,
               band >= 0, band < layout.bandCount, column >= 0, column < layout.columnCount else { return nil }
         let range = layout.cellRanges[band][column]
@@ -605,24 +599,41 @@ extension NSTextView {
         let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: range.location,
                                                                          length: range.length + 1),
                                               actualCharacterRange: nil)
-        let bounds = layoutManager.boundsRect(for: block, glyphRange: glyphs)
+        return layoutManager.boundsRect(for: block, glyphRange: glyphs)
             .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
-        return (bounds, block)
     }
 
     // MARK: Rules (#56)
 
     /// The table's rules in view coordinates, for the bands that intersect
-    /// `rect` (all of them when nil): each cell's trailing divider and bottom
-    /// rule, from its laid-out bounds and its block's border widths.
+    /// `rect` (all of them when nil): each cell's trailing divider and each
+    /// band's bottom rule.
     ///
-    /// The rects are the ones AppKit filled while it painted the borders
-    /// itself (logged on macOS 27.0 through `fillBackgroundRectArray`): the
-    /// divider spans the cell's whole height, the bottom rule the cell's width
-    /// up to the divider — so where they meet, one rect covers the corner and
-    /// a translucent colour is never painted twice.
+    /// WHICH rules exist and how thick they are comes from our own data — the
+    /// layout (a divider after every column but the last; a bottom rule under
+    /// every band but the last, and always under the header band) and the
+    /// `BlockLayout.Table` constants — never from the blocks' border widths:
+    /// those belong to the AppKit object that misbehaved on macOS 27.2 (#56),
+    /// and a block reporting 0 there must not make the rule disappear again.
+    /// WHERE comes from the laid-out cells: a divider on the last point of its
+    /// cell, full cell height; a band's rule on the last point of the band
+    /// (the lowest cell bottom, so cells of unequal height could never give a
+    /// stair-stepped rule), across the cell's width up to its divider. Those
+    /// are exactly the rects AppKit filled while it painted the borders
+    /// itself (logged on macOS 27.0), so where they meet one rect covers the
+    /// corner and a translucent colour is never painted twice. If an OS ever
+    /// stops reserving the border in layout, the rule lands on the cell's
+    /// padding — still drawn, only 1 pt higher.
     func tableRuleRects(layout: TableTextLayout, in rect: NSRect? = nil) -> [NSRect] {
         guard layout.bandCount > 0, layout.columnCount > 0 else { return [] }
+        let dividerWidth = BlockLayout.Table.dividerWidth
+        let separatorHeight = BlockLayout.Table.separatorHeight
+        func cells(of band: Int) -> [NSRect]? {
+            let bounds = (0..<layout.columnCount).compactMap {
+                tableCellBounds(band: band, column: $0, layout: layout)
+            }
+            return bounds.count == layout.columnCount ? bounds : nil
+        }
         // Bands stack top to bottom (as in `characterIndex(confinedToCellAt:)`):
         // a binary search finds the first band that reaches into `rect`, so a
         // 200-row table costs only the visible bands per draw.
@@ -631,24 +642,27 @@ extension NSTextView {
             var high = layout.bandCount - 1
             while first < high {
                 let mid = (first + high) / 2
-                let bounds = tableCellBounds(band: mid, column: 0, layout: layout) ?? .zero
-                if bounds.maxY > rect.minY { high = mid } else { first = mid + 1 }
+                let bottom = cells(of: mid)?.map(\.maxY).max() ?? 0
+                if bottom > rect.minY { high = mid } else { first = mid + 1 }
             }
         }
         var rules: [NSRect] = []
         for band in first..<layout.bandCount {
-            for column in 0..<layout.columnCount {
-                guard let (bounds, block) = tableCell(band: band, column: column, layout: layout) else { continue }
-                if column == 0, let rect, bounds.minY >= rect.maxY { return rules }
-                let trailing = block.width(for: .border, edge: .maxX)
-                let bottom = block.width(for: .border, edge: .maxY)
-                if trailing > 0 {
-                    rules.append(NSRect(x: bounds.maxX - trailing, y: bounds.minY,
-                                        width: trailing, height: bounds.height))
+            guard let bounds = cells(of: band) else { continue }
+            let top = bounds.map(\.minY).min() ?? 0
+            if let rect, top >= rect.maxY { break }
+            let bottom = bounds.map(\.maxY).max() ?? 0
+            let hasRule = band < layout.bandCount - 1 || (layout.showsHeader && band == 0)
+            for (column, cell) in bounds.enumerated() {
+                let hasDivider = column < layout.columnCount - 1
+                if hasDivider {
+                    rules.append(NSRect(x: cell.maxX - dividerWidth, y: cell.minY,
+                                        width: dividerWidth, height: cell.height))
                 }
-                if bottom > 0 {
-                    rules.append(NSRect(x: bounds.minX, y: bounds.maxY - bottom,
-                                        width: bounds.width - trailing, height: bottom))
+                if hasRule {
+                    rules.append(NSRect(x: cell.minX, y: bottom - separatorHeight,
+                                        width: cell.width - (hasDivider ? dividerWidth : 0),
+                                        height: separatorHeight))
                 }
             }
         }
@@ -671,12 +685,12 @@ extension NSTextView {
     /// the pixel grid (every case measured) draw exactly as before.
     func paintTableRules(layout: TableTextLayout, color: NSColor, in dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
-        let rules = tableRuleRects(layout: layout, in: dirtyRect).filter { $0.intersects(dirtyRect) }
+        let rules = tableRuleRects(layout: layout, in: dirtyRect)
+            .map { TableTextBuilder.pixelAligned($0, in: context) }
+            .filter { $0.intersects(dirtyRect) }
         guard !rules.isEmpty else { return }
         color.setFill()
-        for rule in rules {
-            TableTextBuilder.pixelAligned(rule, in: context).fill(using: .sourceOver)
-        }
+        for rule in rules { rule.fill(using: .sourceOver) }
     }
 
     /// The whole of `TableTextView.draw`, here so the unit tests draw a table
