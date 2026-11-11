@@ -34,6 +34,7 @@ Edit side by side, separate windows, tables on macOS 27.2, a redrawn icon, and m
   - `$$x$$` inside a sentence is a formula, and a line that starts with it no longer swallows the lines below;
   - a formula too wide for its place is scaled down or shows its source.
 - Code blocks marked `text` or `plaintext` are no longer coloured as source code.
+- A link, or a selection, in a paragraph could stop responding after the paragraph was scrolled out of view and back.
 - Scrolling while a Find Next jump is under way stops the jump at once.
 - A line break inside a numbered item no longer turns the next item into plain text.
 - A horizontal rule and the line above the footnotes no longer wrap in a narrow window.
