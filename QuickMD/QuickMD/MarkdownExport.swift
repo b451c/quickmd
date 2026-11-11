@@ -71,21 +71,7 @@ struct FocusedExportDocumentLocationKey: FocusedValueKey {
     typealias Value = ExportDocumentLocation
 }
 
-/// Source Edit (v1.12 S-D12) as the File menu sees the focused document: the
-/// title of "Edit Source" / "Done Editing", whether Save and Discard Changes
-/// are enabled, and the commands that must be off while the editor shows
-/// (Export, Print, Copy Markdown, Open in External Editor act on the SAVED
-/// text, not the one the user is looking at). Non-optional for the same
-/// reason as `FocusedExportNameKey`.
-struct SourceEditMenuState: Equatable {
-    let isEditing: Bool
-    let isDirty: Bool
-    /// The editor and the rendered document side by side (File ▸ Split View).
-    var isSplit = false
-
-    var canSave: Bool { isEditing && isDirty }
-}
-
+/// `SourceEditMenuState` lives in SideBySide.swift (compiled into the tests).
 struct FocusedSourceEditStateKey: FocusedValueKey {
     typealias Value = SourceEditMenuState
 }
@@ -97,7 +83,7 @@ struct FocusedToggleSourceEditKey: FocusedValueKey {
 
 /// ⌥⇧⌘E — Source Edit side by side with the rendered document, or back to
 /// the editor only, in the FOCUSED document only.
-struct FocusedToggleSplitEditKey: FocusedValueKey {
+struct FocusedToggleSideBySideKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
@@ -120,9 +106,9 @@ extension FocusedValues {
         get { self[FocusedToggleSourceEditKey.self] }
         set { self[FocusedToggleSourceEditKey.self] = newValue }
     }
-    var toggleSplitEditAction: (() -> Void)? {
-        get { self[FocusedToggleSplitEditKey.self] }
-        set { self[FocusedToggleSplitEditKey.self] = newValue }
+    var toggleSideBySideAction: (() -> Void)? {
+        get { self[FocusedToggleSideBySideKey.self] }
+        set { self[FocusedToggleSideBySideKey.self] = newValue }
     }
     var saveSourceAction: (() -> Void)? {
         get { self[FocusedSaveSourceKey.self] }
@@ -1008,8 +994,9 @@ struct ExportPDFCommand: View {
                                              documentURL: documentLocation?.url)
             }
         }
-        // While editing the export would be of the saved text, not the screen.
-        .disabled((documentText?.isEmpty ?? true) || sourceEditState?.isEditing == true)
+        // While editing the export would be of the saved text, not the screen
+        // (side by side included: the preview shows the buffer).
+        .disabled((documentText?.isEmpty ?? true) || sourceEditState?.allowsSavedTextCommands == false)
         .keyboardShortcut("e", modifiers: [.command, .shift])
     }
 }
@@ -1025,7 +1012,7 @@ struct PrintCommand: View {
                 PrintManager.printDocument(documentText: text, documentURL: documentLocation?.url)
             }
         }
-        .disabled((documentText?.isEmpty ?? true) || sourceEditState?.isEditing == true)
+        .disabled((documentText?.isEmpty ?? true) || sourceEditState?.allowsSavedTextCommands == false)
         .keyboardShortcut("p", modifiers: .command)
     }
 }

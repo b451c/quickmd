@@ -385,12 +385,15 @@ struct ReloadDocumentButton: View {
 /// menu. One of the three ways into Source Edit, with File ▸ Edit Source and
 /// the shortcut.
 ///
-/// Holding Option turns it into "Split edit" (⌥⇧⌘E), like an alternate menu
-/// item: the pill shows the split icon and an Option-click enters the split.
+/// Holding Option turns it into "Side by Side" (⌥⇧⌘E), like an alternate
+/// menu item: the pill shows the two-column icon and an Option-click enters
+/// Source Edit side by side. The Option state comes from a local
+/// `flagsChanged` monitor — one per tab, so every tab relabels its own pill
+/// (display only; the click itself reads the flags at the click).
 struct EditSourceButton: View {
     let theme: MarkdownTheme
     let action: () -> Void
-    let splitAction: () -> Void
+    let sideBySideAction: () -> Void
 
     @State private var isOptionDown = NSEvent.modifierFlags.contains(.option)
     @State private var flagsMonitor: Any?
@@ -398,11 +401,11 @@ struct EditSourceButton: View {
     var body: some View {
         ChromePill(
             theme: theme,
-            title: isOptionDown ? "Split edit" : "Edit",
+            title: isOptionDown ? "Side by Side" : "Edit",
             help: "Edit source (⌥⌘E) · Option-click to edit side by side (⌥⇧⌘E)",
             action: {
                 // The flags at the click, not the last flagsChanged seen.
-                NSEvent.modifierFlags.contains(.option) ? splitAction() : action()
+                NSEvent.modifierFlags.contains(.option) ? sideBySideAction() : action()
             }
         ) {
             Image(systemName: isOptionDown ? "rectangle.split.2x1" : "pencil")
@@ -423,7 +426,7 @@ struct EditSourceButton: View {
     }
 }
 
-// MARK: - Source Edit Pills (Save / Done)
+// MARK: - Source Edit Pills (Side by Side / Save / Done)
 
 /// The whole cluster while Source Edit shows (S-D12) — also in Reading Mode,
 /// where the cluster is otherwise hidden: a mode you could only leave by
@@ -445,20 +448,22 @@ struct SourceSaveButton: View {
     }
 }
 
-/// Toggles the split: editor left, rendered document right (per tab).
-struct SourceSplitButton: View {
+/// Side by side on or off: the editor left, the rendered document right
+/// (per tab). Never called "Split": Split View is the macOS window feature.
+struct SourceSideBySideButton: View {
     let theme: MarkdownTheme
-    let isSplit: Bool
+    let isSideBySide: Bool
     let action: () -> Void
 
     var body: some View {
-        ChromePill(theme: theme, title: isSplit ? "Editor only" : "Split",
-                   help: isSplit ? "Show the editor only (⌥⇧⌘E)" : "Show the rendered document beside the editor (⌥⇧⌘E)",
+        ChromePill(theme: theme, title: isSideBySide ? "Editor Only" : "Side by Side",
+                   help: isSideBySide ? "Show the editor only (⌥⇧⌘E)"
+                                      : "Show the rendered document beside the editor (⌥⇧⌘E)",
                    action: action) {
-            Image(systemName: isSplit ? "rectangle" : "rectangle.split.2x1")
+            Image(systemName: isSideBySide ? "rectangle" : "rectangle.split.2x1")
                 .font(.system(size: 11))
         }
-        .accessibilityIdentifier("source-split")
+        .accessibilityIdentifier("source-side-by-side")
     }
 }
 

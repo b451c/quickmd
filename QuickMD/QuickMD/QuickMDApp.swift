@@ -167,7 +167,7 @@ struct ToggleDocumentListCommand: View {
     }
 }
 
-/// File ▸ Edit Source / Done Editing (⌥⌘E), Split View / Editor Only
+/// File ▸ Edit Source / Done Editing (⌥⌘E), Edit Side by Side / Editor Only
 /// (⌥⇧⌘E), Save (⌘S), Discard Changes —
 /// Source Edit for the frontmost document only, via @FocusedValue like every
 /// other per-document command (an NSEvent monitor would act on every tab).
@@ -175,7 +175,7 @@ struct ToggleDocumentListCommand: View {
 /// no other Save, so a disabled item costs nothing.
 struct SourceEditCommands: View {
     @FocusedValue(\.toggleSourceEditAction) var toggleSourceEditAction
-    @FocusedValue(\.toggleSplitEditAction) var toggleSplitEditAction
+    @FocusedValue(\.toggleSideBySideAction) var toggleSideBySideAction
     @FocusedValue(\.saveSourceAction) var saveSourceAction
     @FocusedValue(\.discardSourceChangesAction) var discardSourceChangesAction
     @FocusedValue(\.sourceEditState) var sourceEditState
@@ -187,12 +187,11 @@ struct SourceEditCommands: View {
         .keyboardShortcut("e", modifiers: [.command, .option])
         .disabled(toggleSourceEditAction == nil)
 
-        Button(sourceEditState?.isEditing == true && sourceEditState?.isSplit == true
-               ? "Editor Only" : "Split View") {
-            toggleSplitEditAction?()
+        Button(SourceEditMenuState.sideBySideTitle(for: sourceEditState)) {
+            toggleSideBySideAction?()
         }
         .keyboardShortcut("e", modifiers: [.command, .option, .shift])
-        .disabled(toggleSplitEditAction == nil)
+        .disabled(toggleSideBySideAction == nil)
 
         Button("Save") {
             saveSourceAction?()
@@ -216,8 +215,9 @@ struct CopyMarkdownCommand: View {
             copyDocumentAction?()
         }
         .keyboardShortcut("c", modifiers: [.command, .shift])
-        // While editing it would copy the saved text, not the one on screen.
-        .disabled(copyDocumentAction == nil || sourceEditState?.isEditing == true)
+        // While editing it would copy the saved text, not the one on screen
+        // (side by side included: the preview shows the buffer).
+        .disabled(copyDocumentAction == nil || sourceEditState?.allowsSavedTextCommands == false)
     }
 }
 

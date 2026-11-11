@@ -63,9 +63,14 @@ final class SourceEditSession: ObservableObject {
         /// text that is on disk.
         var commitText: (String) -> Void = { _ in }
         var toast: (String) -> Void = { _ in }
-        /// Every buffer change, the session's own included (split view's live
-        /// preview). Never writes or commits anything.
+        /// Every buffer change through the editor — typing, undo, the
+        /// session's own `replaceAll` (Discard Changes, Load Disk Version) —
+        /// for the side-by-side preview. Per keystroke: must stay O(1).
         var bufferChanged: () -> Void = {}
+        /// The buffer was replaced without an edit (`load` on entry, `reload`
+        /// for a clean external change or Don't Save on close / quit). The
+        /// preview follows at once; nothing else changes.
+        var bufferReplaced: () -> Void = {}
     }
 
     var environment = Environment()
@@ -205,6 +210,7 @@ final class SourceEditSession: ObservableObject {
             self?.bufferDidChange()
             self?.environment.bufferChanged()
         }
+        editor.onReplace = { [weak self] in self?.environment.bufferReplaced() }
         editor.onEscape = { [weak self] in self?.escape() }
     }
 
@@ -323,6 +329,18 @@ final class SourceEditSession: ObservableObject {
 
     func focusEditor() {
         editor.focus()
+    }
+
+    /// Side by side on or off (⌥⇧⌘E, the pill) while editing: allowed only
+    /// when no prompt is up — like every other menu action, it beeps then
+    /// (the layout must not change under the Esc or conflict sheet).
+    func mayChangeLayout() -> Bool {
+        guard isActive else { return false }
+        guard !isPrompting else {
+            Self.beep()
+            return false
+        }
+        return true
     }
 
     /// Esc while editing (S-D10): closes the find bar first, then leaves. The

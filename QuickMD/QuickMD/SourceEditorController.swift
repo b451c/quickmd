@@ -151,6 +151,10 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     /// The user changed the buffer (typing, paste, undo, redo, `replaceAll`).
     /// Never fired by `load` or `apply(style:)`.
     var onChange: (() -> Void)?
+    /// `load` or `reload` replaced the whole buffer (they fire no `onChange`).
+    /// Whatever mirrors the buffer — the side-by-side preview — must follow
+    /// these too, or it keeps showing the text that was replaced.
+    var onReplace: (() -> Void)?
     /// Escape reached the text view. Consumed here so it never opens
     /// NSTextView's completion list; the session decides what Esc means.
     var onEscape: (() -> Void)?
@@ -592,6 +596,9 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
     /// The buffer (LF only). A copy — for saving and comparing, not per keystroke.
     var text: String { textStorage.string }
 
+    /// The buffer's UTF-16 length, without copying it (per keystroke is fine).
+    var length: Int { textStorage.length }
+
     /// Replaces everything WITHOUT an undo entry and without `onChange`:
     /// entering the editor, adopting a clean external change. The undo stack
     /// is cleared (it described a different text), the caret goes to 0.
@@ -609,6 +616,7 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
         dropPendingAnchor()
         scrollClip(toY: 0)
         startTint()
+        onReplace?()
     }
 
     /// `load` for a buffer the user is looking at: adopting a clean external
@@ -672,6 +680,7 @@ final class SourceEditorController: NSObject, NSTextViewDelegate, NSTextStorageD
             scrollClip(toY: 0)
         }
         startTint()
+        onReplace?()
     }
 
     /// Replaces everything as ONE undoable edit (Discard Changes, Load Disk
