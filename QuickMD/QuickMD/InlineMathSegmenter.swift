@@ -180,6 +180,56 @@ enum InlineMathSegmenter {
         return result
     }
 
+    /// The formulas of one source line as a left-to-right pass meets them —
+    /// THE way every inline pass treats a formula as an opaque atom: the
+    /// renderer (`renderInlineFormatting`) and the two scanners that read a
+    /// line before it is rendered (`FootnoteReferenceScan.labels`,
+    /// `ReferenceLinks.inlinedLine`). At each position the pass asks
+    /// `formula(at:)` FIRST; a formula there is skipped whole (the renderer
+    /// draws it, the scanners copy or ignore it), so no footnote reference,
+    /// bracket, code span or autolink inside it is seen. A formula that
+    /// starts inside something the pass jumped over (a link destination, an
+    /// autolink) is not one. All three must build it from the same text the
+    /// renderer draws, or they disagree about what a `[^a]` or `[a][r]` is.
+    struct Cursor {
+        let formulas: [Formula]
+        /// Index of the next formula not yet passed.
+        private(set) var index = 0
+
+        /// `text`: the line as the renderer gets it. `lineBreaksAreSpaces`:
+        /// for a Setext title scanned with its "\n" kept — the heading view
+        /// renders it with spaces (`MarkdownRenderer.shownHeadingTitle`); one
+        /// byte either way, so offsets are the text's.
+        init(_ text: String, codeSpans: InlineSyntaxScanner.CodeSpanTable? = nil, escapes: Bool = true,
+             entities: Bool = true, lineBreaksAreSpaces: Bool = false) {
+            if lineBreaksAreSpaces, text.utf8.contains(InlineMathSegmenter.newline) {
+                formulas = InlineMathSegmenter.formulas(in: text.replacingOccurrences(of: "\n", with: " "),
+                                                        escapes: escapes, entities: entities)
+            } else {
+                formulas = InlineMathSegmenter.formulas(in: text, codeSpans: codeSpans, escapes: escapes,
+                                                        entities: entities)
+            }
+        }
+
+        /// No formulas (front matter, a heading's id text).
+        init() { formulas = [] }
+
+        /// The formula starting at UTF-8 `offset`, if any; formulas starting
+        /// before it are passed for good. Call `pass()` once it is used.
+        mutating func formula(at offset: Int) -> Formula? {
+            while index < formulas.count, formulas[index].start < offset { index += 1 }
+            guard index < formulas.count, formulas[index].start == offset else { return nil }
+            return formulas[index]
+        }
+
+        /// The formula `formula(at:)` returned is used up.
+        mutating func pass() { index += 1 }
+
+        /// Where the next formula starts (UTF-8 offset), for cutting a run of
+        /// plain text there; nil when none is left.
+        var nextStart: Int? { index < formulas.count ? formulas[index].start : nil }
+    }
+
     private static let dollar = UInt8(ascii: "$")
     private static let backslash = UInt8(ascii: "\\")
     private static let backtick = UInt8(ascii: "`")
@@ -217,6 +267,34 @@ enum InlineMathSegmenter {
         let bytes = Array(text.utf8)
         let count = bytes.count
 
+        func scalar(at offset: Int) -> Unicode.Scalar? {
+            var iterator = bytes[offset...].makeIterator()
+            var decoder = UTF8()
+            if case .scalarValue(let scalar) = decoder.decode(&iterator) { return scalar }
+            return nil
+        }
+        func scalar(before offset: Int) -> Unicode.Scalar? {
+            var lead = offset - 1
+            while lead > 0, bytes[lead] & 0xC0 == 0x80 { lead -= 1 }
+            return lead >= 0 ? scalar(at: lead) : nil
+        }
+        /// Whether the `_` run `start..<end` may OPEN an emphasis — the
+        /// delimiter stack's own rule (`InlineDelimiterStack.push`): not
+        /// inside a word (`snake_case`), not before white space.
+        func underscoresMayOpen(_ start: Int, _ end: Int) -> Bool {
+            let before = start > 0 ? scalar(before: start) : nil
+            let after = end < count ? scalar(at: end) : nil
+            let beforeSpace = before.map(InlineDelimiterStack.isWhitespace) ?? true
+            let afterSpace = after.map(InlineDelimiterStack.isWhitespace) ?? true
+            let beforePunct = before.map(InlineDelimiterStack.isPunctuation) ?? false
+            let afterPunct = after.map(InlineDelimiterStack.isPunctuation) ?? false
+            let beforeIsCJK = before.map(InlineDelimiterStack.isCJK) ?? false
+            let afterIsCJK = after.map(InlineDelimiterStack.isCJK) ?? false
+            let leftFlanking = !afterSpace && (!afterPunct || beforeSpace || beforePunct || beforeIsCJK)
+            let rightFlanking = !beforeSpace && (!beforePunct || afterSpace || afterPunct || afterIsCJK)
+            return leftFlanking && (!rightFlanking || beforePunct)
+        }
+
         // 1. Tokens: every dollar that may delimit, with what lies between.
         var dollars: [(start: Int, end: Int)] = []
         /// Closed code spans / line breaks before each dollar (prefix counts).
@@ -224,7 +302,8 @@ enum InlineMathSegmenter {
         var breaksBefore: [Int] = []
         var closingBrackets: [Int] = []
         var firstOpenBracket = Int.max
-        var firstUnderscore = Int.max
+        /// The first `_` run that may open an emphasis (`_$g$_`).
+        var firstOpeningUnderscore = Int.max
         var codes = 0
         var breaks = 0
         var table = codeSpans
@@ -256,7 +335,12 @@ enum InlineMathSegmenter {
                 }
             case UInt8(ascii: "["): firstOpenBracket = min(firstOpenBracket, i)
             case UInt8(ascii: "]"): closingBrackets.append(i)
-            case underscore: firstUnderscore = min(firstUnderscore, i)
+            case underscore:
+                var end = i
+                while end < count, bytes[end] == underscore { end += 1 }
+                if firstOpeningUnderscore == Int.max, underscoresMayOpen(i, end) { firstOpeningUnderscore = i }
+                i = end
+                continue
             case newline: breaks += 1
             default: break
             }
@@ -267,17 +351,6 @@ enum InlineMathSegmenter {
         func adjacent(_ a: Int, _ b: Int) -> Bool { b < dollars.count && dollars[a].end == dollars[b].start }
         /// A line break between dollar `a` and dollar `b` (a < b).
         func breaksLine(_ a: Int, _ b: Int) -> Bool { breaksBefore[b] != breaksBefore[a] }
-        func scalar(at offset: Int) -> Unicode.Scalar? {
-            var iterator = bytes[offset...].makeIterator()
-            var decoder = UTF8()
-            if case .scalarValue(let scalar) = decoder.decode(&iterator) { return scalar }
-            return nil
-        }
-        func scalar(before offset: Int) -> Unicode.Scalar? {
-            var lead = offset - 1
-            while lead > 0, bytes[lead] & 0xC0 == 0x80 { lead -= 1 }
-            return lead >= 0 ? scalar(at: lead) : nil
-        }
         /// A scalar that joins the character before it — after a `$` it
         /// would make one Character of delimiter and text.
         func extends(_ scalar: Unicode.Scalar?) -> Bool {
@@ -286,8 +359,10 @@ enum InlineMathSegmenter {
                 || scalar.value == 0x200D
         }
         /// GitHub: a closer followed by an ASCII letter, digit or `_` closes
-        /// nothing. An `_` run that can only end an emphasis opened before
-        /// the formula (`_$g$_`) is markup, not a letter.
+        /// nothing. An `_` run that can only end an emphasis an `_` run
+        /// before the formula may open (`_$g$_`) is markup, not a letter —
+        /// a `snake_case` word before it opens nothing (`snake_case $x$_ end`
+        /// is text, as `$x$_ end`).
         func mayClose(after end: Int, opener: Int) -> Bool {
             guard end < count else { return true }
             let next = bytes[end]
@@ -295,7 +370,7 @@ enum InlineMathSegmenter {
             guard next == underscore else { return !extends(scalar(at: end)) }
             var after = end
             while after < count, bytes[after] == underscore { after += 1 }
-            return firstUnderscore < opener
+            return firstOpeningUnderscore < opener
                 && (after == count || isASCIIWhitespace(bytes[after]) || isASCIIPunctuation(bytes[after]))
         }
         /// Scientific notation glued to words (the owner's call, 1.14.4 kept

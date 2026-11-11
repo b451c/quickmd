@@ -1591,12 +1591,17 @@ struct MarkdownBlockParser: Sendable {
     typealias Fence = (marker: Character, length: Int)
 
     /// The fence `marker` (a `markerLine`) opens: three or more backticks or
-    /// tildes. THE opening test — the block loop, quote groups and the
-    /// definition pre-pass all ask it.
+    /// tildes. THE opening test — the block loop, quote groups, the
+    /// definition pre-pass and the `$$` look-ahead (`nextMathLines`) all ask
+    /// it. A backtick fence's info string holds no backtick (CommonMark):
+    /// "```js``` is code" is a paragraph with a code span (GitHub), not a
+    /// fence; a tilde fence's info string may (`~~~ a`b`).
     static func fenceOpening(_ marker: String) -> Fence? {
         guard let first = marker.first, first == "`" || first == "~" else { return nil }
         let length = marker.prefix(while: { $0 == first }).count
-        return length >= 3 ? (first, length) : nil
+        guard length >= 3 else { return nil }
+        if first == "`", marker.dropFirst(length).contains("`") { return nil }
+        return (first, length)
     }
 
     /// Whether `marker` closes `fence`: the same character, at least as many,

@@ -310,8 +310,9 @@ struct MarkdownTheme: Sendable, Identifiable {
     /// Example: \* renders as literal asterisk instead of italic marker.
     /// CommonMark's full list — every ASCII punctuation character (`\&amp;`
     /// shows "&amp;", `\<` shows "<", `\$5` shows "$5", as on GitHub). An
-    /// escaped `$` is tagged `LiteralDollarAttribute`: inline math is found in
-    /// the RENDERED text, and a tagged dollar never opens or closes a formula.
+    /// escaped `$` never opens or closes a formula: formulas are decided on
+    /// the source, where the escape is still there
+    /// (`InlineMathSegmenter.formulas`, which uses the same set).
     static let escapableChars: Set<Character> = [
         "!", "\"", "#", "$", "%", "&", "'", "(", ")", "*", "+", ",", "-", ".", "/", ":", ";", "<", "=", ">",
         "?", "@", "[", "\\", "]", "^", "_", "`", "{", "|", "}", "~",

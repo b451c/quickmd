@@ -933,6 +933,79 @@ final class MathInTextKindsTests: XCTestCase {
                        ["$f^*$ and $g^*$", "$(a)_n + x_{i}$", "$x_1$ and $y_2$"])
     }
 
+    // MARK: - Scanners that read a line before it is rendered (final review S1)
+
+    /// The footnote numbering and the reference inliner skip a formula as the
+    /// renderer does (`InlineMathSegmenter.Cursor`): a `[^a]` or `[a][r]`
+    /// inside one is LaTeX. GitHub (`gh api markdown -f mode=gfm`,
+    /// 2026-11-11) numbers `Area $x^{<sup>1</sup>}$ and see<sup>2</sup>` and
+    /// `<h1>T $x<sup>1</sup>$</h1>` — its footnote pass breaks those
+    /// formulas, as its emphasis does (see `atomCases`); QuickMD typesets
+    /// them, so the first VISIBLE citation is 1 and no number marker lands in
+    /// the LaTeX. `<td><M>$[a][r]$</M></td>`, `<p><M>$[a][r]$</M> …</p>`.
+    @MainActor
+    func testFootnoteAndReferenceScansSkipFormulas() {
+        let recorder = Recorder()
+        let blocks = parse("""
+        Area $x^{[^a]}$ and see[^b]
+
+        > Quote $x[^a]$ here
+
+        # T $x[^a]$
+
+        | A |
+        |---|
+        | $[a][r]$ |
+
+        $[a][r]$ in a paragraph
+
+        [^a]: alpha
+        [^b]: beta
+
+        [r]: http://x.example
+        """)
+        let measured = measure(blocks, math: engine(recorder))
+        XCTAssertEqual(recorder.latex, ["x^{[^a]}", "x[^a]", "x[^a]", "[a][r]", "[a][r]"],
+                       "the LaTeX as written: no number marker, no inlined link")
+        guard case .text(let first) = blocks[0].content else { return XCTFail("paragraph") }
+        XCTAssertEqual(first.runs.compactMap { $0[FootnoteNumberAttribute.self] }, [1], "see¹: b is footnote 1")
+        guard case .text(let list) = blocks.last?.content else { return XCTFail("footnote list") }
+        let listed = String(list.characters)
+        XCTAssertTrue(listed.contains("1. beta"), listed)
+        XCTAssertFalse(listed.contains("alpha"), "a is cited only inside formulas: not listed")
+        XCTAssertEqual(measured.converted[blocks[1].id]?.string, "Quote \u{FFFC} here")
+        XCTAssertEqual(measured.converted[blocks[2].id]?.string, "T \u{FFFC}")
+    }
+
+    /// An `_` after a closer closes only an emphasis an earlier `_` run may
+    /// OPEN (final review N2): GitHub `snake_case $x$_ end` is text, as
+    /// `$x$_ end`; `_$g$_` stays a formula here (1.14.4).
+    func testUnderscoreAfterACloserNeedsAnOpeningUnderscore() {
+        func formulas(_ text: String) -> [String] {
+            InlineMathSegmenter.split(text).compactMap { if case .math(let latex) = $0 { return latex } else { return nil } }
+        }
+        XCTAssertEqual(formulas("snake_case $x$_ end"), [])
+        XCTAssertEqual(formulas("$x$_ end"), [])
+        XCTAssertEqual(formulas("_$g$_ end"), ["g"])
+        XCTAssertEqual(formulas("a _b_ and _$g$_"), ["g"])
+        XCTAssertEqual(formulas("var_name and $x$_ end"), [])
+    }
+
+    /// A line starting with three backticks and holding another backtick is
+    /// no fence (CommonMark: a backtick fence's info string has none; GitHub
+    /// `<p><code>js</code> is code<br>next line</p>`), so it no longer cuts
+    /// the `$$` look-ahead either (final review N4).
+    func testBacktickInfoStringIsNoFenceAndKeepsTheMathLookAhead() {
+        let paragraph = parse("```js``` is code\nnext line")
+        XCTAssertEqual(paragraph.count, 1)
+        guard case .text(let text) = paragraph.first?.content else { return XCTFail("a paragraph, not code") }
+        XCTAssertEqual(String(text.characters), "js is code next line")
+        XCTAssertNil(MarkdownBlockParser.fenceOpening("```js``` is code"))
+        XCTAssertNotNil(MarkdownBlockParser.fenceOpening("~~~ a`b"))
+        XCTAssertNotNil(MarkdownBlockParser.fenceOpening("```swift"))
+        XCTAssertEqual(MarkdownBlockParser.nextMathLines(["$$", "```js``` is code", "$$"]), [2, 2, nil])
+    }
+
     // MARK: - A formula in link text (seam review N2)
 
     /// GitHub: `See <a href="https://e.com">$x$</a> here` in `<p>`, `<h1>`,

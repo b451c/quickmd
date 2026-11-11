@@ -26,7 +26,10 @@ import Foundation
 /// text is not. An image's `[` opens like a link's, so its destination is
 /// skipped and its alt read (GitHub numbers `![x [^a]](y)`). Without the
 /// document's link definitions here, only inline link tails are known (a
-/// reference link has no destination text to hide). Linear in the text.
+/// reference link has no destination text to hide). A formula is skipped
+/// whole, as the renderer draws it before anything else
+/// (`InlineMathSegmenter.Cursor`): `$x^{[^a]}$` cites nothing. Linear in
+/// the text.
 enum FootnoteReferenceScan {
     static func labels(in text: String, defined: Set<String>) -> [String] {
         guard !defined.isEmpty, text.contains("[^") else { return [] }
@@ -37,9 +40,16 @@ enum FootnoteReferenceScan {
         let closing = InlineSyntaxScanner.NextClosingBracket(text)
         let pairs = InlineSyntaxScanner.PairTable(text)
         var brackets = InlineSyntaxScanner.LinkBrackets<Void>()
+        var formulas = InlineMathSegmenter.Cursor(text, codeSpans: codeSpans)
         var labels: [String] = []
         var index = text.startIndex
         while index < text.endIndex {
+            if !formulas.formulas.isEmpty,
+               let formula = formulas.formula(at: utf8.distance(from: utf8.startIndex, to: index)) {
+                formulas.pass()
+                index = utf8.index(utf8.startIndex, offsetBy: formula.end)
+                continue
+            }
             let byte = utf8[index]
             let next = utf8.index(after: index)
             if byte == UInt8(ascii: "\\"), next < text.endIndex, isEscapable(utf8[next]) {

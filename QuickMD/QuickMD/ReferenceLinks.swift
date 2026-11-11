@@ -143,10 +143,17 @@ enum ReferenceLinks {
     static func inlinedHeading(_ title: String, definitions: [String: String],
                                footnoteIds: [String] = []) -> String {
         guard !definitions.isEmpty || !footnoteIds.isEmpty, title.contains("[") else { return title }
-        return inlinedLine(title, sources: Sources(definitions: definitions, footnoteIds: footnoteIds))
+        return inlinedLine(title, sources: Sources(definitions: definitions, footnoteIds: footnoteIds),
+                           lineBreaksAreSpaces: true)
     }
 
-    private static func inlinedLine(_ line: String, sources: Sources) -> String {
+    /// One line (a joined quote paragraph, a cell, a heading title) with its
+    /// references inlined. A formula is copied as written, as the renderer
+    /// draws it before links and footnote references
+    /// (`InlineMathSegmenter.Cursor`): `$[a][r]$` stays LaTeX, `$x[^a]$`
+    /// gets no number marker. `lineBreaksAreSpaces`: a Setext title, whose
+    /// breaks the heading shows as spaces.
+    private static func inlinedLine(_ line: String, sources: Sources, lineBreaksAreSpaces: Bool = false) -> String {
         let definitions = sources.definitions
         guard line.contains("[") else { return line }
         var text = line
@@ -160,8 +167,18 @@ enum ReferenceLinks {
         var remaining = text[...]
         /// Which `]` closes a link: the renderer's own rule.
         var brackets = InlineSyntaxScanner.LinkBrackets<Void>()
+        var formulas = InlineMathSegmenter.Cursor(text, codeSpans: codeSpans,
+                                                  lineBreaksAreSpaces: lineBreaksAreSpaces)
 
         while let first = remaining.first {
+            if !formulas.formulas.isEmpty,
+               let formula = formulas.formula(at: utf8.distance(from: utf8.startIndex, to: remaining.startIndex)) {
+                formulas.pass()
+                let end = utf8.index(utf8.startIndex, offsetBy: formula.end)
+                out += text[remaining.startIndex..<end]
+                remaining = text[end...]
+                continue
+            }
             // Escapes first, as the renderer: `\[` never opens anything.
             if first == "\\", remaining.utf8.count >= 2 {  // O(1), not a Character count
                 let escaped = remaining[remaining.index(after: remaining.startIndex)]

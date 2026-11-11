@@ -1035,31 +1035,24 @@ struct MarkdownRenderer: Sendable {
         var parse = InlineParse(text: text)
         var remaining = text[...]
         let utf8 = text.utf8
-        // Formulas first, on the source (`InlineMathSegmenter.formulas`):
-        // each is one opaque atom, so no delimiter run, bracket, autolink or
+        // Formulas first, on the source (`InlineMathSegmenter.Cursor`): each
+        // is one opaque atom, so no delimiter run, bracket, autolink or
         // character reference inside it is ever seen. A properties value
         // (`escapesDisabled`) is front matter, which has no math.
-        let formulas = escapesDisabled || formulasDisabled ? [] : InlineMathSegmenter.formulas(
-            in: text, codeSpans: parse.codeSpans, entities: !entitiesLiteral)
-        var nextFormula = 0
+        var formulas = escapesDisabled || formulasDisabled ? InlineMathSegmenter.Cursor()
+            : InlineMathSegmenter.Cursor(text, codeSpans: parse.codeSpans, entities: !entitiesLiteral)
 
         while let byte = remaining.utf8.first {
             var plainLimit = remaining.endIndex
-            if nextFormula < formulas.count {
+            if !formulas.formulas.isEmpty {
                 let offset = utf8.distance(from: utf8.startIndex, to: remaining.startIndex)
-                // A formula some atom jumped over (a link destination, an
-                // autolink) is not one.
-                while nextFormula < formulas.count, formulas[nextFormula].start < offset { nextFormula += 1 }
-                if nextFormula < formulas.count {
-                    let formula = formulas[nextFormula]
-                    if formula.start == offset {
-                        parse.append(.atom(formulaAtom(formula, in: text, index: nextFormula), .body))
-                        remaining = text[utf8.index(utf8.startIndex, offsetBy: formula.end)...]
-                        nextFormula += 1
-                        continue
-                    }
-                    plainLimit = utf8.index(utf8.startIndex, offsetBy: formula.start)
+                if let formula = formulas.formula(at: offset) {
+                    parse.append(.atom(formulaAtom(formula, in: text, index: formulas.index), .body))
+                    formulas.pass()
+                    remaining = text[utf8.index(utf8.startIndex, offsetBy: formula.end)...]
+                    continue
                 }
+                if let next = formulas.nextStart { plainLimit = utf8.index(utf8.startIndex, offsetBy: next) }
             }
             switch byte {
             case UInt8(ascii: "\\"):
