@@ -202,6 +202,35 @@
 		A1B2C3D401000181 /* SourceEditLanding.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000180 /* SourceEditLanding.swift */; };
 		A1B2C3D401000182 /* SourceEditLandingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000181 /* SourceEditLandingTests.swift */; };
 		A1B2C3D4010000F0 /* HeadingLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000000F0 /* HeadingLayoutTests.swift */; };
+		A1B2C3D401000560 /* MathFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001A /* MathFont.swift */; };
+		A1B2C3D401000561 /* MathImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001B /* MathImage.swift */; };
+		A1B2C3D401000562 /* MTBezierPath.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001C /* MTBezierPath.swift */; };
+		A1B2C3D401000563 /* MTColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001D /* MTColor.swift */; };
+		A1B2C3D401000564 /* MTConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001E /* MTConfig.swift */; };
+		A1B2C3D401000565 /* MTFont.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000001F /* MTFont.swift */; };
+		A1B2C3D401000566 /* MTFontManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000020 /* MTFontManager.swift */; };
+		A1B2C3D401000567 /* MTFontMathTable.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000021 /* MTFontMathTable.swift */; };
+		A1B2C3D401000568 /* MTFontMathTableV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000022 /* MTFontMathTableV2.swift */; };
+		A1B2C3D401000569 /* MTFontV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000023 /* MTFontV2.swift */; };
+		A1B2C3D40100056A /* MTLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000024 /* MTLabel.swift */; };
+		A1B2C3D40100056B /* MTMathAtomFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000025 /* MTMathAtomFactory.swift */; };
+		A1B2C3D40100056C /* MTMathImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000026 /* MTMathImage.swift */; };
+		A1B2C3D40100056D /* MTMathList.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000027 /* MTMathList.swift */; };
+		A1B2C3D40100056E /* MTMathListBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000028 /* MTMathListBuilder.swift */; };
+		A1B2C3D40100056F /* MTMathListDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000029 /* MTMathListDisplay.swift */; };
+		A1B2C3D401000570 /* MTMathListIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000002A /* MTMathListIndex.swift */; };
+		A1B2C3D401000571 /* MTMathUILabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000002B /* MTMathUILabel.swift */; };
+		A1B2C3D401000572 /* MTTypesetter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000002C /* MTTypesetter.swift */; };
+		A1B2C3D401000573 /* MTTypesetter+Tokenization.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000002D /* MTTypesetter+Tokenization.swift */; };
+		A1B2C3D401000574 /* MTUnicode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000002E /* MTUnicode.swift */; };
+		A1B2C3D401000575 /* RWLock.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D40000002F /* RWLock.swift */; };
+		A1B2C3D401000576 /* MTAtomTokenizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000030 /* MTAtomTokenizer.swift */; };
+		A1B2C3D401000577 /* MTBreakableElement.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000031 /* MTBreakableElement.swift */; };
+		A1B2C3D401000578 /* MTDisplayGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000032 /* MTDisplayGenerator.swift */; };
+		A1B2C3D401000579 /* MTDisplayPreRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000033 /* MTDisplayPreRenderer.swift */; };
+		A1B2C3D40100057A /* MTElementWidthCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000034 /* MTElementWidthCalculator.swift */; };
+		A1B2C3D40100057B /* MTLineFitter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000035 /* MTLineFitter.swift */; };
+		A1B2C3D401000541 /* MathEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000540 /* MathEngineTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -358,6 +387,7 @@
 		A1B2C3D40000004D /* FileWatcherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileWatcherTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000066 /* ChromeHoverState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeHoverState.swift; sourceTree = "<group>"; };
 		A1B2C3D400000067 /* ChromeHoverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromeHoverTests.swift; sourceTree = "<group>"; };
+		A1B2C3D400000540 /* MathEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MathEngineTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -401,6 +431,7 @@
 				A1B2C3D40000006A /* BlockHeightMeasurerTests.swift */,
 				A1B2C3D4000002A1 /* VerticalRhythmTests.swift */,
 				A1B2C3D400000440 /* MathInTextKindsTests.swift */,
+				A1B2C3D400000540 /* MathEngineTests.swift */,
 				A1B2C3D400000483 /* InlineSyntaxTests.swift */,
 				A1B2C3D400000462 /* ImageRowTests.swift */,
 				A1B2C3D400000465 /* LocalLinkSafetyTests.swift */,
@@ -822,6 +853,35 @@
 				A1B2C3D40100006A /* BlockHeightMeasurerTests.swift in Sources */,
 				A1B2C3D4010002A2 /* VerticalRhythmTests.swift in Sources */,
 				A1B2C3D401000441 /* MathInTextKindsTests.swift in Sources */,
+				A1B2C3D401000560 /* MathFont.swift in Sources */,
+				A1B2C3D401000561 /* MathImage.swift in Sources */,
+				A1B2C3D401000562 /* MTBezierPath.swift in Sources */,
+				A1B2C3D401000563 /* MTColor.swift in Sources */,
+				A1B2C3D401000564 /* MTConfig.swift in Sources */,
+				A1B2C3D401000565 /* MTFont.swift in Sources */,
+				A1B2C3D401000566 /* MTFontManager.swift in Sources */,
+				A1B2C3D401000567 /* MTFontMathTable.swift in Sources */,
+				A1B2C3D401000568 /* MTFontMathTableV2.swift in Sources */,
+				A1B2C3D401000569 /* MTFontV2.swift in Sources */,
+				A1B2C3D40100056A /* MTLabel.swift in Sources */,
+				A1B2C3D40100056B /* MTMathAtomFactory.swift in Sources */,
+				A1B2C3D40100056C /* MTMathImage.swift in Sources */,
+				A1B2C3D40100056D /* MTMathList.swift in Sources */,
+				A1B2C3D40100056E /* MTMathListBuilder.swift in Sources */,
+				A1B2C3D40100056F /* MTMathListDisplay.swift in Sources */,
+				A1B2C3D401000570 /* MTMathListIndex.swift in Sources */,
+				A1B2C3D401000571 /* MTMathUILabel.swift in Sources */,
+				A1B2C3D401000572 /* MTTypesetter.swift in Sources */,
+				A1B2C3D401000573 /* MTTypesetter+Tokenization.swift in Sources */,
+				A1B2C3D401000574 /* MTUnicode.swift in Sources */,
+				A1B2C3D401000575 /* RWLock.swift in Sources */,
+				A1B2C3D401000576 /* MTAtomTokenizer.swift in Sources */,
+				A1B2C3D401000577 /* MTBreakableElement.swift in Sources */,
+				A1B2C3D401000578 /* MTDisplayGenerator.swift in Sources */,
+				A1B2C3D401000579 /* MTDisplayPreRenderer.swift in Sources */,
+				A1B2C3D40100057A /* MTElementWidthCalculator.swift in Sources */,
+				A1B2C3D40100057B /* MTLineFitter.swift in Sources */,
+				A1B2C3D401000541 /* MathEngineTests.swift in Sources */,
 				A1B2C3D401000484 /* InlineSyntaxTests.swift in Sources */,
 				A1B2C3D401000462 /* ImageRowTests.swift in Sources */,
 				A1B2C3D401000465 /* LocalLinkSafetyTests.swift in Sources */,

@@ -17,7 +17,12 @@ extension MTBezierPath {
     }
 }
 
-extension MTView {
+// QuickMD (#59): upstream declares this on MTView, i.e. on EVERY NSView. A read
+// of `textView.backgroundColor` where an optional colour is expected then binds
+// to this layer property instead of NSTextView's own (it broke the editor's
+// colour tests once the engine was compiled into the test target). The label
+// is the only user, so the property lives on the label.
+extension MTMathUILabel {
     
     var backgroundColor:MTColor? {
         get {

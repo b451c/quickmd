@@ -46,8 +46,7 @@ public class MTFont {
     }
     
     static var fontBundle:Bundle {
-        // Uses bundle for class so that this can be access by the unit tests.
-        Bundle(url: Bundle.main.url(forResource: "mathFonts", withExtension: "bundle")!)!
+        Bundle(url: MathFontsBundle.url!)!
     }
     
     /** Returns a copy of this font but with a different size. */
@@ -77,4 +76,15 @@ public class MTFont {
         self.defaultCGFont = nil
     }
     
+}
+
+/// Where the math fonts live (QuickMD addition, #59). The app reads them from
+/// its own bundle. The unit tests have no host app (their main bundle is the
+/// test runner), so `MathEngineTests` points `overrideURL` at the folder in the
+/// source tree to typeset with the real engine.
+enum MathFontsBundle {
+    static var overrideURL: URL?
+    static var url: URL? {
+        overrideURL ?? Bundle.main.url(forResource: "mathFonts", withExtension: "bundle")
+    }
 }
