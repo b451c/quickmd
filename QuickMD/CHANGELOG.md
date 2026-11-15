@@ -5,7 +5,9 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.15.1] - 2026-11-15
+
+Formulas: no more repeated characters inside brackets, a crash on a malformed formula, signs and spaces as LaTeX sets them.
 
 ### Fixed
 - **A crash on a malformed formula:** a row break right after `^` or `_` inside `aligned`, `matrix` or `cases` (for example `b^\\`) closed QuickMD.
