@@ -8,8 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A crash on a malformed formula:** a row break right after `^` or `_` inside `aligned`, `matrix` or `cases` (for example `b^\\`) closed QuickMD.
 - **Formulas inside brackets repeated characters:** in `cases`, `pmatrix`, `bmatrix` and anything between `\left` and `\right`, `20` was drawn as `200` and `2x` as `2xx`. Thanks to @ilmarmors for the report (#59).
 - The limits of a sum, product or integral inside `\left…\right` are drawn again.
+- A minus or plus sign at the start of a matrix or `cases` cell, or right after `\displaystyle` or a space command, sits against its number instead of being spaced like a subtraction.
+- Space commands have their own widths: `\quad`, `\qquad`, `\;` and `\!` were all drawn as narrow as `\,`.
 
 ## [1.15.0] - 2026-11-11
 

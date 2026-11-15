@@ -923,6 +923,11 @@ public class MTMathList : NSObject {
         let zeroRange = NSMakeRange(0, 0)
         
         var prevNode: MTMathAtom? = nil
+        // TeX's "most recent previous atom" for rules 5 & 6 (QuickMD): style
+        // changes and spaces are not atoms, so `\displaystyle -x`, `\quad -x`
+        // and a matrix cell `-1` (cells start with a style) begin with a sign,
+        // not with a subtraction.
+        var prevNoad: MTMathAtom? = nil
         for atom in self.atoms {
             let newNode = atom.finalized
             
@@ -949,12 +954,12 @@ public class MTMathList : NSObject {
             
             switch newNode.type {
             case .binaryOperator:
-                if isNotBinaryOperator(prevNode)  {
+                if isNotBinaryOperator(prevNoad)  {
                     newNode.type = .unaryOperator
                 }
             case .relation, .punctuation, .close:
-                if prevNode != nil && prevNode!.type == .binaryOperator {
-                    prevNode!.type = .unaryOperator
+                if prevNoad != nil && prevNoad!.type == .binaryOperator {
+                    prevNoad!.type = .unaryOperator
                 }
             case .number:
                 if prevNode != nil && prevNode!.type == .number && prevNode!.subScript == nil && prevNode!.superScript == nil {
@@ -965,9 +970,10 @@ public class MTMathList : NSObject {
             }
             finalizedList.add(newNode)
             prevNode = newNode
+            if newNode.type != .style && newNode.type != .space { prevNoad = newNode }
         }
-        if prevNode != nil && prevNode!.type == .binaryOperator {
-            prevNode!.type = .unaryOperator
+        if prevNoad != nil && prevNoad!.type == .binaryOperator {
+            prevNoad!.type = .unaryOperator
         }
         return finalizedList
     }

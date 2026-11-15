@@ -1121,7 +1121,16 @@ class MTAtomTokenizer {
     private func tokenizeSpace(_ atom: MTMathAtom, prevAtom: MTMathAtom?, atomIndex: Int) -> MTBreakableElement? {
         // Space atoms typically don't participate in breaking
         // They are rendered as-is
-        let width = widthCalculator.measureSpace(atom.type)
+        //
+        // QuickMD: a space command is as wide as it asks for (`\,` 3mu, `\;` 5mu,
+        // `\quad` 18mu, `\qquad` 36mu, `\!` -3mu). Upstream measures the atom's
+        // TYPE, so every one of them came out as a thin space.
+        let width: CGFloat
+        if let space = atom as? MTMathSpace {
+            width = widthCalculator.measureSpace(mu: space.space)
+        } else {
+            width = widthCalculator.measureSpace(atom.type)
+        }
 
         return MTBreakableElement(
             content: .space(width),

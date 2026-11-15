@@ -105,6 +105,13 @@ class MTElementWidthCalculator {
         }
     }
 
+    /// Width of a space command given in mu (QuickMD), in the same mu as the
+    /// spacing between atoms. Negative for `\!`.
+    func measureSpace(mu: CGFloat) -> CGFloat {
+        guard let mathTable = font.mathTable else { return 0 }
+        return mathTable.muUnit * mu
+    }
+
     /// Measure explicit space value
     func measureExplicitSpace(_ width: CGFloat) -> CGFloat {
         return width

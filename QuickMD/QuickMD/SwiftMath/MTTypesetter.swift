@@ -502,6 +502,10 @@ class MTTypesetter {
         // that are not included in TeX and applies Rule 14 to merge ordinary characters.
         var preprocessed = [MTMathAtom]() //  arrayWithCapacity:ml.atoms.count)
         var prevNode:MTMathAtom! = nil
+        // TeX's "most recent previous atom" for Rule 5 (QuickMD): style changes
+        // and spaces are not atoms. `prevNode` stays the immediate neighbour,
+        // which is what fusing needs.
+        var prevNoad:MTMathAtom? = nil
         preprocessed.reserveCapacity(ml!.atoms.count)
         for atom in ml!.atoms {
             if atom.type == .variable || atom.type == .number {
@@ -520,16 +524,16 @@ class MTTypesetter {
                 // to ordinary when it appears after: Bin, Op, Rel, Open, Punct, or at the beginning
                 // This handles cases like "=-2" where minus should be unary, not binary
                 let shouldConvertToOrdinary: Bool
-                if prevNode == nil {
-                    // At the beginning of the list
-                    shouldConvertToOrdinary = true
-                } else {
-                    switch prevNode.type {
+                if let prevNoad {
+                    switch prevNoad.type {
                     case .binaryOperator, .relation, .open, .punctuation, .largeOperator:
                         shouldConvertToOrdinary = true
                     default:
                         shouldConvertToOrdinary = false
                     }
+                } else {
+                    // At the beginning of the list
+                    shouldConvertToOrdinary = true
                 }
 
                 if shouldConvertToOrdinary {
@@ -552,6 +556,7 @@ class MTTypesetter {
             
             // TODO: add italic correction here or in second pass?
             prevNode = atom
+            if atom.type != .style && atom.type != .space { prevNoad = atom }
             preprocessed.append(atom)
         }
         return preprocessed

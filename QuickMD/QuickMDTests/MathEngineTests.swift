@@ -18,9 +18,11 @@ import AppKit
 ///
 /// Negative control: with the two engine changes reverted
 /// (`MTTypesetter+Tokenization.swift` copies before preprocessing,
-/// `makeLeftRight` typesets once) seven of the nine tests fail. The two that
-/// pass guard what already held: the inline source path (fixed in 1.15.0) and
-/// the public entry, which always typeset a copy.
+/// `makeLeftRight` typesets once) seven of the first nine tests fail. The two
+/// that pass guard what already held: the inline source path (fixed in 1.15.0)
+/// and the public entry, which always typeset a copy. The "Signs and spaces"
+/// tests have their own control: without the previous-atom rule and the
+/// per-command space width the sign test and the space test fail.
 final class MathEngineTests: XCTestCase {
 
     // MARK: - Fixtures
@@ -233,6 +235,96 @@ final class MathEngineTests: XCTestCase {
             XCTAssertEqual(drawn(#"\left\{"# + table + #"\right."#), "80x=15x212y=7ab", environment)
             XCTAssertEqual(drawn(#"\left("# + table + #"\right)"#), "80x=15x212y=7ab", environment)
         }
+    }
+
+    // MARK: - Signs and spaces (found while fixing #59)
+
+    private func width(_ latex: String, file: StaticString = #filePath, line: UInt = #line) -> CGFloat {
+        guard let list = build(latex, file: file, line: line),
+              let display = MTTypesetter.createLineForMathList(list, font: font, style: .display) else {
+            XCTFail("\(latex) must typeset", file: file, line: line)
+            return 0
+        }
+        return display.width
+    }
+
+    /// TeX rule 5: a `-` or `+` with no atom before it is a sign, set tight
+    /// against what follows. A style change or a space is not an atom, and a
+    /// matrix or cases cell starts with a style change — so `\displaystyle -x`
+    /// and every negative matrix entry were spaced like a subtraction (`− 1`).
+    /// Widths are compared with each other, never with a number.
+    func testASignAfterAStyleChangeOrASpaceIsSetTight() {
+        let sign = width("-x")
+        XCTAssertEqual(width(#"\displaystyle -x"#), sign, accuracy: 0.01)
+        XCTAssertEqual(width(#"\textstyle -x"#), sign, accuracy: 0.01)
+        XCTAssertEqual(width(#"\begin{matrix} -x \end{matrix}"#), sign, accuracy: 0.01)
+        XCTAssertEqual(width(#"\begin{matrix} +x \end{matrix}"#), width("+x"), accuracy: 0.01)
+        XCTAssertEqual(width(#"\begin{matrix} -1 & 2 \\ 3 & -4 \end{matrix}"#),
+                       width(#"\begin{matrix} {-1} & 2 \\ 3 & {-4} \end{matrix}"#), accuracy: 0.01)
+        XCTAssertEqual(drawn(#"\begin{cases} -x & x < 0 \\ x & x \ge 0 \end{cases}"#), "-xx<0xx≥0")
+        // After a space the sign is as tight as a letter would be.
+        XCTAssertEqual(width(#"\quad -x"#) - sign, width(#"\quad x"#) - width("x"), accuracy: 0.01)
+        XCTAssertEqual(width(#"x = \, -1"#) - width("x = -1"), width(#"a \, b"#) - width("ab"), accuracy: 0.01)
+        XCTAssertEqual(width(#"\left( \, -x \right)"#) - width(#"\left( -x \right)"#),
+                       width(#"a \, b"#) - width("ab"), accuracy: 0.01)
+    }
+
+    /// The other half of the rule: with an atom before it, the operator is a
+    /// subtraction and keeps its space on both sides — also across a space or
+    /// a style change, and inside a cell.
+    func testASubtractionKeepsItsSpacing() {
+        let operatorSpace = width("a - b") - width("a") - width("-b")
+        XCTAssertGreaterThan(operatorSpace, 1, "a subtraction is wider than its parts set tight")
+        XCTAssertEqual(width(#"\displaystyle a - b"#), width("a - b"), accuracy: 0.01)
+        XCTAssertEqual(width(#"a \, - b"#) - width("a - b"), width(#"a \, b"#) - width("ab"), accuracy: 0.01)
+        XCTAssertEqual(width(#"a \displaystyle - b"#), width("a - b"), accuracy: 0.01)
+        XCTAssertEqual(width(#"\begin{matrix} a - b \end{matrix}"#), width("a - b"), accuracy: 0.01)
+    }
+
+    /// Every space command was drawn as a thin space: `\quad` and `\qquad`
+    /// separated nothing and `\!` pushed apart. Each is the number of mu it
+    /// names (`\,` 3, `\>` 4, `\;` 5, `\quad` 18, `\qquad` 36, `\!` −3).
+    func testSpaceCommandsHaveTheirOwnWidths() {
+        let tight = width("ab")
+        func gap(_ command: String) -> CGFloat { width("a \(command) b") - tight }
+        let thin = gap(#"\,"#)
+        XCTAssertGreaterThan(thin, 0.5)
+        XCTAssertEqual(gap(#"\>"#), thin * 4 / 3, accuracy: 0.01)
+        XCTAssertEqual(gap(#"\;"#), thin * 5 / 3, accuracy: 0.01)
+        XCTAssertEqual(gap(#"\quad"#), thin * 6, accuracy: 0.01)
+        XCTAssertEqual(gap(#"\qquad"#), thin * 12, accuracy: 0.01)
+        XCTAssertEqual(gap(#"\!"#), -thin, accuracy: 0.01)
+        XCTAssertEqual(gap(#"\quad\quad"#), gap(#"\qquad"#), accuracy: 0.01)
+        // The same inside a script, a fraction and delimiters: wider than a thin space.
+        XCTAssertGreaterThan(width(#"x^{a \quad b}"#), width(#"x^{a \, b}"#) + thin)
+        XCTAssertGreaterThan(width(#"\frac{a \quad b}{c}"#), width(#"\frac{a \, b}{c}"#) + thin)
+        XCTAssertEqual(width(#"\left(a \quad b\right)"#) - width(#"\left(a \, b\right)"#), thin * 5, accuracy: 0.01)
+        // Spaces draw nothing.
+        XCTAssertEqual(drawn(#"a \quad b \qquad c \! d"#), "abcd")
+    }
+
+    // MARK: - Malformed input must not crash
+
+    /// A dropped exponent right before a row break (`b^\\`) takes the break as
+    /// its argument; the table parser then indexed a row it never made and
+    /// trapped, taking the whole app down with the document. Whatever such
+    /// input parses to, parsing and typesetting it return.
+    func testARowBreakTakenAsAnArgumentDoesNotCrash() {
+        let inputs = [
+            #"\begin{aligned} a &= b^\\ \\ c &= d \end{aligned}"#,
+            #"\begin{matrix} a_\\ \\ c \end{matrix}"#,
+            #"\begin{cases} \overline\\ \\ c \end{cases}"#,
+            #"\begin{pmatrix} a^\\ \\ b^\\ \\ c \end{pmatrix}"#,
+            #"\begin{matrix} a^\cr b \end{matrix}"#
+        ]
+        for latex in inputs {
+            var error: NSError?
+            guard let list = MTMathListBuilder.build(fromString: latex, error: &error) else { continue }
+            _ = MTTypesetter.createLineForMathList(list, font: font, style: .display)
+            _ = MTTypesetter.createLineForMathList(list, font: font, style: .text)
+        }
+        // The well-formed neighbour still has its two rows.
+        XCTAssertEqual(drawn(#"\begin{aligned} a &= b^2 \\ c &= d \end{aligned}"#), "a=b2c=d")
     }
 
     // MARK: - The invariant
