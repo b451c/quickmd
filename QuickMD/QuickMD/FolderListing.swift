@@ -31,7 +31,13 @@ enum MarkdownFileKind {
 ///   pictures) starve its sibling `Notes/` and the vault read as "No
 ///   Markdown files". A folder that is read is read whole (one directory
 ///   read, not interruptible — accepted) and listed in Finder order; the
-///   file cap cuts in display order.
+///   file cap cuts in display order. A TOTAL bounds the reads as well:
+///   once the entries returned by all directory reads so far (the root's
+///   included) pass `Limits.maxEntriesRead`, no further subfolder is read
+///   and the result is truncated — without it the worst case was 2 000
+///   folders × their size (photo exports, build outputs of 50–100k files),
+///   re-read on every relevant event. A scan costs at most that total plus
+///   one folder.
 /// - Never onto another volume: a subfolder that is a volume's root, or
 ///   whose volume differs from the root's, is skipped ("/" must not walk
 ///   /Volumes or /System/Volumes/Data). Both tests are needed: measured on
@@ -66,6 +72,9 @@ enum FolderListing {
         /// Folders read at most, the root included; more makes the result
         /// truncated.
         var maxFolders = 2_000
+        /// Entries returned by all directory reads together (the root's
+        /// included); past it no further folder is read (truncated).
+        var maxEntriesRead = 200_000
     }
 
     /// The Markdown files directly inside one folder.
@@ -157,7 +166,8 @@ enum FolderListing {
             return .unreadable
         }
         guard isDirectory.boolValue else { return .missing }
-        guard let rootEntries = entries(of: root) else { return .unreadable }
+        var entriesRead = 0
+        guard let rootEntries = entries(of: root, read: &entriesRead) else { return .unreadable }
         let volume = try? root.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier
         var groups: [Group] = []
         var count = 0
@@ -187,12 +197,12 @@ enum FolderListing {
                 }
                 if entry.isVolume { continue }
                 if let volume, let own = entry.volume, !own.isEqual(volume) { continue }
-                guard foldersRead < limits.maxFolders else {
+                guard foldersRead < limits.maxFolders, entriesRead <= limits.maxEntriesRead else {
                     truncated = true
                     return
                 }
                 foldersRead += 1
-                guard let children = Self.entries(of: entry.url) else { continue }
+                guard let children = Self.entries(of: entry.url, read: &entriesRead) else { continue }
                 let name = entry.url.lastPathComponent
                 let path = relativePath.isEmpty ? name : relativePath + "/" + name
                 didVisit?(path)
@@ -213,10 +223,12 @@ enum FolderListing {
 
     /// The listable children of `folder` in Finder order; nil when it cannot
     /// be read. The directory read prefetches exactly the keys the rules
-    /// above read (kind, link, hidden, package, volume).
-    private static func entries(of folder: URL) -> [Entry]? {
+    /// above read (kind, link, hidden, package, volume). `read` grows by the
+    /// number of entries the read returned (the cost, listable or not).
+    private static func entries(of folder: URL, read: inout Int) -> [Entry]? {
         guard let urls = try? FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { return nil }
+        read += urls.count
         var entries: [Entry] = []
         for url in urls {
             let name = url.lastPathComponent

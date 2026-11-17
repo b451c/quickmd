@@ -165,6 +165,34 @@ final class FolderListingTests: XCTestCase {
         XCTAssertEqual(FolderListing.Limits().maxFolders, 2_000)
     }
 
+    /// The total of entries read bounds the walk: root (4 entries) + a/ (3)
+    /// + b/ (3) = 10 passes a limit of 9 after the SECOND folder, so c/ is
+    /// never read — the folders already read stay listed whole, truncated.
+    /// The visit counter proves what was read.
+    func testTheTotalOfEntriesReadStopsFurtherReads() throws {
+        try make("r.md", "a/a.md", "a/x.txt", "a/y.txt", "b/b.md", "b/x.txt", "b/y.txt", "c/c.md")
+        var visited: [String] = []
+        let outcome = FolderListing.scan(root, limits: .init(maxDepth: 8, maxFiles: 2_000, maxFolders: 2_000,
+                                                             maxEntriesRead: 9),
+                                         didVisit: { visited.append($0) })
+        XCTAssertEqual(visited, ["a", "b"], "c/ is not read")
+        XCTAssertEqual(shape(listed(outcome)), ["/: r.md", "a: a.md", "b: b.md"])
+        XCTAssertEqual(listed(outcome)?.isTruncated, true)
+        // At exactly the limit after b/ the total has not passed it: c/ is read.
+        visited = []
+        let whole = FolderListing.scan(root, limits: .init(maxDepth: 8, maxFiles: 2_000, maxFolders: 2_000,
+                                                           maxEntriesRead: 10),
+                                       didVisit: { visited.append($0) })
+        XCTAssertEqual(visited, ["a", "b", "c"])
+        XCTAssertEqual(listed(whole)?.isTruncated, false, "nothing was left unread")
+        // The root alone passing the limit: only the root is listed.
+        let rootOnly = FolderListing.scan(root, limits: .init(maxDepth: 8, maxFiles: 2_000, maxFolders: 2_000,
+                                                              maxEntriesRead: 3))
+        XCTAssertEqual(shape(listed(rootOnly)), ["/: r.md"])
+        XCTAssertEqual(listed(rootOnly)?.isTruncated, true)
+        XCTAssertEqual(FolderListing.Limits().maxEntriesRead, 200_000)
+    }
+
     /// The file cap still cuts in display order.
     func testTheFileCapCutsInDisplayOrder() throws {
         try make("r1.md", "r2.md", "a/m1.md", "a/m2.md", "b/n.md")
