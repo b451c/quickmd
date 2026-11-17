@@ -223,6 +223,15 @@ final class DocumentSelectionLayoutManager: NSLayoutManager {
         for rect in rects { rect.fill(using: .sourceOver) }
     }
 
+    /// The glyphs, then the underline of every formula that is link text
+    /// (`FittingMathAttachment.drawLinkUnderlines`, v1.16): TextKit skips an
+    /// attachment when it underlines a link. Drawing only, like everything
+    /// here.
+    override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        super.drawGlyphs(forGlyphRange: glyphsToShow, at: origin)
+        FittingMathAttachment.drawLinkUnderlines(of: self, forGlyphRange: glyphsToShow, at: origin)
+    }
+
     override func fillBackgroundRectArray(_ rectArray: UnsafePointer<NSRect>, count rectCount: Int,
                                           forCharacterRange charRange: NSRange, color: NSColor) {
         guard let covered = selectionCoveredRange,

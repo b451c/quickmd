@@ -34,18 +34,7 @@ extension MathRendering {
     /// additionally rounds up, which is the safe direction for a row height).
     static let swiftMath = MathRendering(
         inlineImage: { latex, theme, fontSize in
-            var mathImage = MathImage(
-                latex: latex,
-                fontSize: fontSize,
-                textColor: NSColor(theme.textColor),
-                labelMode: .text,
-                textAlignment: .left
-            )
-            let (error, image, _) = mathImage.asImage()
-            // Nothing drawn (an empty or spacing-only `$…$`, an accent over
-            // nothing): the italic literal, like a formula that fails.
-            guard error == nil, let image, MathInk.drawsSomething(latex, image: image) else { return nil }
-            return image
+            inlineFormula(latex, fontSize: fontSize, color: NSColor(theme.textColor))
         },
         displayHeight: { latex, theme, fontScale in
             var mathImage = MathImage(
@@ -71,8 +60,23 @@ extension MathRendering {
             let (error, image, _) = mathImage.asImage()
             guard error == nil, let image, MathInk.drawsSomething(latex, image: image) else { return nil }
             return image
+        },
+        // A formula that is link text, in the link's colour (v1.16).
+        inlineImageInColor: { latex, fontSize, color in
+            inlineFormula(latex, fontSize: fontSize, color: color)
         }
     )
+
+    /// One inline formula, text style, in `color`; nil when nothing is drawn
+    /// (an empty or spacing-only `$…$`, an accent over nothing: the italic
+    /// literal, like a formula that fails).
+    private static func inlineFormula(_ latex: String, fontSize: CGFloat, color: NSColor) -> NSImage? {
+        var mathImage = MathImage(latex: latex, fontSize: fontSize, textColor: color,
+                                  labelMode: .text, textAlignment: .left)
+        let (error, image, _) = mathImage.asImage()
+        guard error == nil, let image, MathInk.drawsSomething(latex, image: image) else { return nil }
+        return image
+    }
 }
 
 // MARK: - Formulas that typeset to nothing
