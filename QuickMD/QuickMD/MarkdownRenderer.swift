@@ -458,8 +458,36 @@ struct MarkdownRenderer: Sendable {
     /// A thematic break (`---`, `***`, `___`, also spaced: `* * *`) —
     /// `renderLine` draws it as a rule.
     static func isThematicBreak(_ line: String) -> Bool {
-        markerLine(line)
-            .range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil
+        isRuleRun(markerLine(line))
+    }
+
+    /// Whether an ALREADY TRIMMED line (`markerLine`: spaces and tabs off
+    /// both ends) is a thematic break: three or more of ONE of `*`, `-`,
+    /// `_`, with any spaces or tabs between them (`* * *`, `- - -`,
+    /// `**  **`). The one rule test: every reader of a rule calls it, before
+    /// any list-item test. The front-matter fence and the setext underline
+    /// keep their own exact `---` checks.
+    ///
+    /// A hand-written scan over the UTF-8 bytes, not a regular expression:
+    /// it is asked about every line that starts with `-` or `*` (every
+    /// bullet) and fails at the first other byte, without allocating. The
+    /// equivalent regex cost ~40 ms more to open an 11 400-bullet document.
+    /// `ListContentTests.testTheRuleScanAnswersAsThePatternDid` pins the
+    /// equivalence with that regex.
+    static func isRuleRun(_ trimmed: String) -> Bool {
+        var bytes = trimmed.utf8.makeIterator()
+        guard let marker = bytes.next(),
+              marker == UInt8(ascii: "*") || marker == UInt8(ascii: "-") || marker == UInt8(ascii: "_")
+        else { return false }
+        var count = 1
+        while let byte = bytes.next() {
+            if byte == marker {
+                count += 1
+            } else if byte != UInt8(ascii: " ") && byte != UInt8(ascii: "\t") {
+                return false
+            }
+        }
+        return count >= 3
     }
 
     /// Must mirror the dispatch in `renderLine`, or a structural line could
@@ -469,7 +497,7 @@ struct MarkdownRenderer: Sendable {
         let trimmed = markerLine(line)
         let nsRange = NSRange(line.startIndex..., in: line)
         if headerRegex.firstMatch(in: line, range: nsRange) != nil { return .structural }
-        if trimmed.range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil { return .structural }
+        if isRuleRun(trimmed) { return .structural }
         if taskListRegex.firstMatch(in: line, range: nsRange) != nil { return .listItem }
         if ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) { return .listItem }
         if trimmed.range(of: orderedMarkerPattern, options: .regularExpression) != nil { return .listItem }
@@ -502,7 +530,7 @@ struct MarkdownRenderer: Sendable {
         }
 
         // Horizontal rule
-        if trimmed.range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil {
+        if Self.isRuleRun(trimmed) {
             return renderHorizontalRule()
         }
 
