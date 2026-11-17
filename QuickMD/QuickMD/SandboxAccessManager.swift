@@ -162,13 +162,25 @@ final class SandboxAccessManager {
         return selectedURL
     }
 
-    /// Saves the bookmark of a granted folder and starts access.
+    /// Saves the bookmark of a granted folder and starts access — once: a
+    /// folder already saved AND active (restored at launch, or granted
+    /// earlier this session) is left alone. Its bookmark needs no refresh
+    /// then: it was either created this session or resolved by
+    /// `restoreAccess`, which re-saves a stale one. A saved folder that is
+    /// not active gets a fresh bookmark (that IS the refresh) and its access
+    /// started, without a second entry in `savedFolders`.
     private func saveGrant(_ selectedURL: URL) -> Bool {
+        if FolderAccessBroker.isActiveGrant(selectedURL, saved: savedFolders, active: activeAccessURLs) {
+            return true
+        }
         do {
             let bookmarkData = try selectedURL.bookmarkData(options: .withSecurityScope)
             let key = Self.bookmarkKey(for: selectedURL)
             UserDefaults.standard.set(bookmarkData, forKey: key)
-            savedFolders.append(selectedURL)
+            let path = FolderAccessBroker.canonicalPath(selectedURL)
+            if !savedFolders.contains(where: { FolderAccessBroker.canonicalPath($0) == path }) {
+                savedFolders.append(selectedURL)
+            }
             if selectedURL.startAccessingSecurityScopedResource() {
                 activeAccessURLs.append(selectedURL)
                 return true

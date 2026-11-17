@@ -262,6 +262,39 @@ final class FolderAccessBrokerTests: XCTestCase {
                           .granted, "outside the chosen folder nothing changed")
     }
 
+    /// The same folder chosen three times: one save (one bookmark, one
+    /// access start), one grant notice; a different folder still adds, and
+    /// coverage / declines are as after one registration.
+    func testTheSameChosenFolderRegisteredThreeTimesIsSavedOnce() async {
+        let world = World()
+        let access = broker(world)
+        _ = await access.requestAccess(forFileAt: file("elsewhere/x.png"), documentURL: document, explicit: false)
+        XCTAssertEqual(access.declinedFolders.count, 1)
+        for _ in 0..<3 { XCTAssertTrue(access.registerUserChosenFolder(file("docs"))) }
+        XCTAssertEqual(world.saves.count, 1, "one bookmark, one access start")
+        XCTAssertEqual(world.granted.count, 1)
+        XCTAssertEqual(access.grantedFolders, [FolderAccessBroker.canonicalPath(file("docs"))])
+        XCTAssertEqual(access.declinedFolders.count, 1, "a decline elsewhere stays")
+        let covered = await access.requestAccess(forFileAt: file("docs/badges/a.svg"), documentURL: document,
+                                                 explicit: false)
+        XCTAssertTrue(covered)
+        XCTAssertTrue(access.registerUserChosenFolder(file("elsewhere")))
+        XCTAssertEqual(world.saves.count, 2, "a different folder still adds")
+        XCTAssertTrue(access.declinedFolders.isEmpty, "its grant clears the decline it covers")
+    }
+
+    /// The manager's guard (`saveGrant`): saved AND active, by canonical
+    /// path, any spelling.
+    func testIsActiveGrantNeedsBothSavedAndActive() {
+        let docs = file("docs")
+        let spelledOtherwise = URL(fileURLWithPath: FolderAccessBroker.canonicalPath(docs) + "/badges/..")
+        XCTAssertTrue(FolderAccessBroker.isActiveGrant(docs, saved: [spelledOtherwise], active: [docs]))
+        XCTAssertFalse(FolderAccessBroker.isActiveGrant(docs, saved: [docs], active: []), "saved, not active")
+        XCTAssertFalse(FolderAccessBroker.isActiveGrant(docs, saved: [], active: [docs]), "active, not saved")
+        XCTAssertFalse(FolderAccessBroker.isActiveGrant(file("docs/images"), saved: [docs], active: [docs]),
+                       "a subfolder is a different folder")
+    }
+
     /// Unsandboxed (GitHub/Homebrew) the chooser's folder is only a path:
     /// nothing is saved, granted or announced.
     func testAUserChosenFolderIsNeverRegisteredUnsandboxed() {

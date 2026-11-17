@@ -100,6 +100,16 @@ final class FolderAccessBroker {
         return path
     }
 
+    /// `folder` already has a saved bookmark AND an active access in this
+    /// process (exact folder, by canonical path): saving it again would only
+    /// add a duplicate entry and an unbalanced
+    /// `startAccessingSecurityScopedResource`. Used by
+    /// `SandboxAccessManager.saveGrant`.
+    nonisolated static func isActiveGrant(_ folder: URL, saved: [URL], active: [URL]) -> Bool {
+        let path = canonicalPath(folder)
+        return saved.contains { canonicalPath($0) == path } && active.contains { canonicalPath($0) == path }
+    }
+
     /// `folder` is `path` or one of its ancestors.
     nonisolated static func covers(_ folder: String, _ path: String) -> Bool {
         folder == "/" || path == folder || path.hasPrefix(folder.hasSuffix("/") ? folder : folder + "/")
@@ -141,8 +151,12 @@ final class FolderAccessBroker {
     /// (false). True when the grant was recorded.
     @discardableResult
     func registerUserChosenFolder(_ folder: URL) -> Bool {
-        guard environment.isSandboxed, environment.save(folder) else { return false }
+        guard environment.isSandboxed else { return false }
         let granted = Self.canonicalPath(folder)
+        // Chosen again (Open Folder on the same folder): already granted in
+        // this session — no second bookmark, no second access start.
+        if grantedFolders.contains(granted) { return true }
+        guard environment.save(folder) else { return false }
         if !grantedFolders.contains(granted) { grantedFolders.append(granted) }
         declinedFolders = declinedFolders.filter { !Self.covers(granted, $0) }
         environment.didGrant(folder)
