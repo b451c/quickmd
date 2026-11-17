@@ -127,9 +127,12 @@ struct RecentDocumentsSidebar: View {
         .task { await folders.restore() }
         .task(id: currentURL) {
             let url = currentURL
-            canonicalCurrentPath = await Task.detached(priority: .utility) {
+            let canonical = await Task.detached(priority: .utility) {
                 url.map { FolderAccessBroker.canonicalPath($0) }
             }.value
+            // A newer document's task replaced this one: its answer stands.
+            guard !Task.isCancelled else { return }
+            canonicalCurrentPath = canonical
         }
     }
 
@@ -151,10 +154,15 @@ struct RecentDocumentsSidebar: View {
     @ViewBuilder
     private func folderSection(_ folder: URL) -> some View {
         FolderHeaderRow(folder: folder, onClose: { folders.close() })
+        if folders.isUnreadable {
+            // Kept (restored, or listed before): the last listing, if any,
+            // stays below.
+            folderNote("Can\u{2019}t read this folder")
+        }
         if folders.groups.isEmpty {
-            // Unreadable: the header alone — "no files" would not be true.
+            // Only a COMPLETE scan may say there are none.
             if !folders.isLoading && !folders.isUnreadable {
-                folderNote("No Markdown files")
+                folderNote(folders.isTruncated ? "This folder is too large to list" : "No Markdown files")
             }
         } else {
             ForEach(folders.groups) { group in

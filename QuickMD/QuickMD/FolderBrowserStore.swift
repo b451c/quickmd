@@ -96,6 +96,12 @@ final class FolderBrowserStore: ObservableObject {
 
     /// One open folder's scans; cancelled when it is closed or replaced.
     private final class Session: @unchecked Sendable {
+        /// Restored at launch, or listed once in this session: such a
+        /// folder is KEPT when a scan cannot read it. An explicit Open that
+        /// cannot read its folder leaves nothing behind. Main actor only.
+        var keepsWhenUnreadable: Bool
+        init(keepsWhenUnreadable: Bool) { self.keepsWhenUnreadable = keepsWhenUnreadable }
+
         private let lock = NSLock()
         private var cancelled = false
         var isCancelled: Bool {
@@ -128,7 +134,7 @@ final class FolderBrowserStore: ObservableObject {
         let chosen = url.standardizedFileURL
         environment.defaults.set(chosen.path, forKey: Self.defaultsKey)
         let root = URL(fileURLWithPath: FolderAccessBroker.canonicalPath(chosen), isDirectory: true)
-        let opened = begin(folder: chosen, root: root)
+        let opened = begin(folder: chosen, root: root, restored: false)
         return await withCheckedContinuation { continuation in
             waiters.append((opened, continuation))
         }
@@ -153,7 +159,7 @@ final class FolderBrowserStore: ObservableObject {
         guard !didRestore else { return }
         didRestore = true
         guard folder == nil, let path = environment.defaults.string(forKey: Self.defaultsKey) else { return }
-        let canonical = await Task.detached(priority: .utility) { Self.existingCanonicalPath(path) }.value
+        let canonical = await Task.detached(priority: .utility) { Self.restorableCanonicalPath(path) }.value
         // Opened, closed or replaced while the check ran: the reader acted.
         guard folder == nil, environment.defaults.string(forKey: Self.defaultsKey) == path else { return }
         let chosen = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
@@ -161,7 +167,7 @@ final class FolderBrowserStore: ObservableObject {
             environment.defaults.removeObject(forKey: Self.defaultsKey)
             return
         }
-        begin(folder: chosen, root: URL(fileURLWithPath: canonical, isDirectory: true))
+        begin(folder: chosen, root: URL(fileURLWithPath: canonical, isDirectory: true), restored: true)
     }
 
     /// Lists the folder again — at once, or after the running scan.
@@ -173,20 +179,30 @@ final class FolderBrowserStore: ObservableObject {
 
     // MARK: Private
 
-    /// The disk spelling of `path` when it is an existing folder (I/O: call
-    /// off the main thread).
-    nonisolated private static func existingCanonicalPath(_ path: String) -> String? {
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else {
+    /// The disk spelling of a remembered `path`, or nil when it is gone
+    /// (ENOENT / ENOTDIR) or not a folder. A path `stat` may not see
+    /// (EACCES / EPERM) is kept — the scan will report it unreadable — so a
+    /// permission never forgets a folder. I/O: call off the main thread.
+    nonisolated static func restorableCanonicalPath(_ path: String) -> String? {
+        switch LocalLinkOpening.existence(atPath: path) {
+        case .missing:
             return nil
+        case .unknown:
+            return FolderAccessBroker.canonicalPath(URL(fileURLWithPath: path, isDirectory: true))
+        case .exists:
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
+                return FolderAccessBroker.canonicalPath(URL(fileURLWithPath: path, isDirectory: true))
+            }
+            return isDirectory.boolValue
+                ? FolderAccessBroker.canonicalPath(URL(fileURLWithPath: path, isDirectory: true)) : nil
         }
-        return FolderAccessBroker.canonicalPath(URL(fileURLWithPath: path, isDirectory: true))
     }
 
     @discardableResult
-    private func begin(folder chosen: URL, root: URL) -> Session {
+    private func begin(folder chosen: URL, root: URL, restored: Bool) -> Session {
         endSession()
-        let opened = Session()
+        let opened = Session(keepsWhenUnreadable: restored)
         session = opened
         folder = chosen
         listingRoot = root
@@ -257,10 +273,18 @@ final class FolderBrowserStore: ObservableObject {
             resumeWaiters(.missing) { $0 === current }
             close()
         case .unreadable:
+            guard current.keepsWhenUnreadable else {
+                // An explicit Open of a folder that cannot be read: the
+                // reader is told (alert); nothing stays behind.
+                resumeWaiters(.unreadable) { $0 === current }
+                close()
+                return
+            }
             if !isUnreadable { isUnreadable = true }
             if isLoading { isLoading = false }
             resumeWaiters(.unreadable) { $0 === current }
         case .listed(let result):
+            current.keepsWhenUnreadable = true
             // Only what changed is assigned: equal listings publish nothing.
             if isUnreadable { isUnreadable = false }
             if isLoading { isLoading = false }

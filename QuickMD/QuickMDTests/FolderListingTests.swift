@@ -143,20 +143,54 @@ final class FolderListingTests: XCTestCase {
         XCTAssertEqual(shape(scan()), ["/: a.md"], "an unreadable subfolder is left out of the parent's listing")
     }
 
-    func testTheEntryCapCountsEveryEntryButKeepsTheRootsFiles() throws {
-        try make("r1.md", "r2.md", "r3.md", "r.txt", "a/x1.txt", "a/x2.txt", "a/m.md", "b/n.md")
-        // The root's own entries are read whatever the cap; a/ (3 entries)
-        // does not fit in 2, so it lists nothing and the walk stops.
-        let capped = scan(.init(maxDepth: 8, maxFiles: 2_000, maxEntries: 2))
-        XCTAssertEqual(shape(capped), ["/: r1.md r2.md r3.md"])
+    /// The cost cap counts FOLDERS READ (the root is one). A huge sibling
+    /// never starves another: a vault whose `Attachments/` holds many
+    /// pictures and whose `Notes/` holds the Markdown lists `Notes/` (under
+    /// the 1.16 review's entry budget it read as "No Markdown files").
+    func testTheFolderCapCountsFoldersReadAndAHugeSiblingStarvesNothing() throws {
+        let fm = FileManager.default
+        let attachments = root.appendingPathComponent("Attachments", isDirectory: true)
+        try fm.createDirectory(at: attachments, withIntermediateDirectories: true)
+        for index in 0..<300 { fm.createFile(atPath: attachments.appendingPathComponent("p\(index).png").path, contents: nil) }
+        try make("Notes/a.md", "Notes/b.md", "Zettel/c.md")
+        let whole = scan(.init(maxDepth: 8, maxFiles: 2_000, maxFolders: 4))
+        XCTAssertEqual(shape(whole), ["Notes: a.md b.md", "Zettel: c.md"])
+        XCTAssertEqual(whole?.isTruncated, false, "root + three folders: exactly the cap")
+        let capped = scan(.init(maxDepth: 8, maxFiles: 2_000, maxFolders: 3))
+        XCTAssertEqual(shape(capped), ["Notes: a.md b.md"], "the folders read are listed whole")
         XCTAssertEqual(capped?.isTruncated, true)
-        let exact = scan(.init(maxDepth: 8, maxFiles: 2_000, maxEntries: 4))
-        XCTAssertEqual(shape(exact), ["/: r1.md r2.md r3.md", "a: m.md", "b: n.md"])
-        XCTAssertEqual(exact?.isTruncated, false, "3 entries in a/, 1 in b/: exactly the cap")
-        let short = scan(.init(maxDepth: 8, maxFiles: 2_000, maxEntries: 3))
-        XCTAssertEqual(shape(short), ["/: r1.md r2.md r3.md", "a: m.md"])
-        XCTAssertEqual(short?.isTruncated, true)
-        XCTAssertEqual(FolderListing.Limits().maxEntries, 20_000)
+        let starved = scan(.init(maxDepth: 8, maxFiles: 2_000, maxFolders: 2))
+        XCTAssertEqual(starved?.groups, [], "only Attachments/ was read…")
+        XCTAssertEqual(starved?.isTruncated, true, "…and the result says it is incomplete, never \"no files\"")
+        XCTAssertEqual(FolderListing.Limits().maxFolders, 2_000)
+    }
+
+    /// The file cap still cuts in display order.
+    func testTheFileCapCutsInDisplayOrder() throws {
+        try make("r1.md", "r2.md", "a/m1.md", "a/m2.md", "b/n.md")
+        let capped = scan(.init(maxDepth: 8, maxFiles: 3, maxFolders: 2_000))
+        XCTAssertEqual(shape(capped), ["/: r1.md r2.md", "a: m1.md"])
+        XCTAssertEqual(capped?.isTruncated, true)
+    }
+
+    /// A parent without search permission: `stat` fails with EACCES — the
+    /// folder is unreadable, not missing (it must not be forgotten).
+    func testAFolderBehindAParentWithoutSearchPermissionIsUnreadableNotMissing() throws {
+        try make("locked/inner/a.md")
+        let locked = root.appendingPathComponent("locked")
+        let inner = locked.appendingPathComponent("inner")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
+        XCTAssertEqual(LocalLinkOpening.existence(atPath: inner.path), .unknown, "the probe: stat says EACCES")
+        XCTAssertEqual(FolderListing.scan(inner), .unreadable)
+        XCTAssertEqual(FolderListing.scan(locked.appendingPathComponent("gone")), .unreadable,
+                       "behind the locked parent even a missing name cannot be told missing")
+        XCTAssertEqual(FolderListing.scan(root.appendingPathComponent("gone/inner")), .missing, "ENOENT")
+        XCTAssertNotNil(FolderBrowserStore.restorableCanonicalPath(inner.path), "restore keeps it")
+        XCTAssertNil(FolderBrowserStore.restorableCanonicalPath(root.appendingPathComponent("gone").path))
+        try make("plain.md")
+        XCTAssertNil(FolderBrowserStore.restorableCanonicalPath(root.appendingPathComponent("plain.md").path),
+                     "a file is no folder")
     }
 
     func testAScanStopsWhenCancelled() throws {
@@ -177,7 +211,7 @@ final class FolderListingTests: XCTestCase {
         let volumes = URL(fileURLWithPath: "/System/Volumes", isDirectory: true)
         try XCTSkipUnless(FileManager.default.fileExists(atPath: volumes.appendingPathComponent("Data").path))
         var visited: [String] = []
-        _ = FolderListing.scan(volumes, limits: .init(maxDepth: 1, maxFiles: 10, maxEntries: 100),
+        _ = FolderListing.scan(volumes, limits: .init(maxDepth: 1, maxFiles: 10, maxFolders: 100),
                                didVisit: { visited.append($0) })
         XCTAssertFalse(visited.contains("Data"), "\(visited)")
         XCTAssertFalse(visited.contains("Preboot"), "\(visited)")

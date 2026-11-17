@@ -169,7 +169,9 @@ enum OpenFolderFlow {
                   store.folder == folder.standardizedFileURL else { return }
             guard let file = FolderListing.Result(groups: store.groups, isTruncated: store.isTruncated)
                 .preferredFile else {
-                alert("No Markdown files in \u{201C}\(LocalLinkSafety.displayName(name))\u{201D}")
+                let shown = "\u{201C}\(LocalLinkSafety.displayName(name))\u{201D}"
+                // Truncated with nothing listed: there may well be files.
+                alert(store.isTruncated ? "\(shown) is too large to list" : "No Markdown files in \(shown)")
                 return
             }
             DocumentOpener.open(file) { alert($0) }

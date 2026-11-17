@@ -24,11 +24,14 @@ enum MarkdownFileKind {
 /// Rules (and why):
 /// - Recursive, but bounded in COST, not only in what is shown: at most
 ///   `Limits.maxDepth` folders deep, `Limits.maxFiles` files listed and
-///   `Limits.maxEntries` entries looked at (files and folders, Markdown or
-///   not) — someone WILL open their home folder or "/", and the scan runs
-///   again on every change in the tree. Either count limit makes the result
-///   `isTruncated`. The root's own entries are always read in full before
-///   anything is descended into, so its files survive any cap.
+///   `Limits.maxFolders` folders read (the root is one) — someone WILL open
+///   their home folder or "/", and the scan runs again on every change in
+///   the tree. Either count limit makes the result `isTruncated`. Folders,
+///   not entries: an entry budget let one huge `Attachments/` (20 000
+///   pictures) starve its sibling `Notes/` and the vault read as "No
+///   Markdown files". A folder that is read is read whole (one directory
+///   read, not interruptible — accepted) and listed in Finder order; the
+///   file cap cuts in display order.
 /// - Never onto another volume: a subfolder that is a volume's root, or
 ///   whose volume differs from the root's, is skipped ("/" must not walk
 ///   /Volumes or /System/Volumes/Data). Both tests are needed: measured on
@@ -60,9 +63,9 @@ enum FolderListing {
         var maxDepth = 8
         /// Files listed at most; more makes the result truncated.
         var maxFiles = 2_000
-        /// Entries (files + folders) looked at at most, the root's own
-        /// excepted; more makes the result truncated.
-        var maxEntries = 20_000
+        /// Folders read at most, the root included; more makes the result
+        /// truncated.
+        var maxFolders = 2_000
     }
 
     /// The Markdown files directly inside one folder.
@@ -140,17 +143,27 @@ enum FolderListing {
     static func scan(_ root: URL, limits: Limits = Limits(),
                      isCancelled: () -> Bool = { false },
                      didVisit: ((String) -> Void)? = nil) -> Outcome {
+        // Missing vs unreadable by `stat`'s error (the Local links rule):
+        // only ENOENT / ENOTDIR is "missing"; EACCES / EPERM (a parent we
+        // may not search) is "unreadable" — a remembered folder must not be
+        // forgotten over a permission.
+        switch LocalLinkOpening.existence(atPath: root.path) {
+        case .missing: return .missing
+        case .unknown: return .unreadable
+        case .exists: break
+        }
         var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory),
-              isDirectory.boolValue else { return .missing }
-        var budget = Int.max
-        guard let rootEntries = entries(of: root, budget: &budget) else { return .unreadable }
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory) else {
+            return .unreadable
+        }
+        guard isDirectory.boolValue else { return .missing }
+        guard let rootEntries = entries(of: root) else { return .unreadable }
         let volume = try? root.resourceValues(forKeys: [.volumeIdentifierKey]).volumeIdentifier
         var groups: [Group] = []
         var count = 0
+        var foldersRead = 1
         var truncated = false
         var cancelled = false
-        budget = limits.maxEntries
 
         /// Depth-first, children in Finder order: a folder's files, then its
         /// subfolders — the display order (see the type).
@@ -174,12 +187,12 @@ enum FolderListing {
                 }
                 if entry.isVolume { continue }
                 if let volume, let own = entry.volume, !own.isEqual(volume) { continue }
-                guard budget > 0 else {
+                guard foldersRead < limits.maxFolders else {
                     truncated = true
                     return
                 }
-                guard let children = Self.entries(of: entry.url, budget: &budget) else { continue }
-                if budget < 0 { truncated = true }
+                foldersRead += 1
+                guard let children = Self.entries(of: entry.url) else { continue }
                 let name = entry.url.lastPathComponent
                 let path = relativePath.isEmpty ? name : relativePath + "/" + name
                 didVisit?(path)
@@ -199,20 +212,13 @@ enum FolderListing {
     }
 
     /// The listable children of `folder` in Finder order; nil when it cannot
-    /// be read. Each entry looked at costs one unit of `budget`. A folder
-    /// the budget does not cover lists NOTHING (`budget` ends at -1): the
-    /// directory's own order is not Finder's, and a partial folder would
-    /// break "the files kept are the first ones shown".
-    private static func entries(of folder: URL, budget: inout Int) -> [Entry]? {
+    /// be read. The directory read prefetches exactly the keys the rules
+    /// above read (kind, link, hidden, package, volume).
+    private static func entries(of folder: URL) -> [Entry]? {
         guard let urls = try? FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else { return nil }
         var entries: [Entry] = []
         for url in urls {
-            guard budget > 0 else {
-                budget = -1
-                return []
-            }
-            budget -= 1
             let name = url.lastPathComponent
             guard !name.hasPrefix("."), let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
             if values.isHidden == true || values.isSymbolicLink == true { continue }

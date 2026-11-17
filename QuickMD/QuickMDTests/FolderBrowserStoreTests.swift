@@ -269,22 +269,69 @@ final class FolderBrowserStoreTests: XCTestCase {
         XCTAssertFalse(browser.isUnreadable, "tried again on the next event")
     }
 
-    func testAnUnreadableFolderAtOpenIsReportedAndKept() async throws {
+    /// An explicit Open of a folder that cannot be read leaves nothing
+    /// behind (it would come back, unreadable, at every launch).
+    func testAnExplicitOpenOfAnUnreadableFolderLeavesNothingBehind() async throws {
         let world = World()
         world.forced = .unreadable
         let notes = try folder("Notes", files: ["a.md"])
         let browser = store(world)
         let result = await browser.open(notes)
         XCTAssertEqual(result, .unreadable)
-        XCTAssertNotNil(browser.folder, "at launch too: the header with an empty list")
+        XCTAssertNil(browser.folder)
+        XCTAssertFalse(browser.isUnreadable)
+        XCTAssertNil(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey))
+        XCTAssertNil(world.token, "no watcher left")
+    }
+
+    func testAnExplicitOpenOfAMissingFolderLeavesNothingBehind() async throws {
+        let world = World()
+        let browser = store(world)
+        let result = await browser.open(root.appendingPathComponent("Nowhere", isDirectory: true))
+        XCTAssertEqual(result, .missing)
+        XCTAssertNil(browser.folder)
+        XCTAssertNil(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey))
+    }
+
+    /// Restored at launch while it cannot be read: kept, header + the
+    /// "Can't read" line (isUnreadable), tried again on the next event.
+    func testARestoredUnreadableFolderIsKept() async throws {
+        let notes = try folder("Notes", files: ["a.md"])
+        _ = await store(World()).open(notes)
+        let world = World()
+        world.forced = .unreadable
+        let browser = store(world)
+        await browser.restore()
+        await settle(browser)
+        XCTAssertNotNil(browser.folder)
+        XCTAssertTrue(browser.isUnreadable)
         XCTAssertTrue(browser.groups.isEmpty)
         XCTAssertFalse(browser.isLoading)
-        // Restored at launch while unreadable: kept as well.
-        let next = store(world)
-        await next.restore()
-        await settle(next)
-        XCTAssertNotNil(next.folder)
-        XCTAssertTrue(next.isUnreadable)
+        XCTAssertNotNil(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey))
+        world.forced = nil
+        world.trigger?([])
+        await settle(browser)
+        XCTAssertFalse(browser.isUnreadable)
+        XCTAssertEqual(names(browser), ["a.md"])
+    }
+
+    /// A remembered folder behind a parent without search permission (stat:
+    /// EACCES) is not forgotten at launch: the REAL scan reports it
+    /// unreadable and it stays.
+    func testAPermissionErrorAtLaunchDoesNotForgetTheFolder() async throws {
+        let parent = try folder("Locked", files: ["Notes/a.md"])
+        let notes = parent.appendingPathComponent("Notes", isDirectory: true)
+        _ = await store(World()).open(notes)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: parent.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path) }
+        let world = World()
+        let browser = store(world)
+        await browser.restore()
+        await settle(browser)
+        XCTAssertEqual(world.restored.count, 1)
+        XCTAssertEqual(browser.folder?.path, path(notes))
+        XCTAssertTrue(browser.isUnreadable)
+        XCTAssertNotNil(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey))
     }
 
     func testAMissingFolderIsForgotten() async throws {
