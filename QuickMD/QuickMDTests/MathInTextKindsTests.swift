@@ -1049,6 +1049,301 @@ final class MathInTextKindsTests: XCTestCase {
         }
     }
 
+    // MARK: - A formula in link text looks like the link (v1.16)
+
+    /// The theme role a colour equals (`text`, `link`), resolved in the
+    /// light appearance — never an sRGB value (constraints "Tests (v1.15)").
+    private func role(_ color: NSColor?) -> String {
+        guard let color else { return "-" }
+        var name = "other"
+        NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {
+            guard let value = color.usingColorSpace(.sRGB) else { return }
+            for (role, themeColor) in [("text", theme.textColor), ("link", theme.linkColor)] {
+                guard let expected = NSColor(themeColor).usingColorSpace(.sRGB) else { continue }
+                if abs(value.redComponent - expected.redComponent) < 0.02,
+                   abs(value.greenComponent - expected.greenComponent) < 0.02,
+                   abs(value.blueComponent - expected.blueComponent) < 0.02,
+                   abs(value.alphaComponent - expected.alphaComponent) < 0.02 { name = role }
+            }
+        }
+        return name
+    }
+
+    /// The stub engine with the colour entry: a box of `size` filled with the
+    /// colour the formula was asked in (the theme's text colour through
+    /// `inlineImage`), only its top `filled` part — so a line drawn under
+    /// the box is told apart from the box itself.
+    private func paintingEngine(_ asked: ((String, String) -> Void)? = nil, filled: CGFloat = 1) -> MathRendering {
+        func box(_ latex: String, _ color: NSColor) -> NSImage {
+            let tall = latex.contains("\\frac")
+            let size = tall ? NSSize(width: 20, height: 30) : NSSize(width: 20, height: 6)
+            return NSImage(size: size, flipped: true) { rect in
+                color.setFill()
+                NSRect(x: 0, y: 0, width: rect.width, height: rect.height * filled).fill()
+                return true
+            }
+        }
+        return MathRendering(inlineImage: { latex, theme, _ in
+            asked?(latex, "theme.text")
+            return box(latex, NSColor(theme.textColor))
+        }, displayHeight: { _, _, _ in 40 }, inlineImageInColor: { latex, _, color in
+            asked?(latex, self.role(color))
+            return box(latex, color)
+        })
+    }
+
+    /// Every formula attachment of `string`, in order.
+    private func formulas(in string: NSAttributedString) -> [FittingMathAttachment] {
+        var found: [FittingMathAttachment] = []
+        string.enumerateAttribute(.attachment, in: NSRange(location: 0, length: string.length)) { value, _, _ in
+            if let formula = value as? FittingMathAttachment { found.append(formula) }
+        }
+        return found
+    }
+
+    /// `[$x$](u)` in every text kind is typeset in the LINK's colour and
+    /// carries the link's underline; `$x$` beside it in the same block stays
+    /// in the text colour with none — two images, never one shared (M1, M3).
+    @MainActor
+    func testFormulaInLinkTextIsTypesetInTheLinkColour() {
+        let markdown = """
+        See $x$ and [$x$](https://e.com) here
+
+        # See $x$ and [$x$](https://e.com) here
+
+        > See $x$ and [$x$](https://e.com) here
+
+        - See $x$ and [$x$](https://e.com) here
+
+        > [!NOTE]
+        > See $x$ and [$x$](https://e.com) here
+
+        | A |
+        |---|
+        | See $x$ and [$x$](https://e.com) here |
+        """
+        var asked: [String] = []
+        let blocks = parse(markdown)
+        let measured = measure(blocks, math: paintingEngine { _, role in asked.append(role) })
+        XCTAssertEqual(blocks.count, 6)
+        // Every formula asked in its own colour: the text's or the link's.
+        XCTAssertEqual(Set(asked), ["theme.text", "link"])
+        XCTAssertEqual(asked.filter { $0 == "link" }.count, asked.filter { $0 == "theme.text" }.count)
+        for block in blocks {
+            guard let string = measured.converted[block.id] ?? measured.tables[block.id]?.string else {
+                XCTFail("\(block.content)"); continue
+            }
+            let found = formulas(in: string)
+            XCTAssertEqual(found.count, 2, "\(block.content)")
+            guard found.count == 2 else { continue }
+            XCTAssertNil(found[0].linkUnderline, "\(block.content): an unlinked formula draws no underline")
+            XCTAssertEqual(role(found[1].linkUnderline?.color), "link", "\(block.content)")
+            XCTAssertFalse(found[0].image === found[1].image, "\(block.content): one image per colour")
+        }
+    }
+
+    /// A linked formula's measured height is the unlinked one's in every
+    /// kind and every fit state — natural, tall, scaled down to fit, shown as
+    /// its source (M2: drawing only, no layout change).
+    @MainActor
+    func testLinkedFormulaKeepsTheMeasuredHeight() {
+        for (formula, width) in [("x", 600.0), ("\\frac{a}{b}", 600), ("long", 400), ("matrix", 300)] {
+            func document(_ linked: Bool) -> String {
+                let atom = linked ? "[$\(formula)$](https://e.com)" : "$\(formula)$"
+                return "See \(atom) here\n\n# See \(atom) here\n\n> See \(atom) here\n\n"
+                    + "| A |\n|---|\n| See \(atom) here |\n\n\(atom)"
+            }
+            let plainBlocks = parse(document(false)), linkedBlocks = parse(document(true))
+            // The sizes `engine()` gives, through the colour entry too.
+            let base = engine()
+            let math = MathRendering(inlineImage: base.inlineImage, displayHeight: base.displayHeight,
+                                     inlineImageInColor: { latex, size, _ in base.inlineImage(latex, self.theme, size) })
+            let plain = measure(plainBlocks, math: math, width: width)
+            let linked = measure(linkedBlocks, math: math, width: width)
+            XCTAssertEqual(plainBlocks.count, linkedBlocks.count, formula)
+            XCTAssertEqual(plain.table.heights, linked.table.heights, "\(formula) at \(width)")
+        }
+    }
+
+    /// The drawn result (M1, M2, M4): a linked formula is underlined at the
+    /// rows AppKit underlines the link text beside it, in the link colour, at
+    /// 1× and 2×; a formula deeper than the text is underlined at the bottom
+    /// of its line, inside it; a formula scaled down to fit keeps both; an
+    /// unlinked formula has nothing under it.
+    @MainActor
+    func testLinkedFormulaIsDrawnUnderlinedLikeTheLinkText() {
+        let theme = self.theme
+        let cases: [(markdown: String, width: CGFloat, atTextRows: Bool)] = [
+            ("See [$x$](https://e.com) and [a text link](https://e.com).", 600, true),
+            ("See [$\\frac{a}{b}$](https://e.com) and [a text link](https://e.com).", 600, false),
+            ("# See [$x$](https://e.com) and [a text link](https://e.com)", 600, true),
+        ]
+        for scale in [1, 2] {
+            for (markdown, width, atTextRows) in cases {
+                let blocks = parse(markdown)
+                let measured = measure(blocks, math: paintingEngine(filled: 0.5), width: width)
+                guard let string = measured.converted[blocks[0].id] else { XCTFail(markdown); continue }
+                let drawn = DrawnText(string, width: width, scale: CGFloat(scale), theme: theme)
+                let label = "\(markdown) @\(scale)x"
+                let link = drawn.rect(of: "a text link")
+                let underline = drawn.rows(in: link.minX...link.maxX, below: link.midY) { self.role($0) == "link" }
+                XCTAssertFalse(underline.isEmpty, "\(label): the text link is underlined")
+                let formula = drawn.formulaRects()[0]
+                let columns = (formula.minX + 1)...(formula.maxX - 1)
+                let under = drawn.rows(in: columns, below: formula.midY) { self.role($0) == "link" }
+                if atTextRows {
+                    XCTAssertEqual(under, underline, "\(label): the formula's underline is the text's")
+                } else {
+                    XCTAssertFalse(under.isEmpty, "\(label): underlined")
+                    XCTAssertEqual(under.max(), drawn.lineBottomRow(of: formula), "\(label): at the line's bottom")
+                }
+            }
+        }
+        // Unlinked: nothing under the formula; scaled down to fit: still
+        // link-coloured and underlined, inside its row.
+        for (markdown, width, expectsLine) in [("See $x$ here and $x$.", CGFloat(600), false),
+                                                ("See [$long$](https://e.com) here", 400, true)] {
+            let blocks = parse(markdown)
+            let measured = measure(blocks, math: MathRendering(
+                inlineImage: { latex, theme, _ in
+                    NSImage(size: latex == "long" ? NSSize(width: 500, height: 6) : NSSize(width: 20, height: 6),
+                            flipped: true) { NSColor(theme.textColor).setFill(); $0.fill(); return true }
+                }, displayHeight: { _, _, _ in 40 },
+                inlineImageInColor: { _, _, color in
+                    NSImage(size: NSSize(width: 500, height: 6), flipped: true) { color.setFill(); $0.fill(); return true }
+                }), width: width)
+            guard let string = measured.converted[blocks[0].id] else { XCTFail(markdown); continue }
+            let drawn = DrawnText(string, width: width, scale: 2, theme: theme)
+            for formula in drawn.formulaRects() {
+                XCTAssertLessThanOrEqual(formula.width, width, markdown)
+                let below = drawn.rows(in: (formula.minX + 1)...(formula.maxX - 1), below: formula.maxY - 0.5) {
+                    self.role($0) == "link"
+                }
+                XCTAssertEqual(!below.isEmpty, expectsLine, markdown)
+                XCTAssertTrue(below.allSatisfy { $0 <= drawn.lineBottomRow(of: formula) }, "\(markdown): inside its line")
+                if expectsLine {
+                    XCTAssertEqual(role(drawn.color(atPoint: NSPoint(x: formula.midX, y: formula.minY + 1))), "link",
+                                   "\(markdown): the scaled formula keeps the link colour")
+                }
+            }
+        }
+    }
+
+    /// The underline's cost does not grow with the formulas drawn: a
+    /// 40-row table with a linked formula in every cell, drawn twice, builds
+    /// at most ONE scratch stack (one font, style and colour) — never one
+    /// per formula or per draw. And every formula is still underlined.
+    @MainActor
+    func testLinkedFormulaUnderlinesCostOneMeasurementPerFont() {
+        // Text beside each formula: its underline is AppKit's (the scratch).
+        let rows = (1...40).map { _ in "| see [$x$](https://e.com) here |" }.joined(separator: "\n")
+        let blocks = parse("| A |\n|---|\n" + rows)
+        let measured = measure(blocks, math: paintingEngine(filled: 0.5))
+        guard let string = measured.tables[blocks[0].id]?.string else { return XCTFail("no table") }
+        let before = FittingMathAttachment.underlineScratchesBuiltForTesting
+        let first = DrawnText(string, width: 600, scale: 2, theme: theme)
+        _ = DrawnText(string, width: 600, scale: 1, theme: theme)
+        XCTAssertLessThanOrEqual(FittingMathAttachment.underlineScratchesBuiltForTesting - before, 1)
+        XCTAssertGreaterThanOrEqual(FittingMathAttachment.underlineScratchesBuiltForTesting, 1,
+                                    "the text underline path was taken")
+        let formulas = first.formulaRects()
+        XCTAssertEqual(formulas.count, 40)
+        for formula in formulas {
+            let under = first.rows(in: (formula.minX + 1)...(formula.maxX - 1), below: formula.midY) {
+                self.role($0) == "link"
+            }
+            XCTAssertFalse(under.isEmpty, "every formula is underlined")
+        }
+    }
+
+    /// `string` laid out and drawn as a document row draws it: a text view
+    /// with `DocumentSelectionLayoutManager`, the light appearance, into a
+    /// bitmap at `scale` pixels per point.
+    @MainActor
+    private struct DrawnText {
+        let string: NSAttributedString
+        let textView: NSTextView
+        let bitmap: NSBitmapImageRep
+        let scale: CGFloat
+        let height: CGFloat
+
+        init(_ string: NSAttributedString, width: CGFloat, scale: CGFloat, theme: MarkdownTheme) {
+            self.string = string
+            self.scale = scale
+            textView = NSTextView(frame: NSRect(x: 0, y: 0, width: width, height: 10))
+            textView.configureForSelfSizing()
+            textView.installDocumentSelectionLayoutManager()
+            // As `TextBlockView`: the renderer's link look, not NSTextView's.
+            textView.linkTextAttributes = [.cursor: NSCursor.pointingHand]
+            textView.appearance = NSAppearance(named: .aqua)
+            textView.drawsBackground = true
+            textView.backgroundColor = NSColor(theme.backgroundColor)
+            textView.textStorage?.setAttributedString(string)
+            let layoutManager = textView.layoutManager!, container = textView.textContainer!
+            layoutManager.ensureLayout(for: container)
+            height = ceil(layoutManager.usedRect(for: container).height)
+            textView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+            bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(width * scale),
+                                      pixelsHigh: Int(height * scale), bitsPerSample: 8, samplesPerPixel: 4,
+                                      hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                      bytesPerRow: 0, bitsPerPixel: 0)!
+            bitmap.size = NSSize(width: width, height: height)
+            let (view, target) = (textView, bitmap)
+            NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {
+                view.cacheDisplay(in: view.bounds, to: target)
+            }
+        }
+
+        func rect(of text: String) -> NSRect {
+            let range = (string.string as NSString).range(of: text)
+            let layoutManager = textView.layoutManager!
+            return layoutManager.boundingRect(forGlyphRange: layoutManager.glyphRange(forCharacterRange: range,
+                                                                                      actualCharacterRange: nil),
+                                              in: textView.textContainer!)
+        }
+
+        /// The laid-out box of every formula (an attachment glyph's location
+        /// is its box's bottom-left corner).
+        func formulaRects() -> [NSRect] {
+            let layoutManager = textView.layoutManager!
+            var rects: [NSRect] = []
+            string.enumerateAttribute(.attachment, in: NSRange(location: 0, length: string.length)) { value, range, _ in
+                guard value != nil else { return }
+                let glyph = layoutManager.glyphIndexForCharacter(at: range.location)
+                let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                let location = layoutManager.location(forGlyphAt: glyph)
+                let size = layoutManager.attachmentSize(forGlyphAt: glyph)
+                rects.append(NSRect(x: fragment.minX + location.x, y: fragment.minY + location.y - size.height,
+                                    width: size.width, height: size.height))
+            }
+            return rects
+        }
+
+        /// The last pixel row of the used line `formula` sits on.
+        func lineBottomRow(of formula: NSRect) -> Int {
+            let layoutManager = textView.layoutManager!
+            let glyph = layoutManager.glyphIndex(for: NSPoint(x: formula.midX, y: formula.midY),
+                                                 in: textView.textContainer!)
+            let used = layoutManager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+            return Int((used.maxY * scale).rounded()) - 1
+        }
+
+        func color(atPoint point: NSPoint) -> NSColor? {
+            bitmap.colorAt(x: Int(point.x * scale), y: Int(point.y * scale))
+        }
+
+        /// Pixel rows below `y` (points) where at least 80 % of the pixels
+        /// in `columns` (points) pass `test`.
+        func rows(in columns: ClosedRange<CGFloat>, below y: CGFloat, where test: (NSColor?) -> Bool) -> [Int] {
+            let x0 = Int((columns.lowerBound * scale).rounded(.up)), x1 = Int((columns.upperBound * scale).rounded(.down))
+            guard x1 > x0 else { return [] }
+            return (Int(y * scale)..<bitmap.pixelsHigh).filter { row in
+                let hits = (x0..<x1).filter { test(bitmap.colorAt(x: $0, y: row)) }.count
+                return Double(hits) >= 0.8 * Double(x1 - x0)
+            }
+        }
+    }
+
     // MARK: - Heading baseline with a tall formula (seam review N1)
 
     /// `# $\frac{a}{b}$ Title`: the formula is taller than the heading's

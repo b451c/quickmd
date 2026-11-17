@@ -742,6 +742,19 @@ struct MathRendering {
     /// when it does not typeset. nil = `inlineImage` stands in (stubs, the
     /// search placeholder: only the attachment character matters there).
     var displayImage: ((_ latex: String, _ theme: MarkdownTheme, _ fontSize: CGFloat) -> NSImage?)?
+    /// Renders one inline formula as `inlineImage` does, in `color` instead of
+    /// the theme's text colour: a formula that is link text (`[$x$](u)`) takes
+    /// the link's colour (v1.16). The colour is an INPUT of the image, so the
+    /// engine is not touched. nil = `inlineImage` stands in (stubs, the search
+    /// placeholder: only the attachment character matters there).
+    var inlineImageInColor: ((_ latex: String, _ fontSize: CGFloat, _ color: NSColor) -> NSImage?)?
+
+    /// The image an inline formula is drawn with: in `color` when it is link
+    /// text (`inlineImageInColor`), else in the theme's text colour.
+    func formulaImage(_ latex: String, theme: MarkdownTheme, fontSize: CGFloat, color: NSColor?) -> NSImage? {
+        if let color, let inColor = inlineImageInColor { return inColor(latex, fontSize, color) }
+        return inlineImage(latex, theme, fontSize)
+    }
 
     /// No math engine: inline math degrades to the italic-literal fallback and
     /// display math to zero intrinsic height. Only for tests and previews.
@@ -800,9 +813,24 @@ final class FittingMathAttachment: NSTextAttachment {
     private let capHeight: CGFloat
     private let source: NSAttributedString
 
-    init(image: NSImage, capHeight: CGFloat, source: NSAttributedString) {
+    /// The underline of the link text a formula is part of (`[$x$](u)`):
+    /// the link's colour and underline style, and the font of the text
+    /// around it, which decides where AppKit puts that text's underline.
+    struct LinkUnderline {
+        let font: NSFont
+        let color: NSColor
+        let style: Int
+    }
+
+    /// nil = not link text. An unlinked formula draws exactly as before 1.16.
+    let linkUnderline: LinkUnderline?
+
+    /// `linkUnderline`: the formula is underlined link text (v1.16) — see
+    /// `drawLinkUnderline`. Its image already comes in the link's colour.
+    init(image: NSImage, capHeight: CGFloat, source: NSAttributedString, linkUnderline: LinkUnderline? = nil) {
         self.capHeight = capHeight
         self.source = source
+        self.linkUnderline = linkUnderline
         super.init(data: nil, ofType: nil)
         self.image = image
         bounds = Self.bounds(for: image.size, capHeight: capHeight, availableWidth: .greatestFiniteMagnitude)
@@ -811,6 +839,7 @@ final class FittingMathAttachment: NSTextAttachment {
     required init?(coder: NSCoder) {
         capHeight = 0
         source = NSAttributedString()
+        linkUnderline = nil
         super.init(coder: coder)
     }
 
@@ -871,14 +900,205 @@ final class FittingMathAttachment: NSTextAttachment {
     override func image(forBounds imageBounds: CGRect, textContainer: NSTextContainer?,
                         characterIndex charIndex: Int) -> NSImage? {
         guard let image, image.size.width > 0, image.size.height > 0 else { return image }
-        let sameAspect = abs(imageBounds.width * image.size.height - imageBounds.height * image.size.width)
-            <= max(imageBounds.width, imageBounds.height) * 0.01
-        guard !sameAspect else { return image }
+        guard showsSource(laidOutAs: imageBounds.size) else { return image }
         let source = self.source
         return NSImage(size: imageBounds.size, flipped: true) { rect in
             // Cut at the box (`maximumSourceLines`), the last line with "…".
             source.draw(with: rect, options: [.usesLineFragmentOrigin, .usesFontLeading, .truncatesLastVisibleLine])
             return true
+        }
+    }
+
+    /// Whether a box laid out `size` big is the source box: its aspect is
+    /// not the image's (a scaled formula keeps it).
+    private func showsSource(laidOutAs size: CGSize) -> Bool {
+        guard let image, image.size.width > 0, image.size.height > 0 else { return false }
+        return abs(size.width * image.size.height - size.height * image.size.width)
+            > max(size.width, size.height) * 0.01
+    }
+
+    // MARK: Link underline (v1.16)
+
+    /// Draws the underline of a formula that is link text, as the link text
+    /// beside it is underlined. TextKit 1 underlines the text runs of a link
+    /// but skips an attachment's run (`underlineGlyphRange` is never called
+    /// for it), so the formula carried `.underlineStyle` and showed none.
+    /// Called after the glyphs by the layout manager of every view that shows
+    /// these strings (`DocumentSelectionLayoutManager.drawGlyphs`): TextKit
+    /// draws an image attachment only inside its own box (`image(forBounds:)`;
+    /// an `attachmentCell` is never asked to draw while the attachment has an
+    /// image), and the text's underline lies below that box.
+    ///
+    /// Drawing only, inside the line the formula sits on: the attachment's
+    /// bounds, the fit rule and every measured height stay as they were.
+    /// - The line is AppKit's own: a layout manager underlines one long
+    ///   no-break space in the link's font, clipped to the formula's width
+    ///   (`drawTextUnderline`, laid out once per font). AppKit's position is not the font's
+    ///   `underlinePosition` (measured: Menlo 13 says 0.8 pt, AppKit draws
+    ///   1.1–1.75 pt), so only AppKit's own drawing meets the text's
+    ///   underline on either side exactly, at every scale.
+    /// - Where AppKit's line would not lie inside the formula's line, the
+    ///   underline lies at the bottom of that line instead, as thick as the
+    ///   text's: a formula that reaches deeper than the text's descenders (a
+    ///   fraction, a sum with limits — it would be struck through), or a line
+    ///   with no text below the baseline (a formula alone on its line or in
+    ///   a table cell: the line ends at the baseline). A shallower formula in
+    ///   a line of text is crossed as the text's own descenders are.
+    /// - The source box (a formula too wide even at half size) draws none
+    ///   here: its text is link text with its own underline
+    ///   (`inlineFallback(link:)`).
+    ///
+    /// - Parameters:
+    ///   - frame: the formula's laid-out box in the drawing coordinates
+    ///     (flipped, as a text view draws).
+    ///   - baseline: the line's baseline, same coordinates.
+    ///   - lineBottom: the bottom of the line's used rect, same coordinates.
+    func drawLinkUnderline(frame: CGRect, baseline: CGFloat, lineBottom: CGFloat) {
+        guard let linkUnderline, frame.width > 0, !showsSource(laidOutAs: frame.size) else { return }
+        let descender = -linkUnderline.font.descender   // `descender` is negative
+        // A line of text ends its descent in whole points (TextKit rounds:
+        // a 26 pt heading's line keeps 5 of 5.48), so `floor` is "the line
+        // holds the text's descent"; a formula alone on its line keeps none.
+        let lineHoldsDescent = lineBottom - baseline >= floor(descender)
+        if frame.maxY <= baseline + descender && lineHoldsDescent {
+            Self.drawTextUnderline(linkUnderline, x: frame.minX, width: frame.width, baseline: baseline)
+        } else {
+            Self.drawLineBottomUnderline(linkUnderline, x: frame.minX, width: frame.width, lineBottom: lineBottom)
+        }
+    }
+
+    /// A line `underline.font.underlineThickness` thick (whole device
+    /// pixels, rounded up, as AppKit's) whose bottom is the line's bottom.
+    private static func drawLineBottomUnderline(_ underline: LinkUnderline, x: CGFloat, width: CGFloat,
+                                                lineBottom: CGFloat) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let thickness = underline.font.underlineThickness
+        // Orientation-agnostic: snap the bottom edge to a device pixel and
+        // grow whole pixels towards the line's inside.
+        let bottom = context.convertToDeviceSpace(CGPoint(x: x, y: lineBottom))
+        let top = context.convertToDeviceSpace(CGPoint(x: x, y: lineBottom - thickness))
+        let right = context.convertToDeviceSpace(CGPoint(x: x + width, y: lineBottom))
+        let pixels = max(1, ceil(abs(top.y - bottom.y) - 0.001))
+        let edge = bottom.y.rounded()
+        let inner = edge + (top.y < bottom.y ? -pixels : pixels)
+        let device = CGRect(x: bottom.x.rounded(), y: min(edge, inner),
+                            width: max(1, right.x.rounded() - bottom.x.rounded()), height: pixels)
+        context.saveGState()
+        context.setFillColor(underline.color.cgColor)
+        context.fill(context.convertToUserSpace(device).standardized)
+        context.restoreGState()
+    }
+
+    /// AppKit's underline of `width` points of text in `underline.font`,
+    /// starting at `x` on `baseline` (flipped drawing coordinates), drawn by
+    /// the same layout manager code as the link text's: a scratch stack
+    /// (`UnderlineScratch`) laid out once per font, style and colour, its
+    /// long underline clipped to the formula's width. Per draw this is one
+    /// clip and one glyph's underline — no layout, no allocation.
+    private static func drawTextUnderline(_ underline: LinkUnderline, x: CGFloat, width: CGFloat,
+                                          baseline: CGFloat) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let scratch = UnderlineScratch.scratch(for: underline)
+        context.saveGState()
+        context.clip(to: CGRect(x: x, y: baseline - 10_000, width: width, height: 20_000))
+        scratch.layoutManager.drawGlyphs(forGlyphRange: NSRange(location: 0, length: 1),
+                                         at: NSPoint(x: x, y: baseline - scratch.baseline))
+        context.restoreGState()
+    }
+
+    /// One no-break space in `LinkUnderline`'s font, colour and underline
+    /// style, kerned to `width` points, laid out once in its own TextKit 1
+    /// stack: the space draws nothing, its underline is AppKit's. Kept per
+    /// (font, style, colour) — a handful in a session (body and heading
+    /// sizes × zoom × theme) — and dropped wholesale past `limit`. Drawing
+    /// runs on the main thread only, so is this cache.
+    private final class UnderlineScratch {
+        let layoutManager: NSLayoutManager
+        /// The space's baseline in its own container.
+        let baseline: CGFloat
+        private let storage: NSTextStorage
+
+        /// Wider than any line a formula can sit on.
+        static let width: CGFloat = 100_000
+        static let limit = 64
+        private static var cache: [Key: UnderlineScratch] = [:]
+
+        #if DEBUG
+        /// Stacks built so far (tests: one per distinct key, never one per
+        /// formula or per draw).
+        static var builtForTesting = 0
+        #endif
+
+        private struct Key: Hashable {
+            let font: NSFont
+            let style: Int
+            let color: NSColor
+        }
+
+        static func scratch(for underline: LinkUnderline) -> UnderlineScratch {
+            let key = Key(font: underline.font, style: underline.style, color: underline.color)
+            if let hit = cache[key] { return hit }
+            if cache.count >= limit { cache.removeAll() }
+            let made = UnderlineScratch(underline)
+            cache[key] = made
+            return made
+        }
+
+        private init(_ underline: LinkUnderline) {
+            let space = "\u{00A0}"
+            let advance = (space as NSString).size(withAttributes: [.font: underline.font]).width
+            storage = NSTextStorage(string: space, attributes: [
+                .font: underline.font, .foregroundColor: underline.color, .underlineStyle: underline.style,
+                .kern: Self.width - advance,
+            ])
+            layoutManager = NSLayoutManager()
+            let container = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                                         height: CGFloat.greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            layoutManager.addTextContainer(container)
+            storage.addLayoutManager(layoutManager)
+            layoutManager.ensureLayout(for: container)
+            baseline = layoutManager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).minY
+                + layoutManager.location(forGlyphAt: 0).y
+            #if DEBUG
+            Self.builtForTesting += 1
+            #endif
+        }
+    }
+
+    #if DEBUG
+    /// Tests: how many underline scratch stacks were built (`UnderlineScratch`).
+    static var underlineScratchesBuiltForTesting: Int { UnderlineScratch.builtForTesting }
+    #endif
+
+    /// Every linked formula's underline among `glyphRange`, drawn by a
+    /// layout manager after its glyphs (`DocumentSelectionLayoutManager`):
+    /// `origin` is the text container's origin, as `drawGlyphs` gets it.
+    static func drawLinkUnderlines(of layoutManager: NSLayoutManager, forGlyphRange glyphRange: NSRange,
+                                   at origin: NSPoint) {
+        guard let storage = layoutManager.textStorage, glyphRange.length > 0 else { return }
+        let characters = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+        storage.enumerateAttribute(.attachment, in: characters) { value, range, _ in
+            guard let formula = value as? FittingMathAttachment, formula.linkUnderline != nil else { return }
+            for index in range.location..<NSMaxRange(range) {
+                let glyph = layoutManager.glyphIndexForCharacter(at: index)
+                guard glyph < layoutManager.numberOfGlyphs else { continue }
+                // The size layout gave it. The source box underlines its own
+                // text: skip it before any geometry.
+                let size = layoutManager.attachmentSize(forGlyphAt: glyph)
+                guard size.width > 0, !formula.showsSource(laidOutAs: size) else { continue }
+                let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+                let used = layoutManager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
+                // An attachment glyph's location is its box's bottom-left
+                // corner (not the baseline, as for a character); a typeset
+                // box is centred on the cap height (`bounds(for:)`).
+                let location = layoutManager.location(forGlyphAt: glyph)
+                let bottom = origin.y + fragment.minY + location.y
+                let frame = CGRect(x: origin.x + fragment.minX + location.x, y: bottom - size.height,
+                                   width: size.width, height: size.height)
+                formula.drawLinkUnderline(frame: frame, baseline: bottom + (formula.capHeight - size.height) / 2,
+                                          lineBottom: origin.y + used.maxY)
+            }
         }
     }
 }
@@ -958,14 +1178,15 @@ enum BlockTextConverter {
                     attrIndex = end
                 }
 
-                if let image = math.inlineImage(latex, theme, mathFontSize) {
+                if let image = math.formulaImage(latex, theme: theme, fontSize: mathFontSize, color: link?.color) {
                     // Centred against the cap height of the text around it
                     // (14 pt body × zoom, or the heading's); scaled down when
                     // wider than the line, its source when even half its size
                     // does not fit (`FittingMathAttachment`).
                     let attachment = FittingMathAttachment(
                         image: image, capHeight: theme.fonts.appKit(size: mathFontSize).capHeight,
-                        source: inlineFallback(latex, theme: theme, fontSize: mathFontSize, link: link))
+                        source: inlineFallback(latex, theme: theme, fontSize: mathFontSize, link: link),
+                        linkUnderline: link?.underline(fontSize: mathFontSize, theme: theme))
                     // Tagged with its source so a copy can write `$latex$`
                     // instead of U+FFFC (DocumentCopyBuilder). Draws nothing,
                     // lays out nothing — the measured height is unchanged.
@@ -978,7 +1199,10 @@ enum BlockTextConverter {
                                               range: NSRange(location: 0, length: embedded.length))
                     }
                     // A formula in link text is part of the link: clickable,
-                    // underlined like the text around it.
+                    // in the link's colour (its image) and underlined like
+                    // the text around it — TextKit draws no underline under
+                    // an attachment, so the attachment draws it
+                    // (`drawLinkUnderline`, from the view's layout manager).
                     link?.apply(to: embedded, colors: false)
                     result.append(embedded)
                 } else {
@@ -1015,6 +1239,9 @@ enum BlockTextConverter {
         let url: URL
         let color: NSColor?
         let underline: Int?
+        /// The font of the formula's run: the link text's, whose underline
+        /// metrics the formula's underline takes.
+        let font: NSFont?
 
         /// Nil when the formula is not in a link.
         init?(of source: AttributedSubstring) {
@@ -1022,6 +1249,16 @@ enum BlockTextConverter {
             self.url = url
             color = run[AttributeScopes.AppKitAttributes.ForegroundColorAttribute.self]
             underline = run[AttributeScopes.AppKitAttributes.UnderlineStyleAttribute.self]?.rawValue
+            font = run[AttributeScopes.AppKitAttributes.FontAttribute.self]
+        }
+
+        /// The underline a typeset formula in this link draws (v1.16), or nil
+        /// when the link is not underlined. `fontSize`/`theme` stand in for a
+        /// run without a font (text set by hand).
+        func underline(fontSize: CGFloat, theme: MarkdownTheme) -> FittingMathAttachment.LinkUnderline? {
+            guard let underline, underline != 0 else { return nil }
+            return FittingMathAttachment.LinkUnderline(font: font ?? theme.fonts.appKit(size: fontSize),
+                                                       color: color ?? NSColor(theme.linkColor), style: underline)
         }
 
         /// `colors`: also the link's colour (text, the fallback) — an
