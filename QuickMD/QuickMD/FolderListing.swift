@@ -419,7 +419,10 @@ enum FolderListing {
         var entries: [Entry] = []
         for url in urls {
             let name = url.lastPathComponent
-            guard !name.hasPrefix("."), let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
+            // The dot test is the byte rule of `isSkippedName` (one rule for
+            // scan and watcher). `.skipsHiddenFiles` already removes dot names,
+            // so today this only guards against that option changing.
+            guard name.utf8.first != dotByte, let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
             if values.isHidden == true || values.isSymbolicLink == true { continue }
             // Built on `folder`, not taken from the enumeration: Foundation
             // hands back `/private/var/…` for a root spelled `/var/…`, and
