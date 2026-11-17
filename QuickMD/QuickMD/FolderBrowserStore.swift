@@ -67,6 +67,24 @@ final class FolderBrowserStore: ObservableObject {
         var followUpDelay: @MainActor () async -> Void = {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
+        /// The two spellings of a folder's path (file-system calls: a
+        /// restore runs it OFF the main thread).
+        var resolveRoot: @Sendable (URL) -> RootSpellings = { FolderBrowserStore.rootSpellings(of: $0) }
+    }
+
+    /// A root as the listing spells it (`canonical`: Foundation's disk
+    /// spelling, `/var/…`) and as FSEvents reports it (`real`: realpath,
+    /// `/private/var/…`).
+    struct RootSpellings: Equatable, Sendable {
+        let canonical: String
+        let real: String
+    }
+
+    /// Resolves symlinks and the on-disk case twice — I/O on the folder's
+    /// volume.
+    nonisolated static func rootSpellings(of url: URL) -> RootSpellings {
+        let canonical = FolderAccessBroker.canonicalPath(url)
+        return RootSpellings(canonical: canonical, real: FolderListing.realPath(canonical))
     }
 
     /// How an `open` ended.
@@ -140,8 +158,10 @@ final class FolderBrowserStore: ObservableObject {
         didRestore = true
         let chosen = url.standardizedFileURL
         environment.defaults.set(chosen.path, forKey: Self.defaultsKey)
-        let root = URL(fileURLWithPath: FolderAccessBroker.canonicalPath(chosen), isDirectory: true)
-        let opened = begin(folder: chosen, root: root, restored: false)
+        // On the main actor, synchronously: the chooser has just touched the
+        // folder, and an await here would let two Opens finish out of order
+        // (the later choice must win).
+        let opened = begin(folder: chosen, spellings: environment.resolveRoot(chosen), restored: false)
         return await withCheckedContinuation { continuation in
             waiters.append((opened, continuation))
         }
@@ -166,15 +186,23 @@ final class FolderBrowserStore: ObservableObject {
         guard !didRestore else { return }
         didRestore = true
         guard folder == nil, let path = environment.defaults.string(forKey: Self.defaultsKey) else { return }
-        let canonical = await Task.detached(priority: .utility) { Self.restorableCanonicalPath(path) }.value
+        // Every file-system call of the restore runs here, off the main
+        // thread — the existence check AND both spellings of the root — and
+        // the main actor only receives the result: a remembered folder on a
+        // stalled share must not stall launch.
+        let resolve = environment.resolveRoot
+        let spellings = await Task.detached(priority: .utility) { () -> RootSpellings? in
+            guard Self.restorableCanonicalPath(path) != nil else { return nil }
+            return resolve(URL(fileURLWithPath: path, isDirectory: true))
+        }.value
         // Opened, closed or replaced while the check ran: the reader acted.
         guard folder == nil, environment.defaults.string(forKey: Self.defaultsKey) == path else { return }
         let chosen = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
-        guard let canonical, environment.restoreAccess(chosen) else {
+        guard let spellings, environment.restoreAccess(chosen) else {
             environment.defaults.removeObject(forKey: Self.defaultsKey)
             return
         }
-        begin(folder: chosen, root: URL(fileURLWithPath: canonical, isDirectory: true), restored: true)
+        begin(folder: chosen, spellings: spellings, restored: true)
     }
 
     /// Lists the folder again — at once, or after the running scan.
@@ -207,13 +235,17 @@ final class FolderBrowserStore: ObservableObject {
     }
 
     @discardableResult
-    private func begin(folder chosen: URL, root: URL, restored: Bool) -> Session {
+    /// Starts a session on spellings resolved BEFORE: no file-system call
+    /// here (the watcher's `FSEventStreamCreate` / `Start` register paths
+    /// with fseventsd; they are not a read of the folder).
+    private func begin(folder chosen: URL, spellings: RootSpellings, restored: Bool) -> Session {
         endSession()
         let opened = Session(keepsWhenUnreadable: restored)
+        let root = URL(fileURLWithPath: spellings.canonical, isDirectory: true)
         session = opened
         folder = chosen
         listingRoot = root
-        eventRootPath = FolderListing.realPath(root.path)
+        eventRootPath = spellings.real
         groups = []
         isTruncated = false
         isUnreadable = false
