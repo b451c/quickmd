@@ -281,6 +281,10 @@ final class FolderListingTests: XCTestCase {
             UInt32(kFSEventStreamEventFlagItemChangeOwner | kFSEventStreamEventFlagItemIsFile),
             UInt32(kFSEventStreamEventFlagItemModified | kFSEventStreamEventFlagItemIsFile),
             UInt32(kFSEventStreamEventFlagItemRenamed | kFSEventStreamEventFlagItemIsSymlink),
+            UInt32(kFSEventStreamEventFlagItemRemoved | kFSEventStreamEventFlagItemIsFile
+                   | kFSEventStreamEventFlagItemIsHardlink),
+            UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemIsFile
+                   | kFSEventStreamEventFlagItemIsLastHardlink),
             UInt32(kFSEventStreamEventFlagMustScanSubDirs),
             0,
         ]
@@ -315,11 +319,11 @@ final class FolderListingTests: XCTestCase {
     func testFileEventsCountOnlyForMarkdownNames() {
         let roots = ["/r/Notes", "/private/r/Notes"]
         let filter = FolderListing.ChangeFilter(roots: roots)
-        func check(_ path: String, _ flags: UInt32, _ expected: Bool, line: UInt = #line) {
+        func check(_ path: String, _ flags: UInt32, _ expected: Bool, _ note: String = "", line: UInt = #line) {
             let reference = FolderListing.isRelevantChange(.init(path: path, flags: flags), roots: roots)
             let fast = Array(path.utf8).withUnsafeBufferPointer { filter.isRelevant(flags: flags, path: $0) }
-            XCTAssertEqual(reference, expected, "reference: \(path)", line: line)
-            XCTAssertEqual(fast, expected, "byte rule: \(path)", line: line)
+            XCTAssertEqual(reference, expected, "reference: \(path) \(note)", line: line)
+            XCTAssertEqual(fast, expected, "byte rule: \(path) \(note)", line: line)
         }
         let file = kFSEventStreamEventFlagItemIsFile, dir = kFSEventStreamEventFlagItemIsDir
         let created = UInt32(kFSEventStreamEventFlagItemCreated | file)
@@ -351,6 +355,15 @@ final class FolderListingTests: XCTestCase {
         // "Look again" counts whatever the path.
         check("/private/r/Notes/.git/x.o", UInt32(kFSEventStreamEventFlagMustScanSubDirs), true)
         check("/private/r/Notes/a.dat", UInt32(kFSEventStreamEventFlagMustScanSubDirs | file), true)
+        // A hard-link event never takes the non-Markdown exemption: its name
+        // may be another link's (`ln a.txt b.md`; `rm b.md` as `a.txt`).
+        check("/private/r/Notes/a.txt", UInt32(kFSEventStreamEventFlagItemRemoved | file
+                                               | kFSEventStreamEventFlagItemIsHardlink), true)
+        check("/private/r/Notes/a.txt", UInt32(kFSEventStreamEventFlagItemRemoved | file
+                                               | kFSEventStreamEventFlagItemIsLastHardlink), true)
+        check("/private/r/Notes/a.txt", UInt32(kFSEventStreamEventFlagItemModified | file
+                                               | kFSEventStreamEventFlagItemIsHardlink), false,
+              "a content write stays irrelevant")
         // A Markdown file under a skipped name still does not count.
         check("/private/r/Notes/node_modules/pkg/README.md", created, false)
     }

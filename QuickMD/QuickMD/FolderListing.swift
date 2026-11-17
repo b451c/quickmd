@@ -99,8 +99,10 @@ extension URL {
 /// - Skipped: hidden files and folders (`.git`, dot files, the Finder hidden
 ///   flag), packages (an `.app`, a `.textbundle` — one document to Finder),
 ///   `node_modules` (thousands of vendored READMEs nobody wants to read). The
-///   name part of that rule is `isSkippedName`, shared with the watcher's
-///   event filter (`isRelevantChange`) so the two never disagree.
+///   name part of that rule is `isSkippedName` (decided on bytes), shared
+///   with the watcher's event filter (`ChangeFilter`, run by
+///   `FolderEventBatchFilter`; `isRelevantChange` is its String reference
+///   form) so the two never disagree.
 /// - Symbolic links are never followed, to folders or files: a link back up
 ///   the tree would loop, and a link out of the folder would list (and in the
 ///   sandbox fail to open) files that are not in it.
@@ -310,14 +312,20 @@ enum FolderListing {
     /// `Renamed|IsFile` for both paths), so `x.txt → x.md` is still seen
     /// through the `x.md` event and `x.md → x.txt` through the old name.
     /// Folders stay relevant (a folder moved in brings only its own event);
-    /// an event that is neither file nor symlink stays relevant.
+    /// an event that is neither file nor symlink stays relevant. A HARD-LINK
+    /// event (`ItemIsHardlink` / `ItemIsLastHardlink`) never takes the
+    /// exemption: FSEvents may name it by whichever link the kernel resolves
+    /// (`ln a.txt b.md`, `rm b.md` can arrive as `a.txt …|IsHardlink`), so
+    /// the name says nothing about which listed file changed.
     static func isNonMarkdownFileEvent(flags: UInt32, name: [UInt8]) -> Bool {
         name.withUnsafeBufferPointer { isNonMarkdownFileEvent(flags: flags, name: $0) }
     }
 
     static func isNonMarkdownFileEvent(flags: UInt32, name: UnsafeBufferPointer<UInt8>) -> Bool {
         let fileLike = UInt32(kFSEventStreamEventFlagItemIsFile | kFSEventStreamEventFlagItemIsSymlink)
-        guard flags & fileLike != 0, flags & UInt32(kFSEventStreamEventFlagItemIsDir) == 0 else { return false }
+        let hardLink = UInt32(kFSEventStreamEventFlagItemIsHardlink | kFSEventStreamEventFlagItemIsLastHardlink)
+        guard flags & fileLike != 0, flags & UInt32(kFSEventStreamEventFlagItemIsDir) == 0,
+              flags & hardLink == 0 else { return false }
         return !MarkdownFileKind.isMarkdownName(utf8: name)
     }
 
@@ -419,7 +427,10 @@ enum FolderListing {
         var entries: [Entry] = []
         for url in urls {
             let name = url.lastPathComponent
-            guard !name.hasPrefix("."), let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
+            // The dot test is the byte rule of `isSkippedName` (one rule for
+            // scan and watcher). `.skipsHiddenFiles` already removes dot names,
+            // so today this only guards against that option changing.
+            guard name.utf8.first != dotByte, let values = try? url.resourceValues(forKeys: Set(keys)) else { continue }
             if values.isHidden == true || values.isSymbolicLink == true { continue }
             // Built on `folder`, not taken from the enumeration: Foundation
             // hands back `/private/var/…` for a root spelled `/var/…`, and

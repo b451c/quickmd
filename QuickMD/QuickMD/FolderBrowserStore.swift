@@ -14,10 +14,14 @@ import CoreServices
 ///   bookmark cannot be restored, is forgotten without a word.
 /// - Watched with ONE `FSEventStream` over the whole tree (the listing is
 ///   recursive; a vnode source per folder would not be), with item events.
-///   A batch is dropped unless one change can alter the listing
-///   (`FolderListing.isRelevantChange`: not under a skipped name such as
-///   `.git` / `node_modules`, the scan's own rule; and an item created,
-///   removed, renamed, or a FOLDER's permissions changed).
+///   Each batch is judged OFF the main thread by `FolderEventBatchFilter`
+///   (`FolderListing.ChangeFilter`, on bytes) and reaches the main actor
+///   only when one change can alter the listing: the flags first (an item
+///   created / removed / renamed, a FOLDER's permissions, or a "look again"
+///   flag, which counts whatever the path); then a FILE or symlink event
+///   whose name is not Markdown is dropped (never a hard-link event, whose
+///   name may be another link's); then a path under a skipped name
+///   (`.git`, `node_modules`, the scan's own rule) is dropped.
 /// - ONE scan at a time (measured in review: ten events 100 ms apart had
 ///   started ten scans at once on the pool the document parse uses). Events
 ///   during a scan only mark the listing dirty; exactly one more scan
