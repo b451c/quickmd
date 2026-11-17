@@ -968,8 +968,11 @@ enum PrintableMath {
         return error == nil ? image : nil
     }
 
-    static func inlineImage(_ latex: String, fontSize: CGFloat = 14) -> (image: NSImage, descent: CGFloat)? {
-        var mathImage = MathImage(latex: latex, fontSize: fontSize, textColor: .black,
+    /// `color`: a formula that is link text prints in the link's colour
+    /// (v1.16, as on screen); black otherwise.
+    static func inlineImage(_ latex: String, fontSize: CGFloat = 14,
+                            color: NSColor = .black) -> (image: NSImage, descent: CGFloat)? {
+        var mathImage = MathImage(latex: latex, fontSize: fontSize, textColor: color,
                                   labelMode: .text, textAlignment: .left)
         let (error, image, info) = mathImage.asImage()
         // Nothing drawn: the italic literal, as on screen (`MathInk`).
@@ -1014,15 +1017,27 @@ enum PrintableMath {
                     index = end
                 }
             case .math(let latex):
+                // A formula in link text takes the link's colour, as on
+                // screen (v1.16). The underline stays the screen's: SwiftUI
+                // `Text` draws none under an image.
+                var linkColor: Color?
                 if let end = attributed.characters.index(index, offsetBy: piece.length,
                                                          limitedBy: attributed.endIndex) {
+                    if let run = attributed[index..<end].runs.first, run.link != nil {
+                        linkColor = run[AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self]
+                    }
                     index = end
                 }
-                if let rendered = inlineImage(latex, fontSize: fontSize),
+                if let rendered = inlineImage(latex, fontSize: fontSize,
+                                              color: linkColor.map { NSColor($0) } ?? .black),
                    let image = fitted(rendered.image, maxWidth: maxWidth) {
                     // Sit the image on the baseline: its own descent goes below.
                     let descent = rendered.descent * image.size.height / rendered.image.size.height
                     result = result + Text(Image(nsImage: image)).baselineOffset(-descent)
+                } else if let linkColor {
+                    // The source, link-coloured and underlined like the
+                    // screen's fallback (`inlineFallback(link:)`).
+                    result = result + Text(latex).italic().foregroundColor(linkColor).underline()
                 } else {
                     result = result + Text(latex).italic()
                 }
