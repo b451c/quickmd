@@ -455,7 +455,8 @@ struct MarkdownRenderer: Sendable {
         return !isBlankLine(trimmed.dropFirst(2))
     }
 
-    /// A thematic break (`---`, `***`, `___`) — `renderLine` draws it as a rule.
+    /// A thematic break (`---`, `***`, `___`, also spaced: `* * *`) —
+    /// `renderLine` draws it as a rule.
     static func isThematicBreak(_ line: String) -> Bool {
         markerLine(line)
             .range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil

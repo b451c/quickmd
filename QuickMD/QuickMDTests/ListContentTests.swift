@@ -668,12 +668,64 @@ final class ListContentTests: XCTestCase {
         // list may interrupt the item's paragraph only when it starts at 1);
         // QuickMD draws nested ordered items counting from 3.
         XCTAssertEqual(try markers("- a\n  3. x\n  3. y\n- b\n  3. z"), "• [3 4] • [3]")
+        // A bullet short of the ordered item's content column is drawn
+        // nested (a level is 2 columns), so it counts as nested and the
+        // list goes on. GitHub: `<ol><li>a</li></ol><ul><li>x</li></ul><ol><li>b</li></ol>`
+        // and `<ol start="10"><li>a</li></ol><ul><li>x</li></ul><ol start="10"><li>b</li></ol>`.
+        XCTAssertEqual(try markers("1. a\n  - x\n1. b"), "1 [•] 2")
+        XCTAssertEqual(try markers("10. a\n   - x\n10. b"), "10 [•] 11")
         // GitHub `<blockquote><ol start="7">…`; QuickMD keeps a quote's lines literal.
         guard case .blockquote(let quote, _) = try XCTUnwrap(parse("> 7. a\n> 7. b").first).content
         else { return XCTFail("quote") }
         let shown = String(MarkdownRenderer(theme: theme).renderQuotedBody(quote).characters)
         XCTAssertEqual(shown.components(separatedBy: "7. ").count - 1, 2, shown)
         XCTAssertFalse(shown.contains("8."), shown)
+    }
+
+    // MARK: - Thematic breaks with spaces
+
+    /// The block list with every drawn rule as `HR`.
+    private func ruleShape(_ markdown: String) -> [String] {
+        shape(parse(markdown)).map { $0.replacingOccurrences(of: String(repeating: "─", count: 32), with: "HR") }
+    }
+
+    /// Three or more of ONE of `*`, `-`, `_`, with spaces or tabs between
+    /// them, are a rule — before any list reading. GitHub (`gh api markdown`,
+    /// 2026-11-17): `<hr>` for each of these.
+    func testARuleMayHaveSpacesBetweenItsCharacters() {
+        for rule in ["* * *", "- - -", "_ _ _", " ***", "**  **", "- - - -", "_\t_\t_"] {
+            XCTAssertEqual(ruleShape(rule), ["T:HR"], rule.debugDescription)
+            XCTAssertTrue(MarkdownRenderer.isThematicBreak(rule), rule.debugDescription)
+            XCTAssertFalse(MarkdownRenderer.isListItem(rule), rule.debugDescription)
+        }
+        // <p><em>-</em></p> and <p>***a</p>: no rule.
+        XCTAssertFalse(MarkdownRenderer.isThematicBreak("*-*"))
+        XCTAssertFalse(MarkdownRenderer.isThematicBreak("***a"))
+        XCTAssertFalse(ruleShape("*-*").contains("T:HR"))
+        XCTAssertEqual(ruleShape("***a"), ["T:***a"])
+        // GitHub draws `- - x` / `* *` as nested empty bullets; QuickMD keeps
+        // its one-line reading of them (a bullet), and never a rule.
+        XCTAssertEqual(ruleShape("- - x"), ["T:• - x"])
+        XCTAssertEqual(ruleShape("* *"), ["T:• *"])
+    }
+
+    /// A spaced rule ends a paragraph or a list like `---` does, and is the
+    /// item's when indented to its content column.
+    func testASpacedRuleBetweenBlocks() throws {
+        // <p>text</p><hr> (not a setext heading: that is `---` only)
+        XCTAssertEqual(ruleShape("text\n- - -"), ["T:text", "T:HR"])
+        // <h2>text</h2>
+        XCTAssertEqual(parse("text\n---").map(\.id).count, 1)
+        guard case .heading(2, _, _) = try XCTUnwrap(parse("text\n---").first).content else { return XCTFail("setext") }
+        // <ol><li>a</li></ol><hr><ol start="2"><li>b</li></ol>
+        XCTAssertEqual(ruleShape("1. a\n* * *\n2. b"), ["T:1. a", "T:HR", "T:2. b"])
+        // <ul><li>a</li></ul><hr><ul><li>b</li></ul>
+        XCTAssertEqual(ruleShape("- a\n- - -\n- b"), ["T:• a", "T:HR", "T:• b"])
+        // <ol><li><p>a</p><hr></li><li><p>b</p></li></ol>: one list
+        XCTAssertEqual(try markers("1. a\n\n   * * *\n\n1. b"), "1 2")
+        // <ol><li>a</li></ol><hr><ol><li>b</li></ol>: two lists
+        XCTAssertEqual(try markers("1. a\n\n* * *\n\n1. b"), "1 1")
+        XCTAssertTrue(ruleShape("1. a\n\n* * *\n\n1. b").contains("T:HR"))
     }
 
     // MARK: - Content column
