@@ -821,9 +821,11 @@ struct MarkdownBlockParser: Sendable {
                 nesting.blank()
             } else if let owner = nesting.text(line, sourceLine: sourceLine) {
                 paragraphOwners[sourceLine] = owner
-            } else if MarkdownRenderer.isThematicBreak(line), let owner = nesting.items.last?.sourceLine {
+            } else if let owner = nesting.items.last?.sourceLine, MarkdownRenderer.isThematicBreak(line) {
                 // A rule drawn by the text row: not an item paragraph (it
                 // draws itself), but inside the item its indent reaches.
+                // The open-item test comes FIRST: outside a list (every
+                // plain paragraph line) the rule test cannot matter.
                 ruleOwners[sourceLine] = owner
             }
             textBuffer.append((line: line, originalIndex: sourceLine))

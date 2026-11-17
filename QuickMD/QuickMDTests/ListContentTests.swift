@@ -761,6 +761,151 @@ final class ListContentTests: XCTestCase {
         XCTAssertTrue(ruleShape("1. a\n\n* * *\n\n1. b").contains("T:HR"))
     }
 
+    // MARK: - Per-line shortcuts (1.16 review): same output
+
+    /// Adversarial documents for the per-line shortcuts: a rule right after
+    /// an item, a rule after a hard break in an item's paragraph, `* * *` first,
+    /// a rule-looking line after a hard break, nested ordered + bullets, no
+    /// list at all, `)` → `.` with code and a picture, a task with a list.
+    private static let shortcutDocuments = [
+        "1. a\n---\n2. b",
+        "1. a\n\n   para  \n   * * *\n\n1. b",
+        "* * *\n1. a\n1. b",
+        "para  \n- - -\nmore",
+        "1. a\n   - x\n     1. y\n     1. z\n   - w\n1. b\n\n   text\n\n10. c",
+        "# T\n\nplain para\nline two\n\n> q\n\n```\ncode\n```\n\n| a |\n|---|\n| 1 |\n\n***\n\nend 3. x",
+        "1) a\n\n       code\n\n2) b\n1. c\n\n![i](x.png)\n\n1. d",
+        "- [ ] t\n  1. a\n  1. b\n\n  * * *\n- [x] u",
+    ]
+
+    /// Every block, every paragraph's text and its indents, every code
+    /// block's list indent — what the parse decides. The indents come out
+    /// as numbers in `numbers`, the text holds `«#;#»` in their place, so a
+    /// pin compares the structure exactly and the points by value
+    /// (`symbolicIndent`), never as font-resolved constants (constraint 28).
+    private func dump(_ markdown: String) throws -> (text: String, numbers: [CGFloat]) {
+        var numbers: [CGFloat] = []
+        let text = try parse(markdown).map { block -> String in
+            var line = block.id.split(separator: "-").first.map(String.init) ?? block.id
+            line += " src\(block.sourceLine)"
+            if block.listIndent > 0 { line += " li«#»"; numbers.append(block.listIndent) }
+            for p in try paragraphs(block) {
+                line += " | " + p.text
+                if let style = p.style {
+                    line += " «#;#»"
+                    numbers += [style.firstLineHeadIndent, style.headIndent]
+                }
+            }
+            return line
+        }.joined(separator: "\n")
+        return (text, numbers)
+    }
+
+    /// Body-font width of a marker string, as the renderer measures it.
+    private func markerWidth(_ s: String) -> CGFloat {
+        (s as NSString).size(withAttributes: [.font: theme.fonts.appKit(size: 14)]).width
+    }
+
+    /// The strings an indent is made of: list gutter 16 + W(a) − W(b).
+    private static let indentParts: [String] = {
+        var parts = [""]
+        for level in 0..<3 {
+            let indent = String(repeating: "    ", count: level)
+            parts += (0...12).map { indent + "\($0). " } + ["• ", "☐ ", "☑ "].map { indent + $0 }
+        }
+        return parts + (1...3).map { String(repeating: "    ", count: $0) }
+    }()
+
+    /// `g+W⟨a⟩-W⟨b⟩` (or `0`) for a captured indent value.
+    private func symbolicIndent(_ value: CGFloat) -> String {
+        if abs(value) < 0.005 { return "0" }
+        for a in Self.indentParts {
+            for b in Self.indentParts where abs(16 + (markerWidth(a) - markerWidth(b)) - value) < 0.005 {
+                return "g+W⟨\(a)⟩-W⟨\(b)⟩"
+            }
+        }
+        return "?\(value)"
+    }
+
+    /// Evaluates one `symbolicIndent` expression with the current font.
+    private func evaluateIndent(_ expression: String) -> CGFloat {
+        if expression == "0" { return 0 }
+        let parts = expression.components(separatedBy: "⟩-W⟨")
+        let a = String(parts[0].dropFirst("g+W⟨".count)), b = String(parts[1].dropLast())
+        return 16 + (markerWidth(a) - markerWidth(b))
+    }
+
+    /// The per-line shortcuts of the 1.16 review (the rule test only while an
+    /// item is open, one trim per line in `renderLine`) change nothing: each
+    /// document parses to the
+    /// dump captured on the code BEFORE them (release/1.16 89971ab). The
+    /// indents were captured as `symbolicIndent` expressions and are
+    /// compared by value with the current font.
+    func testThePerLineShortcutsChangeNoOutput() throws {
+        let captured = [
+        """
+        text src0 | 1. a «g+W⟨⟩-W⟨⟩;g+W⟨1. ⟩-W⟨⟩»
+        text src1 | ──────────────────────────────── «0;0»
+        text src2 | 2. b «g+W⟨⟩-W⟨⟩;g+W⟨2. ⟩-W⟨⟩»
+        """,
+        """
+        text src0 | 1. a «g+W⟨2. ⟩-W⟨1. ⟩;g+W⟨2. ⟩-W⟨⟩»
+        text src2 |     para «g+W⟨2. ⟩-W⟨    ⟩;g+W⟨2. ⟩-W⟨⟩»
+        text src3 | ──────────────────────────────── «0;0»
+        text src5 | 2. b «g+W⟨⟩-W⟨⟩;g+W⟨2. ⟩-W⟨⟩»
+        """,
+        """
+        text src0 | ──────────────────────────────── «0;0»
+        text src1 | 1. a «g+W⟨2. ⟩-W⟨1. ⟩;g+W⟨2. ⟩-W⟨⟩» | 2. b «g+W⟨⟩-W⟨⟩;g+W⟨2. ⟩-W⟨⟩»
+        """,
+        """
+        text src0 | para
+        text src1 | ──────────────────────────────── «0;0»
+        text src2 | more
+        """,
+        """
+        text src0 | 1. a «g+W⟨3. ⟩-W⟨1. ⟩;g+W⟨3. ⟩-W⟨⟩» |     • x «g+W⟨⟩-W⟨⟩;g+W⟨    • ⟩-W⟨⟩» |         1. y «g+W⟨2. ⟩-W⟨1. ⟩;g+W⟨        2. ⟩-W⟨⟩» |         2. z «g+W⟨⟩-W⟨⟩;g+W⟨        2. ⟩-W⟨⟩» |     • w «g+W⟨⟩-W⟨⟩;g+W⟨    • ⟩-W⟨⟩» | 2. b «g+W⟨3. ⟩-W⟨2. ⟩;g+W⟨3. ⟩-W⟨⟩»
+        text src7 |     text «g+W⟨3. ⟩-W⟨    ⟩;g+W⟨3. ⟩-W⟨⟩»
+        text src9 | 3. c «g+W⟨⟩-W⟨⟩;g+W⟨3. ⟩-W⟨⟩»
+        """,
+        """
+        heading src0
+        text src2 | plain para line two
+        blockquote src5
+        code src7
+        table src11
+        text src15 | ──────────────────────────────── «0;0»
+        text src17 | end 3. x
+        """,
+        """
+        text src0 | 1. a «g+W⟨2. ⟩-W⟨1. ⟩;g+W⟨2. ⟩-W⟨⟩»
+        code src2 li«g+W⟨2. ⟩-W⟨⟩»
+        text src4 | 2. b «g+W⟨⟩-W⟨⟩;g+W⟨2. ⟩-W⟨⟩» | 1. c «g+W⟨⟩-W⟨⟩;g+W⟨1. ⟩-W⟨⟩»
+        image src7
+        text src9 | 1. d «g+W⟨⟩-W⟨⟩;g+W⟨1. ⟩-W⟨⟩»
+        """,
+        """
+        text src0 | ☐ t «g+W⟨⟩-W⟨⟩;g+W⟨☐ ⟩-W⟨⟩» |     1. a «g+W⟨2. ⟩-W⟨1. ⟩;g+W⟨    2. ⟩-W⟨⟩» |     2. b «g+W⟨⟩-W⟨⟩;g+W⟨    2. ⟩-W⟨⟩»
+        text src4 | ──────────────────────────────── «0;0»
+        text src5 | ☑ u «g+W⟨⟩-W⟨⟩;g+W⟨☑ ⟩-W⟨⟩»
+        """
+        ]
+        XCTAssertEqual(captured.count, Self.shortcutDocuments.count)
+        for (doc, expected) in zip(Self.shortcutDocuments, captured) {
+            let actual = try dump(doc)
+            // Structure: the expressions back to holes.
+            let holes = try NSRegularExpression(pattern: "(?<=«|;|li«)(0|g\\+W⟨[^⟩]*⟩-W⟨[^⟩]*⟩)(?=»|;)")
+            let range = NSRange(expected.startIndex..., in: expected)
+            let expressions = holes.matches(in: expected, range: range).map { (expected as NSString).substring(with: $0.range) }
+            let skeleton = holes.stringByReplacingMatches(in: expected, range: range, withTemplate: "#")
+            XCTAssertEqual(actual.text, skeleton, doc.debugDescription)
+            XCTAssertEqual(actual.numbers.count, expressions.count, doc.debugDescription)
+            for (value, expression) in zip(actual.numbers, expressions) {
+                XCTAssertEqual(value, evaluateIndent(expression), accuracy: 0.01, "\(doc.debugDescription): \(expression)")
+            }
+        }
+    }
+
     // MARK: - Content column
 
     func testContentColumnOfAnItem() {
