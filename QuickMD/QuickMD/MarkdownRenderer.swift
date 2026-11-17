@@ -298,7 +298,11 @@ struct MarkdownRenderer: Sendable {
     }
 
     private static func orderedItem(_ line: String) -> OrderedItem? {
-        let trimmed = markerLine(line)
+        orderedItem(line, trimmed: markerLine(line))
+    }
+
+    /// `orderedItem(line)` for a caller that has `markerLine(line)` already.
+    private static func orderedItem(_ line: String, trimmed: String) -> OrderedItem? {
         guard let match = trimmed.range(of: Self.orderedMarkerPattern, options: .regularExpression) else { return nil }
         let digits = trimmed.prefix(while: { $0.isASCII && $0.isNumber })
         return OrderedItem(level: listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" })),
@@ -547,7 +551,7 @@ struct MarkdownRenderer: Sendable {
         }
 
         // Ordered list
-        if let item = Self.orderedItem(line) {
+        if let item = Self.orderedItem(line, trimmed: trimmed) {
             let content = String(trimmed.dropFirst(item.markerLength))
             return renderListItem(content, prefix: marker?.prefix ?? item.ownPrefix, hangingUnder: marker?.hang)
         }
