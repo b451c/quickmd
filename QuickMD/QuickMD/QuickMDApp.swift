@@ -34,6 +34,11 @@ struct QuickMDApp: App {
             MarkdownView(document: file.document, documentURL: file.fileURL)
         }
         .commands {
+            // Right after the system's Open… / Open Recent; app-level, so it
+            // works with no window. The .saveItem group below is not touched.
+            CommandGroup(after: .newItem) {
+                OpenFolderCommand()
+            }
             CommandGroup(replacing: .saveItem) {
                 Button("Close") {
                     EditCloseGuard.requestClose(NSApp.keyWindow)
@@ -99,6 +104,104 @@ struct QuickMDApp: App {
         }
         .windowResizability(.contentSize)
         #endif
+    }
+}
+
+// MARK: - Open Folder (#62)
+
+/// File ▸ Open Folder… (⇧⌘O): choose a folder; the Documents sidebar lists
+/// its Markdown files above the recent documents. App-level, enabled with no
+/// window open.
+struct OpenFolderCommand: View {
+    var body: some View {
+        Button("Open Folder\u{2026}") {
+            OpenFolderFlow.run()
+        }
+        .keyboardShortcut("o", modifiers: [.command, .shift])
+    }
+}
+
+extension FolderBrowserStore {
+    /// The app's folder (one at a time). Creating it does no I/O; the
+    /// Documents sidebar starts `restore()` from a task when it first
+    /// appears (an Open Folder before that makes the restore a no-op).
+    static let shared: FolderBrowserStore = {
+        FolderBrowserStore(environment: .init(
+            defaults: .standard,
+            restoreAccess: { folder in
+                // Unsandboxed the path is enough; in the sandbox the
+                // chooser's grant comes back through its bookmark.
+                !SandboxAccessManager.isSandboxed || SandboxAccessManager.shared.restoreAccess(for: folder)
+            },
+            watch: { root, onChange in
+                FolderTreeWatcher(root: root) { paths in
+                    Task { @MainActor in onChange(paths) }
+                }
+            }))
+    }()
+}
+
+/// What File ▸ Open Folder does, start to end (F2, F7 of the 1.16 spec).
+@MainActor
+enum OpenFolderFlow {
+    static func run() {
+        let store = FolderBrowserStore.shared
+        guard let folder = chooseFolder(startingAt: store.folder) else { return }
+        // In the sandbox the chooser's answer is also a folder grant: the
+        // documents' pictures and links in it never ask.
+        SandboxAccessManager.shared.registerUserChosenFolder(folder)
+        UserDefaults.standard.set(true, forKey: RecentDocumentsSidebar.visibilityDefaultsKey)
+        Task { @MainActor in
+            let name = folder.lastPathComponent
+            switch await store.open(folder) {
+            case .superseded:
+                // The reader chose again (or closed it): that answer stands.
+                return
+            case .missing, .unreadable:
+                // An explicit command: say so, window or not.
+                alert(LocalLinkOpening.message(for: .openFailed, name: name))
+                return
+            case .listed:
+                break
+            }
+            // With a document window open the list is all that changes.
+            guard !hasDocumentWindow,
+                  store.folder == folder.standardizedFileURL else { return }
+            guard let file = FolderListing.Result(groups: store.groups, isTruncated: store.isTruncated)
+                .preferredFile else {
+                let shown = "\u{201C}\(LocalLinkSafety.displayName(name))\u{201D}"
+                // Truncated with nothing listed: there may well be files.
+                alert(store.isTruncated ? "\(shown) is too large to list" : "No Markdown files in \(shown)")
+                return
+            }
+            DocumentOpener.open(file) { alert($0) }
+        }
+    }
+
+    /// The chooser: ONE panel, folders only, no message — a list to read
+    /// from, not an access request (the sandbox grant comes with it).
+    private static func chooseFolder(startingAt current: URL?) -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.prompt = "Open"
+        if let current { panel.directoryURL = current.deletingLastPathComponent() }
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
+    /// A visible (or minimised) document window exists.
+    private static var hasDocumentWindow: Bool {
+        WindowTabbing.documentWindows.contains { $0.isVisible || $0.isMiniaturized }
+    }
+
+    private static func alert(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }
 
