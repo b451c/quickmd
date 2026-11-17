@@ -2086,19 +2086,25 @@ struct MarkdownBlockParser: Sendable {
         let blocks: [Int: Int]
     }
 
-    /// Stands in for a non-text block when the ordered-list hangs are worked
+    /// Stands in for a non-text block when the ordered lists are worked
     /// out: not blank, not a list item — so it continues a list exactly when
     /// its first line is indented under the list's items (a step's code
     /// block, a picture under an item), as a nested paragraph would.
     private static let blockStandIn = "\u{FFFC}"
 
-    /// Renders the text rows, every ordered item hanging under the widest
-    /// marker of ITS list (`MarkdownRenderer.widestOrderedPrefixes`), worked
-    /// out over the whole document: the rows' lines in order, each other
-    /// block standing in as one line with its indentation. Until 1.14.4 the
-    /// widest marker was each row's own, so a list cut into rows had two text
-    /// edges, and the steps of a list whose items hold code blocks each hung
-    /// under their own number ("1. " is narrower than "10. ").
+    /// Renders the text rows, every ordered item numbered within ITS list
+    /// and hanging under that list's widest marker
+    /// (`MarkdownRenderer.orderedMarkers`), worked out over the whole
+    /// document: the rows' lines in order, each other block standing in as
+    /// one line with its indentation. Until 1.14.4 the widest marker was each
+    /// row's own, so a list cut into rows had two text edges, and the steps
+    /// of a list whose items hold code blocks each hung under their own
+    /// number ("1. " is narrower than "10. "); until 1.16 each item showed
+    /// its source number (#61).
+    ///
+    /// A line an item owns (`owners.paragraphs`) tells the walk its owner's
+    /// level: a line after a hard break in an item sits at the margin and
+    /// must not end (and so restart) the item's list.
     ///
     /// The same pass lines a list item's own blocks up with the item's text
     /// (`owners`, from `ListNesting`): a paragraph of the item hangs where the
@@ -2129,11 +2135,23 @@ struct MarkdownBlockParser: Sendable {
                 lines.append(String(first.prefix(while: { $0 == " " || $0 == "\t" })) + Self.blockStandIn)
             }
         }
-        let hangs = renderer.widestOrderedPrefixes(lines)
+        // The level of the item that owns each line (by its place in `lines`).
+        var ownerLevels: [Int?] = []
+        if !owners.paragraphs.isEmpty {
+            ownerLevels = [Int?](repeating: nil, count: lines.count)
+            for (row, start) in zip(pending, starts) {
+                for (offset, source) in row.sources.enumerated() {
+                    guard let owner = owners.paragraphs[source], let k = itemLines[owner] else { continue }
+                    ownerLevels[start + offset] = MarkdownRenderer.listLevel(
+                        for: lines[k].prefix(while: { $0 == " " || $0 == "\t" }))
+                }
+            }
+        }
+        let markers = renderer.orderedMarkers(lines, ownerLevels: ownerLevels)
         /// The text column of the item on original line `itemLine`.
         func column(ofItem itemLine: Int) -> MarkdownRenderer.ListItemColumn? {
             guard let k = itemLines[itemLine] else { return nil }
-            return renderer.listItemColumn(itemLine: lines[k], hang: hangs[k])
+            return renderer.listItemColumn(itemLine: lines[k], hang: markers[k]?.hang)
         }
         for (row, start) in zip(pending, starts) {
             let columns = owners.paragraphs.isEmpty ? [] : row.sources.map { source in
@@ -2141,7 +2159,7 @@ struct MarkdownBlockParser: Sendable {
             }
             blocks[row.position] = .text(index: row.index,
                                          renderer.render(joined: row.lines,
-                                                         hangs: Array(hangs[start..<(start + row.lines.count)]),
+                                                         markers: Array(markers[start..<(start + row.lines.count)]),
                                                          itemColumns: columns),
                                          sourceLine: row.sourceLine, joinsPrevious: row.joinsPrevious)
         }

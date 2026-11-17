@@ -168,8 +168,9 @@ final class VerticalRhythmTests: XCTestCase {
         // delimiter (drawn `n.`, as GitHub draws both).
         XCTAssertEqual(parse("Text.\n\n3. third\n4. fourth").count, 2)
         XCTAssertTrue(plain(parse("1984) A year")[0]).hasPrefix("1984. A year"), plain(parse("1984) A year")[0]))
-        // Inside a list, an item of any number is the next item.
-        XCTAssertTrue(plain(parse("1. one\n1984. two")[0]).contains("\n1984. two"))
+        // Inside a list, an item of any number is the next item — numbered
+        // as the next one (#61). GitHub: `<ol><li>one</li><li>two</li></ol>`.
+        XCTAssertTrue(plain(parse("1. one\n1984. two")[0]).contains("\n2. two"), plain(parse("1. one\n1984. two")[0]))
     }
 
     // MARK: - Headings

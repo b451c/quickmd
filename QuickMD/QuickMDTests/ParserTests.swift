@@ -498,7 +498,9 @@ final class ParserTests: XCTestCase {
         let linkedHangs = hangs(linked)
         XCTAssertEqual(linkedHangs.count, 2)
         XCTAssertEqual(linkedHangs, hangs(plain), "a linked image stands in like a plain image")
-        XCTAssertEqual(linkedHangs[0], linkedHangs[1], accuracy: 0.01, "one list: 1. and 10. share the widest hang")
+        XCTAssertEqual(linkedHangs[0], linkedHangs[1], accuracy: 0.01, "one list: its items share the widest hang")
+        // One list, so `10. ten` is its item 3 (#61). GitHub: `<ol><li><p>one</p></li><li><p>two</p><p><a…><img…></a></p></li><li><p>ten</p></li></ol>`.
+        XCTAssertEqual(parse(linked).compactMap(plainText).last, "3. ten")
         let split = hangs("1. one\n2. two\n\n[![b](b.png)](https://x)\n\n10. ten")
         XCTAssertNotEqual(split[0], split[1], "control: an unindented picture ends the list")
 

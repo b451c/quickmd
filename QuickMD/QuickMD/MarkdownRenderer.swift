@@ -183,48 +183,67 @@ struct MarkdownRenderer: Sendable {
 
     func render(_ markdown: String) -> AttributedString {
         let lines = Self.joinSoftBreaks(markdown.components(separatedBy: "\n"))
-        // Ordered items of one list line up on the WIDEST marker of that list:
-        // the body font is not monospaced, so "1. " and "10. " have different
-        // widths and each item's text would otherwise start at a different x.
-        // The run is known before any rendering, so the widest prefix is too.
-        return render(joined: lines, hangs: widestOrderedPrefixes(lines))
+        // Which ordered list each item is in decides its number (the list
+        // counts up from its first item) and its hang (ordered items of one
+        // list line up on the WIDEST displayed marker: the body font is not
+        // monospaced, so "9. " and "10. " differ). The runs are known before
+        // any rendering, so both are too.
+        return render(joined: lines, markers: orderedMarkers(lines))
     }
 
     /// Renders lines that are ALREADY soft-break joined (`joinSoftBreaks`),
-    /// each ordered item hanging under `hangs[i]` (`widestOrderedPrefixes`).
+    /// each ordered item drawn with `markers[i]` (`orderedMarkers`).
     ///
-    /// The parser's entry point: it joins and computes the hangs over a whole
-    /// text run, then renders the run one block at a time — so the items of a
-    /// loose list, one row each, still share their list's widest marker.
+    /// The parser's entry point: it joins and computes the markers over a
+    /// whole text run, then renders the run one block at a time — so the
+    /// items of a loose list, one row each, still count on and share their
+    /// list's widest marker.
     ///
     /// `itemColumns[i]` (when given) is the list item that owns line `i` — a
     /// paragraph of the item after its first (`ListNesting`): that line is
     /// drawn at the item's text column (`renderItemParagraph`).
-    func render(joined lines: [String], hangs: [String?], itemColumns: [ListItemColumn?] = []) -> AttributedString {
+    func render(joined lines: [String], markers: [OrderedMarker?], itemColumns: [ListItemColumn?] = []) -> AttributedString {
         var result = AttributedString()
         for (index, line) in lines.enumerated() {
             if index < itemColumns.count, let column = itemColumns[index] {
                 result.append(renderItemParagraph(line, column: column))
             } else {
-                result.append(renderLine(line, hangingPrefix: index < hangs.count ? hangs[index] : nil))
+                result.append(renderLine(line, marker: index < markers.count ? markers[index] : nil))
             }
             result.append(AttributedString("\n"))
         }
         return result
     }
 
-    /// For every line, the widest marker prefix (indent spaces + "N. ") of the
-    /// ordered list the line belongs to — `nil` for lines that are not ordered
-    /// items. "Widest" is measured in the body font, not counted in characters:
-    /// "9. " is wider than "1. " although both are three characters.
+    /// What an ordered item shows: its marker as drawn (indent spaces + "N. ")
+    /// and the widest drawn marker of its list (what its text hangs under).
+    struct OrderedMarker: Equatable {
+        let prefix: String
+        let hang: String
+    }
+
+    /// For every line, the marker it is drawn with when it is an ordered
+    /// item — `nil` for every other line. This walk is the ONE place that
+    /// decides which list an ordered item is in, and from that its number and
+    /// its hang (#61; until 1.16 the number was the source's and only the
+    /// hang came from here).
     ///
-    /// A list is a run of ordered items at one indent level. Blank lines and
-    /// deeper-indented lines between its items (a loose list, a nested list, a
-    /// continuation paragraph) do not end it; any other line does. Nested
-    /// ordered lists form their own runs.
-    func widestOrderedPrefixes(_ lines: [String]) -> [String?] {
+    /// A list is a run of ordered items at one level with one delimiter
+    /// (`.` or `)`; the other one starts a new list, as on GitHub). It
+    /// counts up from its first item's number. Blank lines, deeper-indented
+    /// lines (a loose list, a nested list, an item's own blocks) and lines an
+    /// item at the run's level or deeper owns (`ownerLevels[i]`: the
+    /// `listLevel` of the item that owns line `i` — a line after a hard break
+    /// sits at the margin but is still that item's) do not end it; a
+    /// shallower item or any other line does. Nested ordered lists form
+    /// their own runs.
+    ///
+    /// The hang is the widest DISPLAYED marker, measured in the body font,
+    /// not counted in characters: "9. " is wider than "1. " although both
+    /// are three characters, and twelve `1.` items end in "12. ".
+    func orderedMarkers(_ lines: [String], ownerLevels: [Int?] = []) -> [OrderedMarker?] {
         let items = lines.map(Self.orderedItem)
-        var out = [String?](repeating: nil, count: lines.count)
+        var out = [OrderedMarker?](repeating: nil, count: lines.count)
         var widths: [String: CGFloat] = [:]
         func measured(_ prefix: String) -> CGFloat {
             if let w = widths[prefix] { return w }
@@ -235,33 +254,51 @@ struct MarkdownRenderer: Sendable {
         for start in lines.indices {
             guard out[start] == nil, let first = items[start] else { continue }
             var members = [start]
-            var widest = first.prefix
             var i = start + 1
             while i < lines.count {
                 if let item = items[i] {
                     if item.level < first.level { break }
                     if item.level == first.level {
+                        if item.delimiter != first.delimiter { break }
                         members.append(i)
-                        if measured(item.prefix) > measured(widest) { widest = item.prefix }
                     }
-                } else if !Self.lineContinuesList(lines[i], atLevel: first.level) {
+                } else if !Self.lineContinuesList(lines[i], atLevel: first.level),
+                          (i < ownerLevels.count ? ownerLevels[i] ?? -1 : -1) < first.level {
                     break
                 }
                 i += 1
             }
-            for m in members { out[m] = widest }
+            let indent = Self.indentSpaces(first.level)
+            let prefixes = members.indices.map { indent + "\(first.number + $0). " }
+            var widest = prefixes[0]
+            for prefix in prefixes.dropFirst() where measured(prefix) > measured(widest) { widest = prefix }
+            for (m, prefix) in zip(members, prefixes) { out[m] = OrderedMarker(prefix: prefix, hang: widest) }
         }
         return out
     }
 
-    /// `(prefix, level)` of an ordered list item, prefix exactly as
-    /// `renderListItem` will emit it (indent spaces + normalised number).
-    private static func orderedItem(_ line: String) -> (prefix: String, level: Int)? {
+    /// An ordered list item line as the source has it: its level, its number
+    /// (leading zeros dropped), its delimiter and how many characters of the
+    /// trimmed line its marker takes (digits, delimiter, one white space).
+    /// The ONE place a source number is read.
+    private struct OrderedItem {
+        let level: Int
+        let number: Int
+        let delimiter: Character
+        let markerLength: Int
+
+        /// The marker the item draws without list context: its own number.
+        var ownPrefix: String { MarkdownRenderer.indentSpaces(level) + "\(number). " }
+    }
+
+    private static func orderedItem(_ line: String) -> OrderedItem? {
         let trimmed = markerLine(line)
-        guard trimmed.range(of: Self.orderedMarkerPattern, options: .regularExpression) != nil else { return nil }
-        let level = listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" }))
-        let number = Int(trimmed.prefix(while: { $0.isNumber })) ?? 1
-        return (indentSpaces(level) + "\(number). ", level)
+        guard let match = trimmed.range(of: Self.orderedMarkerPattern, options: .regularExpression) else { return nil }
+        let digits = trimmed.prefix(while: { $0.isNumber })
+        return OrderedItem(level: listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" })),
+                           number: Int(digits) ?? 1,
+                           delimiter: trimmed[digits.endIndex],
+                           markerLength: trimmed.distance(from: trimmed.startIndex, to: match.upperBound))
     }
 
     /// A blank line or a line indented deeper than the list's own items keeps
@@ -440,7 +477,10 @@ struct MarkdownRenderer: Sendable {
 
     // MARK: - Line Rendering
 
-    private func renderLine(_ line: String, hangingPrefix: String? = nil) -> AttributedString {
+    /// `marker`: what an ordered item line draws (`orderedMarkers`); nil
+    /// for a line rendered without list context, which draws its own
+    /// number and hangs under itself.
+    private func renderLine(_ line: String, marker: OrderedMarker? = nil) -> AttributedString {
         let trimmed = Self.markerLine(line)
 
         // Header - extract hash count from regex group, not space position
@@ -467,16 +507,13 @@ struct MarkdownRenderer: Sendable {
         if let bullet = ["- ", "* ", "+ "].first(where: { trimmed.hasPrefix($0) }) {
             let level = Self.listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" }))
             let content = String(trimmed.dropFirst(bullet.count))
-            return renderListItem(content, level: level, ordered: false, number: 0)
+            return renderListItem(content, prefix: Self.indentSpaces(level) + "• ")
         }
 
         // Ordered list
-        if let match = trimmed.range(of: Self.orderedMarkerPattern, options: .regularExpression) {
-            let level = Self.listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" }))
-            let number = Int(trimmed.prefix(while: { $0.isNumber })) ?? 1
-            let content = String(trimmed[match.upperBound...])
-            return renderListItem(content, level: level, ordered: true, number: number,
-                                  hangingPrefix: hangingPrefix)
+        if let item = Self.orderedItem(line) {
+            let content = String(trimmed.dropFirst(item.markerLength))
+            return renderListItem(content, prefix: marker?.prefix ?? item.ownPrefix, hangingUnder: marker?.hang)
         }
 
         // Empty line
@@ -732,9 +769,9 @@ struct MarkdownRenderer: Sendable {
         return min(columns / 2, 8)
     }
 
-    private func renderListItem(_ text: String, level: Int, ordered: Bool, number: Int,
-                                hangingPrefix: String? = nil) -> AttributedString {
-        let prefix = Self.indentSpaces(level) + (ordered ? "\(number). " : "• ")
+    /// `prefix`: the indent spaces + marker the item draws; `hang`: the
+    /// widest marker of its ordered list (nil: it hangs under itself).
+    private func renderListItem(_ text: String, prefix: String, hangingUnder hang: String? = nil) -> AttributedString {
         var attr = AttributedString(prefix)
         attr.setDualFont(size: scaled(14), fonts: theme.fonts)
         attr.setDualForeground(theme.textColor)
@@ -743,7 +780,7 @@ struct MarkdownRenderer: Sendable {
         // push their own, narrower marker right by the difference, so the markers
         // are right-aligned and every item's text starts at the same x — on the
         // first line and on wrapped lines alike.
-        let hangWidth = width(of: hangingPrefix ?? prefix)
+        let hangWidth = width(of: hang ?? prefix)
         applyHangingIndent(&attr, indent: scaled(Self.listGutter),
                            firstLineLead: max(0, hangWidth - width(of: prefix)), hangWidth: hangWidth)
         return attr
@@ -759,7 +796,9 @@ struct MarkdownRenderer: Sendable {
     }
 
     /// The text column of the item `itemLine` renders (`renderLine`), hanging
-    /// under `hang` when it is an ordered item (`widestOrderedPrefixes`).
+    /// under `hang` when it is an ordered item (`OrderedMarker.hang` from
+    /// `orderedMarkers`; nil: under its own source marker, as `renderLine`
+    /// draws it without list context).
     /// Nil for a line that is not an item.
     func listItemColumn(itemLine: String, hang: String?) -> ListItemColumn? {
         let indent = itemLine.prefix(while: { $0 == " " || $0 == "\t" })
@@ -768,7 +807,7 @@ struct MarkdownRenderer: Sendable {
         if let task = parseTaskList(itemLine) {
             prefix = Self.indentSpaces(task.level) + (task.checked ? "☑ " : "☐ ")
         } else if let ordered = Self.orderedItem(itemLine) {
-            prefix = hang ?? ordered.prefix
+            prefix = hang ?? ordered.ownPrefix
         } else if Self.isListItem(itemLine) {
             prefix = Self.indentSpaces(level) + "• "
         } else {
