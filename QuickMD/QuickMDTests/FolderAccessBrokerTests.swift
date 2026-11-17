@@ -15,6 +15,7 @@ final class FolderAccessBrokerTests: XCTestCase {
         var prompts: [String] = []
         var granted: [URL] = []
         var restored: [URL] = []
+        var saves: [URL] = []
         /// Panels held back until the test releases them (all of them: a
         /// broken coalescing must FAIL by its prompt count, never hang).
         var gates: [CheckedContinuation<Void, Never>] = []
@@ -34,7 +35,7 @@ final class FolderAccessBrokerTests: XCTestCase {
                 world.prompts.append(FolderAccessBroker.canonicalPath(folder))
                 return world.answer(folder)
             },
-            save: { _ in true },
+            save: { folder in world.saves.append(folder); return true },
             didGrant: { world.granted.append($0) }))
     }
 
@@ -233,6 +234,44 @@ final class FolderAccessBrokerTests: XCTestCase {
                            FolderAccessBroker.canonicalPath(file("docs/badges")))
             XCTAssertTrue(FolderAccessBroker.covers(docs, FolderAccessBroker.canonicalPath(file("DOCS/x.png"))))
         }
+    }
+
+    /// File ▸ Open Folder (#62): the folder chosen in the chooser is a
+    /// grant in the sandbox — saved once, its files (and subfolders') are
+    /// covered without a panel, a decline below it is cleared, waiting
+    /// pictures are told.
+    func testAUserChosenFolderCoversItsFilesWithoutAPanel() async {
+        let world = World()
+        let access = broker(world)
+        let declined = await access.requestAccess(forFileAt: file("docs/badges/a.svg"), documentURL: document,
+                                                  explicit: false)
+        XCTAssertFalse(declined)
+        XCTAssertEqual(world.prompts.count, 1)
+        XCTAssertTrue(access.registerUserChosenFolder(file("docs")))
+        XCTAssertEqual(world.saves.map(FolderAccessBroker.canonicalPath), [FolderAccessBroker.canonicalPath(file("docs"))])
+        XCTAssertEqual(world.granted.map(FolderAccessBroker.canonicalPath), [FolderAccessBroker.canonicalPath(file("docs"))])
+        XCTAssertTrue(access.declinedFolders.isEmpty, "the earlier decline below it is cleared")
+        for picture in ["docs/badges/a.svg", "docs/images/b.png", "docs/badges/deep/c.svg", "docs/other.md"] {
+            let granted = await access.requestAccess(forFileAt: file(picture), documentURL: document, explicit: false)
+            XCTAssertTrue(granted, picture)
+        }
+        let link = await access.requestAccess(forFileAt: file("docs/other.md"), documentURL: document, explicit: true)
+        XCTAssertTrue(link, "a link click in the folder does not ask either")
+        XCTAssertEqual(world.prompts.count, 1, "no panel after the chooser")
+        XCTAssertNotEqual(access.decision(forFileAt: file("elsewhere/x.png"), documentURL: document, explicit: false),
+                          .granted, "outside the chosen folder nothing changed")
+    }
+
+    /// Unsandboxed (GitHub/Homebrew) the chooser's folder is only a path:
+    /// nothing is saved, granted or announced.
+    func testAUserChosenFolderIsNeverRegisteredUnsandboxed() {
+        let world = World()
+        let access = broker(world, sandboxed: false)
+        XCTAssertFalse(access.registerUserChosenFolder(file("docs")))
+        XCTAssertTrue(world.saves.isEmpty)
+        XCTAssertTrue(world.granted.isEmpty)
+        XCTAssertTrue(access.grantedFolders.isEmpty)
+        XCTAssertEqual(access.decision(forFileAt: file("docs/a.png"), documentURL: document, explicit: false), .declined)
     }
 
     /// Final review N1: the editing mark is ended by the window's token, not

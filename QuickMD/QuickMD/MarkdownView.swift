@@ -57,7 +57,7 @@ struct MarkdownView: View {
     /// monitor uses it to ignore events addressed to other tabs' windows.
     @State private var hostWindow: NSWindow?
     @AppStorage("isToCVisible") private var isToCVisible: Bool = false
-    @AppStorage("isDocumentListVisible") private var isDocumentListVisible: Bool = false
+    @AppStorage(RecentDocumentsSidebar.visibilityDefaultsKey) private var isDocumentListVisible: Bool = false
     @AppStorage("documentListWidth") private var documentListWidth: Double = 220
     @State private var headings: [ToCEntry] = []
     /// Transient bottom toast ("Copied 12 characters", "Opened in …"). Nil = hidden.
@@ -272,9 +272,9 @@ struct MarkdownView: View {
             // sidebars at the USE SITE — their @AppStorage flags keep whatever the
             // reader chose, so leaving reading mode brings back exactly that.
             if isDocumentListVisible && !isReadingMode {
-                RecentDocumentsSidebar(theme: theme, currentURL: documentURL) {
+                RecentDocumentsSidebar(theme: theme, currentURL: documentURL, onCollapse: {
                     withAnimation(.easeInOut(duration: 0.2)) { isDocumentListVisible = false }
-                }
+                }, onOpenFailed: { showToast($0) })
                 .frame(width: documentListWidth)
                 .transition(.move(edge: .leading).combined(with: .opacity))
                 SidebarResizeHandle(width: $documentListWidth, minWidth: 160, maxWidth: 500)
@@ -1960,8 +1960,7 @@ struct MarkdownView: View {
             DispatchQueue.main.async { showToast(LocalLinkOpening.message(for: .openFailed, name: name)) }
         }
 
-        let ext = finalURL.pathExtension.lowercased()
-        if ext == "md" || ext == "markdown" || ext == "mdown" || ext == "mkd" {
+        if MarkdownFileKind.isMarkdown(finalURL) {
             // `other.md#section`: the window that shows other.md scrolls there.
             if let fragment = CrossDocumentAnchors.fragment(of: url) {
                 CrossDocumentAnchors.shared.request(fragment, for: finalURL)

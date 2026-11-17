@@ -297,8 +297,14 @@ struct MarkdownTheme: Sendable, Identifiable {
     /// Captures: (1) hash marks, (2) header text
     static let headerPattern = #"^(#{1,6})[ \t]+(.*)$"#
 
-    /// Matches horizontal rules: ***, ---, ___ (3 or more)
-    static let horizontalRulePattern = #"^(\*{3,}|-{3,}|_{3,})[ \t]*$"#
+    /// Matches horizontal rules (CommonMark thematic breaks) on a TRIMMED
+    /// line: three or more of ONE of `*`, `-`, `_`, with any spaces or tabs
+    /// between them (`* * *`, `- - -`, `**  **`). Before 1.16 the characters
+    /// had to touch, and `* * *` was drawn as the bullet "• * *". Every
+    /// reader of a rule goes through this one pattern (`isThematicBreak`),
+    /// and each checks it before list items. The front-matter fence and the
+    /// setext underline keep their own exact `---` patterns.
+    static let horizontalRulePattern = #"^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$"#
 
     /// Matches task list items: - [ ] or - [x] with optional indentation
     /// Captures: (1) indent whitespace, (2) check state (space or x), (3) content

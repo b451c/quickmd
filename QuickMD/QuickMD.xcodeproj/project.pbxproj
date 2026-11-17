@@ -156,6 +156,12 @@
 		A1B2C3D401000466 /* FolderAccessBroker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000466 /* FolderAccessBroker.swift */; };
 		A1B2C3D401000467 /* FolderAccessBroker.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000466 /* FolderAccessBroker.swift */; };
 		A1B2C3D401000468 /* FolderAccessBrokerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000468 /* FolderAccessBrokerTests.swift */; };
+		F62A000001000001 /* FolderListing.swift in Sources */ = {isa = PBXBuildFile; fileRef = F62A000000000001 /* FolderListing.swift */; };
+		F62A000001000002 /* FolderListing.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = F62A000000000001 /* FolderListing.swift */; };
+		F62A000001000003 /* FolderBrowserStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F62A000000000003 /* FolderBrowserStore.swift */; };
+		F62A000001000004 /* FolderBrowserStore.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = F62A000000000003 /* FolderBrowserStore.swift */; };
+		F62A000001000005 /* FolderListingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F62A000000000005 /* FolderListingTests.swift */; };
+		F62A000001000006 /* FolderBrowserStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F62A000000000006 /* FolderBrowserStoreTests.swift */; };
 		A1B2C3D401000400 /* TableRulesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000400 /* TableRulesTests.swift */; };
 		A1B2C3D4010004A1 /* FootnoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4000004A0 /* FootnoteTests.swift */; };
 		A1B2C3D40100006B /* BlockHeightMeasurer.swift in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A1B2C3D400000069 /* BlockHeightMeasurer.swift */; };
@@ -249,6 +255,10 @@
 		A1B2C3D400000465 /* LocalLinkSafetyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLinkSafetyTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000466 /* FolderAccessBroker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderAccessBroker.swift; sourceTree = "<group>"; };
 		A1B2C3D400000468 /* FolderAccessBrokerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderAccessBrokerTests.swift; sourceTree = "<group>"; };
+		F62A000000000001 /* FolderListing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderListing.swift; sourceTree = "<group>"; };
+		F62A000000000003 /* FolderBrowserStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderBrowserStore.swift; sourceTree = "<group>"; };
+		F62A000000000005 /* FolderListingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderListingTests.swift; sourceTree = "<group>"; };
+		F62A000000000006 /* FolderBrowserStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FolderBrowserStoreTests.swift; sourceTree = "<group>"; };
 		A1B2C3D400000400 /* TableRulesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TableRulesTests.swift; sourceTree = "<group>"; };
 		A1B2C3D4000004A0 /* FootnoteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FootnoteTests.swift; sourceTree = "<group>"; };
 		A1B2C3D40000006C /* VirtualBlockList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualBlockList.swift; sourceTree = "<group>"; };
@@ -436,6 +446,8 @@
 				A1B2C3D400000462 /* ImageRowTests.swift */,
 				A1B2C3D400000465 /* LocalLinkSafetyTests.swift */,
 				A1B2C3D400000468 /* FolderAccessBrokerTests.swift */,
+				F62A000000000005 /* FolderListingTests.swift */,
+				F62A000000000006 /* FolderBrowserStoreTests.swift */,
 				A1B2C3D400000400 /* TableRulesTests.swift */,
 				A1B2C3D4000004E1 /* SideBySideTests.swift */,
 				A1B2C3D400000421 /* ListContentTests.swift */,
@@ -490,6 +502,8 @@
 				A1B2C3D400000460 /* ImageRowLayout.swift */,
 				A1B2C3D400000463 /* LocalLinkSafety.swift */,
 				A1B2C3D400000466 /* FolderAccessBroker.swift */,
+				F62A000000000001 /* FolderListing.swift */,
+				F62A000000000003 /* FolderBrowserStore.swift */,
 				A1B2C3D4000004E0 /* SideBySide.swift */,
 				A1B2C3D400000420 /* ListNesting.swift */,
 				A1B2C3D400000301 /* ReferenceLinks.swift */,
@@ -801,6 +815,8 @@
 				A1B2C3D401000460 /* ImageRowLayout.swift in Sources */,
 				A1B2C3D401000463 /* LocalLinkSafety.swift in Sources */,
 				A1B2C3D401000466 /* FolderAccessBroker.swift in Sources */,
+				F62A000001000001 /* FolderListing.swift in Sources */,
+				F62A000001000003 /* FolderBrowserStore.swift in Sources */,
 				A1B2C3D4010004E0 /* SideBySide.swift in Sources */,
 				A1B2C3D401000420 /* ListNesting.swift in Sources */,
 				A1B2C3D401000301 /* ReferenceLinks.swift in Sources */,
@@ -886,6 +902,8 @@
 				A1B2C3D401000462 /* ImageRowTests.swift in Sources */,
 				A1B2C3D401000465 /* LocalLinkSafetyTests.swift in Sources */,
 				A1B2C3D401000468 /* FolderAccessBrokerTests.swift in Sources */,
+				F62A000001000005 /* FolderListingTests.swift in Sources */,
+				F62A000001000006 /* FolderBrowserStoreTests.swift in Sources */,
 				A1B2C3D401000400 /* TableRulesTests.swift in Sources */,
 				A1B2C3D4010004E2 /* SideBySideTests.swift in Sources */,
 				A1B2C3D401000422 /* ListContentTests.swift in Sources */,
@@ -905,6 +923,8 @@
 				A1B2C3D401000461 /* ImageRowLayout.swift in Sources (Tests) */,
 				A1B2C3D401000464 /* LocalLinkSafety.swift in Sources (Tests) */,
 				A1B2C3D401000467 /* FolderAccessBroker.swift in Sources (Tests) */,
+				F62A000001000002 /* FolderListing.swift in Sources (Tests) */,
+				F62A000001000004 /* FolderBrowserStore.swift in Sources (Tests) */,
 				A1B2C3D4010004E1 /* SideBySide.swift in Sources (Tests) */,
 				A1B2C3D401000421 /* ListNesting.swift in Sources (Tests) */,
 				A1B2C3D401000302 /* ReferenceLinks.swift in Sources (Tests) */,

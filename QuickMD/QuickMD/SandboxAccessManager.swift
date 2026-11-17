@@ -107,6 +107,16 @@ final class SandboxAccessManager {
                                    mayAsk: explicit || !isEditing(documentURL))
     }
 
+    /// File ▸ Open Folder: the folder the reader picked in the chooser is
+    /// also a folder grant — bookmark saved, access started, the broker's
+    /// bookkeeping told, `folderAccessGranted` posted — so pictures and links
+    /// of the documents in it never ask. Unsandboxed: nothing (no bookmark;
+    /// the folder store keeps only the path).
+    @discardableResult
+    func registerUserChosenFolder(_ folder: URL) -> Bool {
+        broker.registerUserChosenFolder(folder)
+    }
+
     // MARK: - Source Edit
 
     /// Documents with an active Source Edit session, by the windows editing
