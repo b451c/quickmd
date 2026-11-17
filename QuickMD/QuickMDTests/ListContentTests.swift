@@ -709,6 +709,39 @@ final class ListContentTests: XCTestCase {
         XCTAssertEqual(ruleShape("* *"), ["T:• *"])
     }
 
+    /// The hand-written rule scan answers exactly as the regular expression
+    /// it replaced (kept here as the oracle) for EVERY string of up to seven
+    /// characters over `*`, `-`, `_`, space, tab and `a` (335 922 strings),
+    /// trimmed as every caller trims (`isThematicBreak`) and untrimmed.
+    func testTheRuleScanAnswersAsThePatternDid() {
+        // The old callers' exact call: `String.range(of:options: .regularExpression)`.
+        // (`NSRegularExpression.firstMatch` differs: its `$` also matches
+        // before a final `\r` or U+2028, which the old callers never did.)
+        let oracle = #"^(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$"#
+        func pattern(_ s: String) -> Bool {
+            s.range(of: oracle, options: .regularExpression) != nil
+        }
+        let alphabet: [Character] = ["*", "-", "_", " ", "\t", "a"]
+        var level = [""]
+        var checked = 0, rules = 0
+        for _ in 1...7 {
+            level = level.flatMap { prefix in alphabet.map { prefix + String($0) } }
+            for s in level {
+                let trimmed = s.trimmingCharacters(in: MarkdownRenderer.markerWhitespace)
+                XCTAssertEqual(MarkdownRenderer.isRuleRun(s), pattern(s), s.debugDescription)
+                XCTAssertEqual(MarkdownRenderer.isThematicBreak(s), pattern(trimmed), s.debugDescription)
+                checked += 1
+                if pattern(trimmed) { rules += 1 }
+            }
+        }
+        XCTAssertEqual(checked, 335_922)
+        XCTAssertGreaterThan(rules, 0)
+        // Outside the alphabet: other characters and other white space.
+        for s in ["***\u{2028}", "*\u{00A0}*\u{00A0}*", "＊＊＊", "—————", "\u{0B}***", "***\r", "-–-"] {
+            XCTAssertEqual(MarkdownRenderer.isRuleRun(s), pattern(s), s.debugDescription)
+        }
+    }
+
     /// A spaced rule ends a paragraph or a list like `---` does, and is the
     /// item's when indented to its content column.
     func testASpacedRuleBetweenBlocks() throws {

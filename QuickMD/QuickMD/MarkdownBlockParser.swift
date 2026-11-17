@@ -1215,7 +1215,7 @@ struct MarkdownBlockParser: Sendable {
         if isTableSeparator(trimmed) { return false }
 
         // Rules and setext underlines
-        if trimmed.range(of: MarkdownTheme.horizontalRulePattern, options: .regularExpression) != nil { return false }
+        if MarkdownRenderer.isRuleRun(trimmed) { return false }
         if trimmed.range(of: MarkdownTheme.setextH1Pattern, options: .regularExpression) != nil { return false }
 
         // ATX headings and standalone image lines — the SAME predicate the
