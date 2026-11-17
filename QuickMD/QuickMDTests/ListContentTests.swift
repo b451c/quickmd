@@ -574,6 +574,48 @@ final class ListContentTests: XCTestCase {
         XCTAssertEqual(try markers("1. a\n   1. x  \nmore\n   1. y\n1. b"), "1 [1 2] 2")
     }
 
+    /// Ownership, not indentation, keeps a list going past a line that is not
+    /// an item: a paragraph or fence indented short of the item's content
+    /// column is not the item's, so the list ends there and the next item
+    /// starts a new one — number and hang. GitHub (`gh api markdown`, 2026-11-17):
+    func testOnlyWhatAnItemOwnsKeepsTheListGoing() throws {
+        // <ol><li>a</li></ol><p>para</p><ol><li>b</li></ol>
+        XCTAssertEqual(try markers("1. a\n\n  para\n\n1. b"), "1 1")
+        // <ol start="8"><li>a</li></ol><p>para</p><ol start="8"><li>b</li></ol>
+        XCTAssertEqual(try markers("8. a\n\n  para\n\n8. b"), "8 8")
+        // <ol start="10"><li>a</li></ol><p>para</p><ol><li>b</li></ol>
+        XCTAssertEqual(try markers("10. a\n\n   para\n\n1. b"), "10 1")
+        let hangs = try orderedHangs("10. a\n\n   para\n\n1. b")
+        XCTAssertEqual(hangs.count, 2)
+        XCTAssertGreaterThan(hangs[0], hangs[1], "two lists, two hangs")
+        // <ol><li>a</li><li>b</li></ol><p>para</p><ol><li>c</li></ol>
+        XCTAssertEqual(try markers("1. a\n1. b\n\n  para\n1. c"), "1 2 1")
+        // A fence at 2 columns is not the item's:
+        // <ol><li>a</li></ol><pre><code>code</code></pre><ol><li>b</li></ol>
+        XCTAssertEqual(try markers("1. a\n\n  ```\n  code\n  ```\n\n1. b"), "1 1")
+        // … at the content column it is: <ol><li><p>a</p><pre><code>code</code></pre></li><li><p>b</p></li></ol>
+        XCTAssertEqual(try markers("1. a\n\n   ```\n   code\n   ```\n\n1. b"), "1 2")
+        // A paragraph at the content column after a blank line is the item's:
+        // <ol><li><p>a</p><p>para</p></li><li><p>b</p></li></ol>
+        XCTAssertEqual(try markers("1. a\n\n   para\n\n1. b"), "1 2")
+        // The same under a nested bullet, at the ordered item's content column:
+        // <ul><li>x<ol><li><p>a</p><p>para</p></li><li><p>b</p></li></ol></li></ul>
+        XCTAssertEqual(try markers("- x\n  1. a\n\n     para\n\n  1. b"), "• [1 2]")
+        // … and short of it, the bullet's paragraph:
+        // <ul><li><p>x</p><ol><li>a</li></ol><p>para</p><ol><li>b</li></ol></li></ul>
+        XCTAssertEqual(try markers("- x\n  1. a\n\n    para\n\n  1. b"), "• [1 1]")
+        // A rule inside an item (a text-row line, not a paragraph) is the item's:
+        // <ol><li><p>a</p><hr></li><li><p>b</p></li></ol>
+        XCTAssertEqual(try markers("1. a\n\n   ---\n\n1. b"), "1 2")
+    }
+
+    /// Only ASCII digits make an ordered marker. GitHub: `<p>١. a<br>١. b</p>`.
+    func testNonASCIIDigitsAreNoMarker() {
+        XCTAssertEqual(shape(parse("١. a\n١. b")), ["T:١. a ١. b"])
+        XCTAssertFalse(MarkdownRenderer.isListItem("١. a"))
+        XCTAssertFalse(MarkdownRenderer.canInterruptParagraph("١. a"))
+    }
+
     /// A numbered line after paragraph text is still text unless it is 1.
     /// GitHub: `<p>text<br>2. b<br>3. c</p>` and `<p>text</p><ol><li>a</li><li>b</li></ol>`.
     func testParagraphTextBeforeANumberedLine() throws {
@@ -622,6 +664,10 @@ final class ListContentTests: XCTestCase {
         // QuickMD's task items are bullets only, so these stay ordered items with literal text.
         let task = try parse("1. [ ] a\n1. [x] b\n1. c").flatMap { try paragraphs($0) }.map(\.text)
         XCTAssertEqual(task, ["1. [ ] a", "2. [x] b", "3. c"])
+        // GitHub `<ul><li>a<br>3. x<br>3. y</li><li>b<br>3. z</li></ul>` (a nested
+        // list may interrupt the item's paragraph only when it starts at 1);
+        // QuickMD draws nested ordered items counting from 3.
+        XCTAssertEqual(try markers("- a\n  3. x\n  3. y\n- b\n  3. z"), "• [3 4] • [3]")
         // GitHub `<blockquote><ol start="7">…`; QuickMD keeps a quote's lines literal.
         guard case .blockquote(let quote, _) = try XCTUnwrap(parse("> 7. a\n> 7. b").first).content
         else { return XCTFail("quote") }

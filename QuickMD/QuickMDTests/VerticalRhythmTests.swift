@@ -460,12 +460,27 @@ final class VerticalRhythmTests: XCTestCase {
     /// its OWN number — the digits are proportional, so "1. " to "9. " each
     /// started the text at a different x and "10. " further right still.
     func testOrderedStepsWithCodeBlocksKeepOneTextEdge() throws {
-        let steps = (1...11).map { "\($0). Step \($0)\n   ```sh\n   run \($0)\n   ```" }
+        // Each fence at its item's content column ("10. " is 4 wide): GitHub
+        // keeps one list, `<ol start="8"><li>Step 8<pre>…</li>…<li>Step 11<pre>…</li></ol>`.
+        let steps = (1...11).map { n -> String in
+            let pad = String(repeating: " ", count: "\(n). ".count)
+            return "\(n). Step \(n)\n\(pad)```sh\n\(pad)run \(n)\n\(pad)```"
+        }
         let blocks = parse(steps.joined(separator: "\n"))
         XCTAssertEqual(blocks.filter { if case .codeBlock = $0.content { return true }; return false }.count, 11)
         let indents = try orderedItemIndents(blocks)
         XCTAssertEqual(indents.count, 11)
         XCTAssertEqual(Set(indents).count, 1, "\(indents)")
+
+        // A fence at 3 columns under "10. " (content column 4) is NOT the
+        // item's (#61 review): GitHub ends the list there,
+        // `…<li>Step 10</li></ol><pre>run 10</pre><ol start="11"><li>Step 11</li></ol>`,
+        // so "11." is a list of its own and hangs under itself.
+        let short = (8...11).map { "\($0). Step \($0)\n   ```sh\n   run \($0)\n   ```" }
+        let shortIndents = try orderedItemIndents(parse(short.joined(separator: "\n")))
+        XCTAssertEqual(shortIndents.count, 4)
+        XCTAssertEqual(Set(shortIndents[0..<3]).count, 1, "\(shortIndents)")
+        XCTAssertNotEqual(shortIndents[2], shortIndents[3], "\(shortIndents)")
 
         // A block NOT under the list (not indented) ends it: the list after
         // it hangs on its own.

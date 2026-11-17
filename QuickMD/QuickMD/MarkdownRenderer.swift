@@ -230,18 +230,22 @@ struct MarkdownRenderer: Sendable {
     ///
     /// A list is a run of ordered items at one level with one delimiter
     /// (`.` or `)`; the other one starts a new list, as on GitHub). It
-    /// counts up from its first item's number. Blank lines, deeper-indented
-    /// lines (a loose list, a nested list, an item's own blocks) and lines an
-    /// item at the run's level or deeper owns (`ownerLevels[i]`: the
-    /// `listLevel` of the item that owns line `i` — a line after a hard break
-    /// sits at the margin but is still that item's) do not end it; a
-    /// shallower item or any other line does. Nested ordered lists form
-    /// their own runs.
+    /// counts up from its first item's number. A shallower item ends it;
+    /// deeper ordered items form their own runs. Any other line:
+    /// - a list item (bullet, task) continues it when indented deeper than
+    ///   the run's items (`lineContinuesList`), a blank line always does;
+    /// - with `ownerLevels` (the parser: one entry per line, the `listLevel`
+    ///   of the item that OWNS line `i`, nil when none does) any other line
+    ///   continues it only when an item at the run's level or deeper owns it.
+    ///   Ownership (`ListNesting`), not indentation: a line after a hard
+    ///   break sits at the margin and is still the item's, a paragraph
+    ///   indented two columns under `1.` is not and ends the list;
+    /// - without them (direct callers) by its indentation alone.
     ///
     /// The hang is the widest DISPLAYED marker, measured in the body font,
     /// not counted in characters: "9. " is wider than "1. " although both
     /// are three characters, and twelve `1.` items end in "12. ".
-    func orderedMarkers(_ lines: [String], ownerLevels: [Int?] = []) -> [OrderedMarker?] {
+    func orderedMarkers(_ lines: [String], ownerLevels: [Int?]? = nil) -> [OrderedMarker?] {
         let items = lines.map(Self.orderedItem)
         var out = [OrderedMarker?](repeating: nil, count: lines.count)
         var widths: [String: CGFloat] = [:]
@@ -262,8 +266,10 @@ struct MarkdownRenderer: Sendable {
                         if item.delimiter != first.delimiter { break }
                         members.append(i)
                     }
-                } else if !Self.lineContinuesList(lines[i], atLevel: first.level),
-                          (i < ownerLevels.count ? ownerLevels[i] ?? -1 : -1) < first.level {
+                } else if let ownerLevels, !Self.isListItem(lines[i]) {
+                    let owned = i < ownerLevels.count && (ownerLevels[i] ?? -1) >= first.level
+                    if !owned && !Self.isBlankLine(lines[i]) { break }
+                } else if !Self.lineContinuesList(lines[i], atLevel: first.level) {
                     break
                 }
                 i += 1
@@ -294,7 +300,7 @@ struct MarkdownRenderer: Sendable {
     private static func orderedItem(_ line: String) -> OrderedItem? {
         let trimmed = markerLine(line)
         guard let match = trimmed.range(of: Self.orderedMarkerPattern, options: .regularExpression) else { return nil }
-        let digits = trimmed.prefix(while: { $0.isNumber })
+        let digits = trimmed.prefix(while: { $0.isASCII && $0.isNumber })
         return OrderedItem(level: listLevel(for: line.prefix(while: { $0 == " " || $0 == "\t" })),
                            number: Int(digits) ?? 1,
                            delimiter: trimmed[digits.endIndex],
@@ -421,16 +427,17 @@ struct MarkdownRenderer: Sendable {
         String(text.drop(while: { $0 == " " || $0 == "\t" }))
     }
 
-    /// An ordered item's marker (CommonMark): one to nine digits, then `.` or
-    /// `)`, then white space. Drawn as `n.` whichever delimiter it had, as
+    /// An ordered item's marker (CommonMark): one to nine ASCII digits (`\d`
+    /// would take `١.` too; GitHub keeps that text), then `.` or `)`, then
+    /// white space. Drawn as `n.` whichever delimiter it had, as
     /// GitHub draws both (an HTML list).
-    static let orderedMarkerPattern = #"^(\d{1,9})[.)][ \t]"#
+    static let orderedMarkerPattern = #"^([0-9]{1,9})[.)][ \t]"#
 
     /// `line` (an ordered item line that may not interrupt a paragraph) as
     /// paragraph text: its delimiter backslash-escaped, so `renderLine` draws
     /// `1984. A year` as the words it is and never as an item.
     static func asParagraphText(_ line: String) -> String {
-        line.replacingOccurrences(of: #"^([ \t]*\d{1,9})([.)])"#, with: "$1\\\\$2", options: .regularExpression)
+        line.replacingOccurrences(of: #"^([ \t]*[0-9]{1,9})([.)])"#, with: "$1\\\\$2", options: .regularExpression)
     }
 
     /// Whether this item line may interrupt a paragraph (CommonMark): a
@@ -441,7 +448,7 @@ struct MarkdownRenderer: Sendable {
     static func canInterruptParagraph(_ line: String) -> Bool {
         guard isListItem(line) else { return false }
         let trimmed = markerLine(line)
-        if let marker = trimmed.range(of: #"^\d{1,9}[.)]"#, options: .regularExpression) {
+        if let marker = trimmed.range(of: #"^[0-9]{1,9}[.)]"#, options: .regularExpression) {
             guard Int(trimmed[marker].dropLast()) == 1 else { return false }
             return !isBlankLine(trimmed[marker.upperBound...])
         }

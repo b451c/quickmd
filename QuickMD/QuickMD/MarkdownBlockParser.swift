@@ -300,14 +300,25 @@ struct MarkdownBlockParser: Sendable {
         var nesting = ListNesting()
         var paragraphOwners: [Int: Int] = [:]
         var blockOwners: [Int: Int] = [:]
+        // For the ordered-list runs (`ListOwners.rules` / `.everyBlock`): the
+        // item that owns a thematic break kept as text, and EVERY block an
+        // item owns (code, diagrams, pictures, tables, quotes, math, headings).
+        var ruleOwners: [Int: Int] = [:]
+        var everyBlockOwner: [Int: Int] = [:]
 
         while i < lines.count {
+            // The item that owns the block(s) this turn appends, and where in
+            // `blocks` they start (after the text the branch flushed first).
+            var turnOwner: (owner: Int?, from: Int)?
             // Every turn consumes at least one line. A branch that decides on a
             // line its own loop then refuses would otherwise re-enter it for
             // ever (a quote marker after a no-break space did, 9bbf6ae): DEBUG
             // stops there, Release keeps the line as text and goes on.
             let turnStart = i
             defer {
+                if let turnOwner, let owner = turnOwner.owner, turnOwner.from < blocks.count {
+                    for position in turnOwner.from..<blocks.count { everyBlockOwner[position] = owner }
+                }
                 if i <= turnStart {
                     assertionFailure("MarkdownBlockParser: no line consumed at \(turnStart)")
                     textBuffer.append((line: lines[turnStart], originalIndex: lineMap[turnStart]))
@@ -336,7 +347,7 @@ struct MarkdownBlockParser: Sendable {
             // Blank lines inside it are code; trailing ones are not.
             if let code = nesting.indentedCode(line) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-                nesting.block(startingAt: line)
+                turnOwner = (nesting.block(startingAt: line), blocks.count)
                 var codeLines: [String] = []
                 var end = i
                 var j = i
@@ -365,6 +376,7 @@ struct MarkdownBlockParser: Sendable {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                 // A fence indented under a list item is that item's.
                 let owner = nesting.block(startingAt: line)
+                turnOwner = (owner, blocks.count)
                 let fenceLength = opening.length
                 // CommonMark: a fence indented N columns drops up to N columns
                 // of indentation from each of its lines (a fence under a list
@@ -412,7 +424,7 @@ struct MarkdownBlockParser: Sendable {
                 : nil
             if let mathOpening, mathOpening != .text {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-                nesting.block(startingAt: line)
+                turnOwner = (nesting.block(startingAt: line), blocks.count)
 
                 let afterDollar = String(trimmedLine.dropFirst(2)).trimmingCharacters(in: .whitespaces)
 
@@ -448,7 +460,7 @@ struct MarkdownBlockParser: Sendable {
                let hashRange = Range(match.range(at: 1), in: line),
                let contentRange = Range(match.range(at: 2), in: line) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-                nesting.block(startingAt: line)
+                turnOwner = (nesting.block(startingAt: line), blocks.count)
                 let level = min(max(line[hashRange].count, 1), 6)
                 let title = Self.withoutClosingSequence(
                     String(line[contentRange]).trimmingCharacters(in: .whitespaces))
@@ -478,7 +490,7 @@ struct MarkdownBlockParser: Sendable {
                     // always was (an item's paragraph; the picture or row is
                     // drawn at the margin, like a lone image). Its other lines
                     // continue that paragraph: nothing more to tell.
-                    _ = nesting.text(line, sourceLine: sourceLine)
+                    turnOwner = (nesting.text(line, sourceLine: sourceLine), blocks.count)
                     if images.count == 1, let image = images.first {
                         blocks.append(.image(index: blockIndex, url: image.url, alt: image.alt, width: image.width,
                                              link: image.link, sourceLine: sourceLine))
@@ -505,7 +517,7 @@ struct MarkdownBlockParser: Sendable {
             if let images = InlineSyntaxScanner.standaloneImages(in: line[...], references: referenceDefinitions) {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                 // Paragraph text in CommonMark: an item's paragraph goes on.
-                _ = nesting.text(line, sourceLine: sourceLine)
+                turnOwner = (nesting.text(line, sourceLine: sourceLine), blocks.count)
                 for image in images {
                     // The alt is caption text: references decoded like any inline
                     // text (an `<img alt>` is decoded by `HTMLImageSyntax`).
@@ -540,7 +552,7 @@ struct MarkdownBlockParser: Sendable {
                 } else {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                     // Inline HTML in a paragraph for CommonMark: as an image line.
-                    _ = nesting.text(line, sourceLine: sourceLine)
+                    turnOwner = (nesting.text(line, sourceLine: sourceLine), blocks.count)
                     for tag in html.images {
                         // `<a href="…"><img></a>` on one line: the picture is the link.
                         blocks.append(.image(index: blockIndex, url: tag.url, alt: tag.alt, width: tag.width,
@@ -583,7 +595,7 @@ struct MarkdownBlockParser: Sendable {
                     var preceding = Array(textBuffer[..<start])
                     textBuffer.removeAll()
                     flushTextBuffer(&preceding, to: &blocks, index: &blockIndex, pending: &pendingRows)
-                    nesting.block(startingAt: line)
+                    turnOwner = (nesting.block(startingAt: line), blocks.count)
                     blocks.append(.heading(index: blockIndex, level: level,
                                            title: ReferenceLinks.inlinedHeading(title, definitions: referenceDefinitions,
                                                                                 footnoteIds: footnoteDefinitions.map(\.id)),
@@ -598,7 +610,7 @@ struct MarkdownBlockParser: Sendable {
             if Self.pipeCount(line) >= 2 && !trimmed.isEmpty {
                 if !isTableSeparator(trimmed) && i + 1 < lines.count && isTableSeparator(lines[i + 1]) {
                     flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-                    nesting.block(startingAt: line)
+                    turnOwner = (nesting.block(startingAt: line), blocks.count)
 
                     var alignments = parseTableAlignments(lines[i + 1])
                     // The separator row is authoritative for column count: a header row
@@ -637,7 +649,7 @@ struct MarkdownBlockParser: Sendable {
             // Blockquote detection - group consecutive > lines by nesting level
             if trimmed.hasPrefix(">") {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
-                nesting.block(startingAt: line)
+                turnOwner = (nesting.block(startingAt: line), blocks.count)
                 // A later nesting group of this run continues the quote row
                 // before it (`MarkdownBlock.joinsPrevious`): `> a` then `>> b`
                 // is one quote on the page, drawn as two rows.
@@ -790,7 +802,7 @@ struct MarkdownBlockParser: Sendable {
                 // "para line\n: def" as term + definition).
                 var preceding = Array(textBuffer[..<run.bufferStart])
                 flushTextBuffer(&preceding, to: &blocks, index: &blockIndex, pending: &pendingRows)
-                nesting.block(startingAt: line)
+                turnOwner = (nesting.block(startingAt: line), blocks.count)
                 let termSourceLine = textBuffer[run.bufferStart].originalIndex
                 textBuffer.removeAll()
 
@@ -809,6 +821,10 @@ struct MarkdownBlockParser: Sendable {
                 nesting.blank()
             } else if let owner = nesting.text(line, sourceLine: sourceLine) {
                 paragraphOwners[sourceLine] = owner
+            } else if MarkdownRenderer.isThematicBreak(line), let owner = nesting.items.last?.sourceLine {
+                // A rule drawn by the text row: not an item paragraph (it
+                // draws itself), but inside the item its indent reaches.
+                ruleOwners[sourceLine] = owner
             }
             textBuffer.append((line: line, originalIndex: sourceLine))
             i += 1
@@ -816,7 +832,8 @@ struct MarkdownBlockParser: Sendable {
 
         flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
         renderPendingRows(pendingRows, in: &blocks, allLines: allLines, using: activeRenderer,
-                          owners: ListOwners(paragraphs: paragraphOwners, blocks: blockOwners))
+                          owners: ListOwners(paragraphs: paragraphOwners, blocks: blockOwners,
+                                             rules: ruleOwners, everyBlock: everyBlockOwner))
 
         // Append footnotes block at end of document if any definitions exist
         if !footnoteDefinitions.isEmpty {
@@ -1190,7 +1207,7 @@ struct MarkdownBlockParser: Sendable {
 
         // List items — bullets (task items included, they start `- [ ]`) and ordered
         if ["- ", "* ", "+ "].contains(where: { trimmed.hasPrefix($0) }) { return false }
-        if trimmed.range(of: #"^(\d+)\.[ \t]"#, options: .regularExpression) != nil { return false }
+        if trimmed.range(of: #"^([0-9]+)\.[ \t]"#, options: .regularExpression) != nil { return false }
 
         // Table rows (the table branch needs a separator to fire, but a pipe row
         // is still a table row, not a term) and separators
@@ -2084,6 +2101,12 @@ struct MarkdownBlockParser: Sendable {
     struct ListOwners {
         let paragraphs: [Int: Int]
         let blocks: [Int: Int]
+        /// A thematic break (kept in a text row) inside an item, by line.
+        var rules: [Int: Int] = [:]
+        /// EVERY block an item owns, by position (`blocks` holds only the
+        /// code blocks, which are drawn at the item's text): what keeps an
+        /// ordered list going past a picture, a table or a quote under it.
+        var everyBlock: [Int: Int] = [:]
     }
 
     /// Stands in for a non-text block when the ordered lists are worked
@@ -2102,9 +2125,12 @@ struct MarkdownBlockParser: Sendable {
     /// number ("1. " is narrower than "10. "); until 1.16 each item showed
     /// its source number (#61).
     ///
-    /// A line an item owns (`owners.paragraphs`) tells the walk its owner's
-    /// level: a line after a hard break in an item sits at the margin and
-    /// must not end (and so restart) the item's list.
+    /// Every line that is not a list item tells the walk the level of the
+    /// item that owns it (`owners.paragraphs` / `.rules` for text lines,
+    /// `owners.everyBlock` for a stand-in; nil: no item does). Ownership, not
+    /// indentation, decides: a line after a hard break in an item sits at
+    /// the margin and keeps the list going, a paragraph indented two columns
+    /// under `1.` is not the item's and ends it.
     ///
     /// The same pass lines a list item's own blocks up with the item's text
     /// (`owners`, from `ListNesting`): a paragraph of the item hangs where the
@@ -2119,33 +2145,32 @@ struct MarkdownBlockParser: Sendable {
         starts.reserveCapacity(pending.count)
         // Where an item line (by original line) landed in `lines`.
         var itemLines: [Int: Int] = [:]
+        // The item (original line) that owns each line of `lines`, nil for
+        // a line no item owns (an item line itself included: it draws itself).
+        var lineOwners: [Int?] = []
         var next = 0
         for (position, block) in blocks.enumerated() {
             if next < pending.count, pending[next].position == position {
                 starts.append(lines.count)
-                if !owners.paragraphs.isEmpty || !owners.blocks.isEmpty {
-                    for (offset, source) in pending[next].sources.enumerated() {
-                        itemLines[source] = lines.count + offset
-                    }
+                for (offset, source) in pending[next].sources.enumerated() {
+                    itemLines[source] = lines.count + offset
+                    lineOwners.append(owners.paragraphs[source] ?? owners.rules[source])
                 }
                 lines.append(contentsOf: pending[next].lines)
                 next += 1
             } else {
                 let first = block.sourceLine >= 0 && block.sourceLine < allLines.count ? allLines[block.sourceLine] : ""
                 lines.append(String(first.prefix(while: { $0 == " " || $0 == "\t" })) + Self.blockStandIn)
+                lineOwners.append(owners.everyBlock[position])
             }
         }
-        // The level of the item that owns each line (by its place in `lines`).
-        var ownerLevels: [Int?] = []
-        if !owners.paragraphs.isEmpty {
-            ownerLevels = [Int?](repeating: nil, count: lines.count)
-            for (row, start) in zip(pending, starts) {
-                for (offset, source) in row.sources.enumerated() {
-                    guard let owner = owners.paragraphs[source], let k = itemLines[owner] else { continue }
-                    ownerLevels[start + offset] = MarkdownRenderer.listLevel(
-                        for: lines[k].prefix(while: { $0 == " " || $0 == "\t" }))
-                }
-            }
+        // What keeps an ordered list going past a line that is not a list
+        // item is OWNERSHIP (`ListNesting`), never its indentation alone: a
+        // paragraph indented two columns under `1.` is not the item's and
+        // ends the list on GitHub, so it must restart the count here too.
+        let ownerLevels: [Int?] = lineOwners.map { owner in
+            guard let owner, let k = itemLines[owner] else { return nil }
+            return MarkdownRenderer.listLevel(for: lines[k].prefix(while: { $0 == " " || $0 == "\t" }))
         }
         let markers = renderer.orderedMarkers(lines, ownerLevels: ownerLevels)
         /// The text column of the item on original line `itemLine`.
