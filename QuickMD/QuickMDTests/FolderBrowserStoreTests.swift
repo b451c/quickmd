@@ -25,6 +25,9 @@ final class FolderBrowserStoreTests: XCTestCase {
         var roots: [String] = []
         /// Batches that reached the main actor.
         var hops = 0
+        /// Calls of the path-resolving seam, and those made on the main
+        /// thread (counted from any thread).
+        let resolves = ResolveCounter()
 
         /// An event batch: these paths, each with `flags` (default: an item
         /// created — a change that can alter the listing), judged by the
@@ -115,7 +118,11 @@ final class FolderBrowserStoreTests: XCTestCase {
                 await world.end()
                 return outcome
             },
-            followUpDelay: { world.events.append("delay") }))
+            followUpDelay: { world.events.append("delay") },
+            resolveRoot: { [resolves = world.resolves] url in
+                resolves.record(onMain: Thread.isMainThread)
+                return FolderBrowserStore.rootSpellings(of: url)
+            }))
     }
 
     private func folder(_ name: String, files: [String]) throws -> URL {
@@ -545,6 +552,43 @@ final class FolderBrowserStoreTests: XCTestCase {
             _ = filter.handle(count: paths.count, paths: paths as CFArray, flags: $0.baseAddress!)
         }
         return counter.value
+    }
+
+    private final class ResolveCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var all = 0
+        private var main = 0
+        var total: Int { lock.lock(); defer { lock.unlock() }; return all }
+        var onMain: Int { lock.lock(); defer { lock.unlock() }; return main }
+        func record(onMain isMain: Bool) {
+            lock.lock(); all += 1; if isMain { main += 1 }; lock.unlock()
+        }
+    }
+
+    /// A restore resolves the root's spellings OFF the main thread only:
+    /// the main actor gets the result and starts the session without a
+    /// file-system call of its own (a stalled share must not stall launch).
+    func testARestoreResolvesTheRootOffTheMainThread() async throws {
+        let notes = try folder("Notes", files: ["a.md"])
+        _ = await store(World()).open(notes)
+        let world = World()
+        let browser = store(world)
+        await browser.restore()
+        await settle(browser)
+        XCTAssertEqual(names(browser), ["a.md"])
+        XCTAssertEqual(world.resolves.total, 1)
+        XCTAssertEqual(world.resolves.onMain, 0, "no path resolution on the main actor during a restore")
+        XCTAssertEqual(browser.listingRoot?.path, FolderAccessBroker.canonicalPath(notes))
+        XCTAssertEqual(world.roots, [FolderAccessBroker.canonicalPath(notes),
+                                     FolderListing.realPath(FolderAccessBroker.canonicalPath(notes))],
+                       "the watcher got the carried spellings")
+        // A gone folder is not resolved at all.
+        try FileManager.default.removeItem(at: notes)
+        _ = await store(World()).open(try folder("Other", files: ["b.md"]))
+        let otherWorld = World()
+        suite.defaults.set(notes.path, forKey: FolderBrowserStore.defaultsKey)
+        await store(otherWorld).restore()
+        XCTAssertEqual(otherWorld.resolves.total, 0)
     }
 
     private final class HopCounter: @unchecked Sendable {
