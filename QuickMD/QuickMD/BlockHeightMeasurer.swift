@@ -931,9 +931,9 @@ final class FittingMathAttachment: NSTextAttachment {
     ///
     /// Drawing only, inside the line the formula sits on: the attachment's
     /// bounds, the fit rule and every measured height stay as they were.
-    /// - The line is AppKit's own: a layout manager underlines one
-    ///   no-break space in the link's font, kerned to the formula's width
-    ///   (`drawTextUnderline`). AppKit's position is not the font's
+    /// - The line is AppKit's own: a layout manager underlines one long
+    ///   no-break space in the link's font, clipped to the formula's width
+    ///   (`drawTextUnderline`, laid out once per font). AppKit's position is not the font's
     ///   `underlinePosition` (measured: Menlo 13 says 0.8 pt, AppKit draws
     ///   1.1–1.75 pt), so only AppKit's own drawing meets the text's
     ///   underline on either side exactly, at every scale.
@@ -990,31 +990,86 @@ final class FittingMathAttachment: NSTextAttachment {
     }
 
     /// AppKit's underline of `width` points of text in `underline.font`,
-    /// starting at `x` on `baseline` (flipped drawing coordinates): one
-    /// no-break space in a scratch TextKit 1 stack, kerned to `width`. The
-    /// space draws nothing; its underline is drawn by the same layout
-    /// manager code as the link text's.
+    /// starting at `x` on `baseline` (flipped drawing coordinates), drawn by
+    /// the same layout manager code as the link text's: a scratch stack
+    /// (`UnderlineScratch`) laid out once per font, style and colour, its
+    /// long underline clipped to the formula's width. Per draw this is one
+    /// clip and one glyph's underline — no layout, no allocation.
     private static func drawTextUnderline(_ underline: LinkUnderline, x: CGFloat, width: CGFloat,
                                           baseline: CGFloat) {
-        let space = "\u{00A0}"
-        let advance = (space as NSString).size(withAttributes: [.font: underline.font]).width
-        let storage = NSTextStorage(string: space, attributes: [
-            .font: underline.font, .foregroundColor: underline.color, .underlineStyle: underline.style,
-            .kern: width - advance,
-        ])
-        let layoutManager = NSLayoutManager()
-        let container = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude,
-                                                     height: CGFloat.greatestFiniteMagnitude))
-        container.lineFragmentPadding = 0
-        layoutManager.addTextContainer(container)
-        storage.addLayoutManager(layoutManager)
-        layoutManager.ensureLayout(for: container)
-        let glyphs = NSRange(location: 0, length: layoutManager.numberOfGlyphs)
-        guard glyphs.length > 0 else { return }
-        let ownBaseline = layoutManager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).minY
-            + layoutManager.location(forGlyphAt: 0).y
-        layoutManager.drawGlyphs(forGlyphRange: glyphs, at: NSPoint(x: x, y: baseline - ownBaseline))
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        let scratch = UnderlineScratch.scratch(for: underline)
+        context.saveGState()
+        context.clip(to: CGRect(x: x, y: baseline - 10_000, width: width, height: 20_000))
+        scratch.layoutManager.drawGlyphs(forGlyphRange: NSRange(location: 0, length: 1),
+                                         at: NSPoint(x: x, y: baseline - scratch.baseline))
+        context.restoreGState()
     }
+
+    /// One no-break space in `LinkUnderline`'s font, colour and underline
+    /// style, kerned to `width` points, laid out once in its own TextKit 1
+    /// stack: the space draws nothing, its underline is AppKit's. Kept per
+    /// (font, style, colour) — a handful in a session (body and heading
+    /// sizes × zoom × theme) — and dropped wholesale past `limit`. Drawing
+    /// runs on the main thread only, so is this cache.
+    private final class UnderlineScratch {
+        let layoutManager: NSLayoutManager
+        /// The space's baseline in its own container.
+        let baseline: CGFloat
+        private let storage: NSTextStorage
+
+        /// Wider than any line a formula can sit on.
+        static let width: CGFloat = 100_000
+        static let limit = 64
+        private static var cache: [Key: UnderlineScratch] = [:]
+
+        #if DEBUG
+        /// Stacks built so far (tests: one per distinct key, never one per
+        /// formula or per draw).
+        static var builtForTesting = 0
+        #endif
+
+        private struct Key: Hashable {
+            let font: NSFont
+            let style: Int
+            let color: NSColor
+        }
+
+        static func scratch(for underline: LinkUnderline) -> UnderlineScratch {
+            let key = Key(font: underline.font, style: underline.style, color: underline.color)
+            if let hit = cache[key] { return hit }
+            if cache.count >= limit { cache.removeAll() }
+            let made = UnderlineScratch(underline)
+            cache[key] = made
+            return made
+        }
+
+        private init(_ underline: LinkUnderline) {
+            let space = "\u{00A0}"
+            let advance = (space as NSString).size(withAttributes: [.font: underline.font]).width
+            storage = NSTextStorage(string: space, attributes: [
+                .font: underline.font, .foregroundColor: underline.color, .underlineStyle: underline.style,
+                .kern: Self.width - advance,
+            ])
+            layoutManager = NSLayoutManager()
+            let container = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                                         height: CGFloat.greatestFiniteMagnitude))
+            container.lineFragmentPadding = 0
+            layoutManager.addTextContainer(container)
+            storage.addLayoutManager(layoutManager)
+            layoutManager.ensureLayout(for: container)
+            baseline = layoutManager.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).minY
+                + layoutManager.location(forGlyphAt: 0).y
+            #if DEBUG
+            Self.builtForTesting += 1
+            #endif
+        }
+    }
+
+    #if DEBUG
+    /// Tests: how many underline scratch stacks were built (`UnderlineScratch`).
+    static var underlineScratchesBuiltForTesting: Int { UnderlineScratch.builtForTesting }
+    #endif
 
     /// Every linked formula's underline among `glyphRange`, drawn by a
     /// layout manager after its glyphs (`DocumentSelectionLayoutManager`):
@@ -1028,19 +1083,20 @@ final class FittingMathAttachment: NSTextAttachment {
             for index in range.location..<NSMaxRange(range) {
                 let glyph = layoutManager.glyphIndexForCharacter(at: index)
                 guard glyph < layoutManager.numberOfGlyphs else { continue }
+                // The size layout gave it. The source box underlines its own
+                // text: skip it before any geometry.
+                let size = layoutManager.attachmentSize(forGlyphAt: glyph)
+                guard size.width > 0, !formula.showsSource(laidOutAs: size) else { continue }
                 let fragment = layoutManager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
                 let used = layoutManager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil)
                 // An attachment glyph's location is its box's bottom-left
-                // corner (not the baseline, as for a character).
+                // corner (not the baseline, as for a character); a typeset
+                // box is centred on the cap height (`bounds(for:)`).
                 let location = layoutManager.location(forGlyphAt: glyph)
-                // The bounds layout gave it on this line: the same call.
-                let bounds = formula.attachmentBounds(
-                    for: layoutManager.textContainer(forGlyphAt: glyph, effectiveRange: nil),
-                    proposedLineFragment: fragment, glyphPosition: location, characterIndex: index)
                 let bottom = origin.y + fragment.minY + location.y
-                let frame = CGRect(x: origin.x + fragment.minX + location.x, y: bottom - bounds.height,
-                                   width: bounds.width, height: bounds.height)
-                formula.drawLinkUnderline(frame: frame, baseline: bottom + bounds.minY,
+                let frame = CGRect(x: origin.x + fragment.minX + location.x, y: bottom - size.height,
+                                   width: size.width, height: size.height)
+                formula.drawLinkUnderline(frame: frame, baseline: bottom + (formula.capHeight - size.height) / 2,
                                           lineBottom: origin.y + used.maxY)
             }
         }

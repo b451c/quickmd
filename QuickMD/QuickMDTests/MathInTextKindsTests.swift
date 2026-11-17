@@ -1229,6 +1229,33 @@ final class MathInTextKindsTests: XCTestCase {
         }
     }
 
+    /// The underline's cost does not grow with the formulas drawn: a
+    /// 40-row table with a linked formula in every cell, drawn twice, builds
+    /// at most ONE scratch stack (one font, style and colour) — never one
+    /// per formula or per draw. And every formula is still underlined.
+    @MainActor
+    func testLinkedFormulaUnderlinesCostOneMeasurementPerFont() {
+        // Text beside each formula: its underline is AppKit's (the scratch).
+        let rows = (1...40).map { _ in "| see [$x$](https://e.com) here |" }.joined(separator: "\n")
+        let blocks = parse("| A |\n|---|\n" + rows)
+        let measured = measure(blocks, math: paintingEngine(filled: 0.5))
+        guard let string = measured.tables[blocks[0].id]?.string else { return XCTFail("no table") }
+        let before = FittingMathAttachment.underlineScratchesBuiltForTesting
+        let first = DrawnText(string, width: 600, scale: 2, theme: theme)
+        _ = DrawnText(string, width: 600, scale: 1, theme: theme)
+        XCTAssertLessThanOrEqual(FittingMathAttachment.underlineScratchesBuiltForTesting - before, 1)
+        XCTAssertGreaterThanOrEqual(FittingMathAttachment.underlineScratchesBuiltForTesting, 1,
+                                    "the text underline path was taken")
+        let formulas = first.formulaRects()
+        XCTAssertEqual(formulas.count, 40)
+        for formula in formulas {
+            let under = first.rows(in: (formula.minX + 1)...(formula.maxX - 1), below: formula.midY) {
+                self.role($0) == "link"
+            }
+            XCTAssertFalse(under.isEmpty, "every formula is underlined")
+        }
+    }
+
     /// `string` laid out and drawn as a document row draws it: a text view
     /// with `DocumentSelectionLayoutManager`, the light appearance, into a
     /// bitmap at `scale` pixels per point.
