@@ -436,6 +436,298 @@ final class ListContentTests: XCTestCase {
         XCTAssertEqual(MarkdownRenderer.printedListIndent(0), 0)
     }
 
+    // MARK: - Numbering (#61): the first item's number starts the list
+
+    /// Every list item's displayed marker, in document order, read from the
+    /// rendered strings: the number of an ordered item, `•` for a bullet,
+    /// `☐`/`☑` for a task. A deeper level opens `[`, a shallower one closes
+    /// `]` — `1 [1 2] 2` is two items with two nested under the first.
+    /// Brackets count distinct levels as seen (a stack), so a 4-space nest
+    /// that the 2-column model draws two levels deeper is still one `[`.
+    /// Lists that follow each other ("‖" in the spec) simply read on.
+    private func markers(_ markdown: String) throws -> String {
+        var out: [String] = []
+        var levels: [Int] = []
+        for block in parse(markdown) {
+            for paragraph in try paragraphs(block) where paragraph.style != nil {
+                let text = paragraph.text
+                let spaces = text.prefix(while: { $0 == " " })
+                let rest = text.dropFirst(spaces.count)
+                let marker: String
+                if let first = rest.first, "•☐☑".contains(first) {
+                    marker = String(first)
+                } else if let dot = rest.firstIndex(of: "."), !rest[..<dot].isEmpty,
+                          rest[..<dot].allSatisfy(\.isNumber), rest[dot...].hasPrefix(". ") {
+                    marker = String(rest[..<dot])
+                } else {
+                    continue    // a later paragraph of an item
+                }
+                let level = spaces.count / 4
+                while let top = levels.last, top > level, levels.count > 1 { out.append("]"); levels.removeLast() }
+                if let top = levels.last, level > top { out.append("["); levels.append(level) }
+                if levels.isEmpty { levels.append(level) }
+                out.append(marker)
+            }
+        }
+        out.append(contentsOf: repeatElement("]", count: max(0, levels.count - 1)))
+        return out.joined(separator: " ")
+            .replacingOccurrences(of: "[ ", with: "[").replacingOccurrences(of: " ]", with: "]")
+    }
+
+    /// The text x (`headIndent`) of every ordered item paragraph, in order.
+    private func orderedHangs(_ markdown: String) throws -> [CGFloat] {
+        try parse(markdown).flatMap { try paragraphs($0) }
+            .filter { $0.style != nil && $0.text.drop(while: { $0 == " " }).first?.isNumber == true }
+            .map { try XCTUnwrap($0.style?.headIndent) }
+    }
+
+    /// GitHub (`gh api markdown -f mode=gfm`, 2026-11-17): `<ol>` with
+    /// `start` = the first item's number and every later `<li>` one more.
+    func testOrderedItemsCountUpFromTheFirstNumber() throws {
+        // <ol><li>One</li><li>Two</li><li>Three</li></ol>
+        XCTAssertEqual(try markers("1. One\n1. Two\n1. Three"), "1 2 3")
+        // <ol start="5"><li>new list</li><li>starts here</li></ol> (the #61 report)
+        XCTAssertEqual(try markers("  5.  new list\n  8.  starts here"), "5 6")
+        // <ol start="0"><li>zero</li><li>again</li><li>x</li></ol>
+        XCTAssertEqual(try markers("0. zero\n0. again\n5. x"), "0 1 2")
+        // <ol start="3"><li>c</li><li>b</li><li>a</li></ol>
+        XCTAssertEqual(try markers("3. c\n2. b\n1. a"), "3 4 5")
+        // <ol start="10"><li>a</li><li>b</li><li>c</li></ol>
+        XCTAssertEqual(try markers("10. a\n1. b\n1. c"), "10 11 12")
+        // <ol start="7"><li>a</li><li>b</li></ol> — leading zeros drop
+        XCTAssertEqual(try markers("007. a\n1. b"), "7 8")
+        // <ol start="999999999"><li>a</li><li>b</li></ol>
+        XCTAssertEqual(try markers("999999999. a\n1. b"), "999999999 1000000000")
+        // <ol><li>a</li><li>b</li><li>c</li></ol> — `)` is drawn as `.`
+        XCTAssertEqual(try markers("1) a\n1) b\n1) c"), "1 2 3")
+        XCTAssertEqual(try parse("1) a\n1) b").flatMap { try paragraphs($0) }.map(\.text), ["1. a", "2. b"])
+        // <ol><li>Intro</li><li>The year</li></ol>
+        XCTAssertEqual(try markers("1. Intro\n1986. The year"), "1 2")
+    }
+
+    /// D3 (a): the other delimiter starts a new list.
+    /// GitHub: `<ol><li>a</li><li>b</li></ol><ol start="3"><li>c</li><li>d</li></ol>`
+    /// and `<ol><li>a</li><li>b</li></ol><ol><li>c</li><li>d</li></ol>`.
+    func testTheOtherDelimiterStartsANewList() throws {
+        XCTAssertEqual(try markers("1. a\n2. b\n3) c\n4) d"), "1 2 3 4")
+        XCTAssertEqual(try markers("1. a\n1. b\n1) c\n1) d"), "1 2 1 2")
+        // Its own hang too: "8. 9. 10." hang under "10. ", the new "1." under itself.
+        let hangs = try orderedHangs("8. a\n8. b\n8. c\n1) d")
+        XCTAssertEqual(hangs.count, 4)
+        XCTAssertEqual(Set(hangs[0..<3]).count, 1, "\(hangs)")
+        XCTAssertLessThan(hangs[3], hangs[0], "a new list: \(hangs)")
+    }
+
+    /// Nested lists count on their own.
+    func testNestedListsCountOnTheirOwn() throws {
+        // <ol><li>a<ol><li>a1</li><li>a2</li></ol></li><li>b<ol><li>b1</li></ol></li></ol>
+        XCTAssertEqual(try markers("1. a\n   1. a1\n   1. a2\n1. b\n   1. b1"), "1 [1 2] 2 [1]")
+        // <ol><li>a<ol><li>x</li><li>y</li></ol></li><li>b</li></ol>
+        XCTAssertEqual(try markers("1. a\n    1. x\n    1. y\n1. b"), "1 [1 2] 2")
+        // <ol><li>a<ol><li>x<ol><li>p</li><li>q</li></ol></li><li>y</li></ol></li><li>b</li></ol>
+        XCTAssertEqual(try markers("1. a\n   1. x\n      1. p\n      1. q\n   1. y\n1. b"), "1 [1 [1 2] 2] 2")
+    }
+
+    /// What ends a list restarts the count; what an item holds does not.
+    func testWhatEndsAListAndWhatKeepsItGoing() throws {
+        // <ol><li>a</li><li>b</li></ol><p>para</p><ol><li>c</li><li>d</li></ol>
+        XCTAssertEqual(try markers("1. a\n1. b\n\npara\n\n1. c\n1. d"), "1 2 1 2")
+        // <ol start="8">…</ol><p>para</p><ol start="8">…</ol>
+        XCTAssertEqual(try markers("8. a\n8. b\n\npara\n\n8. c\n8. d"), "8 9 8 9")
+        // <ol><li>a</li></ol><ul><li>x</li></ul><ol><li>b</li></ol>
+        XCTAssertEqual(try markers("1. a\n- x\n1. b"), "1 • 1")
+        // <ol><li><p>a</p></li><li><p>b</p></li><li><p>c</p></li></ol>
+        XCTAssertEqual(try markers("1. a\n\n1. b\n\n1. c"), "1 2 3")
+        // <ol><li><p>a</p></li><li><p>b</p></li></ol>
+        XCTAssertEqual(try markers("1. a\n\n\n1. b"), "1 2")
+        // <ol><li><p>Step one</p><pre><code>code</code></pre></li><li><p>Step two</p><pre>…</li><li><p>Step three</p></li></ol>
+        XCTAssertEqual(try markers("1. Step one\n\n       code\n\n1. Step two\n\n       more\n\n1. Step three"), "1 2 3")
+        // <ol><li><p>a</p><pre><code>code</code></pre></li><li><p>b</p></li></ol>
+        XCTAssertEqual(try markers("1. a\n\n   ```\n   code\n   ```\n\n1. b"), "1 2")
+        // <ol><li>a</li></ol><pre><code>code</code></pre><ol><li>b</li></ol>
+        XCTAssertEqual(try markers("1. a\n\n```\ncode\n```\n\n1. b"), "1 1")
+        // heading / rule / table / image / quote at the margin: `<ol><li>a</li></ol>…<ol><li>b</li></ol>`
+        for between in ["# H", "---", "| h |\n|---|\n| c |", "![x](y.png)", "> q"] {
+            XCTAssertEqual(try markers("1. a\n\n\(between)\n\n1. b"), "1 1", between)
+        }
+        // <ol><li><p>a</p><blockquote><p>q</p></blockquote></li><li><p>b</p></li></ol>
+        XCTAssertEqual(try markers("1. a\n\n   > q\n\n1. b"), "1 2")
+        // <ol><li><p>a</p><p>para</p><ul><li>x</li></ul></li><li><p>b</p></li></ol>
+        XCTAssertEqual(try markers("1. a\n\n   para\n\n   - x\n\n1. b"), "1 [•] 2")
+        // <ol><li>a<br>lazy</li><li>b</li></ol>
+        XCTAssertEqual(try markers("1. a\nlazy\n1. b"), "1 2")
+        // ParserTests' picture case: `10. ten` after an item-owned picture is item 3.
+        XCTAssertEqual(try markers("1. one\n2. two\n\n   ![b](b.png)\n\n10. ten"), "1 2 3")
+    }
+
+    /// D3 (b): a line after a hard break in an item is the item's even at
+    /// the margin, so the list goes on — number and hang.
+    /// GitHub: `<ol><li>a<br>more</li><li>b</li></ol>`.
+    func testALineAfterAHardBreakKeepsTheListGoing() throws {
+        XCTAssertEqual(try markers("1. a  \nmore\n1. b"), "1 2")
+        XCTAssertEqual(try markers("1. a\\\nmore\n1. b"), "1 2")
+        let hangs = try orderedHangs("9. a  \nmore\n9. b")
+        XCTAssertEqual(try markers("9. a  \nmore\n9. b"), "9 10")
+        XCTAssertEqual(hangs.count, 2)
+        XCTAssertEqual(hangs[0], hangs[1], accuracy: 0.01, "one list hangs under \"10. \"")
+        // Nested: the line is the nested item's, both levels go on.
+        XCTAssertEqual(try markers("1. a\n   1. x  \nmore\n   1. y\n1. b"), "1 [1 2] 2")
+    }
+
+    /// Ownership, not indentation, keeps a list going past a line that is not
+    /// an item: a paragraph or fence indented short of the item's content
+    /// column is not the item's, so the list ends there and the next item
+    /// starts a new one — number and hang. GitHub (`gh api markdown`, 2026-11-17):
+    func testOnlyWhatAnItemOwnsKeepsTheListGoing() throws {
+        // <ol><li>a</li></ol><p>para</p><ol><li>b</li></ol>
+        XCTAssertEqual(try markers("1. a\n\n  para\n\n1. b"), "1 1")
+        // <ol start="8"><li>a</li></ol><p>para</p><ol start="8"><li>b</li></ol>
+        XCTAssertEqual(try markers("8. a\n\n  para\n\n8. b"), "8 8")
+        // <ol start="10"><li>a</li></ol><p>para</p><ol><li>b</li></ol>
+        XCTAssertEqual(try markers("10. a\n\n   para\n\n1. b"), "10 1")
+        let hangs = try orderedHangs("10. a\n\n   para\n\n1. b")
+        XCTAssertEqual(hangs.count, 2)
+        XCTAssertGreaterThan(hangs[0], hangs[1], "two lists, two hangs")
+        // <ol><li>a</li><li>b</li></ol><p>para</p><ol><li>c</li></ol>
+        XCTAssertEqual(try markers("1. a\n1. b\n\n  para\n1. c"), "1 2 1")
+        // A fence at 2 columns is not the item's:
+        // <ol><li>a</li></ol><pre><code>code</code></pre><ol><li>b</li></ol>
+        XCTAssertEqual(try markers("1. a\n\n  ```\n  code\n  ```\n\n1. b"), "1 1")
+        // … at the content column it is: <ol><li><p>a</p><pre><code>code</code></pre></li><li><p>b</p></li></ol>
+        XCTAssertEqual(try markers("1. a\n\n   ```\n   code\n   ```\n\n1. b"), "1 2")
+        // A paragraph at the content column after a blank line is the item's:
+        // <ol><li><p>a</p><p>para</p></li><li><p>b</p></li></ol>
+        XCTAssertEqual(try markers("1. a\n\n   para\n\n1. b"), "1 2")
+        // The same under a nested bullet, at the ordered item's content column:
+        // <ul><li>x<ol><li><p>a</p><p>para</p></li><li><p>b</p></li></ol></li></ul>
+        XCTAssertEqual(try markers("- x\n  1. a\n\n     para\n\n  1. b"), "• [1 2]")
+        // … and short of it, the bullet's paragraph:
+        // <ul><li><p>x</p><ol><li>a</li></ol><p>para</p><ol><li>b</li></ol></li></ul>
+        XCTAssertEqual(try markers("- x\n  1. a\n\n    para\n\n  1. b"), "• [1 1]")
+        // A rule inside an item (a text-row line, not a paragraph) is the item's:
+        // <ol><li><p>a</p><hr></li><li><p>b</p></li></ol>
+        XCTAssertEqual(try markers("1. a\n\n   ---\n\n1. b"), "1 2")
+    }
+
+    /// Only ASCII digits make an ordered marker. GitHub: `<p>١. a<br>١. b</p>`.
+    func testNonASCIIDigitsAreNoMarker() {
+        XCTAssertEqual(shape(parse("١. a\n١. b")), ["T:١. a ١. b"])
+        XCTAssertFalse(MarkdownRenderer.isListItem("١. a"))
+        XCTAssertFalse(MarkdownRenderer.canInterruptParagraph("١. a"))
+    }
+
+    /// A numbered line after paragraph text is still text unless it is 1.
+    /// GitHub: `<p>text<br>2. b<br>3. c</p>` and `<p>text</p><ol><li>a</li><li>b</li></ol>`.
+    func testParagraphTextBeforeANumberedLine() throws {
+        XCTAssertEqual(shape(parse("text\n2. b\n3. c")), ["T:text 2. b 3. c"])
+        XCTAssertEqual(try markers("text\n1. a\n1. b"), "1 2")
+        XCTAssertEqual(shape(parse("text\n1. a\n1. b")), ["T:text", "T:1. a\n2. b"])
+    }
+
+    /// D4: the hang is the widest DISPLAYED marker. Twelve `1.` items show
+    /// 1 … 12 and all hang under "12. ".
+    func testTwelveOnesShareOneTextEdge() throws {
+        let markdown = (1...12).map { "1. item \($0)" }.joined(separator: "\n")
+        XCTAssertEqual(try markers(markdown), (1...12).map(String.init).joined(separator: " "))
+        let hangs = try orderedHangs(markdown)
+        XCTAssertEqual(hangs.count, 12)
+        XCTAssertEqual(Set(hangs).count, 1, "\(hangs)")
+        // The text edge is the gutter plus the widest of the DRAWN markers
+        // "1. " … "12. " (digits are proportional: not always "12. ").
+        func width(_ s: String) -> CGFloat {
+            (s as NSString).size(withAttributes: [.font: theme.fonts.appKit(size: 14)]).width
+        }
+        let widest = (1...12).map { width("\($0). ") }.max()!
+        let single = try orderedHangs("1. a")[0]    // gutter + "1. "
+        XCTAssertEqual(hangs[0] - single, widest - width("1. "), accuracy: 0.01)
+    }
+
+    /// A loose list longer than a text row (`textChunkLineLimit`): the count
+    /// goes on across the rows. And 5 000 items: the numbers, not the clock.
+    func testALongListCountsAcrossRows() throws {
+        let loose = (1...40).map { "1. item \($0)" }.joined(separator: "\n\n")
+        XCTAssertEqual(try markers(loose), (1...40).map(String.init).joined(separator: " "))
+        let long = String(repeating: "1. item\n", count: 5_000)
+        XCTAssertEqual(try markers(long), (1...5_000).map(String.init).joined(separator: " "))
+    }
+
+    /// Kept deviations from GitHub (the pre-existing nesting model: a level
+    /// is 2 columns; quotes, alerts and footnotes draw list lines literally).
+    func testKnownDeviationsFromGitHub() throws {
+        // GitHub 1 2 3 (`<ol><li>a</li><li>b</li><li>c</li></ol>`); QuickMD nests at 2 columns.
+        XCTAssertEqual(try markers("1. a\n 1. b\n  1. c"), "1 2 [1]")
+        // GitHub 1 2 3 4; QuickMD draws 2 columns under `1.` nested, as their own list.
+        XCTAssertEqual(try markers("1. a\n  1. b\n  1. c\n1. d"), "1 [1 2] 2")
+        // GitHub `<ol start="2"><li>a<br>5. x<br>5. y</li><li>b</li></ol>`; QuickMD nests them.
+        XCTAssertEqual(try markers("2. a\n   5. x\n   5. y\n3. b"), "2 [5 6] 3")
+        // GitHub draws checkboxes (`<li><input type="checkbox" disabled=""> a</li>…<li>c</li>`);
+        // QuickMD's task items are bullets only, so these stay ordered items with literal text.
+        let task = try parse("1. [ ] a\n1. [x] b\n1. c").flatMap { try paragraphs($0) }.map(\.text)
+        XCTAssertEqual(task, ["1. [ ] a", "2. [x] b", "3. c"])
+        // GitHub `<ul><li>a<br>3. x<br>3. y</li><li>b<br>3. z</li></ul>` (a nested
+        // list may interrupt the item's paragraph only when it starts at 1);
+        // QuickMD draws nested ordered items counting from 3.
+        XCTAssertEqual(try markers("- a\n  3. x\n  3. y\n- b\n  3. z"), "• [3 4] • [3]")
+        // A bullet short of the ordered item's content column is drawn
+        // nested (a level is 2 columns), so it counts as nested and the
+        // list goes on. GitHub: `<ol><li>a</li></ol><ul><li>x</li></ul><ol><li>b</li></ol>`
+        // and `<ol start="10"><li>a</li></ol><ul><li>x</li></ul><ol start="10"><li>b</li></ol>`.
+        XCTAssertEqual(try markers("1. a\n  - x\n1. b"), "1 [•] 2")
+        XCTAssertEqual(try markers("10. a\n   - x\n10. b"), "10 [•] 11")
+        // GitHub `<blockquote><ol start="7">…`; QuickMD keeps a quote's lines literal.
+        guard case .blockquote(let quote, _) = try XCTUnwrap(parse("> 7. a\n> 7. b").first).content
+        else { return XCTFail("quote") }
+        let shown = String(MarkdownRenderer(theme: theme).renderQuotedBody(quote).characters)
+        XCTAssertEqual(shown.components(separatedBy: "7. ").count - 1, 2, shown)
+        XCTAssertFalse(shown.contains("8."), shown)
+    }
+
+    // MARK: - Thematic breaks with spaces
+
+    /// The block list with every drawn rule as `HR`.
+    private func ruleShape(_ markdown: String) -> [String] {
+        shape(parse(markdown)).map { $0.replacingOccurrences(of: String(repeating: "─", count: 32), with: "HR") }
+    }
+
+    /// Three or more of ONE of `*`, `-`, `_`, with spaces or tabs between
+    /// them, are a rule — before any list reading. GitHub (`gh api markdown`,
+    /// 2026-11-17): `<hr>` for each of these.
+    func testARuleMayHaveSpacesBetweenItsCharacters() {
+        for rule in ["* * *", "- - -", "_ _ _", " ***", "**  **", "- - - -", "_\t_\t_"] {
+            XCTAssertEqual(ruleShape(rule), ["T:HR"], rule.debugDescription)
+            XCTAssertTrue(MarkdownRenderer.isThematicBreak(rule), rule.debugDescription)
+            XCTAssertFalse(MarkdownRenderer.isListItem(rule), rule.debugDescription)
+        }
+        // <p><em>-</em></p> and <p>***a</p>: no rule.
+        XCTAssertFalse(MarkdownRenderer.isThematicBreak("*-*"))
+        XCTAssertFalse(MarkdownRenderer.isThematicBreak("***a"))
+        XCTAssertFalse(ruleShape("*-*").contains("T:HR"))
+        XCTAssertEqual(ruleShape("***a"), ["T:***a"])
+        // GitHub draws `- - x` / `* *` as nested empty bullets; QuickMD keeps
+        // its one-line reading of them (a bullet), and never a rule.
+        XCTAssertEqual(ruleShape("- - x"), ["T:• - x"])
+        XCTAssertEqual(ruleShape("* *"), ["T:• *"])
+    }
+
+    /// A spaced rule ends a paragraph or a list like `---` does, and is the
+    /// item's when indented to its content column.
+    func testASpacedRuleBetweenBlocks() throws {
+        // <p>text</p><hr> (not a setext heading: that is `---` only)
+        XCTAssertEqual(ruleShape("text\n- - -"), ["T:text", "T:HR"])
+        // <h2>text</h2>
+        XCTAssertEqual(parse("text\n---").map(\.id).count, 1)
+        guard case .heading(2, _, _) = try XCTUnwrap(parse("text\n---").first).content else { return XCTFail("setext") }
+        // <ol><li>a</li></ol><hr><ol start="2"><li>b</li></ol>
+        XCTAssertEqual(ruleShape("1. a\n* * *\n2. b"), ["T:1. a", "T:HR", "T:2. b"])
+        // <ul><li>a</li></ul><hr><ul><li>b</li></ul>
+        XCTAssertEqual(ruleShape("- a\n- - -\n- b"), ["T:• a", "T:HR", "T:• b"])
+        // <ol><li><p>a</p><hr></li><li><p>b</p></li></ol>: one list
+        XCTAssertEqual(try markers("1. a\n\n   * * *\n\n1. b"), "1 2")
+        // <ol><li>a</li></ol><hr><ol><li>b</li></ol>: two lists
+        XCTAssertEqual(try markers("1. a\n\n* * *\n\n1. b"), "1 1")
+        XCTAssertTrue(ruleShape("1. a\n\n* * *\n\n1. b").contains("T:HR"))
+    }
+
     // MARK: - Content column
 
     func testContentColumnOfAnItem() {
