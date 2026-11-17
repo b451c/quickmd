@@ -79,6 +79,8 @@ struct RecentDocumentsSidebar: View {
 
             if let folder = folders.folder {
                 ScrollView {
+                    // Every row id in this stack comes from `SidebarRowID`;
+                    // a file may be in both sections.
                     LazyVStack(alignment: .leading, spacing: 0) {
                         folderSection(folder)
                         if !store.documents.isEmpty {
@@ -136,9 +138,10 @@ struct RecentDocumentsSidebar: View {
         }
     }
 
-    /// The recent rows, as in the no-folder branch.
+    /// The recent rows, as in the no-folder branch, under the folder's
+    /// list — with ids of their own (`SidebarRowID.recent`).
     private var recentRows: some View {
-        ForEach(store.documents, id: \.absoluteString) { url in
+        ForEach(store.documents, id: \.sidebarRecentRowID) { url in
             DocumentRow(
                 url: url,
                 isCurrent: isCurrent(url),
@@ -165,7 +168,7 @@ struct RecentDocumentsSidebar: View {
                 folderNote(folders.isTruncated ? "This folder is too large to list" : "No Markdown files")
             }
         } else {
-            ForEach(folders.groups) { group in
+            ForEach(folders.groups, id: \.rowID) { group in
                 if !group.relativePath.isEmpty {
                     Text(group.relativePath)
                         .font(.system(size: 10))
@@ -176,7 +179,7 @@ struct RecentDocumentsSidebar: View {
                         .padding(.top, 8)
                         .padding(.bottom, 2)
                 }
-                ForEach(group.files, id: \.absoluteString) { url in
+                ForEach(group.files, id: \.sidebarFolderRowID) { url in
                     FolderFileRow(url: url, isCurrent: isCurrentInFolder(url), theme: theme,
                                   onOpen: { openDocument(url) })
                 }
