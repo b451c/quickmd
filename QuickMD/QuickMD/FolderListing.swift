@@ -1,4 +1,5 @@
 import Foundation
+import CoreServices
 
 // MARK: - Markdown file kind
 
@@ -166,6 +167,48 @@ enum FolderListing {
         let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
         guard trimmed.hasPrefix(base) else { return true }
         return !trimmed.dropFirst(base.count).split(separator: "/").contains { isSkippedName(String($0)) }
+    }
+
+    /// One FSEvents item event: where, and what happened (the stream's
+    /// `kFSEventStreamEventFlag…` bits).
+    struct Change: Equatable, Sendable {
+        let path: String
+        let flags: UInt32
+    }
+
+    /// The flags that can change the listing:
+    /// - an item created, removed or renamed (files appear / vanish);
+    /// - a DIRECTORY's permissions or owner (`ItemChangeOwner` + `ItemIsDir`
+    ///   — what `chmod` / `chown` of a folder delivers, probed on macOS 27:
+    ///   `chmod 000 sub` → `…|ChangeOwner|IsDir` on `sub`, the root
+    ///   included): a folder becomes unreadable or readable again;
+    /// - anything that says "events were lost / look again" (must scan,
+    ///   root changed, dropped, ids wrapped, mount, unmount), and an event
+    ///   with no item flags at all (unknown).
+    /// Not: a content write (`ItemModified`), a FILE's permissions
+    /// (`ChangeOwner` + `IsFile`), xattrs, inode metadata (mtime) or Finder
+    /// info — a busy tree writes those all the time and the listing (names
+    /// only) cannot change.
+    static func isRelevantEventFlags(_ flags: UInt32) -> Bool {
+        let structural = UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRemoved
+                                    | kFSEventStreamEventFlagItemRenamed)
+        let lookAgain = UInt32(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagRootChanged
+                                   | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped
+                                   | kFSEventStreamEventFlagEventIdsWrapped | kFSEventStreamEventFlagMount
+                                   | kFSEventStreamEventFlagUnmount)
+        if flags & (structural | lookAgain) != 0 { return true }
+        if flags & UInt32(kFSEventStreamEventFlagItemChangeOwner) != 0,
+           flags & UInt32(kFSEventStreamEventFlagItemIsDir) != 0 { return true }
+        return flags == 0
+    }
+
+    /// `change` can change the listing of `root` (both spellings of the
+    /// root must agree that it is not under a skipped name; see
+    /// `isRelevantChange(atPath:root:)`). The root's own event (its path IS
+    /// the root) is judged by its flags alone.
+    static func isRelevantChange(_ change: Change, roots: [String]) -> Bool {
+        isRelevantEventFlags(change.flags)
+            && roots.allSatisfy { isRelevantChange(atPath: change.path, root: $0) }
     }
 
     /// `realpath(3)`: the spelling FSEvents reports (`/private/var/…`, where

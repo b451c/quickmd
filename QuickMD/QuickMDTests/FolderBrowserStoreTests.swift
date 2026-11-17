@@ -1,5 +1,6 @@
 import XCTest
 import Combine
+import CoreServices
 
 /// `FolderBrowserStore` (File ▸ Open Folder, #62): open / close / persist /
 /// restore, gone vs unreadable, one scan at a time with one follow-up,
@@ -20,7 +21,13 @@ final class FolderBrowserStoreTests: XCTestCase {
         var restoreAnswer = true
         var restored: [String] = []
         var watched: [String] = []
-        var trigger: (@MainActor ([String]) -> Void)?
+        var trigger: (@MainActor ([FolderListing.Change]) -> Void)?
+
+        /// An event batch: these paths, each with `flags` (default: an item
+        /// created — a change that can alter the listing).
+        func fire(_ paths: [String], flags: UInt32 = UInt32(kFSEventStreamEventFlagItemCreated)) {
+            trigger?(paths.map { FolderListing.Change(path: $0, flags: flags) })
+        }
         weak var token: Token?
         weak var earlierToken: Token?
         // Scan probe.
@@ -257,14 +264,14 @@ final class FolderBrowserStoreTests: XCTestCase {
         let browser = store(world)
         _ = await browser.open(notes)
         world.forced = .unreadable
-        world.trigger?([])
+        world.fire([])
         await settle(browser)
         XCTAssertEqual(browser.folder?.path, path(notes), "kept")
         XCTAssertTrue(browser.isUnreadable)
         XCTAssertEqual(names(browser), ["a.md"], "the last listing stays")
         XCTAssertNotNil(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey))
         world.forced = nil
-        world.trigger?([])
+        world.fire([])
         await settle(browser)
         XCTAssertFalse(browser.isUnreadable, "tried again on the next event")
     }
@@ -309,7 +316,7 @@ final class FolderBrowserStoreTests: XCTestCase {
         XCTAssertFalse(browser.isLoading)
         XCTAssertNotNil(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey))
         world.forced = nil
-        world.trigger?([])
+        world.fire([])
         await settle(browser)
         XCTAssertFalse(browser.isUnreadable)
         XCTAssertEqual(names(browser), ["a.md"])
@@ -340,7 +347,7 @@ final class FolderBrowserStoreTests: XCTestCase {
         let browser = store(world)
         _ = await browser.open(notes)
         try FileManager.default.removeItem(at: notes)
-        world.trigger?([])
+        world.fire([])
         await settle(browser)
         XCTAssertNil(browser.folder)
         XCTAssertTrue(browser.groups.isEmpty)
@@ -358,7 +365,7 @@ final class FolderBrowserStoreTests: XCTestCase {
         try Data("# new\n".utf8).write(to: notes.appendingPathComponent("sub/new.md"))
         try FileManager.default.removeItem(at: notes.appendingPathComponent("a.md"))
         XCTAssertEqual(names(browser), ["a.md", "b.md"], "nothing changes before the event")
-        world.trigger?([FolderAccessBroker.canonicalPath(notes) + "/sub"])
+        world.fire([FolderAccessBroker.canonicalPath(notes) + "/sub"])
         await settle(browser)
         XCTAssertEqual(names(browser), ["b.md", "new.md"])
         XCTAssertEqual(browser.groups.map(\.relativePath), ["", "sub"])
@@ -374,7 +381,7 @@ final class FolderBrowserStoreTests: XCTestCase {
         world.hold = true
         let opening = Task { await browser.open(notes) }
         await until { world.started == 1 && !world.gates.isEmpty }
-        for _ in 0..<10 { world.trigger?([FolderAccessBroker.canonicalPath(notes)]) }
+        for _ in 0..<10 { world.fire([FolderAccessBroker.canonicalPath(notes)]) }
         for _ in 0..<50 { await Task.yield() }
         XCTAssertEqual(world.started, 1, "events while a scan runs start nothing")
         world.release()
@@ -392,15 +399,15 @@ final class FolderBrowserStoreTests: XCTestCase {
         let browser = store(world)
         _ = await browser.open(notes)
         let canonical = FolderAccessBroker.canonicalPath(notes)
-        world.trigger?([canonical + "/.git/objects/ab", canonical + "/node_modules/pkg"])
+        world.fire([canonical + "/.git/objects/ab", canonical + "/node_modules/pkg"])
         await settle(browser)
         XCTAssertEqual(world.started, 1, "a batch only under skipped names is dropped")
         // FSEvents spells the temporary folder `/private/var/…`.
         let real = FolderListing.realPath(canonical)
-        world.trigger?([real + "/.git/index", real + "/docs/node_modules"])
+        world.fire([real + "/.git/index", real + "/docs/node_modules"])
         await settle(browser)
         XCTAssertEqual(world.started, 1, "in the realpath spelling too")
-        world.trigger?([canonical + "/.git", canonical + "/docs"])
+        world.fire([canonical + "/.git", canonical + "/docs"])
         await settle(browser)
         XCTAssertEqual(world.started, 2, "one relevant path is enough")
     }
@@ -412,12 +419,12 @@ final class FolderBrowserStoreTests: XCTestCase {
         _ = await browser.open(notes)
         var changes = 0
         let subscription = browser.objectWillChange.sink { changes += 1 }
-        world.trigger?([])
+        world.fire([])
         await settle(browser)
         XCTAssertEqual(world.started, 2)
         XCTAssertEqual(changes, 0)
         try Data("# b\n".utf8).write(to: notes.appendingPathComponent("b.md"))
-        world.trigger?([])
+        world.fire([])
         await settle(browser)
         XCTAssertGreaterThan(changes, 0, "a changed listing does publish")
         subscription.cancel()
@@ -468,12 +475,43 @@ final class FolderBrowserStoreTests: XCTestCase {
         world.hold = true
         let opening = Task { await browser.open(notes) }
         await until { world.started == 1 && !world.gates.isEmpty }
-        world.trigger?([])
+        world.fire([])
         world.release()
         let result = await opening.value
         XCTAssertEqual(result, .listed)
         XCTAssertEqual(names(browser), ["a.md"], "published before open returned")
         await settle(browser)
+    }
+
+    /// Restored while unreadable, then the folder's permission is fixed:
+    /// the `chmod` event of the ROOT (ChangeOwner + IsDir) lists it again.
+    /// A file's chmod, an xattr or a content write would not have.
+    func testAPermissionChangeOfTheRootListsARestoredUnreadableFolderAgain() async throws {
+        let notes = try folder("Notes", files: ["a.md"])
+        _ = await store(World()).open(notes)
+        let world = World()
+        world.forced = .unreadable
+        let browser = store(world)
+        await browser.restore()
+        await settle(browser)
+        XCTAssertTrue(browser.isUnreadable)
+        world.forced = nil
+        let real = FolderListing.realPath(FolderAccessBroker.canonicalPath(notes))
+        let started = world.started
+        for flags in [kFSEventStreamEventFlagItemChangeOwner | kFSEventStreamEventFlagItemIsFile,
+                      kFSEventStreamEventFlagItemXattrMod | kFSEventStreamEventFlagItemIsDir,
+                      kFSEventStreamEventFlagItemInodeMetaMod | kFSEventStreamEventFlagItemIsDir,
+                      kFSEventStreamEventFlagItemModified | kFSEventStreamEventFlagItemIsFile] {
+            world.fire([real + "/a.md", real], flags: UInt32(flags))
+            await settle(browser)
+        }
+        XCTAssertEqual(world.started, started, "file chmod, xattr, mtime, content write: no scan")
+        XCTAssertTrue(browser.isUnreadable)
+        world.fire([real], flags: UInt32(kFSEventStreamEventFlagItemChangeOwner | kFSEventStreamEventFlagItemIsDir))
+        await settle(browser)
+        XCTAssertEqual(world.started, started + 1)
+        XCTAssertFalse(browser.isUnreadable)
+        XCTAssertEqual(names(browser), ["a.md"])
     }
 
     // MARK: Real watcher
@@ -483,7 +521,7 @@ final class FolderBrowserStoreTests: XCTestCase {
     func testTheTreeWatcherStartsAndStops() {
         weak var released: FolderTreeWatcher?
         do {
-            let watcher = FolderTreeWatcher(root: root) { _ in }
+            let watcher = FolderTreeWatcher(root: root) { (_: [FolderListing.Change]) in }
             XCTAssertNotNil(watcher)
             released = watcher
         }
