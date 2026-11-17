@@ -43,6 +43,8 @@ struct QuickMDApp: App {
             // Replacing .saveItem makes SwiftUI's first menu update leave a
             // blank "NSMenuItem" where Open Recent was; `OpenRecentMenu`
             // (installed in `applicationDidFinishLaunching`) repairs it in place.
+            // It takes the item right after Open… for that blank, so nothing
+            // of ours may sit directly after the system's Open….
             CommandGroup(replacing: .saveItem) {
                 Button("Close") {
                     EditCloseGuard.requestClose(NSApp.keyWindow)

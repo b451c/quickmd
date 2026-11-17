@@ -271,13 +271,41 @@ final class OpenRecentMenuTests: XCTestCase {
         XCTAssertEqual(repair.submenusBuilt, 0)
     }
 
+    func testAFileMenuBuiltDetachedIsRepairedWhenItIsAttached() throws {
+        let tree = makeFileMenu(slot: systemOpenRecent())
+        let repair = makeRepair(for: tree)
+        repair.install()
+        let fileItem = try XCTUnwrap(tree.main.items.first { $0.submenu === tree.file })
+
+        // A new File menu built while detached: its own notifications come
+        // from a menu under nothing and are ignored.
+        let blank = NSMenuItem()
+        let newFile = NSMenu(title: "File")
+        for item in [NSMenuItem(title: "New", action: nil, keyEquivalent: "n"), openItem(), blank, closeItem()] {
+            newFile.addItem(item)
+        }
+        XCTAssertNil(blank.submenu)
+        XCTAssertEqual(repair.submenusBuilt, 0)
+
+        // Attaching it posts a change on the main menu only.
+        fileItem.submenu = newFile
+
+        XCTAssertTrue(newFile.item(at: 2) === blank)
+        XCTAssertEqual(blank.title, OpenRecentMenu.title)
+        XCTAssertTrue(blank.submenu?.delegate === repair)
+        XCTAssertEqual(repair.submenusBuilt, 1)
+    }
+
     func testOneEventBuildsOneSubmenuAndLaterChangesKeepIt() {
         let tree = makeFileMenu(slot: systemOpenRecent())
         let repair = makeRepair(for: tree)
         repair.install()
 
+        // Proves one event builds one submenu. It does not prove the
+        // `isRepairing` guard: with the submenu assigned first, a nested
+        // notification already sees a healthy slot.
         let blank = simulateSwiftUIRebuild(tree.file)
-        XCTAssertEqual(repair.submenusBuilt, 1, "the nested change notifications build nothing")
+        XCTAssertEqual(repair.submenusBuilt, 1, "one event, one submenu")
         let submenu = blank.submenu
 
         // Unrelated later changes in the File menu.

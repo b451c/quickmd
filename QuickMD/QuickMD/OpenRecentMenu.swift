@@ -49,7 +49,9 @@ final class OpenRecentMenu: NSObject, NSMenuDelegate {
     private var isInstalled = false
     /// Set while the repair mutates the slot: setting `title` / `submenu`
     /// posts `NSMenu.didChangeItemNotification` synchronously, which would
-    /// otherwise re-enter and build a second submenu.
+    /// otherwise re-enter. With today's order (submenu first) a nested
+    /// notification already sees a healthy slot; the flag is defence for any
+    /// future order of the three assignments.
     private var isRepairing = false
     /// One icon per extension (a copy sized for the menu; NSWorkspace's
     /// image is shared and must not be resized).
@@ -81,24 +83,40 @@ final class OpenRecentMenu: NSObject, NSMenuDelegate {
                            name: NSMenu.didAddItemNotification, object: nil)
         center.addObserver(self, selector: #selector(menuItemsDidChange(_:)),
                            name: NSMenu.didChangeItemNotification, object: nil)
-        guard let main = mainMenu() else { return }
+        if let main = mainMenu() { repairTopLevelMenus(of: main) }
+    }
+
+    private func repairTopLevelMenus(of main: NSMenu) {
         for case let menu? in main.items.map(\.submenu) {
             repairIfNeeded(in: menu)
         }
     }
 
     /// Every menu in the app posts these (context menus too), so the cheap
-    /// test comes first: only a top-level submenu of the main menu counts.
+    /// test comes first: only the main menu itself or one of its top-level
+    /// submenus counts. A change ON the main menu is what attaching a File
+    /// menu built while detached posts (`fileItem.submenu = newFile`) — the
+    /// only notification such a rebuild would give.
     @objc private func menuItemsDidChange(_ notification: Notification) {
-        guard !isRepairing,
-              let menu = notification.object as? NSMenu,
-              let main = menu.supermenu, main === mainMenu() else { return }
-        repairIfNeeded(in: menu)
+        guard !isRepairing, let menu = notification.object as? NSMenu else { return }
+        if let main = menu.supermenu {
+            guard main === mainMenu() else { return }
+            repairIfNeeded(in: menu)
+        } else if menu === mainMenu() {
+            repairTopLevelMenus(of: menu)
+        }
     }
 
     /// The item right after Open… when it is blank: not a separator, no
     /// submenu, no action, no view. The title is deliberately not tested —
     /// a partly reset item must still be repaired.
+    ///
+    /// Assumption: nothing of ours sits directly after the system's Open….
+    /// A disabled SwiftUI Button there also has no action and no submenu and
+    /// would be taken for the blank. There is deliberately no class check:
+    /// the blank's class is known only for macOS 27.2.1, and a repair that
+    /// silently stops on another macOS is worse than this rule
+    /// (`CommandGroup(after: .newItem)` lands BEFORE Open…).
     static func blankSlot(in menu: NSMenu) -> NSMenuItem? {
         let openDocument = #selector(NSDocumentController.openDocument(_:))
         guard let index = menu.items.firstIndex(where: { $0.action == openDocument }),
