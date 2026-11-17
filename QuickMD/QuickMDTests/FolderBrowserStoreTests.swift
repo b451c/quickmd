@@ -21,12 +21,31 @@ final class FolderBrowserStoreTests: XCTestCase {
         var restoreAnswer = true
         var restored: [String] = []
         var watched: [String] = []
-        var trigger: (@MainActor ([FolderListing.Change]) -> Void)?
+        var trigger: (@MainActor () -> Void)?
+        var roots: [String] = []
+        /// Batches that reached the main actor.
+        var hops = 0
 
         /// An event batch: these paths, each with `flags` (default: an item
-        /// created — a change that can alter the listing).
+        /// created — a change that can alter the listing), judged by the
+        /// REAL batch filter the watcher runs; an empty batch stands for
+        /// "something changed" and goes straight through.
         func fire(_ paths: [String], flags: UInt32 = UInt32(kFSEventStreamEventFlagItemCreated)) {
-            trigger?(paths.map { FolderListing.Change(path: $0, flags: flags) })
+            guard !paths.isEmpty else {
+                hops += 1
+                trigger?()
+                return
+            }
+            let counter = HopCounter()
+            let filter = FolderEventBatchFilter(roots: roots) { counter.add() }
+            let flagList = [FSEventStreamEventFlags](repeating: flags, count: paths.count)
+            flagList.withUnsafeBufferPointer {
+                _ = filter.handle(count: paths.count, paths: paths as CFArray, flags: $0.baseAddress!)
+            }
+            if counter.value > 0 {
+                hops += 1
+                trigger?()
+            }
         }
         weak var token: Token?
         weak var earlierToken: Token?
@@ -81,8 +100,9 @@ final class FolderBrowserStoreTests: XCTestCase {
                 world.restored.append(folder.path)
                 return world.restoreAnswer
             },
-            watch: { folder, onChange in
+            watch: { folder, roots, onChange in
                 world.watched.append(folder.path)
+                world.roots = roots
                 world.trigger = onChange
                 let token = Token()
                 world.token = token
@@ -514,6 +534,84 @@ final class FolderBrowserStoreTests: XCTestCase {
         XCTAssertEqual(names(browser), ["a.md"])
     }
 
+    // MARK: Batch filter (the watcher's queue)
+
+    /// A batch of `count` changes through the real filter, with a counter
+    /// for the hops it would make to the main actor.
+    private func hops(paths: [String], flags: [UInt32], roots: [String]) -> Int {
+        let counter = HopCounter()
+        let filter = FolderEventBatchFilter(roots: roots) { counter.add() }
+        flags.withUnsafeBufferPointer {
+            _ = filter.handle(count: paths.count, paths: paths as CFArray, flags: $0.baseAddress!)
+        }
+        return counter.value
+    }
+
+    private final class HopCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+        func add() { lock.lock(); count += 1; lock.unlock() }
+    }
+
+    /// 10 000 irrelevant changes (an `npm install` under node_modules/, a
+    /// git object write, content writes, file chmods): no hop to the main
+    /// actor, so no scan. One relevant change in the middle: exactly one.
+    func testABatchHopsToTheMainActorOnlyForARelevantChange() async throws {
+        let notes = try folder("Notes", files: ["a.md"])
+        let root = FolderAccessBroker.canonicalPath(notes)
+        let real = FolderListing.realPath(root)
+        let roots = [root, real]
+        let created = UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemIsFile)
+        let written = UInt32(kFSEventStreamEventFlagItemModified | kFSEventStreamEventFlagItemIsFile)
+        let fileChmod = UInt32(kFSEventStreamEventFlagItemChangeOwner | kFSEventStreamEventFlagItemIsFile)
+        var paths: [String] = []
+        var flags: [UInt32] = []
+        for index in 0..<10_000 {
+            switch index % 4 {
+            case 0: paths.append(real + "/node_modules/pkg\(index)/index.js"); flags.append(created)
+            case 1: paths.append(real + "/.git/objects/\(index)"); flags.append(created)
+            case 2: paths.append(real + "/notes\(index).md"); flags.append(written)
+            default: paths.append(real + "/docs/n\(index).md"); flags.append(fileChmod)
+            }
+        }
+        XCTAssertEqual(hops(paths: paths, flags: flags, roots: roots), 0)
+
+        var oneRelevant = paths
+        oneRelevant[5_000] = real + "/docs/new.md"
+        var oneFlags = flags
+        oneFlags[5_000] = created
+        XCTAssertEqual(hops(paths: oneRelevant, flags: oneFlags, roots: roots), 1, "once per batch")
+
+        // Through the store: the irrelevant batch starts no scan.
+        let world = World()
+        let browser = store(world)
+        _ = await browser.open(notes)
+        let started = world.started
+        var hoppedBefore = world.hops
+        for (path, flag) in zip(paths.prefix(200), flags.prefix(200)) { world.fire([path], flags: flag) }
+        await settle(browser)
+        XCTAssertEqual(world.hops, hoppedBefore)
+        XCTAssertEqual(world.started, started)
+        hoppedBefore = world.hops
+        world.fire([real + "/docs/new.md"], flags: created)
+        await settle(browser)
+        XCTAssertEqual(world.hops, hoppedBefore + 1)
+        XCTAssertEqual(world.started, started + 1)
+    }
+
+    /// A stopped filter (the watcher released) calls nothing.
+    func testAStoppedBatchFilterCallsNothing() {
+        let counter = HopCounter()
+        let filter = FolderEventBatchFilter(roots: ["/r"]) { counter.add() }
+        filter.stop()
+        let flags = [UInt32(kFSEventStreamEventFlagItemCreated)]
+        flags.withUnsafeBufferPointer {
+            _ = filter.handle(count: 1, paths: ["/r/a.md"] as CFArray, flags: $0.baseAddress!)
+        }
+        XCTAssertEqual(counter.value, 0)
+    }
+
     // MARK: Real watcher
 
     /// The real watcher starts on a folder and stops when released (no event
@@ -521,7 +619,7 @@ final class FolderBrowserStoreTests: XCTestCase {
     func testTheTreeWatcherStartsAndStops() {
         weak var released: FolderTreeWatcher?
         do {
-            let watcher = FolderTreeWatcher(root: root) { (_: [FolderListing.Change]) in }
+            let watcher = FolderTreeWatcher(root: root, roots: [root.path]) {}
             XCTAssertNotNil(watcher)
             released = watcher
         }

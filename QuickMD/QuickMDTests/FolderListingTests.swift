@@ -262,6 +262,49 @@ final class FolderListingTests: XCTestCase {
                                                       roots: [root, real]))
     }
 
+    /// The watcher's allocation-free byte rule (`ChangeFilter`) decides
+    /// exactly as the String reference `isRelevantChange(_:roots:)`, over
+    /// generated paths: both root spellings, inside / outside / the root
+    /// itself, trailing slashes, double slashes, dot names, `node_modules`
+    /// and look-alikes, non-ASCII (NFC and NFD, a dot plus a combining mark),
+    /// every flag kind.
+    func testTheByteRuleAgreesWithTheReferenceRule() {
+        let roots = ["/var/f/Notes", "/private/var/f/Notes"]
+        let filter = FolderListing.ChangeFilter(roots: roots)
+        let prefixes = ["/var/f/Notes", "/private/var/f/Notes", "/var/f/Notes2", "/var/f", "/elsewhere", "/"]
+        let components = ["", "docs", ".git", "node_modules", "node_modules2", "xnode_modules", ".", "..",
+                          "\u{E9}t\u{E9}", "e\u{301}te", ".\u{301}x", "a b", "Node_Modules", "\u{1F600}", "notes.md"]
+        let flagKinds: [UInt32] = [
+            UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemIsFile),
+            UInt32(kFSEventStreamEventFlagItemChangeOwner | kFSEventStreamEventFlagItemIsDir),
+            UInt32(kFSEventStreamEventFlagItemChangeOwner | kFSEventStreamEventFlagItemIsFile),
+            UInt32(kFSEventStreamEventFlagItemModified | kFSEventStreamEventFlagItemIsFile),
+            0,
+        ]
+        var checked = 0
+        for prefix in prefixes {
+            for first in components {
+                for second in components {
+                    for tail in ["", "/", "//"] {
+                        var path = prefix
+                        if !first.isEmpty { path += "/" + first }
+                        if !second.isEmpty { path += "/" + second }
+                        path += tail
+                        for flags in flagKinds {
+                            let reference = FolderListing.isRelevantChange(.init(path: path, flags: flags), roots: roots)
+                            let bytes = Array(path.utf8)
+                            let fast = bytes.withUnsafeBufferPointer { filter.isRelevant(flags: flags, path: $0) }
+                            XCTAssertEqual(fast, reference, "\(path) flags \(String(flags, radix: 16))")
+                            checked += 1
+                        }
+                    }
+                }
+            }
+        }
+        XCTAssertGreaterThan(checked, 3_000)
+        XCTAssertTrue(FolderListing.isSkippedName(".\u{301}x"), "a leading dot BYTE, as the byte rule")
+    }
+
     /// The file cap still cuts in display order.
     func testTheFileCapCutsInDisplayOrder() throws {
         try make("r1.md", "r2.md", "a/m1.md", "a/m2.md", "b/n.md")

@@ -153,8 +153,21 @@ enum FolderListing {
 
     /// The NAME part of the skip rule: hidden by a leading dot, or a folder
     /// nobody reads (`node_modules`). Shared by the scan and the watcher.
+    /// Decided on the UTF-8 BYTES (a leading 0x2E; byte equality with
+    /// `node_modules`), so the watcher's allocation-free byte rule
+    /// (`ChangeFilter`) is exactly this rule — `String.hasPrefix` would
+    /// compare graphemes (".\u{301}x" does not start with ".").
     static func isSkippedName(_ name: String) -> Bool {
-        name.hasPrefix(".") || skippedFolderNames.contains(name)
+        isSkippedName(utf8: name.utf8)
+    }
+
+    private static let nodeModulesUTF8 = Array("node_modules".utf8)
+    private static let dotByte = UInt8(ascii: ".")
+    private static let slashByte = UInt8(ascii: "/")
+
+    static func isSkippedName<Bytes: Collection>(utf8 name: Bytes) -> Bool where Bytes.Element == UInt8 {
+        guard let first = name.first else { return false }
+        return first == dotByte || name.elementsEqual(nodeModulesUTF8)
     }
 
     /// A change at `path` (as FSEvents reports it) can change the listing of
@@ -162,11 +175,56 @@ enum FolderListing {
     /// path below the root is a skipped name (`.git/objects/ab`,
     /// `node_modules/x`). Paths outside the root (the root itself moved)
     /// count as relevant.
+    /// The reference form of the watcher's path rule (Strings; the watcher
+    /// itself runs `ChangeFilter`, its allocation-free twin — a test proves
+    /// they agree). Byte-wise prefix, like the twin.
     static func isRelevantChange(atPath path: String, root: String) -> Bool {
         let base = root.hasSuffix("/") ? root : root + "/"
-        let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
-        guard trimmed.hasPrefix(base) else { return true }
-        return !trimmed.dropFirst(base.count).split(separator: "/").contains { isSkippedName(String($0)) }
+        var trimmed = Array(path.utf8)
+        if trimmed.last == slashByte { trimmed.removeLast() }
+        guard trimmed.starts(with: base.utf8) else { return true }
+        return !trimmed.dropFirst(base.utf8.count).split(separator: slashByte).contains { isSkippedName(utf8: $0) }
+    }
+
+    /// The watcher's rule for one event, on the stream's own queue and
+    /// without allocating: flags first (an integer test), then the path's
+    /// UTF-8 bytes after each spelling of the root, component by component
+    /// (a leading "." or `node_modules` → not relevant). Exactly
+    /// `isRelevantChange(_:roots:)` (tested over generated paths).
+    struct ChangeFilter: Sendable {
+        /// Each root spelling with one trailing "/".
+        let bases: [[UInt8]]
+
+        init(roots: [String]) {
+            bases = roots.map { Array(($0.hasSuffix("/") ? $0 : $0 + "/").utf8) }
+        }
+
+        func isRelevant(flags: UInt32, path: UnsafeBufferPointer<UInt8>) -> Bool {
+            guard FolderListing.isRelevantEventFlags(flags) else { return false }
+            return bases.allSatisfy { Self.isRelevant(path: path, base: $0) }
+        }
+
+        static func isRelevant(path: UnsafeBufferPointer<UInt8>, base: [UInt8]) -> Bool {
+            var end = path.count
+            if end > 0, path[end - 1] == FolderListing.slashByte { end -= 1 }
+            guard end >= base.count else { return true }
+            for index in 0..<base.count where path[index] != base[index] { return true }
+            var index = base.count
+            while index < end {
+                let start = index
+                while index < end, path[index] != FolderListing.slashByte { index += 1 }
+                let length = index - start
+                if length > 0 {
+                    if path[start] == FolderListing.dotByte { return false }
+                    if length == FolderListing.nodeModulesUTF8.count,
+                       FolderListing.nodeModulesUTF8.indices.allSatisfy({ path[start + $0] == FolderListing.nodeModulesUTF8[$0] }) {
+                        return false
+                    }
+                }
+                index += 1
+            }
+            return true
+        }
     }
 
     /// One FSEvents item event: where, and what happened (the stream's
