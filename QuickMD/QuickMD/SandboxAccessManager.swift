@@ -177,8 +177,8 @@ final class SandboxAccessManager {
             let bookmarkData = try selectedURL.bookmarkData(options: .withSecurityScope)
             let key = Self.bookmarkKey(for: selectedURL)
             UserDefaults.standard.set(bookmarkData, forKey: key)
-            let path = FolderAccessBroker.canonicalPath(selectedURL)
-            if !savedFolders.contains(where: { FolderAccessBroker.canonicalPath($0) == path }) {
+            let keyPath = FolderAccessBroker.bookmarkKeyPath(selectedURL)
+            if !savedFolders.contains(where: { FolderAccessBroker.bookmarkKeyPath($0) == keyPath }) {
                 savedFolders.append(selectedURL)
             }
             if selectedURL.startAccessingSecurityScopedResource() {
@@ -201,6 +201,7 @@ final class SandboxAccessManager {
 
     /// Generate a UserDefaults key for a directory path.
     private static func bookmarkKey(for directoryURL: URL) -> String {
-        return bookmarkKeyPrefix + directoryURL.standardizedFileURL.path
+        // One definition of the key path, shared with the broker's dedupe.
+        return bookmarkKeyPrefix + FolderAccessBroker.bookmarkKeyPath(directoryURL)
     }
 }

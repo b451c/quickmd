@@ -283,16 +283,55 @@ final class FolderAccessBrokerTests: XCTestCase {
         XCTAssertTrue(access.declinedFolders.isEmpty, "its grant clears the decline it covers")
     }
 
-    /// The manager's guard (`saveGrant`): saved AND active, by canonical
-    /// path, any spelling.
-    func testIsActiveGrantNeedsBothSavedAndActive() {
+    /// The manager's guard (`saveGrant`): saved under THIS spelling's key
+    /// AND active (any spelling of the same folder).
+    func testIsActiveGrantNeedsItsOwnKeySavedAndAnActiveAccess() throws {
         let docs = file("docs")
-        let spelledOtherwise = URL(fileURLWithPath: FolderAccessBroker.canonicalPath(docs) + "/badges/..")
-        XCTAssertTrue(FolderAccessBroker.isActiveGrant(docs, saved: [spelledOtherwise], active: [docs]))
+        let alias = file("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: docs)
+        let resolved = URL(fileURLWithPath: FolderAccessBroker.canonicalPath(docs))
+        XCTAssertTrue(FolderAccessBroker.isActiveGrant(docs, saved: [docs], active: [resolved]),
+                      "own key saved; a restored access in the resolved spelling is active")
+        XCTAssertTrue(FolderAccessBroker.isActiveGrant(docs, saved: [file("docs/badges/..")], active: [docs]),
+                      "`..` standardizes to the same key")
+        XCTAssertFalse(FolderAccessBroker.isActiveGrant(alias, saved: [docs], active: [docs]),
+                       "another spelling of a granted folder needs its own key")
         XCTAssertFalse(FolderAccessBroker.isActiveGrant(docs, saved: [docs], active: []), "saved, not active")
         XCTAssertFalse(FolderAccessBroker.isActiveGrant(docs, saved: [], active: [docs]), "active, not saved")
         XCTAssertFalse(FolderAccessBroker.isActiveGrant(file("docs/images"), saved: [docs], active: [docs]),
                        "a subfolder is a different folder")
+    }
+
+    /// Granted under spelling X by the broker's own panel (a picture's
+    /// folder), then chosen as spelling Y (a symlink to it) through Open
+    /// Folder: Y is saved under ITS key — the one `restoreAccess(Y)` looks
+    /// up at relaunch — so the remembered folder comes back with access.
+    /// Y chosen again: no second save.
+    func testAChosenFolderInAnotherSpellingIsSavedUnderItsOwnKey() async throws {
+        let alias = file("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: file("docs"))
+        XCTAssertEqual(FolderAccessBroker.canonicalPath(alias), FolderAccessBroker.canonicalPath(file("docs")))
+        let world = World()
+        world.answer = { $0 }
+        let access = broker(world)
+        let granted = await access.requestAccess(forFileAt: file("docs/badges/a.svg"), documentURL: document,
+                                                 explicit: false)
+        XCTAssertTrue(granted)
+        XCTAssertEqual(world.saves.map(FolderAccessBroker.bookmarkKeyPath), [FolderAccessBroker.bookmarkKeyPath(file("docs"))])
+        XCTAssertTrue(access.registerUserChosenFolder(alias))
+        XCTAssertEqual(world.saves.map(FolderAccessBroker.bookmarkKeyPath),
+                       [FolderAccessBroker.bookmarkKeyPath(file("docs")), FolderAccessBroker.bookmarkKeyPath(alias)],
+                       "saved under the key restore looks up for the chosen spelling")
+        XCTAssertTrue(access.registerUserChosenFolder(alias))
+        XCTAssertTrue(access.registerUserChosenFolder(file("docs")))
+        XCTAssertEqual(world.saves.count, 2, "each spelling once")
+        // A bookmark saved in an earlier launch under Y counts as saved.
+        let later = World()
+        later.saved = [alias]
+        let next = broker(later)
+        _ = await next.requestAccess(forFileAt: file("docs/a.png"), documentURL: document, explicit: false)
+        XCTAssertTrue(next.registerUserChosenFolder(alias))
+        XCTAssertTrue(later.saves.isEmpty, "already under its key from the earlier launch")
     }
 
     /// Unsandboxed (GitHub/Homebrew) the chooser's folder is only a path:

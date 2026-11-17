@@ -66,6 +66,8 @@ final class FolderAccessBroker {
 
     private let environment: Environment
     private(set) var grantedFolders: [String] = []
+    /// Bookmark keys (`bookmarkKeyPath`) this broker saved in this session.
+    private var savedKeyPaths: Set<String> = []
     private(set) var declinedFolders: Set<String> = []
     /// The panel being shown (or about to be): requests wait for it.
     private var pending: Task<Void, Never>?
@@ -100,14 +102,27 @@ final class FolderAccessBroker {
         return path
     }
 
-    /// `folder` already has a saved bookmark AND an active access in this
-    /// process (exact folder, by canonical path): saving it again would only
-    /// add a duplicate entry and an unbalanced
-    /// `startAccessingSecurityScopedResource`. Used by
-    /// `SandboxAccessManager.saveGrant`.
+    /// The path a bookmark of `folder` is stored and looked up under
+    /// (`SandboxAccessManager.bookmarkKey` = prefix + this). EXACT, not
+    /// canonical: `restoreAccess` looks a remembered folder up by the
+    /// spelling it was remembered with (`/tmp/x` and `/private/tmp/x` are two
+    /// keys).
+    nonisolated static func bookmarkKeyPath(_ folder: URL) -> String {
+        folder.standardizedFileURL.path
+    }
+
+    /// `folder` already has a bookmark under ITS OWN key (the exact one a
+    /// later `restoreAccess(folder)` looks up) AND an active access to the
+    /// same folder (by canonical path: a restored bookmark resolves to its
+    /// own spelling). Saving it again would only add a duplicate entry and
+    /// an unbalanced `startAccessingSecurityScopedResource`. Another
+    /// spelling of a granted folder is NOT a repeat: it gets its own key,
+    /// or the folder remembered under it would be forgotten at relaunch.
+    /// Used by `SandboxAccessManager.saveGrant`.
     nonisolated static func isActiveGrant(_ folder: URL, saved: [URL], active: [URL]) -> Bool {
+        let key = bookmarkKeyPath(folder)
         let path = canonicalPath(folder)
-        return saved.contains { canonicalPath($0) == path } && active.contains { canonicalPath($0) == path }
+        return saved.contains { bookmarkKeyPath($0) == key } && active.contains { canonicalPath($0) == path }
     }
 
     /// `folder` is `path` or one of its ancestors.
@@ -153,10 +168,18 @@ final class FolderAccessBroker {
     func registerUserChosenFolder(_ folder: URL) -> Bool {
         guard environment.isSandboxed else { return false }
         let granted = Self.canonicalPath(folder)
-        // Chosen again (Open Folder on the same folder): already granted in
-        // this session — no second bookmark, no second access start.
-        if grantedFolders.contains(granted) { return true }
+        let key = Self.bookmarkKeyPath(folder)
+        // Chosen again IN THE SAME SPELLING: already granted and saved under
+        // the key a restore will look up — no second bookmark, no second
+        // access start. A different spelling of a granted folder is saved
+        // (its own key), or Open Folder's remembered path would find no
+        // bookmark at relaunch.
+        if grantedFolders.contains(granted),
+           savedKeyPaths.contains(key) || environment.savedFolders().contains(where: { Self.bookmarkKeyPath($0) == key }) {
+            return true
+        }
         guard environment.save(folder) else { return false }
+        savedKeyPaths.insert(key)
         if !grantedFolders.contains(granted) { grantedFolders.append(granted) }
         declinedFolders = declinedFolders.filter { !Self.covers(granted, $0) }
         environment.didGrant(folder)
@@ -200,6 +223,7 @@ final class FolderAccessBroker {
                 declinedFolders.insert(Self.canonicalPath(folder))
                 return
             }
+            savedKeyPaths.insert(Self.bookmarkKeyPath(chosen))
             let granted = Self.canonicalPath(chosen)
             grantedFolders.append(granted)
             declinedFolders = declinedFolders.filter { !Self.covers(granted, $0) }
