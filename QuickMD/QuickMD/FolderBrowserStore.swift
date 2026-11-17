@@ -48,10 +48,11 @@ final class FolderBrowserStore: ObservableObject {
         /// Starts access to a remembered folder (sandbox: its bookmark).
         /// False = it cannot be read this launch.
         var restoreAccess: @MainActor (URL) -> Bool
-        /// Watches the tree under the (canonical) root; the token stops it
-        /// when released. The closure gets the batch's changes, on the main
-        /// actor (empty = unknown, treated as relevant).
-        var watch: @MainActor (URL, @escaping @MainActor ([FolderListing.Change]) -> Void) -> AnyObject?
+        /// Watches the tree under the (canonical) root, judging every event
+        /// OFF the main thread against `roots` (both spellings); the closure
+        /// runs on the main actor once per batch that holds a relevant
+        /// change. The token stops it when released.
+        var watch: @MainActor (URL, [String], @escaping @MainActor () -> Void) -> AnyObject?
         /// Lists the root off the main thread; the closure says the scan
         /// was cancelled.
         var scan: @Sendable (URL, @escaping @Sendable () -> Bool) async -> FolderListing.Outcome = { root, cancelled in
@@ -213,8 +214,11 @@ final class FolderBrowserStore: ObservableObject {
         isTruncated = false
         isUnreadable = false
         isLoading = true
-        watcher = environment.watch(root) { [weak self] changes in
-            self?.filesChanged(changes)
+        // A path outside a root counts as relevant, so a path is dropped
+        // when it lies under a skipped name in either spelling of the root.
+        let roots = [root.path, eventRootPath ?? root.path]
+        watcher = environment.watch(root, roots) { [weak self] in
+            self?.refresh()
         }
         dirty = true
         startScanLoopIfNeeded()
@@ -231,16 +235,6 @@ final class FolderBrowserStore: ObservableObject {
         dirty = false
         watcher = nil
         resumeWaiters(.superseded) { _ in true }
-    }
-
-    private func filesChanged(_ changes: [FolderListing.Change]) {
-        guard let root = listingRoot?.path else { return }
-        // A path outside a root counts as relevant, so a path is dropped
-        // when it lies under a skipped name in either spelling of the root.
-        let roots = [root, eventRootPath ?? root]
-        guard changes.isEmpty || changes.contains(where: { FolderListing.isRelevantChange($0, roots: roots) })
-        else { return }
-        refresh()
     }
 
     private func startScanLoopIfNeeded() {
@@ -303,36 +297,107 @@ final class FolderBrowserStore: ObservableObject {
 
 // MARK: - Tree watcher
 
+/// Judges one FSEvents batch on the stream's own queue (`FolderTreeWatcher`)
+/// and calls `onRelevant` ONCE when the batch holds a change that can alter
+/// the listing (`FolderListing.ChangeFilter`), stopping at the first one.
+///
+/// Why off the main thread: item events arrive per FILE — an `npm install`,
+/// `cargo build` or `git checkout` inside the open folder is tens of
+/// thousands of `Created|IsFile` events under `node_modules/` or `target/`
+/// every 0.5 s. Bridging and splitting those on main hitched scrolling and
+/// Source Edit typing (review of bf7c959). Here a batch with nothing
+/// relevant never reaches the main thread; nothing is bridged to Swift
+/// (paths are read as UTF-8 into one reused buffer); flags are tested
+/// before any path is looked at.
+///
+/// Serial-queue only (the buffer); `stop()` may be called from any thread.
+final class FolderEventBatchFilter: @unchecked Sendable {
+    private let filter: FolderListing.ChangeFilter
+    private let onRelevant: @Sendable () -> Void
+    private var buffer = [CChar](repeating: 0, count: 1_024)
+    private let lock = NSLock()
+    private var stopped = false
+
+    init(roots: [String], onRelevant: @escaping @Sendable () -> Void) {
+        filter = FolderListing.ChangeFilter(roots: roots)
+        self.onRelevant = onRelevant
+    }
+
+    /// After this no batch calls `onRelevant` (a batch already past the
+    /// check may still finish: the store's `refresh` tolerates a late one).
+    func stop() {
+        lock.lock(); stopped = true; lock.unlock()
+    }
+
+    private var isStopped: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return stopped
+    }
+
+    /// One batch: `count` events, `paths` a CFArray of CFString
+    /// (`UseCFTypes`), `flags` their flags. True when `onRelevant` was called.
+    @discardableResult
+    func handle(count: Int, paths: CFArray, flags: UnsafePointer<FSEventStreamEventFlags>) -> Bool {
+        guard !isStopped else { return false }
+        let available = min(count, CFArrayGetCount(paths))
+        for index in 0..<available {
+            let eventFlags = flags[index]
+            guard FolderListing.isRelevantEventFlags(eventFlags) else { continue }
+            let path = unsafeBitCast(CFArrayGetValueAtIndex(paths, index), to: CFString.self)
+            if isRelevantPath(path, flags: eventFlags) {
+                onRelevant()
+                return true
+            }
+        }
+        return false
+    }
+
+    private func isRelevantPath(_ path: CFString, flags: UInt32) -> Bool {
+        let utf8 = CFStringBuiltInEncodings.UTF8.rawValue
+        let needed = CFStringGetMaximumSizeForEncoding(CFStringGetLength(path), utf8) + 1
+        if buffer.count < needed { buffer = [CChar](repeating: 0, count: needed) }
+        // An unconvertible path: look again rather than miss a change.
+        guard CFStringGetCString(path, &buffer, buffer.count, utf8) else { return true }
+        return buffer.withUnsafeBufferPointer { chars in
+            guard let start = chars.baseAddress else { return true }
+            let length = strlen(start)
+            return start.withMemoryRebound(to: UInt8.self, capacity: length) {
+                filter.isRelevant(flags: flags, path: UnsafeBufferPointer(start: $0, count: length))
+            }
+        }
+    }
+}
+
 /// One `FSEventStream` over a folder tree: ITEM events (`FileEvents`: a
 /// directory-level stream carries no flags, so a folder's `chmod` could not
 /// be told from a content write) with their paths (`UseCFTypes`), 0.5 s
-/// latency (a save that touches several files is one batch), on the main
-/// queue.
+/// latency (a save that touches several files is one batch), delivered on
+/// a PRIVATE serial utility queue where `FolderEventBatchFilter` judges
+/// them; only a relevant batch hops to the main actor (once).
 /// `kFSEventStreamCreateFlagWatchRoot` also reports the root itself being
 /// moved or deleted, so the re-scan can forget it. Stops when released.
+///
+/// Lifetime: the stream holds the filter UNRETAINED. On release the filter
+/// is stopped, the stream stopped and invalidated (no new callbacks), and
+/// the stream is RELEASED in a block queued on the stream's own serial
+/// queue that also holds the filter: any callback in flight or already
+/// queued runs before that block, so the filter outlives every callback.
+/// Nothing waits on that queue synchronously (no `sync`), so a release from
+/// the main actor never blocks on a busy queue.
 final class FolderTreeWatcher {
-    private final class Handler {
-        let fire: ([FolderListing.Change]) -> Void
-        init(_ fire: @escaping ([FolderListing.Change]) -> Void) { self.fire = fire }
-    }
-
-    private let handler: Handler
+    private let filter: FolderEventBatchFilter
+    private let queue = DispatchQueue(label: "pl.falami.studio.QuickMD.folder-watch", qos: .utility)
     private var stream: FSEventStreamRef?
 
-    init?(root: URL, latency: TimeInterval = 0.5, onChange: @escaping ([FolderListing.Change]) -> Void) {
-        handler = Handler(onChange)
-        // The stream holds the handler unretained: it is invalidated in
-        // deinit, before the handler goes away.
-        var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(handler).toOpaque(),
+    init?(root: URL, roots: [String], latency: TimeInterval = 0.5, onRelevant: @escaping @Sendable () -> Void) {
+        filter = FolderEventBatchFilter(roots: roots, onRelevant: onRelevant)
+        var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(filter).toOpaque(),
                                            retain: nil, release: nil, copyDescription: nil)
         let callback: FSEventStreamCallback = { _, info, count, eventPaths, eventFlags, _ in
             guard let info else { return }
-            // UseCFTypes: the paths are a CFArray of CFString.
-            let paths = (Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as NSArray) as? [String] ?? []
-            let changes = (0..<min(count, paths.count)).map {
-                FolderListing.Change(path: paths[$0], flags: eventFlags[$0])
-            }
-            Unmanaged<Handler>.fromOpaque(info).takeUnretainedValue().fire(changes)
+            let paths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue()
+            Unmanaged<FolderEventBatchFilter>.fromOpaque(info).takeUnretainedValue()
+                .handle(count: count, paths: paths, flags: eventFlags)
         }
         let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagWatchRoot | kFSEventStreamCreateFlagUseCFTypes
                                                  | kFSEventStreamCreateFlagFileEvents)
@@ -341,7 +406,7 @@ final class FolderTreeWatcher {
                                                flags) else {
             return nil
         }
-        FSEventStreamSetDispatchQueue(stream, DispatchQueue.main)
+        FSEventStreamSetDispatchQueue(stream, queue)
         guard FSEventStreamStart(stream) else {
             FSEventStreamInvalidate(stream)
             FSEventStreamRelease(stream)
@@ -351,9 +416,14 @@ final class FolderTreeWatcher {
     }
 
     deinit {
+        filter.stop()
         guard let stream else { return }
         FSEventStreamStop(stream)
         FSEventStreamInvalidate(stream)
-        FSEventStreamRelease(stream)
+        let filter = self.filter
+        queue.async {
+            FSEventStreamRelease(stream)
+            withExtendedLifetime(filter) {}
+        }
     }
 }

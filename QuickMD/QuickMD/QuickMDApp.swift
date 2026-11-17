@@ -133,9 +133,10 @@ extension FolderBrowserStore {
                 // chooser's grant comes back through its bookmark.
                 !SandboxAccessManager.isSandboxed || SandboxAccessManager.shared.restoreAccess(for: folder)
             },
-            watch: { root, onChange in
-                FolderTreeWatcher(root: root) { changes in
-                    Task { @MainActor in onChange(changes) }
+            watch: { root, roots, onChange in
+                // Called on the watcher's queue, once per relevant batch.
+                FolderTreeWatcher(root: root, roots: roots) {
+                    Task { @MainActor in onChange() }
                 }
             }))
     }()

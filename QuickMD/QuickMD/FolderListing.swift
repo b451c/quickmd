@@ -14,6 +14,25 @@ enum MarkdownFileKind {
     static func isMarkdown(_ url: URL) -> Bool {
         extensions.contains(url.pathExtension.lowercased())
     }
+
+    private static let extensionBytes: [[UInt8]] = extensions.map { Array($0.utf8) }
+
+    /// The same test on a file NAME's UTF-8 bytes, without allocating (the
+    /// folder watcher's queue): the bytes after the last "." (not a leading
+    /// one), ASCII case-insensitive.
+    static func isMarkdownName(utf8 name: UnsafeBufferPointer<UInt8>) -> Bool {
+        var dot = name.count - 1
+        while dot > 0, name[dot] != UInt8(ascii: ".") { dot -= 1 }
+        guard dot > 0 else { return false }
+        let length = name.count - dot - 1
+        return extensionBytes.contains { candidate in
+            candidate.count == length && candidate.indices.allSatisfy { index in
+                var byte = name[dot + 1 + index]
+                if byte >= UInt8(ascii: "A"), byte <= UInt8(ascii: "Z") { byte += 32 }
+                return byte == candidate[index]
+            }
+        }
+    }
 }
 
 // MARK: - Sidebar row identity
@@ -153,8 +172,21 @@ enum FolderListing {
 
     /// The NAME part of the skip rule: hidden by a leading dot, or a folder
     /// nobody reads (`node_modules`). Shared by the scan and the watcher.
+    /// Decided on the UTF-8 BYTES (a leading 0x2E; byte equality with
+    /// `node_modules`), so the watcher's allocation-free byte rule
+    /// (`ChangeFilter`) is exactly this rule — `String.hasPrefix` would
+    /// compare graphemes (".\u{301}x" does not start with ".").
     static func isSkippedName(_ name: String) -> Bool {
-        name.hasPrefix(".") || skippedFolderNames.contains(name)
+        isSkippedName(utf8: name.utf8)
+    }
+
+    private static let nodeModulesUTF8 = Array("node_modules".utf8)
+    private static let dotByte = UInt8(ascii: ".")
+    private static let slashByte = UInt8(ascii: "/")
+
+    static func isSkippedName<Bytes: Collection>(utf8 name: Bytes) -> Bool where Bytes.Element == UInt8 {
+        guard let first = name.first else { return false }
+        return first == dotByte || name.elementsEqual(nodeModulesUTF8)
     }
 
     /// A change at `path` (as FSEvents reports it) can change the listing of
@@ -162,11 +194,63 @@ enum FolderListing {
     /// path below the root is a skipped name (`.git/objects/ab`,
     /// `node_modules/x`). Paths outside the root (the root itself moved)
     /// count as relevant.
+    /// The reference form of the watcher's path rule (Strings; the watcher
+    /// itself runs `ChangeFilter`, its allocation-free twin — a test proves
+    /// they agree). Byte-wise prefix, like the twin.
     static func isRelevantChange(atPath path: String, root: String) -> Bool {
         let base = root.hasSuffix("/") ? root : root + "/"
-        let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
-        guard trimmed.hasPrefix(base) else { return true }
-        return !trimmed.dropFirst(base.count).split(separator: "/").contains { isSkippedName(String($0)) }
+        var trimmed = Array(path.utf8)
+        if trimmed.last == slashByte { trimmed.removeLast() }
+        guard trimmed.starts(with: base.utf8) else { return true }
+        return !trimmed.dropFirst(base.utf8.count).split(separator: slashByte).contains { isSkippedName(utf8: $0) }
+    }
+
+    /// The watcher's rule for one event, on the stream's own queue and
+    /// without allocating: flags first (an integer test), then the path's
+    /// UTF-8 bytes after each spelling of the root, component by component
+    /// (a leading "." or `node_modules` → not relevant). Exactly
+    /// `isRelevantChange(_:roots:)` (tested over generated paths).
+    struct ChangeFilter: Sendable {
+        /// Each root spelling with one trailing "/".
+        let bases: [[UInt8]]
+
+        init(roots: [String]) {
+            bases = roots.map { Array(($0.hasSuffix("/") ? $0 : $0 + "/").utf8) }
+        }
+
+        func isRelevant(flags: UInt32, path: UnsafeBufferPointer<UInt8>) -> Bool {
+            guard FolderListing.isRelevantEventFlags(flags) else { return false }
+            if flags & FolderListing.lookAgainFlags != 0 { return true }
+            var end = path.count
+            if end > 0, path[end - 1] == FolderListing.slashByte { end -= 1 }
+            var start = end
+            while start > 0, path[start - 1] != FolderListing.slashByte { start -= 1 }
+            let name = UnsafeBufferPointer(rebasing: path[start..<end])
+            if FolderListing.isNonMarkdownFileEvent(flags: flags, name: name) { return false }
+            return bases.allSatisfy { Self.isRelevant(path: path, base: $0) }
+        }
+
+        static func isRelevant(path: UnsafeBufferPointer<UInt8>, base: [UInt8]) -> Bool {
+            var end = path.count
+            if end > 0, path[end - 1] == FolderListing.slashByte { end -= 1 }
+            guard end >= base.count else { return true }
+            for index in 0..<base.count where path[index] != base[index] { return true }
+            var index = base.count
+            while index < end {
+                let start = index
+                while index < end, path[index] != FolderListing.slashByte { index += 1 }
+                let length = index - start
+                if length > 0 {
+                    if path[start] == FolderListing.dotByte { return false }
+                    if length == FolderListing.nodeModulesUTF8.count,
+                       FolderListing.nodeModulesUTF8.indices.allSatisfy({ path[start + $0] == FolderListing.nodeModulesUTF8[$0] }) {
+                        return false
+                    }
+                }
+                index += 1
+            }
+            return true
+        }
     }
 
     /// One FSEvents item event: where, and what happened (the stream's
@@ -192,11 +276,7 @@ enum FolderListing {
     static func isRelevantEventFlags(_ flags: UInt32) -> Bool {
         let structural = UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRemoved
                                     | kFSEventStreamEventFlagItemRenamed)
-        let lookAgain = UInt32(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagRootChanged
-                                   | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped
-                                   | kFSEventStreamEventFlagEventIdsWrapped | kFSEventStreamEventFlagMount
-                                   | kFSEventStreamEventFlagUnmount)
-        if flags & (structural | lookAgain) != 0 { return true }
+        if flags & (structural | lookAgainFlags) != 0 { return true }
         if flags & UInt32(kFSEventStreamEventFlagItemChangeOwner) != 0,
            flags & UInt32(kFSEventStreamEventFlagItemIsDir) != 0 { return true }
         return flags == 0
@@ -207,8 +287,38 @@ enum FolderListing {
     /// `isRelevantChange(atPath:root:)`). The root's own event (its path IS
     /// the root) is judged by its flags alone.
     static func isRelevantChange(_ change: Change, roots: [String]) -> Bool {
-        isRelevantEventFlags(change.flags)
-            && roots.allSatisfy { isRelevantChange(atPath: change.path, root: $0) }
+        guard isRelevantEventFlags(change.flags) else { return false }
+        if change.flags & lookAgainFlags != 0 { return true }
+        var bytes = Array(change.path.utf8)
+        if bytes.last == slashByte { bytes.removeLast() }
+        let name = bytes.split(separator: slashByte, omittingEmptySubsequences: false).last.map(Array.init) ?? []
+        if isNonMarkdownFileEvent(flags: change.flags, name: name) { return false }
+        return roots.allSatisfy { isRelevantChange(atPath: change.path, root: $0) }
+    }
+
+    /// "Events were lost / look again": relevant whatever the path.
+    static let lookAgainFlags = UInt32(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagRootChanged
+                                           | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped
+                                           | kFSEventStreamEventFlagEventIdsWrapped | kFSEventStreamEventFlagMount
+                                           | kFSEventStreamEventFlagUnmount)
+
+    /// A FILE (or symlink) event whose name is not Markdown cannot change a
+    /// listing of Markdown files, whatever happened to it (created,
+    /// removed, renamed): a build writing thousands of `.o` / `dist/` files
+    /// re-read the whole tree every second (GUI, 13 % CPU). A rename
+    /// delivers one event PER NAME (probed: `x.txt → x.md` gives
+    /// `Renamed|IsFile` for both paths), so `x.txt → x.md` is still seen
+    /// through the `x.md` event and `x.md → x.txt` through the old name.
+    /// Folders stay relevant (a folder moved in brings only its own event);
+    /// an event that is neither file nor symlink stays relevant.
+    static func isNonMarkdownFileEvent(flags: UInt32, name: [UInt8]) -> Bool {
+        name.withUnsafeBufferPointer { isNonMarkdownFileEvent(flags: flags, name: $0) }
+    }
+
+    static func isNonMarkdownFileEvent(flags: UInt32, name: UnsafeBufferPointer<UInt8>) -> Bool {
+        let fileLike = UInt32(kFSEventStreamEventFlagItemIsFile | kFSEventStreamEventFlagItemIsSymlink)
+        guard flags & fileLike != 0, flags & UInt32(kFSEventStreamEventFlagItemIsDir) == 0 else { return false }
+        return !MarkdownFileKind.isMarkdownName(utf8: name)
     }
 
     /// `realpath(3)`: the spelling FSEvents reports (`/private/var/…`, where
