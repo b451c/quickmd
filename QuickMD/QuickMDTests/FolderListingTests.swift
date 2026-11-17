@@ -1,4 +1,5 @@
 import XCTest
+import CoreServices
 
 /// `FolderListing` (File ▸ Open Folder, #62) on temporary trees: which
 /// files are listed, in which order and groups, what is skipped, and the
@@ -218,6 +219,47 @@ final class FolderListingTests: XCTestCase {
         // A group named like a file path is still a different case.
         XCTAssertNotEqual(SidebarRowID.folderGroup("docs"), SidebarRowID.folderFile("docs"))
         XCTAssertNotEqual(SidebarRowID.folderGroup("docs"), SidebarRowID.recent("docs"))
+    }
+
+    /// What an FSEvents item event may trigger, with the flag combinations
+    /// probed on macOS 27 (`chmod 000 dir` → ChangeOwner|IsDir; a content
+    /// write → Modified|IsFile; `xattr -w` → XattrMod; `touch dir` →
+    /// InodeMetaMod|IsDir).
+    func testOnlyStructuralChangesAndFolderPermissionsAreRelevant() {
+        func flags(_ bits: Int...) -> UInt32 { UInt32(bits.reduce(0, |)) }
+        let dir = kFSEventStreamEventFlagItemIsDir, file = kFSEventStreamEventFlagItemIsFile
+        let relevant = [
+            flags(kFSEventStreamEventFlagItemChangeOwner, dir),           // chmod / chown of a folder
+            flags(kFSEventStreamEventFlagItemCreated, file),
+            flags(kFSEventStreamEventFlagItemRemoved, file),
+            flags(kFSEventStreamEventFlagItemRenamed, dir),
+            flags(kFSEventStreamEventFlagItemCreated, kFSEventStreamEventFlagItemModified, file),
+            flags(kFSEventStreamEventFlagMustScanSubDirs),
+            flags(kFSEventStreamEventFlagRootChanged),
+            flags(kFSEventStreamEventFlagKernelDropped),
+            0,                                                              // no item flags: unknown
+        ]
+        let irrelevant = [
+            flags(kFSEventStreamEventFlagItemChangeOwner, file),          // chmod of a file
+            flags(kFSEventStreamEventFlagItemXattrMod, dir),              // xattr on a folder
+            flags(kFSEventStreamEventFlagItemXattrMod, file),
+            flags(kFSEventStreamEventFlagItemInodeMetaMod, dir),          // a folder's mtime
+            flags(kFSEventStreamEventFlagItemModified, file),             // a content write
+            flags(kFSEventStreamEventFlagItemFinderInfoMod, file),
+        ]
+        for value in relevant { XCTAssertTrue(FolderListing.isRelevantEventFlags(value), String(value, radix: 16)) }
+        for value in irrelevant { XCTAssertFalse(FolderListing.isRelevantEventFlags(value), String(value, radix: 16)) }
+
+        // The root's own event is judged by its flags only; a skipped name
+        // still drops a folder's chmod below it.
+        let root = "/r/Notes", real = "/private/r/Notes"
+        let chmodDir = flags(kFSEventStreamEventFlagItemChangeOwner, dir)
+        for path in [root, real, root + "/", real + "/docs"] {
+            XCTAssertTrue(FolderListing.isRelevantChange(.init(path: path, flags: chmodDir), roots: [root, real]), path)
+        }
+        XCTAssertFalse(FolderListing.isRelevantChange(.init(path: real + "/.git", flags: chmodDir), roots: [root, real]))
+        XCTAssertFalse(FolderListing.isRelevantChange(.init(path: root, flags: flags(kFSEventStreamEventFlagItemChangeOwner, file)),
+                                                      roots: [root, real]))
     }
 
     /// The file cap still cuts in display order.

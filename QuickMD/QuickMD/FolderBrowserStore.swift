@@ -13,9 +13,11 @@ import CoreServices
 ///   access and publishes it. A folder that is gone, or whose sandbox
 ///   bookmark cannot be restored, is forgotten without a word.
 /// - Watched with ONE `FSEventStream` over the whole tree (the listing is
-///   recursive; a vnode source per folder would not be). An event batch
-///   whose paths all lie under skipped names (`.git`, `node_modules`;
-///   `FolderListing.isRelevantChange`, the scan's own rule) is dropped.
+///   recursive; a vnode source per folder would not be), with item events.
+///   A batch is dropped unless one change can alter the listing
+///   (`FolderListing.isRelevantChange`: not under a skipped name such as
+///   `.git` / `node_modules`, the scan's own rule; and an item created,
+///   removed, renamed, or a FOLDER's permissions changed).
 /// - ONE scan at a time (measured in review: ten events 100 ms apart had
 ///   started ten scans at once on the pool the document parse uses). Events
 ///   during a scan only mark the listing dirty; exactly one more scan
@@ -47,9 +49,9 @@ final class FolderBrowserStore: ObservableObject {
         /// False = it cannot be read this launch.
         var restoreAccess: @MainActor (URL) -> Bool
         /// Watches the tree under the (canonical) root; the token stops it
-        /// when released. The closure gets the changed paths, on the main
+        /// when released. The closure gets the batch's changes, on the main
         /// actor (empty = unknown, treated as relevant).
-        var watch: @MainActor (URL, @escaping @MainActor ([String]) -> Void) -> AnyObject?
+        var watch: @MainActor (URL, @escaping @MainActor ([FolderListing.Change]) -> Void) -> AnyObject?
         /// Lists the root off the main thread; the closure says the scan
         /// was cancelled.
         var scan: @Sendable (URL, @escaping @Sendable () -> Bool) async -> FolderListing.Outcome = { root, cancelled in
@@ -211,8 +213,8 @@ final class FolderBrowserStore: ObservableObject {
         isTruncated = false
         isUnreadable = false
         isLoading = true
-        watcher = environment.watch(root) { [weak self] paths in
-            self?.filesChanged(atPaths: paths)
+        watcher = environment.watch(root) { [weak self] changes in
+            self?.filesChanged(changes)
         }
         dirty = true
         startScanLoopIfNeeded()
@@ -231,15 +233,13 @@ final class FolderBrowserStore: ObservableObject {
         resumeWaiters(.superseded) { _ in true }
     }
 
-    private func filesChanged(atPaths paths: [String]) {
+    private func filesChanged(_ changes: [FolderListing.Change]) {
         guard let root = listingRoot?.path else { return }
-        let real = eventRootPath ?? root
         // A path outside a root counts as relevant, so a path is dropped
         // when it lies under a skipped name in either spelling of the root.
-        guard paths.isEmpty || paths.contains(where: {
-            FolderListing.isRelevantChange(atPath: $0, root: root)
-                && FolderListing.isRelevantChange(atPath: $0, root: real)
-        }) else { return }
+        let roots = [root, eventRootPath ?? root]
+        guard changes.isEmpty || changes.contains(where: { FolderListing.isRelevantChange($0, roots: roots) })
+        else { return }
         refresh()
     }
 
@@ -303,33 +303,39 @@ final class FolderBrowserStore: ObservableObject {
 
 // MARK: - Tree watcher
 
-/// One `FSEventStream` over a folder tree: directory-level events (no
-/// per-file flags) with their paths (`UseCFTypes`), 0.5 s latency (a save
-/// that touches several files is one batch), on the main queue.
+/// One `FSEventStream` over a folder tree: ITEM events (`FileEvents`: a
+/// directory-level stream carries no flags, so a folder's `chmod` could not
+/// be told from a content write) with their paths (`UseCFTypes`), 0.5 s
+/// latency (a save that touches several files is one batch), on the main
+/// queue.
 /// `kFSEventStreamCreateFlagWatchRoot` also reports the root itself being
 /// moved or deleted, so the re-scan can forget it. Stops when released.
 final class FolderTreeWatcher {
     private final class Handler {
-        let fire: ([String]) -> Void
-        init(_ fire: @escaping ([String]) -> Void) { self.fire = fire }
+        let fire: ([FolderListing.Change]) -> Void
+        init(_ fire: @escaping ([FolderListing.Change]) -> Void) { self.fire = fire }
     }
 
     private let handler: Handler
     private var stream: FSEventStreamRef?
 
-    init?(root: URL, latency: TimeInterval = 0.5, onChange: @escaping ([String]) -> Void) {
+    init?(root: URL, latency: TimeInterval = 0.5, onChange: @escaping ([FolderListing.Change]) -> Void) {
         handler = Handler(onChange)
         // The stream holds the handler unretained: it is invalidated in
         // deinit, before the handler goes away.
         var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(handler).toOpaque(),
                                            retain: nil, release: nil, copyDescription: nil)
-        let callback: FSEventStreamCallback = { _, info, _, eventPaths, _, _ in
+        let callback: FSEventStreamCallback = { _, info, count, eventPaths, eventFlags, _ in
             guard let info else { return }
             // UseCFTypes: the paths are a CFArray of CFString.
             let paths = (Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as NSArray) as? [String] ?? []
-            Unmanaged<Handler>.fromOpaque(info).takeUnretainedValue().fire(paths)
+            let changes = (0..<min(count, paths.count)).map {
+                FolderListing.Change(path: paths[$0], flags: eventFlags[$0])
+            }
+            Unmanaged<Handler>.fromOpaque(info).takeUnretainedValue().fire(changes)
         }
-        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagWatchRoot | kFSEventStreamCreateFlagUseCFTypes)
+        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagWatchRoot | kFSEventStreamCreateFlagUseCFTypes
+                                                 | kFSEventStreamCreateFlagFileEvents)
         guard let stream = FSEventStreamCreate(kCFAllocatorDefault, callback, &context, [root.path] as CFArray,
                                                FSEventStreamEventId(kFSEventStreamEventIdSinceNow), latency,
                                                flags) else {

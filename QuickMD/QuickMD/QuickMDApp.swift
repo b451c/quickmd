@@ -134,8 +134,8 @@ extension FolderBrowserStore {
                 !SandboxAccessManager.isSandboxed || SandboxAccessManager.shared.restoreAccess(for: folder)
             },
             watch: { root, onChange in
-                FolderTreeWatcher(root: root) { paths in
-                    Task { @MainActor in onChange(paths) }
+                FolderTreeWatcher(root: root) { changes in
+                    Task { @MainActor in onChange(changes) }
                 }
             }))
     }()
