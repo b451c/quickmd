@@ -34,11 +34,15 @@ struct QuickMDApp: App {
             MarkdownView(document: file.document, documentURL: file.fileURL)
         }
         .commands {
-            // Right after the system's Open… / Open Recent; app-level, so it
-            // works with no window. The .saveItem group below is not touched.
+            // Lands BEFORE the system's Open… (New / Open Folder… / Open… /
+            // Open Recent); app-level, so it works with no window. The
+            // .saveItem group below is not touched.
             CommandGroup(after: .newItem) {
                 OpenFolderCommand()
             }
+            // Replacing .saveItem makes SwiftUI's first menu update leave a
+            // blank "NSMenuItem" where Open Recent was; `OpenRecentMenu`
+            // (installed in `applicationDidFinishLaunching`) repairs it in place.
             CommandGroup(replacing: .saveItem) {
                 Button("Close") {
                     EditCloseGuard.requestClose(NSApp.keyWindow)
@@ -199,10 +203,46 @@ enum OpenFolderFlow {
     }
 
     private static func alert(_ message: String) {
+        MessageAlert.run(message)
+    }
+}
+
+/// The app-modal message alert of the flows that may run with no window
+/// (Open Folder, File ▸ Open Recent): one message, OK.
+@MainActor
+enum MessageAlert {
+    static func run(_ message: String) {
         let alert = NSAlert()
         alert.messageText = message
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+}
+
+// MARK: - Open Recent repair
+
+extension OpenRecentMenu {
+    /// The app's instance: the system's recent list (it follows the user's
+    /// setting for the number of items), opened through `DocumentOpener`,
+    /// cleared through `RecentDocumentsStore` (session list and system list
+    /// together, as the sidebar's trash button does).
+    static let shared = OpenRecentMenu(
+        mainMenu: { NSApp.mainMenu },
+        environment: .init(
+            recents: { NSDocumentController.shared.recentDocumentURLs },
+            open: { url, onFailure in DocumentOpener.open(url, onFailure: onFailure) },
+            reportFailure: { MessageAlert.run($0) },
+            clear: { RecentDocumentsStore.shared.clear() }))
+}
+
+extension QuickMDAppDelegate {
+    /// Lives here, not next to the delegate in `EditCloseGuard.swift`: the
+    /// test target compiles that file but not the live dependencies above.
+    /// Not earlier than this: SwiftUI installs its document controller in
+    /// its own `applicationWillFinishLaunching`.
+    @MainActor
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        OpenRecentMenu.shared.install()
     }
 }
 
