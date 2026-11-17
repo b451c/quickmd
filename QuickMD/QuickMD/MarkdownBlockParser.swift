@@ -2111,8 +2111,10 @@ struct MarkdownBlockParser: Sendable {
 
     /// Stands in for a non-text block when the ordered lists are worked
     /// out: not blank, not a list item — so it continues a list exactly when
-    /// its first line is indented under the list's items (a step's code
-    /// block, a picture under an item), as a nested paragraph would.
+    /// an item of that list's level or deeper OWNS the block
+    /// (`ListOwners.everyBlock`: a step's code block, a picture under an
+    /// item), as an owned nested paragraph would. Its indentation alone
+    /// decides nothing since 1.16 (see `renderPendingRows`).
     private static let blockStandIn = "\u{FFFC}"
 
     /// Renders the text rows, every ordered item numbered within ITS list
