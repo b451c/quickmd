@@ -132,6 +132,23 @@ final class FolderAccessBroker {
         return .ask(folder: Self.folderToAsk(forFileAt: file, documentURL: documentURL))
     }
 
+    /// The reader chose `folder` in File ▸ Open Folder's chooser. In the
+    /// sandbox that answer IS a grant (the powerbox gave the process the
+    /// folder): it is saved like a panel's grant, covers everything below it
+    /// (pictures and links of documents in the folder never ask), clears the
+    /// declines it covers and tells waiting pictures. Not a question — this
+    /// broker still decides every ask. Unsandboxed: nothing to record
+    /// (false). True when the grant was recorded.
+    @discardableResult
+    func registerUserChosenFolder(_ folder: URL) -> Bool {
+        guard environment.isSandboxed, environment.save(folder) else { return false }
+        let granted = Self.canonicalPath(folder)
+        if !grantedFolders.contains(granted) { grantedFolders.append(granted) }
+        declinedFolders = declinedFolders.filter { !Self.covers(granted, $0) }
+        environment.didGrant(folder)
+        return true
+    }
+
     /// Restores a saved grant covering `file`, never asks (print/PDF).
     func restoreWithoutAsking(forFileAt file: URL) -> Bool {
         if case .granted = decision(forFileAt: file, documentURL: nil, explicit: false) { return true }
