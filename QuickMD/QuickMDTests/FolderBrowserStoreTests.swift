@@ -1,23 +1,55 @@
 import XCTest
+import Combine
 
 /// `FolderBrowserStore` (File ▸ Open Folder, #62): open / close / persist /
-/// restore, a vanished folder forgotten, and a watcher event re-scans. The
-/// defaults are a `TemporaryDefaults` suite, the watcher a fake whose trigger
-/// the test pulls (no real FSEvents), the access a recording closure; the
-/// scan is the real `FolderListing` on a temporary tree.
+/// restore, gone vs unreadable, one scan at a time with one follow-up,
+/// irrelevant events dropped, equal listings unpublished, and `open`
+/// waiting for ITS folder's listing. The defaults are a `TemporaryDefaults`
+/// suite, the watcher a fake whose trigger the test pulls (no FSEvents), the
+/// follow-up delay a recorded no-op (no clock), the scan the real
+/// `FolderListing` on a temporary tree behind a probe that counts scans and
+/// can hold them (work counters, never time).
 @MainActor
 final class FolderBrowserStoreTests: XCTestCase {
 
     /// A watcher token; the world sees whether it is still alive.
     private final class Token {}
 
+    @MainActor
     private final class World {
         var restoreAnswer = true
         var restored: [String] = []
         var watched: [String] = []
-        var trigger: (@MainActor () -> Void)?
+        var trigger: (@MainActor ([String]) -> Void)?
         weak var token: Token?
         weak var earlierToken: Token?
+        // Scan probe.
+        var started = 0
+        var running = 0
+        var peak = 0
+        var hold = false
+        var gates: [CheckedContinuation<Void, Never>] = []
+        var events: [String] = []
+        /// Answers instead of the real scan when set.
+        var forced: FolderListing.Outcome?
+        var cancelChecks: [@Sendable () -> Bool] = []
+
+        func begin(_ isCancelled: @escaping @Sendable () -> Bool) async {
+            started += 1
+            running += 1
+            peak = max(peak, running)
+            events.append("scan")
+            cancelChecks.append(isCancelled)
+            if hold { await withCheckedContinuation { gates.append($0) } }
+        }
+
+        func end() { running -= 1 }
+
+        func release() {
+            hold = false
+            gates.forEach { $0.resume() }
+            gates.removeAll()
+        }
     }
 
     private var root: URL!
@@ -48,18 +80,26 @@ final class FolderBrowserStoreTests: XCTestCase {
                 let token = Token()
                 world.token = token
                 return token
-            }))
+            },
+            scan: { folder, isCancelled in
+                await world.begin(isCancelled)
+                let forced = await MainActor.run { world.forced }
+                let outcome = forced ?? FolderListing.scan(folder, isCancelled: isCancelled)
+                await world.end()
+                return outcome
+            },
+            followUpDelay: { world.events.append("delay") }))
     }
 
     private func folder(_ name: String, files: [String]) throws -> URL {
         let url = root.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         for file in files {
             let path = url.appendingPathComponent(file)
             try FileManager.default.createDirectory(at: path.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)
             try Data("# x\n".utf8).write(to: path)
         }
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
 
@@ -67,19 +107,52 @@ final class FolderBrowserStoreTests: XCTestCase {
         store.groups.flatMap(\.files).map(\.lastPathComponent)
     }
 
+    /// Spins until `condition` holds (bounded by a generous deadline, which a
+    /// passing run never reaches).
+    private func until(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async {
+        let deadline = Date().addingTimeInterval(15)
+        while !condition() && Date() < deadline { await Task.yield() }
+        XCTAssertTrue(condition(), "condition never held", file: file, line: line)
+    }
+
+    /// The scans the store has left to run, finished.
+    private func settle(_ store: FolderBrowserStore) async {
+        while let loop = store.scanLoop { await loop.value; await Task.yield() }
+    }
+
+    private func path(_ url: URL) -> String { url.standardizedFileURL.path }
+
+    // MARK: Open, close, persist
+
     func testOpenListsPersistsAndWatches() async throws {
         let world = World()
         let notes = try folder("Notes", files: ["b.md", "a.md", "sub/c.md", "x.txt"])
         let browser = store(world)
-        await browser.open(notes)
-        XCTAssertEqual(browser.folder?.path, notes.standardizedFileURL.path)
+        let result = await browser.open(notes)
+        XCTAssertEqual(result, .listed)
+        XCTAssertEqual(browser.folder?.path, path(notes))
         XCTAssertEqual(names(browser), ["a.md", "b.md", "c.md"])
+        XCTAssertEqual(browser.fileCount, 3)
         XCTAssertFalse(browser.isLoading)
         XCTAssertFalse(browser.isTruncated)
-        XCTAssertEqual(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey), notes.standardizedFileURL.path)
-        XCTAssertEqual(world.watched, [notes.standardizedFileURL.path], "one watcher, on the root")
+        XCTAssertEqual(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey), path(notes))
+        XCTAssertEqual(world.watched, [FolderAccessBroker.canonicalPath(notes)], "one watcher, on the canonical root")
         XCTAssertNotNil(world.token)
         XCTAssertTrue(world.restored.isEmpty, "a chosen folder is not restored: the chooser granted it")
+        XCTAssertEqual(world.started, 1)
+    }
+
+    /// The listing is built on the disk spelling of the root (the temporary
+    /// directory lives under the `/var` → `/private/var` symlink), while the
+    /// folder stays as chosen.
+    func testListingURLsAreCanonicalAndTheFolderAsChosen() async throws {
+        let notes = try folder("Notes", files: ["a.md"])
+        let browser = store(World())
+        _ = await browser.open(notes)
+        let canonical = FolderAccessBroker.canonicalPath(notes)
+        XCTAssertEqual(browser.listingRoot?.path, canonical)
+        XCTAssertEqual(browser.groups.first?.files.first?.path, canonical + "/a.md")
+        XCTAssertEqual(browser.folder?.path, path(notes))
     }
 
     func testOpenReplacesTheFolderAndItsWatcher() async throws {
@@ -87,50 +160,77 @@ final class FolderBrowserStoreTests: XCTestCase {
         let first = try folder("One", files: ["one.md"])
         let second = try folder("Two", files: ["two.md"])
         let browser = store(world)
-        await browser.open(first)
+        _ = await browser.open(first)
         world.earlierToken = world.token
         XCTAssertNotNil(world.earlierToken)
-        await browser.open(second)
+        _ = await browser.open(second)
         XCTAssertNil(world.earlierToken, "the first folder's watcher stopped")
         XCTAssertNotNil(world.token)
         XCTAssertEqual(names(browser), ["two.md"])
-        XCTAssertEqual(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey), second.standardizedFileURL.path)
+        XCTAssertEqual(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey), path(second))
     }
 
     func testCloseForgetsEverything() async throws {
         let world = World()
         let browser = store(world)
-        await browser.open(try folder("Notes", files: ["a.md"]))
+        _ = await browser.open(try folder("Notes", files: ["a.md"]))
         browser.close()
         XCTAssertNil(browser.folder)
+        XCTAssertNil(browser.listingRoot)
         XCTAssertTrue(browser.groups.isEmpty)
         XCTAssertNil(world.token, "the watcher stopped")
         XCTAssertNil(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey))
-        XCTAssertNil(store(World()).restore(), "nothing to restore after a close")
+        let next = store(World())
+        await next.restore()
+        XCTAssertNil(next.folder, "nothing to restore after a close")
+    }
+
+    // MARK: Restore
+
+    func testCreatingTheStoreDoesNothingUntilRestore() async throws {
+        _ = await store(World()).open(try folder("Notes", files: ["a.md"]))
+        let world = World()
+        let browser = store(world)
+        XCTAssertNil(browser.folder, "no I/O and no publishing at creation")
+        XCTAssertTrue(world.restored.isEmpty)
+        XCTAssertEqual(world.started, 0)
+        await browser.restore()
+        await settle(browser)
+        XCTAssertEqual(names(browser), ["a.md"])
+        await browser.restore()
+        XCTAssertEqual(world.restored.count, 1, "once per process")
     }
 
     func testRestoreBringsTheRememberedFolderBack() async throws {
         let notes = try folder("Notes", files: ["a.md"])
-        await store(World()).open(notes)
+        _ = await store(World()).open(notes)
         // Next launch: a new store over the same defaults.
         let world = World()
         let browser = store(world)
-        let task = browser.restore()
-        XCTAssertNotNil(task)
-        await task?.value
-        XCTAssertEqual(world.restored, [notes.standardizedFileURL.path], "access restored (sandbox: its bookmark)")
-        XCTAssertEqual(browser.folder?.path, notes.standardizedFileURL.path)
+        await browser.restore()
+        await settle(browser)
+        XCTAssertEqual(world.restored, [path(notes)], "access restored (sandbox: its bookmark) for the chosen path")
+        XCTAssertEqual(browser.folder?.path, path(notes))
         XCTAssertEqual(names(browser), ["a.md"])
-        XCTAssertEqual(world.watched.count, 1)
+        XCTAssertEqual(world.watched, [FolderAccessBroker.canonicalPath(notes)])
+    }
+
+    func testAnOpenBeforeTheRestoreWins() async throws {
+        let old = try folder("Old", files: ["old.md"])
+        _ = await store(World()).open(old)
+        let browser = store(World())
+        _ = await browser.open(try folder("New", files: ["new.md"]))
+        await browser.restore()
+        XCTAssertEqual(names(browser), ["new.md"])
     }
 
     func testAVanishedFolderIsForgottenSilently() async throws {
         let notes = try folder("Notes", files: ["a.md"])
-        await store(World()).open(notes)
+        _ = await store(World()).open(notes)
         try FileManager.default.removeItem(at: notes)
         let world = World()
         let browser = store(world)
-        XCTAssertNil(browser.restore())
+        await browser.restore()
         XCTAssertNil(browser.folder)
         XCTAssertTrue(world.restored.isEmpty, "existence first: no bookmark for a folder that is gone")
         XCTAssertTrue(world.watched.isEmpty)
@@ -139,72 +239,207 @@ final class FolderBrowserStoreTests: XCTestCase {
 
     func testAFolderThatCannotBeRestoredIsForgottenSilently() async throws {
         let notes = try folder("Notes", files: ["a.md"])
-        await store(World()).open(notes)
+        _ = await store(World()).open(notes)
         let world = World()
         world.restoreAnswer = false
         let browser = store(world)
-        XCTAssertNil(browser.restore())
+        await browser.restore()
         XCTAssertNil(browser.folder)
         XCTAssertEqual(world.restored.count, 1)
         XCTAssertNil(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey))
     }
 
-    func testAWatcherEventRescans() async throws {
-        let world = World()
-        let notes = try folder("Notes", files: ["a.md", "b.md"])
-        let browser = store(world)
-        await browser.open(notes)
-        try Data("# new\n".utf8).write(to: notes.appendingPathComponent("sub/new.md").creatingParent())
-        try FileManager.default.removeItem(at: notes.appendingPathComponent("a.md"))
-        XCTAssertEqual(names(browser), ["a.md", "b.md"], "nothing changes before the event")
-        world.trigger?()
-        await browser.scanTask?.value
-        XCTAssertEqual(names(browser), ["b.md", "new.md"])
-        XCTAssertEqual(browser.groups.map(\.relativePath), ["", "sub"])
-    }
+    // MARK: Gone vs unreadable
 
-    func testAWatcherEventAfterTheFolderWentAwayForgetsIt() async throws {
+    func testAnUnreadableFolderIsKeptWithItsLastListing() async throws {
         let world = World()
         let notes = try folder("Notes", files: ["a.md"])
         let browser = store(world)
-        await browser.open(notes)
+        _ = await browser.open(notes)
+        world.forced = .unreadable
+        world.trigger?([])
+        await settle(browser)
+        XCTAssertEqual(browser.folder?.path, path(notes), "kept")
+        XCTAssertTrue(browser.isUnreadable)
+        XCTAssertEqual(names(browser), ["a.md"], "the last listing stays")
+        XCTAssertNotNil(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey))
+        world.forced = nil
+        world.trigger?([])
+        await settle(browser)
+        XCTAssertFalse(browser.isUnreadable, "tried again on the next event")
+    }
+
+    func testAnUnreadableFolderAtOpenIsReportedAndKept() async throws {
+        let world = World()
+        world.forced = .unreadable
+        let notes = try folder("Notes", files: ["a.md"])
+        let browser = store(world)
+        let result = await browser.open(notes)
+        XCTAssertEqual(result, .unreadable)
+        XCTAssertNotNil(browser.folder, "at launch too: the header with an empty list")
+        XCTAssertTrue(browser.groups.isEmpty)
+        XCTAssertFalse(browser.isLoading)
+        // Restored at launch while unreadable: kept as well.
+        let next = store(world)
+        await next.restore()
+        await settle(next)
+        XCTAssertNotNil(next.folder)
+        XCTAssertTrue(next.isUnreadable)
+    }
+
+    func testAMissingFolderIsForgotten() async throws {
+        let world = World()
+        let notes = try folder("Notes", files: ["a.md"])
+        let browser = store(world)
+        _ = await browser.open(notes)
         try FileManager.default.removeItem(at: notes)
-        world.trigger?()
-        await browser.scanTask?.value
+        world.trigger?([])
+        await settle(browser)
         XCTAssertNil(browser.folder)
         XCTAssertTrue(browser.groups.isEmpty)
         XCTAssertNil(suite.defaults.string(forKey: FolderBrowserStore.defaultsKey))
     }
+
+    // MARK: One scan at a time
+
+    func testAWatcherEventRescans() async throws {
+        let world = World()
+        let notes = try folder("Notes", files: ["a.md", "b.md"])
+        let browser = store(world)
+        _ = await browser.open(notes)
+        try FileManager.default.createDirectory(at: notes.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        try Data("# new\n".utf8).write(to: notes.appendingPathComponent("sub/new.md"))
+        try FileManager.default.removeItem(at: notes.appendingPathComponent("a.md"))
+        XCTAssertEqual(names(browser), ["a.md", "b.md"], "nothing changes before the event")
+        world.trigger?([FolderAccessBroker.canonicalPath(notes) + "/sub"])
+        await settle(browser)
+        XCTAssertEqual(names(browser), ["b.md", "new.md"])
+        XCTAssertEqual(browser.groups.map(\.relativePath), ["", "sub"])
+        XCTAssertEqual(world.events, ["scan", "scan"], "no delay before a scan nothing was waiting for")
+    }
+
+    /// Ten events during one scan: still one scan in flight, then exactly
+    /// ONE follow-up, after the delay.
+    func testEventsDuringAScanCauseExactlyOneFollowUp() async throws {
+        let world = World()
+        let notes = try folder("Notes", files: ["a.md"])
+        let browser = store(world)
+        world.hold = true
+        let opening = Task { await browser.open(notes) }
+        await until { world.started == 1 && !world.gates.isEmpty }
+        for _ in 0..<10 { world.trigger?([FolderAccessBroker.canonicalPath(notes)]) }
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertEqual(world.started, 1, "events while a scan runs start nothing")
+        world.release()
+        let result = await opening.value
+        XCTAssertEqual(result, .listed)
+        await settle(browser)
+        XCTAssertEqual(world.started, 2)
+        XCTAssertEqual(world.peak, 1, "never two scans at once")
+        XCTAssertEqual(world.events, ["scan", "delay", "scan"])
+    }
+
+    func testIrrelevantEventsStartNoScan() async throws {
+        let world = World()
+        let notes = try folder("Notes", files: ["a.md"])
+        let browser = store(world)
+        _ = await browser.open(notes)
+        let canonical = FolderAccessBroker.canonicalPath(notes)
+        world.trigger?([canonical + "/.git/objects/ab", canonical + "/node_modules/pkg"])
+        await settle(browser)
+        XCTAssertEqual(world.started, 1, "a batch only under skipped names is dropped")
+        // FSEvents spells the temporary folder `/private/var/…`.
+        let real = FolderListing.realPath(canonical)
+        world.trigger?([real + "/.git/index", real + "/docs/node_modules"])
+        await settle(browser)
+        XCTAssertEqual(world.started, 1, "in the realpath spelling too")
+        world.trigger?([canonical + "/.git", canonical + "/docs"])
+        await settle(browser)
+        XCTAssertEqual(world.started, 2, "one relevant path is enough")
+    }
+
+    func testAnEqualListingPublishesNothing() async throws {
+        let world = World()
+        let notes = try folder("Notes", files: ["a.md"])
+        let browser = store(world)
+        _ = await browser.open(notes)
+        var changes = 0
+        let subscription = browser.objectWillChange.sink { changes += 1 }
+        world.trigger?([])
+        await settle(browser)
+        XCTAssertEqual(world.started, 2)
+        XCTAssertEqual(changes, 0)
+        try Data("# b\n".utf8).write(to: notes.appendingPathComponent("b.md"))
+        world.trigger?([])
+        await settle(browser)
+        XCTAssertGreaterThan(changes, 0, "a changed listing does publish")
+        subscription.cancel()
+    }
+
+    func testCloseCancelsTheRunningScan() async throws {
+        let world = World()
+        let notes = try folder("Notes", files: ["a.md"])
+        let browser = store(world)
+        world.hold = true
+        let opening = Task { await browser.open(notes) }
+        await until { world.started == 1 && !world.gates.isEmpty }
+        XCTAssertEqual(world.cancelChecks.first?(), false)
+        browser.close()
+        XCTAssertEqual(world.cancelChecks.first?(), true, "the scan sees it was cancelled")
+        let result = await opening.value
+        XCTAssertEqual(result, .superseded)
+        world.release()
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertNil(browser.folder)
+        XCTAssertTrue(browser.groups.isEmpty, "the cancelled scan published nothing")
+    }
+
+    // MARK: open waits for its own listing
+
+    func testASecondOpenSupersedesTheFirst() async throws {
+        let world = World()
+        let first = try folder("One", files: ["one.md"])
+        let second = try folder("Two", files: ["two.md"])
+        let browser = store(world)
+        world.hold = true
+        let firstOpen = Task { await browser.open(first) }
+        await until { world.started == 1 && !world.gates.isEmpty }
+        XCTAssertEqual(world.cancelChecks.first?(), false)
+        let secondOpen = Task { await browser.open(second) }
+        await until { world.started == 2 }
+        world.release()
+        let results = await [firstOpen.value, secondOpen.value]
+        XCTAssertEqual(results, [.superseded, .listed])
+        XCTAssertEqual(world.cancelChecks.first?(), true, "the first folder's scan was cancelled")
+        XCTAssertEqual(names(browser), ["two.md"])
+    }
+
+    func testOpenReturnsWithItsOwnListingWhenAnEventArrivesDuringTheScan() async throws {
+        let world = World()
+        let notes = try folder("Notes", files: ["a.md"])
+        let browser = store(world)
+        world.hold = true
+        let opening = Task { await browser.open(notes) }
+        await until { world.started == 1 && !world.gates.isEmpty }
+        world.trigger?([])
+        world.release()
+        let result = await opening.value
+        XCTAssertEqual(result, .listed)
+        XCTAssertEqual(names(browser), ["a.md"], "published before open returned")
+        await settle(browser)
+    }
+
+    // MARK: Real watcher
 
     /// The real watcher starts on a folder and stops when released (no event
     /// is waited for: delivery timing is the system's).
     func testTheTreeWatcherStartsAndStops() {
         weak var released: FolderTreeWatcher?
         do {
-            let watcher = FolderTreeWatcher(root: root) {}
+            let watcher = FolderTreeWatcher(root: root) { _ in }
             XCTAssertNotNil(watcher)
             released = watcher
         }
         XCTAssertNil(released)
-    }
-
-    func testALateScanOfAClosedFolderPublishesNothing() async throws {
-        let world = World()
-        let notes = try folder("Notes", files: ["a.md"])
-        let browser = store(world)
-        await browser.open(notes)
-        let pending = browser.refresh()
-        browser.close()
-        await pending.value
-        XCTAssertNil(browser.folder)
-        XCTAssertTrue(browser.groups.isEmpty, "the superseded scan dropped its result")
-    }
-}
-
-private extension URL {
-    /// Creates the parent folder and returns self (test trees).
-    func creatingParent() throws -> URL {
-        try FileManager.default.createDirectory(at: deletingLastPathComponent(), withIntermediateDirectories: true)
-        return self
     }
 }

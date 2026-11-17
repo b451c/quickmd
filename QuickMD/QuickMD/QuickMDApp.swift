@@ -122,10 +122,11 @@ struct OpenFolderCommand: View {
 }
 
 extension FolderBrowserStore {
-    /// The app's folder (one at a time), restored when first used — the
-    /// Documents sidebar or the command, whichever comes first.
+    /// The app's folder (one at a time). Creating it does no I/O; the
+    /// Documents sidebar starts `restore()` from a task when it first
+    /// appears (an Open Folder before that makes the restore a no-op).
     static let shared: FolderBrowserStore = {
-        let store = FolderBrowserStore(environment: .init(
+        FolderBrowserStore(environment: .init(
             defaults: .standard,
             restoreAccess: { folder in
                 // Unsandboxed the path is enough; in the sandbox the
@@ -133,12 +134,10 @@ extension FolderBrowserStore {
                 !SandboxAccessManager.isSandboxed || SandboxAccessManager.shared.restoreAccess(for: folder)
             },
             watch: { root, onChange in
-                FolderTreeWatcher(root: root) {
-                    Task { @MainActor in onChange() }
+                FolderTreeWatcher(root: root) { paths in
+                    Task { @MainActor in onChange(paths) }
                 }
             }))
-        store.restore()
-        return store
     }()
 }
 
@@ -153,14 +152,21 @@ enum OpenFolderFlow {
         SandboxAccessManager.shared.registerUserChosenFolder(folder)
         UserDefaults.standard.set(true, forKey: RecentDocumentsSidebar.visibilityDefaultsKey)
         Task { @MainActor in
-            await store.open(folder)
-            // With a document window open the list is all that changes.
-            guard !hasDocumentWindow else { return }
             let name = folder.lastPathComponent
-            guard store.folder != nil else {
+            switch await store.open(folder) {
+            case .superseded:
+                // The reader chose again (or closed it): that answer stands.
+                return
+            case .missing, .unreadable:
+                // An explicit command: say so, window or not.
                 alert(LocalLinkOpening.message(for: .openFailed, name: name))
                 return
+            case .listed:
+                break
             }
+            // With a document window open the list is all that changes.
+            guard !hasDocumentWindow,
+                  store.folder == folder.standardizedFileURL else { return }
             guard let file = FolderListing.Result(groups: store.groups, isTruncated: store.isTruncated)
                 .preferredFile else {
                 alert("No Markdown files in \u{201C}\(LocalLinkSafety.displayName(name))\u{201D}")

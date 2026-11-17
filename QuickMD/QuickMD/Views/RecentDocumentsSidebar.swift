@@ -25,6 +25,11 @@ struct RecentDocumentsSidebar: View {
     let onCollapse: () -> Void
     /// A row's file could not be opened: the message, for this window's toast.
     let onOpenFailed: (String) -> Void
+    /// The current document's path as the disk spells it (symlinks, case),
+    /// computed once per document off the main thread — the folder's
+    /// listing is built on the canonical root, so a document opened as
+    /// `/tmp/x.md` still finds its `/private/tmp/x.md` row. No I/O in rows.
+    @State private var canonicalCurrentPath: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -117,6 +122,15 @@ struct RecentDocumentsSidebar: View {
         }
         .frame(maxHeight: .infinity)
         .background(theme.backgroundColor.opacity(0.5))
+        // The remembered folder comes back on the first appearance (once per
+        // process; the store does the I/O off the main thread).
+        .task { await folders.restore() }
+        .task(id: currentURL) {
+            let url = currentURL
+            canonicalCurrentPath = await Task.detached(priority: .utility) {
+                url.map { FolderAccessBroker.canonicalPath($0) }
+            }.value
+        }
     }
 
     /// The recent rows, as in the no-folder branch.
@@ -138,7 +152,8 @@ struct RecentDocumentsSidebar: View {
     private func folderSection(_ folder: URL) -> some View {
         FolderHeaderRow(folder: folder, onClose: { folders.close() })
         if folders.groups.isEmpty {
-            if !folders.isLoading {
+            // Unreadable: the header alone — "no files" would not be true.
+            if !folders.isLoading && !folders.isUnreadable {
                 folderNote("No Markdown files")
             }
         } else {
@@ -154,12 +169,12 @@ struct RecentDocumentsSidebar: View {
                         .padding(.bottom, 2)
                 }
                 ForEach(group.files, id: \.absoluteString) { url in
-                    FolderFileRow(url: url, isCurrent: isCurrent(url), theme: theme,
+                    FolderFileRow(url: url, isCurrent: isCurrentInFolder(url), theme: theme,
                                   onOpen: { openDocument(url) })
                 }
             }
             if folders.isTruncated {
-                folderNote("Showing the first \(FolderListing.Limits().maxFiles.formatted()) files")
+                folderNote("Showing the first \(folders.fileCount.formatted()) files")
             }
         }
     }
@@ -174,6 +189,11 @@ struct RecentDocumentsSidebar: View {
 
     private func isCurrent(_ url: URL) -> Bool {
         currentURL?.standardizedFileURL == url.standardizedFileURL
+    }
+
+    /// Listing URLs are canonical (see `canonicalCurrentPath`).
+    private func isCurrentInFolder(_ url: URL) -> Bool {
+        (canonicalCurrentPath != nil && canonicalCurrentPath == url.path) || isCurrent(url)
     }
 
     private func openDocument(_ url: URL) {
