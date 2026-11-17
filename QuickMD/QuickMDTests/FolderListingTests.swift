@@ -193,6 +193,33 @@ final class FolderListingTests: XCTestCase {
         XCTAssertEqual(FolderListing.Limits().maxEntriesRead, 200_000)
     }
 
+    /// The sidebar's lazy stack shows a file in both sections: its folder
+    /// row and its recent row must never share an id, and the ids of one
+    /// listing (headers and files) are unique.
+    func testSidebarRowIdsAreDisjointBetweenSectionsAndUniqueInAListing() throws {
+        try make("README.md", "notes.md", "docs/guide.md", "docs/a/notes.md", "docs a/guide.md",
+                 "notes.md.d/x.md")
+        let fm = FileManager.default
+        try fm.linkItem(at: root.appendingPathComponent("notes.md"),
+                        to: root.appendingPathComponent("docs/hard-link.md"))
+        let listing = try XCTUnwrap(scan())
+        var ids: [SidebarRowID] = []
+        for group in listing.groups {
+            if !group.relativePath.isEmpty { ids.append(group.rowID) }
+            ids.append(contentsOf: group.files.map(\.sidebarFolderRowID))
+        }
+        XCTAssertEqual(Set(ids).count, ids.count, "no id twice in one listing")
+        XCTAssertEqual(Set(listing.files.map(\.path)).count, listing.files.count, "no path listed twice")
+        for url in listing.files {
+            XCTAssertNotEqual(url.sidebarFolderRowID, url.sidebarRecentRowID, url.path)
+            // A recent row's URL is the same file however it is spelled.
+            XCTAssertNotEqual(url.sidebarFolderRowID, url.standardizedFileURL.sidebarRecentRowID)
+        }
+        // A group named like a file path is still a different case.
+        XCTAssertNotEqual(SidebarRowID.folderGroup("docs"), SidebarRowID.folderFile("docs"))
+        XCTAssertNotEqual(SidebarRowID.folderGroup("docs"), SidebarRowID.recent("docs"))
+    }
+
     /// The file cap still cuts in display order.
     func testTheFileCapCutsInDisplayOrder() throws {
         try make("r1.md", "r2.md", "a/m1.md", "a/m2.md", "b/n.md")

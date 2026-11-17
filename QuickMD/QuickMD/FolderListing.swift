@@ -15,6 +15,38 @@ enum MarkdownFileKind {
     }
 }
 
+// MARK: - Sidebar row identity
+
+/// The identity of every row of the Documents sidebar's lazy stack while a
+/// folder is open. A file may be listed in BOTH sections (a folder file the
+/// reader opened is also a recent document), and two `ForEach`es in one
+/// `LazyVStack` with the same explicit id for it left the recent row blank
+/// after an insert or move (1.16 GUI E2E: space reserved, nothing drawn, not
+/// in the accessibility tree). Each section has its own case, so the ids are
+/// disjoint by construction:
+/// - `folderGroup`: a subfolder header, by its relative path;
+/// - `folderFile`: a listed file, by its path — unique within a listing,
+///   because the walk reads every folder once (it reaches a folder only
+///   through its parent: symbolic links are never followed, volume roots
+///   are skipped, and APFS has no directory hard links), so no path is
+///   listed twice; two hard links to one file are two paths, two rows;
+/// - `recent`: a recent document, by its URL string.
+enum SidebarRowID: Hashable {
+    case folderGroup(String)
+    case folderFile(String)
+    case recent(String)
+
+    static func folderFile(_ url: URL) -> SidebarRowID { .folderFile(url.path) }
+    static func recent(_ url: URL) -> SidebarRowID { .recent(url.absoluteString) }
+}
+
+extension URL {
+    /// This URL as a row of the open folder's list (`SidebarRowID`).
+    var sidebarFolderRowID: SidebarRowID { .folderFile(self) }
+    /// This URL as a recent-document row (`SidebarRowID`).
+    var sidebarRecentRowID: SidebarRowID { .recent(self) }
+}
+
 // MARK: - Folder listing (File ▸ Open Folder, #62)
 
 /// The Markdown files under a folder, grouped by the folder they sit in —
@@ -83,6 +115,8 @@ enum FolderListing {
         let relativePath: String
         let files: [URL]
         var id: String { relativePath }
+        /// The subfolder header's sidebar row (`SidebarRowID`).
+        var rowID: SidebarRowID { .folderGroup(relativePath) }
     }
 
     struct Result: Equatable, Sendable {
