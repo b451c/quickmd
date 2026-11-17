@@ -3,15 +3,28 @@ import AppKit
 
 // MARK: - Recent Documents Sidebar
 
-/// Left sidebar listing documents opened in this session.
-/// Clicking a row re-opens the file in QuickMD.
+/// Left sidebar listing documents opened in this session — and, after
+/// File ▸ Open Folder (#62), the Markdown files of that folder above them.
+/// Clicking a row opens the file in QuickMD (`DocumentOpener`).
+///
+/// With no folder open the sidebar is exactly the 1.15 one: that branch of
+/// `body` is kept as it was. Rows are plain `Text` inside the `LazyVStack`,
+/// never `.textSelection` (constraints, first section); `.onHover` is right
+/// here — window chrome, not a document row.
 ///
 /// Originally contributed by COSMAX-JYP (https://github.com/COSMAX-JYP/quickmd).
 struct RecentDocumentsSidebar: View {
+    /// The `@AppStorage` key of "the Documents sidebar is shown" (all
+    /// windows): Open Folder sets it from outside any window.
+    static let visibilityDefaultsKey = "isDocumentListVisible"
+
     @ObservedObject var store: RecentDocumentsStore = .shared
+    @ObservedObject var folders: FolderBrowserStore = .shared
     let theme: MarkdownTheme
     let currentURL: URL?
     let onCollapse: () -> Void
+    /// A row's file could not be opened: the message, for this window's toast.
+    let onOpenFailed: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -59,7 +72,24 @@ struct RecentDocumentsSidebar: View {
 
             Divider()
 
-            if store.documents.isEmpty {
+            if let folder = folders.folder {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        folderSection(folder)
+                        if !store.documents.isEmpty {
+                            Text("Recent")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .padding(.horizontal, 12)
+                                .padding(.top, 10)
+                                .padding(.bottom, 2)
+                            recentRows
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            } else if store.documents.isEmpty {
                 Spacer(minLength: 0)
                 Text("No documents opened yet")
                     .font(.system(size: 11))
@@ -89,7 +119,79 @@ struct RecentDocumentsSidebar: View {
         .background(theme.backgroundColor.opacity(0.5))
     }
 
+    /// The recent rows, as in the no-folder branch.
+    private var recentRows: some View {
+        ForEach(store.documents, id: \.absoluteString) { url in
+            DocumentRow(
+                url: url,
+                isCurrent: isCurrent(url),
+                theme: theme,
+                onOpen: { openDocument(url) },
+                onRemove: { store.remove(url) }
+            )
+        }
+    }
+
+    /// The open folder: its header, then every folder that holds Markdown
+    /// files (the root's without a header of its own).
+    @ViewBuilder
+    private func folderSection(_ folder: URL) -> some View {
+        FolderHeaderRow(folder: folder, onClose: { folders.close() })
+        if folders.groups.isEmpty {
+            if !folders.isLoading {
+                folderNote("No Markdown files")
+            }
+        } else {
+            ForEach(folders.groups) { group in
+                if !group.relativePath.isEmpty {
+                    Text(group.relativePath)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
+                        .padding(.bottom, 2)
+                }
+                ForEach(group.files, id: \.absoluteString) { url in
+                    FolderFileRow(url: url, isCurrent: isCurrent(url), theme: theme,
+                                  onOpen: { openDocument(url) })
+                }
+            }
+            if folders.isTruncated {
+                folderNote("Showing the first \(FolderListing.Limits().maxFiles.formatted()) files")
+            }
+        }
+    }
+
+    private func folderNote(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundColor(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+    }
+
+    private func isCurrent(_ url: URL) -> Bool {
+        currentURL?.standardizedFileURL == url.standardizedFileURL
+    }
+
     private func openDocument(_ url: URL) {
+        DocumentOpener.open(url, onFailure: onOpenFailed)
+    }
+}
+
+// MARK: - Opening
+
+/// The ONE way a sidebar row (folder file or recent document) or Open Folder
+/// opens a file: in QuickMD itself, as Finder would — a tab, or a window with
+/// "Open documents in separate windows" on; an already open document gets
+/// its tab selected. A failure is reported (`onFailure`, on the main queue,
+/// with the Local links wording) instead of the pre-1.16 debug-only
+/// assertion: the sandbox may have dropped a recent file's access, a listed
+/// file may have been removed a moment ago.
+enum DocumentOpener {
+    static func open(_ url: URL, onFailure: @escaping (String) -> Void) {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
         NSWorkspace.shared.open(
@@ -97,13 +199,97 @@ struct RecentDocumentsSidebar: View {
             withApplicationAt: Bundle.main.bundleURL,
             configuration: config,
             completionHandler: { _, error in
-                if let error = error {
-                    // Sandbox may deny access if the system has dropped its bookmark
-                    // for this URL (rare). Surface via assertion in debug only.
-                    assertionFailure("Recent document open failed: \(error.localizedDescription)")
-                }
+                guard error != nil else { return }
+                let message = LocalLinkOpening.message(for: .openFailed, name: url.lastPathComponent)
+                DispatchQueue.main.async { onFailure(message) }
             }
         )
+    }
+}
+
+// MARK: - Folder rows
+
+/// The open folder's name, its path as help, and Close Folder on hover.
+private struct FolderHeaderRow: View {
+    let folder: URL
+    let onClose: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "folder")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+            Text(folder.lastPathComponent)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if isHovered {
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .padding(2)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Close Folder")
+                .accessibilityLabel("Close Folder")
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .help(folder.path)
+    }
+}
+
+/// A file of the open folder: the recent row's look on one line (name only),
+/// no remove button — the folder decides what is listed.
+private struct FolderFileRow: View {
+    let url: URL
+    let isCurrent: Bool
+    let theme: MarkdownTheme
+    let onOpen: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "doc.plaintext")
+                .font(.system(size: 11))
+                .foregroundColor(isCurrent ? .accentColor : .secondary)
+            Text(url.lastPathComponent)
+                .font(.system(size: 12, weight: isCurrent ? .semibold : .regular))
+                .foregroundColor(theme.textColor)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(isCurrent
+                      ? Color.accentColor.opacity(0.18)
+                      : (isHovered ? Color.gray.opacity(0.12) : Color.clear))
+                .padding(.horizontal, 4)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onOpen()
+        }
+        .onHover { hovering in
+            isHovered = hovering
+        }
+        .help(url.path)
     }
 }
 
