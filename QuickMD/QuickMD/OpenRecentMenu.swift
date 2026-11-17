@@ -150,6 +150,7 @@ final class OpenRecentMenu: NSObject, NSMenuDelegate {
             item.target = self
             item.representedObject = url
             item.image = icon(for: url)
+            Self.requestVisibleImage(for: item)
             item.isEnabled = true
             menu.addItem(item)
         }
@@ -158,6 +159,21 @@ final class OpenRecentMenu: NSObject, NSMenuDelegate {
         clear.target = self
         clear.isEnabled = !urls.isEmpty
         menu.addItem(clear)
+    }
+
+    /// The KVC key of `NSMenuItem.preferredImageVisibility` (macOS 27 SDK).
+    static let imageVisibilityKey = "preferredImageVisibility"
+
+    /// On macOS 27 and later AppKit decides whether a menu item's image is
+    /// drawn and typically hides it (SDK header `NSMenuItem.h`); the
+    /// system's own Open Recent shows document icons, so ours asks for
+    /// them. `preferredImageVisibility` is public API of the macOS 27 SDK,
+    /// called by name only because CI builds with an older SDK that lacks
+    /// the symbol; 1 is `NSMenuItemImageVisibilityVisible`. On macOS 13–26
+    /// the item does not respond and nothing is called (images show there).
+    static func requestVisibleImage(for item: NSMenuItem) {
+        guard item.responds(to: NSSelectorFromString("setPreferredImageVisibility:")) else { return }
+        item.setValue(NSNumber(value: 1), forKey: imageVisibilityKey)
     }
 
     /// The content type's icon from the extension alone — no

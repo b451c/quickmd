@@ -327,6 +327,37 @@ final class OpenRecentMenuTests: XCTestCase {
         }
     }
 
+    /// Where AppKit has `preferredImageVisibility` (macOS 27+), entries ask
+    /// for their icon to be drawn and Clear Menu / the separator are left at
+    /// the default; elsewhere the request is a no-op. Decided by
+    /// `responds(to:)`, never by the OS version.
+    func testEntryIconsAskToBeVisibleWhereAppKitDecidesVisibility() throws {
+        world.recents = [url("/Notes/one.md"), url("/Notes/two.txt")]
+        let tree = makeFileMenu(slot: NSMenuItem())
+        let repair = makeRepair(for: tree)
+        repair.install()
+        let submenu = try XCTUnwrap(repairedSubmenu(tree, repair: repair))
+        let entries = Array(submenu.items.prefix(2))
+        let clear = try XCTUnwrap(submenu.items.last)
+
+        for entry in entries { XCTAssertEqual(entry.image?.size, OpenRecentMenu.iconSize) }
+        XCTAssertNil(clear.image)
+
+        let key = OpenRecentMenu.imageVisibilityKey
+        guard NSMenuItem().responds(to: NSSelectorFromString("setPreferredImageVisibility:")) else {
+            // No such property: the request must not crash and sets nothing.
+            OpenRecentMenu.requestVisibleImage(for: NSMenuItem())
+            return
+        }
+        let defaultValue = (NSMenuItem().value(forKey: key) as? NSNumber)?.intValue
+        for entry in entries {
+            XCTAssertEqual((entry.value(forKey: key) as? NSNumber)?.intValue, 1, entry.title)
+        }
+        XCTAssertEqual((clear.value(forKey: key) as? NSNumber)?.intValue, defaultValue)
+        XCTAssertEqual((submenu.items[2].value(forKey: key) as? NSNumber)?.intValue, defaultValue,
+                       "the separator")
+    }
+
     func testEntriesThatShareANameSayTheirFolder() throws {
         world.recents = [url("/A/README.md"), url("/Notes/plan.md"), url("/B/README.md")]
         let tree = makeFileMenu(slot: NSMenuItem())
