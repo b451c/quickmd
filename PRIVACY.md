@@ -1,6 +1,6 @@
 # Privacy Policy for QuickMD
 
-**Last updated: November 4, 2026**
+**Last updated: November 17, 2026**
 
 ## Overview
 
@@ -33,6 +33,7 @@ Specifically, QuickMD does NOT collect:
 QuickMD works with the files **you open**, and with what those files point to.
 
 - It reads the Markdown file you open, the local images that file references, and another Markdown file when you click a link to it
+- If you use File > Open Folder, it reads the names of the files and folders inside the folder you choose to list its Markdown files in the sidebar, keeps that list current while the folder is open, and remembers the folder on your Mac until you close it. A file from the list is read only when you click it.
 - It writes to a file only when you ask it to: saving your changes in Source Edit writes to the document you are editing; "Save a Copy" and "Export as PDF" write where you choose
 - Your settings, the list of recent documents and any custom themes you add are stored on your Mac
 - The Mac App Store version also notes on which days you open documents, so it asks for a rating at most once per version. This stays on your Mac and is never sent anywhere.
@@ -76,7 +77,7 @@ QuickMD is distributed in two builds, and macOS limits them differently.
 | Permission | Purpose |
 |------------|---------|
 | **User Selected File (Read/Write)** | To read the Markdown files you open and to save your Source Edit changes to them |
-| **App-Scoped Bookmarks** | To remember a folder you allowed, so images next to your documents keep loading |
+| **App-Scoped Bookmarks** | To remember a folder you allowed or opened, so images next to your documents keep loading and an opened folder's list is there next time |
 | **Outgoing Network Connections** | To fetch remote images from URLs in your Markdown files |
 | **Printing** | To print and export to PDF |
 
@@ -87,7 +88,7 @@ It cannot read anything else unless you grant access to a folder when macOS asks
 Neither build accesses:
 - Your contacts, calendar, or location
 - Your camera, microphone, or photos
-- Files other than the documents you open, what they reference, and QuickMD's own settings and themes
+- Files other than the documents you open, what they reference, the names of the files in a folder you open, and QuickMD's own settings and themes
 
 ### Open Source
 

@@ -67,6 +67,7 @@ Perfect for developers, writers, students, and anyone who works with Markdown da
 - Find in document (`⌘F`) with match count and per-word navigation
 - Word-level highlighting across all block types (text, code, tables, blockquotes)
 - Table of Contents sidebar (`⌘⇧T`) — auto-generated from headings; right-click it to list every level or stop at H2, H3 or H4
+- **Open Folder** (`⇧⌘O`) — the Documents sidebar lists the Markdown files of a folder, subfolders included, above your recent documents; a click opens the file in a tab
 - Reading mode (`⌘⇧R`) — hides both sidebars and the hover buttons and centres the text in a comfortable column (720 pt at 100 %, growing with zoom); `Esc` brings everything back
 - **Select across the whole document** — drag through paragraphs, headings, lists, quotes, code and tables (a word, a cell or a range of cells), it scrolls for you, Shift-click to extend, `⌘A` / `⌘C` to copy clean text (table cells as tab-separated values, math as LaTeX). Every copy shows how many characters and words were copied; optional auto-copy of selections in Settings → General
 - Copy entire document (`⌘⇧C`) or individual sections (hover heading → copy icon)
@@ -173,6 +174,7 @@ Now all your Markdown files will open instantly with QuickMD!
 | Shortcut | Action |
 |----------|--------|
 | `⌘O` | Open file |
+| `⇧⌘O` | Open Folder |
 | `⌘W` | Close tab (or window if last tab) |
 | `⌘R` | Reload the document from disk |
 | `⌥⌘E` | Edit the Markdown source in place / done editing |
@@ -202,7 +204,7 @@ Now all your Markdown files will open instantly with QuickMD!
 - Per-block **vector PDF export** — selectable text, embedded fonts, Mermaid diagrams as images, multi-page pagination
 - Source Edit writes the file in place (inode, permissions and extended attributes survive) and re-encodes exactly what it decoded; the unsaved-changes guard sits in front of the window's own delegate, so the system's document machinery is untouched
 - The Mac App Store build runs in the App Sandbox (security-scoped bookmarks for local images); the GitHub and Homebrew build is Developer ID signed and notarized, not sandboxed
-- 1,200+ unit tests; GitHub Actions builds every flavor on each push
+- 1,300+ unit tests; GitHub Actions builds every flavor on each push
 
 ### Where Things Live
 
@@ -278,7 +280,7 @@ Donations help renew the qmd.app domain - [see the goal on qmd.app](https://qmd.
 
 ## Roadmap
 
-What has shipped, release by release, is in the [CHANGELOG](QuickMD/CHANGELOG.md). What is planned for the next version is listed in [this issue](https://github.com/b451c/quickmd/issues/54): comment there, or open a new issue if something is missing for you.
+What has shipped, release by release, is in the [CHANGELOG](QuickMD/CHANGELOG.md). What is planned for the next version is listed in [this issue](https://github.com/b451c/quickmd/issues/63): comment there, or open a new issue if something is missing for you.
 
 ## Contributing
 

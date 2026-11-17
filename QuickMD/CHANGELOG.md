@@ -5,6 +5,20 @@ All notable changes to QuickMD will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.0] - 2026-11-17
+
+Open a folder and read its Markdown files from the sidebar; numbered lists count up from their first number.
+
+### Added
+- **Open Folder** (File ▸ Open Folder…, ⇧⌘O): the Documents sidebar lists the Markdown files of a folder, subfolders included, above your recent documents. A click opens the file in a tab. The folder stays until you close it. Thanks to @aginanjar for the suggestion (#62).
+
+### Fixed
+- **Numbered lists count up from their first number:** `1.` `1.` `1.` is shown as 1, 2, 3, and a list that starts with `5.` goes on with 6, whatever numbers follow in the source. Switching between `1.` and `1)` starts a new list. Thanks to @jmataraz for the report (#61).
+- A formula used as link text is drawn in the link's colour and underlined (in print/PDF: in the link's colour).
+- A line of three or more `*`, `-` or `_` with spaces between them (`* * *`) is a horizontal rule.
+- A recent document that cannot be opened says so instead of doing nothing.
+- **File ▸ Open Recent is back:** on macOS 27 the menu showed an empty grey item in its place.
+
 ## [1.15.1] - 2026-11-15
 
 Formulas: no more repeated characters inside brackets, a crash on a malformed formula, signs and spaces as LaTeX sets them.
