@@ -14,6 +14,25 @@ enum MarkdownFileKind {
     static func isMarkdown(_ url: URL) -> Bool {
         extensions.contains(url.pathExtension.lowercased())
     }
+
+    private static let extensionBytes: [[UInt8]] = extensions.map { Array($0.utf8) }
+
+    /// The same test on a file NAME's UTF-8 bytes, without allocating (the
+    /// folder watcher's queue): the bytes after the last "." (not a leading
+    /// one), ASCII case-insensitive.
+    static func isMarkdownName(utf8 name: UnsafeBufferPointer<UInt8>) -> Bool {
+        var dot = name.count - 1
+        while dot > 0, name[dot] != UInt8(ascii: ".") { dot -= 1 }
+        guard dot > 0 else { return false }
+        let length = name.count - dot - 1
+        return extensionBytes.contains { candidate in
+            candidate.count == length && candidate.indices.allSatisfy { index in
+                var byte = name[dot + 1 + index]
+                if byte >= UInt8(ascii: "A"), byte <= UInt8(ascii: "Z") { byte += 32 }
+                return byte == candidate[index]
+            }
+        }
+    }
 }
 
 // MARK: - Sidebar row identity
@@ -201,6 +220,13 @@ enum FolderListing {
 
         func isRelevant(flags: UInt32, path: UnsafeBufferPointer<UInt8>) -> Bool {
             guard FolderListing.isRelevantEventFlags(flags) else { return false }
+            if flags & FolderListing.lookAgainFlags != 0 { return true }
+            var end = path.count
+            if end > 0, path[end - 1] == FolderListing.slashByte { end -= 1 }
+            var start = end
+            while start > 0, path[start - 1] != FolderListing.slashByte { start -= 1 }
+            let name = UnsafeBufferPointer(rebasing: path[start..<end])
+            if FolderListing.isNonMarkdownFileEvent(flags: flags, name: name) { return false }
             return bases.allSatisfy { Self.isRelevant(path: path, base: $0) }
         }
 
@@ -250,11 +276,7 @@ enum FolderListing {
     static func isRelevantEventFlags(_ flags: UInt32) -> Bool {
         let structural = UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRemoved
                                     | kFSEventStreamEventFlagItemRenamed)
-        let lookAgain = UInt32(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagRootChanged
-                                   | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped
-                                   | kFSEventStreamEventFlagEventIdsWrapped | kFSEventStreamEventFlagMount
-                                   | kFSEventStreamEventFlagUnmount)
-        if flags & (structural | lookAgain) != 0 { return true }
+        if flags & (structural | lookAgainFlags) != 0 { return true }
         if flags & UInt32(kFSEventStreamEventFlagItemChangeOwner) != 0,
            flags & UInt32(kFSEventStreamEventFlagItemIsDir) != 0 { return true }
         return flags == 0
@@ -265,8 +287,38 @@ enum FolderListing {
     /// `isRelevantChange(atPath:root:)`). The root's own event (its path IS
     /// the root) is judged by its flags alone.
     static func isRelevantChange(_ change: Change, roots: [String]) -> Bool {
-        isRelevantEventFlags(change.flags)
-            && roots.allSatisfy { isRelevantChange(atPath: change.path, root: $0) }
+        guard isRelevantEventFlags(change.flags) else { return false }
+        if change.flags & lookAgainFlags != 0 { return true }
+        var bytes = Array(change.path.utf8)
+        if bytes.last == slashByte { bytes.removeLast() }
+        let name = bytes.split(separator: slashByte, omittingEmptySubsequences: false).last.map(Array.init) ?? []
+        if isNonMarkdownFileEvent(flags: change.flags, name: name) { return false }
+        return roots.allSatisfy { isRelevantChange(atPath: change.path, root: $0) }
+    }
+
+    /// "Events were lost / look again": relevant whatever the path.
+    static let lookAgainFlags = UInt32(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagRootChanged
+                                           | kFSEventStreamEventFlagUserDropped | kFSEventStreamEventFlagKernelDropped
+                                           | kFSEventStreamEventFlagEventIdsWrapped | kFSEventStreamEventFlagMount
+                                           | kFSEventStreamEventFlagUnmount)
+
+    /// A FILE (or symlink) event whose name is not Markdown cannot change a
+    /// listing of Markdown files, whatever happened to it (created,
+    /// removed, renamed): a build writing thousands of `.o` / `dist/` files
+    /// re-read the whole tree every second (GUI, 13 % CPU). A rename
+    /// delivers one event PER NAME (probed: `x.txt → x.md` gives
+    /// `Renamed|IsFile` for both paths), so `x.txt → x.md` is still seen
+    /// through the `x.md` event and `x.md → x.txt` through the old name.
+    /// Folders stay relevant (a folder moved in brings only its own event);
+    /// an event that is neither file nor symlink stays relevant.
+    static func isNonMarkdownFileEvent(flags: UInt32, name: [UInt8]) -> Bool {
+        name.withUnsafeBufferPointer { isNonMarkdownFileEvent(flags: flags, name: $0) }
+    }
+
+    static func isNonMarkdownFileEvent(flags: UInt32, name: UnsafeBufferPointer<UInt8>) -> Bool {
+        let fileLike = UInt32(kFSEventStreamEventFlagItemIsFile | kFSEventStreamEventFlagItemIsSymlink)
+        guard flags & fileLike != 0, flags & UInt32(kFSEventStreamEventFlagItemIsDir) == 0 else { return false }
+        return !MarkdownFileKind.isMarkdownName(utf8: name)
     }
 
     /// `realpath(3)`: the spelling FSEvents reports (`/private/var/…`, where

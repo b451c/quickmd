@@ -273,12 +273,15 @@ final class FolderListingTests: XCTestCase {
         let filter = FolderListing.ChangeFilter(roots: roots)
         let prefixes = ["/var/f/Notes", "/private/var/f/Notes", "/var/f/Notes2", "/var/f", "/elsewhere", "/"]
         let components = ["", "docs", ".git", "node_modules", "node_modules2", "xnode_modules", ".", "..",
-                          "\u{E9}t\u{E9}", "e\u{301}te", ".\u{301}x", "a b", "Node_Modules", "\u{1F600}", "notes.md"]
+                          "\u{E9}t\u{E9}", "e\u{301}te", ".\u{301}x", "a b", "Node_Modules", "\u{1F600}", "notes.md",
+                          "N.MD", "x.o", "a.md.bak", ".md", "x.", "r\u{E9}.markdown"]
         let flagKinds: [UInt32] = [
             UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemIsFile),
             UInt32(kFSEventStreamEventFlagItemChangeOwner | kFSEventStreamEventFlagItemIsDir),
             UInt32(kFSEventStreamEventFlagItemChangeOwner | kFSEventStreamEventFlagItemIsFile),
             UInt32(kFSEventStreamEventFlagItemModified | kFSEventStreamEventFlagItemIsFile),
+            UInt32(kFSEventStreamEventFlagItemRenamed | kFSEventStreamEventFlagItemIsSymlink),
+            UInt32(kFSEventStreamEventFlagMustScanSubDirs),
             0,
         ]
         var checked = 0
@@ -303,6 +306,53 @@ final class FolderListingTests: XCTestCase {
         }
         XCTAssertGreaterThan(checked, 3_000)
         XCTAssertTrue(FolderListing.isSkippedName(".\u{301}x"), "a leading dot BYTE, as the byte rule")
+    }
+
+    /// A file event counts only for a Markdown name; folders and unknown
+    /// kinds always count; "look again" counts anywhere. Rename flags are
+    /// the probed ones (macOS 27: one `Renamed|IsFile` event per name; a
+    /// young file also carries its sticky `Created|Modified`).
+    func testFileEventsCountOnlyForMarkdownNames() {
+        let roots = ["/r/Notes", "/private/r/Notes"]
+        let filter = FolderListing.ChangeFilter(roots: roots)
+        func check(_ path: String, _ flags: UInt32, _ expected: Bool, line: UInt = #line) {
+            let reference = FolderListing.isRelevantChange(.init(path: path, flags: flags), roots: roots)
+            let fast = Array(path.utf8).withUnsafeBufferPointer { filter.isRelevant(flags: flags, path: $0) }
+            XCTAssertEqual(reference, expected, "reference: \(path)", line: line)
+            XCTAssertEqual(fast, expected, "byte rule: \(path)", line: line)
+        }
+        let file = kFSEventStreamEventFlagItemIsFile, dir = kFSEventStreamEventFlagItemIsDir
+        let created = UInt32(kFSEventStreamEventFlagItemCreated | file)
+        let removed = UInt32(kFSEventStreamEventFlagItemRemoved | file)
+        let renamed = UInt32(kFSEventStreamEventFlagItemRenamed | file)
+        let youngRenamed = UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemRenamed
+                                  | kFSEventStreamEventFlagItemModified | file)
+        for name in ["build.dat", "main.o", "Makefile", "notes.md.bak", "x.md.", "a.mdx", "readme.txt"] {
+            check("/private/r/Notes/Attachments/" + name, created, false)
+            check("/private/r/Notes/Attachments/" + name, removed, false)
+        }
+        for name in ["a.md", "B.MD", "c.markdown", "d.MarkDown", "e.mdown", "f.mkd", "g.MKD"] {
+            check("/private/r/Notes/docs/" + name, created, true)
+            check("/private/r/Notes/docs/" + name, removed, true)
+        }
+        check("/private/r/Notes/x.dat", UInt32(kFSEventStreamEventFlagItemCreated | dir), true)  // a folder
+        check("/private/r/Notes/x.dat/", UInt32(kFSEventStreamEventFlagItemRenamed | dir), true)
+        // x.txt → x.md (the new name tells) and x.md → x.txt (the old name tells).
+        check("/private/r/Notes/x.txt", renamed, false)
+        check("/private/r/Notes/x.md", renamed, true)
+        check("/private/r/Notes/y.txt", youngRenamed, false)
+        check("/private/r/Notes/y.md", renamed, true)
+        // A symlink named like data: not relevant; one named .md: relevant.
+        check("/private/r/Notes/link", UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemIsSymlink), false)
+        check("/private/r/Notes/link.md", UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemIsSymlink), true)
+        // Neither file nor folder, or no flags: relevant.
+        check("/private/r/Notes/thing.dat", UInt32(kFSEventStreamEventFlagItemCreated), true)
+        check("/private/r/Notes/thing.dat", 0, true)
+        // "Look again" counts whatever the path.
+        check("/private/r/Notes/.git/x.o", UInt32(kFSEventStreamEventFlagMustScanSubDirs), true)
+        check("/private/r/Notes/a.dat", UInt32(kFSEventStreamEventFlagMustScanSubDirs | file), true)
+        // A Markdown file under a skipped name still does not count.
+        check("/private/r/Notes/node_modules/pkg/README.md", created, false)
     }
 
     /// The file cap still cuts in display order.

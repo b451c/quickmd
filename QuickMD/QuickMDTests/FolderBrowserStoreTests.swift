@@ -600,6 +600,25 @@ final class FolderBrowserStoreTests: XCTestCase {
         XCTAssertEqual(world.started, started + 1)
     }
 
+    /// A build in the folder: 10 000 created `.o` files outside skipped
+    /// names → no hop, no scan.
+    func testTenThousandNonMarkdownFilesCauseNoHopAndNoScan() async throws {
+        let notes = try folder("Notes", files: ["a.md"])
+        let real = FolderListing.realPath(FolderAccessBroker.canonicalPath(notes))
+        let created = UInt32(kFSEventStreamEventFlagItemCreated | kFSEventStreamEventFlagItemIsFile)
+        let paths = (0..<10_000).map { real + "/build/obj\($0 % 50)/unit\($0).o" }
+        XCTAssertEqual(hops(paths: paths, flags: Array(repeating: created, count: paths.count),
+                            roots: [FolderAccessBroker.canonicalPath(notes), real]), 0)
+        let world = World()
+        let browser = store(world)
+        _ = await browser.open(notes)
+        let started = world.started, hopped = world.hops
+        world.fire(paths, flags: created)
+        await settle(browser)
+        XCTAssertEqual(world.hops, hopped)
+        XCTAssertEqual(world.started, started)
+    }
+
     /// A stopped filter (the watcher released) calls nothing.
     func testAStoppedBatchFilterCallsNothing() {
         let counter = HopCounter()
