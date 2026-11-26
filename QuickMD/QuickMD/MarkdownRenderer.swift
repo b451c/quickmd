@@ -1120,6 +1120,8 @@ struct MarkdownRenderer: Sendable {
         // (`escapesDisabled`) is front matter, which has no math.
         var formulas = escapesDisabled || formulasDisabled ? InlineMathSegmenter.Cursor()
             : InlineMathSegmenter.Cursor(text, codeSpans: parse.codeSpans, entities: !entitiesLiteral)
+        // An inline comment found no `-->` (see the `<` case).
+        var commentCloserMissing = false
 
         while let byte = remaining.utf8.first {
             var plainLimit = remaining.endIndex
@@ -1181,6 +1183,22 @@ struct MarkdownRenderer: Sendable {
                 }
                 continue
             case UInt8(ascii: "<"):
+                // An HTML comment is drawn as nothing (GitHub). Once one
+                // finds no `-->`, no later `<!--` of the line can either:
+                // they are not searched again (no quadratic run of `<!--`).
+                if !commentCloserMissing, remaining.hasPrefix("<!--") {
+                    if var rest = HTMLBlockSyntax.skippingInlineComment(remaining) {
+                        // `a <!-- x --> b` reads "a b", one space, as a
+                        // browser collapses it.
+                        if remaining.startIndex > text.startIndex,
+                           text[text.index(before: remaining.startIndex)] == " " {
+                            rest = rest.drop(while: { $0 == " " })
+                        }
+                        remaining = rest
+                        continue
+                    }
+                    commentCloserMissing = true
+                }
                 if let (attr, rest) = tryParseAngleAutolink(remaining) {
                     parse.append(.atom(attr, .body))
                     remaining = rest

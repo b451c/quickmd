@@ -454,6 +454,19 @@ struct MarkdownBlockParser: Sendable {
                 continue
             }
 
+            // HTML blocks (`HTMLBlockSyntax`) — after code and math, whose
+            // lines are verbatim, before every other block start.
+            //
+            // A comment (`<!--` … `-->`, kind 2) is drawn as nothing, as on
+            // GitHub. It may interrupt a paragraph and ends one; at the
+            // margin it ends a list, like any block.
+            if let end = HTMLBlockSyntax.commentBlockEnd(in: lines, at: i) {
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                _ = nesting.block(startingAt: line)
+                i = end
+                continue
+            }
+
             // ATX headers (# H1 ... ###### H6) — detect at block level
             let nsRange = NSRange(line.startIndex..., in: line)
             if let match = Self.headerRegex.firstMatch(in: line, range: nsRange),
@@ -1699,9 +1712,12 @@ struct MarkdownBlockParser: Sendable {
         private var fence: Fence?
         /// Index of the line that closes the open `$$` block.
         private var mathCloses: Int?
+        /// An HTML comment block (`HTMLBlockSyntax.commentBlockEnd`) is open:
+        /// a definition commented out is not one.
+        private var inComment = false
 
         /// Inside such a block: the next line is its text or its closing line.
-        var isOpen: Bool { fence != nil || mathCloses != nil }
+        var isOpen: Bool { fence != nil || mathCloses != nil || inComment }
 
         /// Whether the line `index` (its `markerLine`) opens, continues or
         /// closes such a block. `nextMath` is `nextMathLines` of the lines and
@@ -1715,6 +1731,14 @@ struct MarkdownBlockParser: Sendable {
             }
             if let closes = mathCloses {
                 if index >= closes { mathCloses = nil }
+                return true
+            }
+            if inComment {
+                if marker.contains("-->") { inComment = false }
+                return true
+            }
+            if marker.hasPrefix("<!--") {
+                inComment = !marker.dropFirst(2).contains("-->")
                 return true
             }
             if let opening = MarkdownBlockParser.fenceOpening(marker) {
