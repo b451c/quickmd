@@ -215,6 +215,21 @@ struct MarkdownRenderer: Sendable {
         return result
     }
 
+    /// A container's summary row (`<details>`'s `<summary>`, see
+    /// `HTMLBlockSyntax`): the caption as one paragraph, drawn beside the
+    /// disclosure control (`BlockLayout.ContainerSummary`), with a link on
+    /// the text that toggles the container (`HTMLBlockSyntax.toggleURL`): a
+    /// click on the caption opens or closes it, as in a browser. A link of
+    /// the caption's own keeps its destination.
+    func renderContainerSummary(_ markdown: String, container: Int) -> AttributedString {
+        var text = render(Self.asParagraphText(markdown))
+        let toggle = HTMLBlockSyntax.toggleURL(for: container)
+        for (link, range) in text.runs[\.link] where link == nil {
+            text[range].link = toggle
+        }
+        return text
+    }
+
     /// What an ordered item shows: its marker as drawn (indent spaces + "N. ")
     /// and the widest drawn marker of its list (what its text hangs under).
     struct OrderedMarker: Equatable {

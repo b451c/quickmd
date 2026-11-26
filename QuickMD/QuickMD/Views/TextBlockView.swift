@@ -56,6 +56,11 @@ struct TextBlockView: View {
     var typesetsTextKindMath: Bool = false
     var mathFontSize: CGFloat? = nil
     let onLink: (URL) -> Void
+    /// The tooltip of a `<details>` summary's toggle link
+    /// (`HTMLBlockSyntax.toggleURL`): "Expand" / "Collapse", from the view
+    /// that knows the state. Nil, or nil for the URL: no tooltip, never the
+    /// internal URL. Other links keep the text view's own.
+    var toggleToolTip: ((URL) -> String?)? = nil
 
     @State private var cachedNS: NSAttributedString?
     @State private var cachedKey: String = ""
@@ -67,7 +72,8 @@ struct TextBlockView: View {
          cacheScope: String = "",
          typesetsTextKindMath: Bool = false,
          mathFontSize: CGFloat? = nil,
-         onLink: @escaping (URL) -> Void) {
+         onLink: @escaping (URL) -> Void,
+         toggleToolTip: ((URL) -> String?)? = nil) {
         self.blockId = blockId
         self.attributed = attributed
         self.hasInlineMath = hasInlineMath
@@ -81,6 +87,7 @@ struct TextBlockView: View {
         self.typesetsTextKindMath = typesetsTextKindMath
         self.mathFontSize = mathFontSize
         self.onLink = onLink
+        self.toggleToolTip = toggleToolTip
     }
 
     /// Keyed on `contentVersion`, NOT on a theme/scale/length fingerprint.
@@ -108,7 +115,8 @@ struct TextBlockView: View {
             attributed: ns,
             searchTerm: searchTerm,
             focusedOccurrence: focusedOccurrence,
-            onLink: onLink
+            onLink: onLink,
+            toggleToolTip: toggleToolTip
         )
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: cacheKey) {
@@ -160,6 +168,7 @@ private struct BlockTextView: NSViewRepresentable {
     let searchTerm: String
     let focusedOccurrence: Int?
     let onLink: (URL) -> Void
+    var toggleToolTip: ((URL) -> String?)? = nil
 
     func makeCoordinator() -> TextViewLinkDelegate { TextViewLinkDelegate(onLink: onLink) }
 
@@ -180,6 +189,7 @@ private struct BlockTextView: NSViewRepresentable {
 
     func updateNSView(_ textView: SelfSizingTextView, context: Context) {
         context.coordinator.onLink = onLink
+        context.coordinator.toggleToolTip = toggleToolTip
 
         let textChanged = (textView.cachedAttributed !== attributed)
         if textChanged {
@@ -216,6 +226,8 @@ private struct BlockTextView: NSViewRepresentable {
 /// `MarkdownView.handleLinkActivation`.
 final class TextViewLinkDelegate: NSObject, NSTextViewDelegate {
     var onLink: (URL) -> Void
+    /// `TextBlockView.toggleToolTip`.
+    var toggleToolTip: ((URL) -> String?)?
 
     init(onLink: @escaping (URL) -> Void) { self.onLink = onLink }
 
@@ -229,5 +241,15 @@ final class TextViewLinkDelegate: NSObject, NSTextViewDelegate {
             return true
         }
         return false
+    }
+
+    /// A `<details>` summary's toggle link says what a click does, not its
+    /// internal URL (`HTMLBlockSyntax.toggleURL`).
+    func textView(_ view: NSTextView, willDisplayToolTip tooltip: String,
+                  forCharacterAt characterIndex: Int) -> String? {
+        guard let storage = view.textStorage, characterIndex < storage.length,
+              let url = HTMLBlockSyntax.url(fromLink: storage.attribute(.link, at: characterIndex, effectiveRange: nil)),
+              HTMLBlockSyntax.toggledContainer(url) != nil else { return tooltip }
+        return toggleToolTip?(url)
     }
 }

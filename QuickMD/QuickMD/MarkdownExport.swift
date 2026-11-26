@@ -509,8 +509,22 @@ struct MarkdownPrintableBlockView: View {
         Group {
             switch block.content {
             case .text(let attributedString):
-                PrintableMath.text(from: attributedString)
-                    .foregroundColor(.black)
+                if block.opensContainer != nil {
+                    // A `<details>` summary. Print shows every container
+                    // open (the parse keeps their blocks), so its chevron
+                    // points down, in the control's column as on screen.
+                    HStack(alignment: .firstTextBaseline, spacing: 0) {
+                        Image(systemName: "arrowtriangle.down.fill")
+                            .font(.system(size: 9))
+                            .foregroundColor(.black)
+                            .frame(width: BlockLayout.ContainerSummary.controlWidth, alignment: .center)
+                        PrintableMath.text(from: HTMLBlockSyntax.removingToggleLinks(attributedString))
+                            .foregroundColor(.black)
+                    }
+                } else {
+                    PrintableMath.text(from: attributedString)
+                        .foregroundColor(.black)
+                }
 
             case .table(let headers, let rows, let alignments, let style):
                 PrintableTableView(headers: headers, rows: rows, alignments: alignments, style: style)

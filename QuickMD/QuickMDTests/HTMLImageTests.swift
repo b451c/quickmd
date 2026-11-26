@@ -256,7 +256,7 @@ final class HTMLImageTests: XCTestCase {
     }
 
     func testOtherHTMLStaysLiteralText() {
-        for line in ["<span>x</span>", "<details>", "<summary>More</summary>", "<p>Some text</p>",
+        for line in ["<span>x</span>", "<p>Some text</p>",
                      "<div>text</div>", "</img>", "<img src=\"a.png\"> caption", "<img src=a.png>text",
                      "<p", "<>", "< img src=a.png>", "<imgsrc=a.png>",
                      "<img src=\"a.png\" alt=\"x\" <b>", "<table>", "</br>", "<p align=center>![a](x.png)</p>"] {

@@ -306,6 +306,42 @@ struct MarkdownBlockParser: Sendable {
         var ruleOwners: [Int: Int] = [:]
         var everyBlockOwner: [Int: Int] = [:]
 
+        // HTML containers (`HTMLBlockSyntax.containerLine`, `<details>`):
+        // the open ones, innermost last, and the block positions each one's
+        // body took (`assignContainers` tags those blocks at the end).
+        var openContainers: [OpenContainer] = []
+        var containerBodies: [(id: Int, range: Range<Int>)] = []
+        var containerCount = 0
+        // The innermost open container gets its summary row now: `caption`,
+        // or the kind's default when it has none (`<details>` without a
+        // `<summary>` reads "Details", as in a browser). Its body starts
+        // after the row.
+        func appendSummary(_ caption: String?, line: Int) {
+            guard var open = openContainers.popLast() else { return }
+            flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+            let text = caption.flatMap { MarkdownRenderer.isBlankLine($0) ? nil : $0 }
+                ?? Self.defaultSummary(of: open.container.kind)
+            blocks.append(.containerSummary(index: blockIndex,
+                                            activeRenderer.renderContainerSummary(text, container: open.container.id),
+                                            container: open.container, sourceLine: line))
+            blockIndex += 1
+            open.bodyStart = blocks.count
+            openContainers.append(open)
+        }
+        // The innermost open container has no summary yet and something
+        // other than one comes: it gets the default.
+        func summarizeIfAwaiting() {
+            if let open = openContainers.last, open.bodyStart == nil {
+                appendSummary(nil, line: open.sourceLine)
+            }
+        }
+        func closeContainer() {
+            summarizeIfAwaiting()
+            guard let open = openContainers.popLast(), let bodyStart = open.bodyStart else { return }
+            flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+            containerBodies.append((id: open.container.id, range: bodyStart..<blocks.count))
+        }
+
         while i < lines.count {
             // The item that owns the block(s) this turn appends, and where in
             // `blocks` they start (after the text the branch flushed first).
@@ -336,6 +372,13 @@ struct MarkdownBlockParser: Sendable {
                 for removed in firstRemoved..<sourceLine where !Self.isBlank(allLines[removed]) {
                     nesting.block(startingAt: allLines[removed])
                 }
+            }
+
+            // A container's first line of content that is not its summary:
+            // the container gets the default one before it.
+            if let open = openContainers.last, open.bodyStart == nil, !Self.isBlank(line),
+               !HTMLBlockSyntax.startsSummary(line) {
+                appendSummary(nil, line: open.sourceLine)
             }
 
             // What every block marker below is looked for in (`markerLine`).
@@ -464,6 +507,44 @@ struct MarkdownBlockParser: Sendable {
                 flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
                 _ = nesting.block(startingAt: line)
                 i = end
+                continue
+            }
+
+            // A container line (`<details>`, `<summary>…</summary>`,
+            // `</details>`, or several on one line): opens and closes
+            // containers and gives them their summary rows. The blocks
+            // between are parsed as usual, each tagged with its containers
+            // at the end. Text on the line outside the tags is paragraph
+            // text, so the next line may go on with it. A `</details>`
+            // with nothing open draws nothing; one never closed is closed
+            // at the end of the document, as a browser does.
+            if let html = HTMLBlockSyntax.containerLine(in: lines, at: i) {
+                flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                _ = nesting.block(startingAt: line)
+                for event in html.events {
+                    switch event {
+                    case .open(let kind):
+                        summarizeIfAwaiting()
+                        flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+                        openContainers.append(OpenContainer(container: HTMLContainer(id: containerCount, kind: kind),
+                                                            sourceLine: sourceLine))
+                        containerCount += 1
+                    case .summary(let caption):
+                        if let open = openContainers.last, open.bodyStart == nil {
+                            appendSummary(caption, line: sourceLine)
+                        } else {
+                            // A summary outside a container, or a second one:
+                            // its text, as a browser shows it.
+                            textBuffer.append((line: caption, originalIndex: sourceLine))
+                        }
+                    case .text(let text):
+                        summarizeIfAwaiting()
+                        textBuffer.append((line: text, originalIndex: sourceLine))
+                    case .close:
+                        closeContainer()
+                    }
+                }
+                i = html.end
                 continue
             }
 
@@ -846,9 +927,12 @@ struct MarkdownBlockParser: Sendable {
         }
 
         flushTextBuffer(&textBuffer, to: &blocks, index: &blockIndex, pending: &pendingRows)
+        while !openContainers.isEmpty { closeContainer() }
         renderPendingRows(pendingRows, in: &blocks, allLines: allLines, using: activeRenderer,
                           owners: ListOwners(paragraphs: paragraphOwners, blocks: blockOwners,
                                              rules: ruleOwners, everyBlock: everyBlockOwner))
+        // After the text rows are rendered (they replace their placeholders).
+        if !containerBodies.isEmpty { Self.assignContainers(containerBodies, to: &blocks) }
 
         // Append footnotes block at end of document if any definitions exist
         if !footnoteDefinitions.isEmpty {
@@ -893,6 +977,38 @@ struct MarkdownBlockParser: Sendable {
         }
 
         return blocks
+    }
+
+    // MARK: - HTML containers
+
+    /// A container the block loop has opened and not closed yet.
+    struct OpenContainer {
+        let container: HTMLContainer
+        /// The line of its opening tag.
+        let sourceLine: Int
+        /// Where its body starts in the block list: after its summary row.
+        /// Nil until that row is appended.
+        var bodyStart: Int?
+    }
+
+    /// A container's summary when the source gives none.
+    static func defaultSummary(of kind: HTMLContainerKind) -> String {
+        switch kind {
+        case .details: return "Details"
+        }
+    }
+
+    /// Tags every block of each body with its container
+    /// (`MarkdownBlock.containers`), outermost first: bodies nest, and an
+    /// outer container opened first has the lower id.
+    static func assignContainers(_ bodies: [(id: Int, range: Range<Int>)], to blocks: inout [MarkdownBlock]) {
+        var ids = [[Int]](repeating: [], count: blocks.count)
+        for body in bodies.sorted(by: { $0.id < $1.id }) {
+            for position in body.range where position < blocks.count { ids[position].append(body.id) }
+        }
+        for position in blocks.indices where !ids[position].isEmpty {
+            blocks[position] = blocks[position].inContainers(ids[position])
+        }
     }
 
     // MARK: - Heading Helpers

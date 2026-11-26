@@ -175,9 +175,20 @@ struct MarkdownBlock: Identifiable, Sendable {
     /// narrows the code by `BlockLayout.Code.leadingInset` of it; print by
     /// `MarkdownRenderer.printedListIndent`.
     let listIndent: CGFloat
+    /// The HTML containers (`<details>`, `HTMLContainer`) this block is
+    /// inside, by `HTMLContainer.id`, outermost first. Empty outside any —
+    /// every block of a document without one. Whether the block is shown
+    /// is the view's decision (`ContainerPresentation`): the parser keeps
+    /// every block, open or not, so search, copy and print see them all.
+    let containers: [Int]
+    /// The container this row is the header of: a `<details>`'s summary
+    /// row (a `.text` block), which shows or hides the container's blocks.
+    /// The row itself is inside the ENCLOSING containers only.
+    let opensContainer: HTMLContainer?
 
     init(id: String, content: BlockContent, sourceLine: Int, joinsPrevious: Bool = false,
-         isFrontMatter: Bool = false, substitutesFormula: Bool = false, listIndent: CGFloat = 0) {
+         isFrontMatter: Bool = false, substitutesFormula: Bool = false, listIndent: CGFloat = 0,
+         containers: [Int] = [], opensContainer: HTMLContainer? = nil) {
         self.id = id
         self.content = content
         self.sourceLine = sourceLine
@@ -185,12 +196,29 @@ struct MarkdownBlock: Identifiable, Sendable {
         self.isFrontMatter = isFrontMatter
         self.substitutesFormula = substitutesFormula
         self.listIndent = listIndent
+        self.containers = containers
+        self.opensContainer = opensContainer
     }
 
     /// This block drawn under a list item whose text starts `indent` points in.
     func withListIndent(_ indent: CGFloat) -> MarkdownBlock {
         MarkdownBlock(id: id, content: content, sourceLine: sourceLine, joinsPrevious: joinsPrevious,
-                      isFrontMatter: isFrontMatter, substitutesFormula: substitutesFormula, listIndent: indent)
+                      isFrontMatter: isFrontMatter, substitutesFormula: substitutesFormula, listIndent: indent,
+                      containers: containers, opensContainer: opensContainer)
+    }
+
+    /// This block inside the containers `ids` (outermost first).
+    func inContainers(_ ids: [Int]) -> MarkdownBlock {
+        MarkdownBlock(id: id, content: content, sourceLine: sourceLine, joinsPrevious: joinsPrevious,
+                      isFrontMatter: isFrontMatter, substitutesFormula: substitutesFormula, listIndent: listIndent,
+                      containers: ids, opensContainer: opensContainer)
+    }
+
+    /// This block with another content, everything else kept.
+    func replacingContent(_ content: BlockContent, substitutesFormula: Bool) -> MarkdownBlock {
+        MarkdownBlock(id: id, content: content, sourceLine: sourceLine, joinsPrevious: joinsPrevious,
+                      isFrontMatter: isFrontMatter, substitutesFormula: substitutesFormula, listIndent: listIndent,
+                      containers: containers, opensContainer: opensContainer)
     }
 
     /// A cheap content fingerprint of the block, to find the scroll anchor
@@ -322,5 +350,12 @@ struct MarkdownBlock: Identifiable, Sendable {
     }
     static func svgImage(index: Int, source: String, sourceLine: Int) -> MarkdownBlock {
         MarkdownBlock(id: "svg-\(index)", content: .svgImage(source: source), sourceLine: sourceLine)
+    }
+    /// The header row of an HTML container (`<details>`'s `<summary>`):
+    /// text, drawn with the disclosure control in its leading indent.
+    static func containerSummary(index: Int, _ attributed: AttributedString, container: HTMLContainer,
+                                 sourceLine: Int) -> MarkdownBlock {
+        let text = MarkdownBlock.text(index: index, attributed, sourceLine: sourceLine)
+        return MarkdownBlock(id: text.id, content: text.content, sourceLine: sourceLine, opensContainer: container)
     }
 }

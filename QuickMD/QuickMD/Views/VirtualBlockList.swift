@@ -125,6 +125,10 @@ struct VirtualBlockList: NSViewRepresentable {
     let table: BlockHeightTable
     /// Bumped by `MarkdownView` on every parse. THE signal that `blocks` are new.
     let contentVersion: Int
+    /// Bumped when what the rows DRAW changes without the rows changing (a
+    /// `<details>` toggled: its summary's control turns): the materialized
+    /// cells get fresh root views, like a search change.
+    var rowStateVersion: Int = 0
     let searchText: String
     let focusedBlockId: String?
     let focusedOccInBlock: Int?
@@ -313,7 +317,8 @@ struct VirtualBlockList: NSViewRepresentable {
                 coordinator.install(blocks: blocks, table: table, contentVersion: contentVersion)
             } else if coordinator.searchText != searchText
                         || coordinator.focusedBlockId != focusedBlockId
-                        || coordinator.focusedOccInBlock != focusedOccInBlock {
+                        || coordinator.focusedOccInBlock != focusedOccInBlock
+                        || coordinator.rowStateVersion != rowStateVersion {
                 // D11 — same rows, new highlighting: hand the materialized cells
                 // a fresh root view. SwiftUI diffs it and `.id(block.id)` keeps
                 // each block's state (loaded images, rendered diagrams).
@@ -323,6 +328,7 @@ struct VirtualBlockList: NSViewRepresentable {
         coordinator.searchText = searchText
         coordinator.focusedBlockId = focusedBlockId
         coordinator.focusedOccInBlock = focusedOccInBlock
+        coordinator.rowStateVersion = rowStateVersion
 
         if let request = scrollRequest, request.token != coordinator.lastScrollToken {
             coordinator.lastScrollToken = request.token
@@ -417,6 +423,7 @@ struct VirtualBlockList: NSViewRepresentable {
         var onHeightReport: (String, Int, CGFloat) -> Void = { _, _, _ in }
         var setContentWidth: (CGFloat) -> Void = { _ in }
         var searchText: String = ""
+        var rowStateVersion = 0
         var focusedBlockId: String?
         var focusedOccInBlock: Int?
         var lastScrollToken: Int = .min
