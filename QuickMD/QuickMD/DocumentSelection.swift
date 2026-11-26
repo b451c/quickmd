@@ -383,6 +383,8 @@ enum DocumentCopyBuilder {
         result.removeAttribute(.qmdInlineMathSource, range: full)
         result.removeAttribute(.qmdDisplayMathSource, range: full)
         result.removeAttribute(.qmdInlineMathDelimiter, range: full)
+        // A `<details>` summary's toggle is the view's, not a link to paste.
+        HTMLBlockSyntax.removeToggleLinks(from: result)
         return DocumentCopyOutput(plain: result.string, rtf: result)
     }
 

@@ -215,6 +215,21 @@ struct MarkdownRenderer: Sendable {
         return result
     }
 
+    /// A container's summary row (`<details>`'s `<summary>`, see
+    /// `HTMLBlockSyntax`): the caption as one paragraph, drawn beside the
+    /// disclosure control (`BlockLayout.ContainerSummary`), with a link on
+    /// the text that toggles the container (`HTMLBlockSyntax.toggleURL`): a
+    /// click on the caption opens or closes it, as in a browser. A link of
+    /// the caption's own keeps its destination.
+    func renderContainerSummary(_ markdown: String, container: Int) -> AttributedString {
+        var text = render(Self.asParagraphText(markdown))
+        let toggle = HTMLBlockSyntax.toggleURL(for: container)
+        for (link, range) in text.runs[\.link] where link == nil {
+            text[range].link = toggle
+        }
+        return text
+    }
+
     /// What an ordered item shows: its marker as drawn (indent spaces + "N. ")
     /// and the widest drawn marker of its list (what its text hangs under).
     struct OrderedMarker: Equatable {
@@ -1120,6 +1135,8 @@ struct MarkdownRenderer: Sendable {
         // (`escapesDisabled`) is front matter, which has no math.
         var formulas = escapesDisabled || formulasDisabled ? InlineMathSegmenter.Cursor()
             : InlineMathSegmenter.Cursor(text, codeSpans: parse.codeSpans, entities: !entitiesLiteral)
+        // An inline comment found no `-->` (see the `<` case).
+        var commentCloserMissing = false
 
         while let byte = remaining.utf8.first {
             var plainLimit = remaining.endIndex
@@ -1181,6 +1198,22 @@ struct MarkdownRenderer: Sendable {
                 }
                 continue
             case UInt8(ascii: "<"):
+                // An HTML comment is drawn as nothing (GitHub). Once one
+                // finds no `-->`, no later `<!--` of the line can either:
+                // they are not searched again (no quadratic run of `<!--`).
+                if !commentCloserMissing, remaining.hasPrefix("<!--") {
+                    if var rest = HTMLBlockSyntax.skippingInlineComment(remaining) {
+                        // `a <!-- x --> b` reads "a b", one space, as a
+                        // browser collapses it.
+                        if remaining.startIndex > text.startIndex,
+                           text[text.index(before: remaining.startIndex)] == " " {
+                            rest = rest.drop(while: { $0 == " " })
+                        }
+                        remaining = rest
+                        continue
+                    }
+                    commentCloserMissing = true
+                }
                 if let (attr, rest) = tryParseAngleAutolink(remaining) {
                     parse.append(.atom(attr, .body))
                     remaining = rest

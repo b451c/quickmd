@@ -212,6 +212,32 @@ enum BlockLayout {
         }
     }
 
+    // MARK: Container summaries (`<details>`)
+
+    /// A `<details>` summary row (`MarkdownBlock.opensContainer`): the
+    /// disclosure control, then the caption's text view beside it — never
+    /// under it, so the control is no part of the text (its cursor, clicks
+    /// and tooltip are its own). The measurer wraps the caption at
+    /// `textWidth`, the view gives the control `controlWidth`.
+    enum ContainerSummary {
+        /// The control's column at 100 % zoom.
+        static let controlWidth: CGFloat = 18
+
+        static func controlWidth(fontScale: CGFloat) -> CGFloat { controlWidth * fontScale }
+
+        /// The width the caption wraps at: the column less the control.
+        static func textWidth(contentWidth: CGFloat, fontScale: CGFloat) -> CGFloat {
+            BlockLayout.clampedWidth(contentWidth - min(controlWidth(fontScale: fontScale), contentWidth / 2))
+        }
+
+        /// The text width of `block`'s row: the summary's, or `textWidth`
+        /// for any other text row.
+        static func textWidth(of block: MarkdownBlock, textWidth: CGFloat, contentWidth: CGFloat,
+                              fontScale: CGFloat) -> CGFloat {
+            block.opensContainer == nil ? textWidth : self.textWidth(contentWidth: contentWidth, fontScale: fontScale)
+        }
+    }
+
     // MARK: Blockquotes
 
     enum Quote {
@@ -782,9 +808,7 @@ struct MathRendering {
         else { return blocks }
         return blocks.map { block in
             guard case .mathBlock(let latex) = block.content, !typesets(latex) else { return block }
-            return MarkdownBlock(id: block.id,
-                                 content: .codeBlock(code: latex, language: "latex"),
-                                 sourceLine: block.sourceLine, substitutesFormula: true)
+            return block.replacingContent(.codeBlock(code: latex, language: "latex"), substitutesFormula: true)
         }
     }
 }
@@ -1994,7 +2018,8 @@ enum BlockHeightMeasurer {
                         from: attributed, hasInlineMath: hasMath,
                         theme: theme, fontScale: fontScale, math: engine)
                     converted[block.id] = ns
-                    let ink = textInk(text: ns, width: textWidth)
+                    let ink = textInk(text: ns, width: BlockLayout.ContainerSummary.textWidth(
+                        of: block, textWidth: textWidth, contentWidth: contentWidth, fontScale: fontScale))
                     heights.append(ink.height)
                     kinds.append(.exact)
                     textEdges = .text(ink)
@@ -2301,7 +2326,8 @@ enum BlockHeightMeasurer {
                     // this string are still the right images and only the wrap
                     // has to be recomputed.
                     converted[block.id] = existing
-                    let ink = textInk(text: existing, width: textWidth)
+                    let ink = textInk(text: existing, width: BlockLayout.ContainerSummary.textWidth(
+                        of: block, textWidth: textWidth, contentWidth: contentWidth, fontScale: fontScale))
                     heights[index] = ink.height
                     rhythm[index] = rhythmRow(block, edges: .text(ink))
                     continue
@@ -2314,7 +2340,8 @@ enum BlockHeightMeasurer {
                     from: attributed, hasInlineMath: hasMath,
                     theme: theme, fontScale: fontScale, math: math)
                 converted[block.id] = ns
-                let ink = textInk(text: ns, width: textWidth)
+                let ink = textInk(text: ns, width: BlockLayout.ContainerSummary.textWidth(
+                    of: block, textWidth: textWidth, contentWidth: contentWidth, fontScale: fontScale))
                 heights[index] = ink.height
                 rhythm[index] = rhythmRow(block, edges: .text(ink))
 

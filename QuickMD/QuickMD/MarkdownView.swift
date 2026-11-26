@@ -33,6 +33,18 @@ struct MarkdownView: View {
     /// What the `fileMissing` banner says (gone, or there but unreadable).
     @State private var fileProblem: FileWatcher.Problem = .missing
     @State private var cachedBlocks: [MarkdownBlock] = []
+    /// Some block of `cachedBlocks` opens an HTML container (`<details>`):
+    /// only then is the list handed a `ContainerPresentation`.
+    @State private var documentHasContainers = false
+    /// The containers (`HTMLContainer.id`) the reader toggled away from
+    /// their default (`<details open>` or not). Positional ids, like block
+    /// ids: kept across a re-parse, so a reload or a keystroke side by side
+    /// does not close what the reader opened.
+    @State private var containerToggles = Set<Int>()
+    /// Bumped on every toggle: the list redraws its rows even when the
+    /// toggle showed or hid none (an empty `<details>`), so the disclosure
+    /// control turns.
+    @State private var containerToggleVersion = 0
     /// Incremented on every successful parse. Text blocks use it to invalidate
     /// their NSAttributedString caches — a font-size-only change leaves the
     /// characters identical, so nothing cheaper detects it reliably.
@@ -316,10 +328,15 @@ struct MarkdownView: View {
                     // Our own virtualized list (v1.9): exact row heights from
                     // `measured.table`, one layout path for every document size,
                     // nothing estimated — see VirtualBlockList.swift.
+                    // Closed `<details>` leave their blocks out of the list
+                    // (`ContainerPresentation`); rows it reports are mapped
+                    // back to the parse's.
+                    let shown = shownContainers
                     VirtualBlockList(
-                        blocks: cachedBlocks,
-                        table: measured.table,
+                        blocks: shown?.blocks ?? cachedBlocks,
+                        table: shown?.table ?? measured.table,
                         contentVersion: contentVersion,
+                        rowStateVersion: containerToggleVersion,
                         searchText: searchText,
                         focusedBlockId: focusedBlockId,
                         focusedOccInBlock: focusedOccInBlock,
@@ -327,7 +344,7 @@ struct MarkdownView: View {
                         layoutStyle: isReadingMode ? .reading(fontScale: CGFloat(renderedFontScale)) : .standard,
                         contentWidth: $contentWidth,
                         onHeightReport: { blockId, row, height in
-                            applyHeightReport(blockId: blockId, row: row, height: height)
+                            applyHeightReport(blockId: blockId, row: shown?.documentRow(row) ?? row, height: height)
                         },
                         content: { block in AnyView(hostedBlockView(for: block)) },
                         selectableText: { block, version in
@@ -886,6 +903,7 @@ struct MarkdownView: View {
             let blocks = MathRendering.swiftMath.substitutingUntypesettableMath(in: parsed.blocks)
             heightCache.removeAll()  // new content/theme — stale heights would mis-seed diagrams
             cachedBlocks = blocks
+            documentHasContainers = blocks.contains { $0.opensContainer != nil }
             renderedFontScale = Double(scale)
             contentVersion += 1
             // The column this parse was measured at, in the same transaction
@@ -1472,7 +1490,7 @@ struct MarkdownView: View {
                 // hasInlineMath is precomputed at parse time (see textBlockMeta).
                 // TextBlockView handles search highlighting (temporaryAttributes)
                 // and inline math (NSTextAttachment) natively.
-                TextBlockView(
+                let text = TextBlockView(
                     blockId: block.id,
                     attributed: attributedString,
                     hasInlineMath: textBlockMeta[block.id]?.hasInlineMath ?? false,
@@ -1484,8 +1502,29 @@ struct MarkdownView: View {
                     // D12 — the measurer already built this string to size the
                     // row; nil until the document has been measured.
                     preconverted: measured.converted[block.id],
-                    onLink: { handleLinkActivation($0) }
+                    onLink: { handleLinkActivation($0) },
+                    toggleToolTip: block.opensContainer.map { container in
+                        { url in
+                            HTMLBlockSyntax.toggledContainer(url) == container.id
+                                ? ContainerDisclosureControl.toolTip(isOpen: isContainerOpen(container)) : nil
+                        }
+                    }
                 )
+                if let container = block.opensContainer {
+                    // A `<details>` summary: the control, then the caption
+                    // beside it (`BlockLayout.ContainerSummary`, the width
+                    // the measurer wrapped it at). A click on the caption
+                    // toggles too, through its link.
+                    HStack(alignment: .top, spacing: 0) {
+                        ContainerDisclosureControl(isOpen: isContainerOpen(container), theme: theme,
+                                                   fontScale: scale) {
+                            toggleContainer(container.id)
+                        }
+                        text
+                    }
+                } else {
+                    text
+                }
 
             case .table(let headers, let rows, let alignments, let style):
                 // One NSTextView over the measurer's own `TableText` (v1.13
@@ -1575,6 +1614,37 @@ struct MarkdownView: View {
 
         view
             .id(block.id)
+    }
+
+    // MARK: - HTML containers (`<details>`)
+
+    /// What the list shows when the document has containers; nil when it
+    /// has none (every block shown, nothing to map).
+    private var shownContainers: ContainerPresentation? {
+        guard documentHasContainers else { return nil }
+        return ContainerPresentation(blocks: cachedBlocks, table: measured.table, rhythm: measured.rhythm,
+                                     fontScale: CGFloat(renderedFontScale), isOpen: isContainerOpen)
+    }
+
+    private func isContainerOpen(_ container: HTMLContainer) -> Bool {
+        container.kind.isOpenByDefault != containerToggles.contains(container.id)
+    }
+
+    private func toggleContainer(_ id: Int) {
+        if containerToggles.remove(id) == nil { containerToggles.insert(id) }
+        containerToggleVersion += 1
+    }
+
+    /// Opens every closed container block `blockId` is inside.
+    private func revealContainers(of blockId: String) {
+        guard documentHasContainers,
+              let block = cachedBlocks.first(where: { $0.id == blockId }), !block.containers.isEmpty else { return }
+        let around = Set(block.containers)
+        for summary in cachedBlocks {
+            guard let container = summary.opensContainer, around.contains(container.id),
+                  !isContainerOpen(container) else { continue }
+            toggleContainer(container.id)
+        }
     }
 
     // MARK: - Search Helpers
@@ -1751,6 +1821,10 @@ struct MarkdownView: View {
     /// the coordinator acts on, so asking twice for the same block scrolls twice
     /// and an unrelated body re-evaluation scrolls not at all.
     private func requestScroll(to blockId: String, anchor: VirtualBlockList.Anchor, animated: Bool) {
+        // A heading, match or anchor inside a closed `<details>`: open it
+        // (and every one around it) first, as a browser's find does. The
+        // list installs the new rows before it scrolls.
+        revealContainers(of: blockId)
         scrollRequestToken += 1
         scrollRequest = VirtualBlockList.ScrollRequest(blockId: blockId, anchor: anchor,
                                                       animated: animated, token: scrollRequestToken)
@@ -1878,6 +1952,11 @@ struct MarkdownView: View {
     }
 
     private func handleLinkActivation(_ url: URL) {
+        // A `<details>` summary's caption (`HTMLBlockSyntax.toggleURL`).
+        if let container = HTMLBlockSyntax.toggledContainer(url) {
+            toggleContainer(container)
+            return
+        }
         // In-document link (`#install`, #43). Never a file: it used to resolve
         // to the document's folder and open it in Finder.
         if let fragment = HeadingAnchors.inDocumentFragment(of: url) {
@@ -2110,4 +2189,87 @@ struct SystemColorSchemeReader: NSViewRepresentable {
 
     [Visit Apple](https://apple.com)
     """), documentURL: nil)
+}
+
+// MARK: - Container disclosure control
+
+/// The control of a `<details>` summary row: a filled triangle (GitHub's
+/// disclosure marker) in its own column left of the caption
+/// (`BlockLayout.ContainerSummary.controlWidth`), centred on the first
+/// line, pointing right when closed and down when open.
+///
+/// No text view lies under it, so it is no part of the text. The click, the
+/// cursor and the tooltip belong to an AppKit view over the triangle
+/// (`DisclosureHitArea`): as the view under the pointer it receives the
+/// cursor updates, which the cell's hosting view would otherwise answer
+/// with the arrow.
+struct ContainerDisclosureControl: View {
+    let isOpen: Bool
+    let theme: MarkdownTheme
+    let fontScale: CGFloat
+    let toggle: () -> Void
+
+    /// What a click does: the control's tooltip and the caption's.
+    static func toolTip(isOpen: Bool) -> String { isOpen ? "Collapse" : "Expand" }
+
+    var body: some View {
+        let font = theme.fonts.appKit(size: BlockLayout.Spacing.bodySize * fontScale)
+        let lineHeight = NSLayoutManager().defaultLineHeight(for: font)
+        Image(systemName: "arrowtriangle.right.fill")
+            .font(.system(size: 9 * fontScale))
+            .foregroundColor(theme.textColor)
+            .rotationEffect(.degrees(isOpen ? 90 : 0))
+            .frame(width: BlockLayout.ContainerSummary.controlWidth(fontScale: fontScale), height: lineHeight)
+            .overlay(DisclosureHitArea(toolTip: Self.toolTip(isOpen: isOpen), action: toggle))
+            .accessibilityElement()
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(Self.toolTip(isOpen: isOpen))
+            .accessibilityAction { toggle() }
+    }
+}
+
+/// A transparent AppKit view that is clicked (`action` on a mouse-up inside
+/// it), shows the pointing hand while the pointer is over it, and has a
+/// tooltip.
+struct DisclosureHitArea: NSViewRepresentable {
+    let toolTip: String
+    let action: () -> Void
+
+    final class HitView: NSView {
+        var action: () -> Void = {}
+        private var tracking: NSTrackingArea?
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let tracking { removeTrackingArea(tracking) }
+            let area = NSTrackingArea(rect: .zero, options: [.cursorUpdate, .activeInKeyWindow, .inVisibleRect],
+                                      owner: self)
+            addTrackingArea(area)
+            tracking = area
+        }
+        override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+        override func cursorUpdate(with event: NSEvent) { NSCursor.pointingHand.set() }
+        // A click in a background window acts at once, like a link.
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        // Taken here, so the list starts no selection from it.
+        override func mouseDown(with event: NSEvent) {}
+        override func mouseUp(with event: NSEvent) {
+            guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+            action()
+            // The rows may be re-laid out under the pointer: keep the hand.
+            NSCursor.pointingHand.set()
+        }
+    }
+
+    func makeNSView(context: Context) -> HitView {
+        let view = HitView()
+        view.action = action
+        view.toolTip = toolTip
+        return view
+    }
+
+    func updateNSView(_ view: HitView, context: Context) {
+        view.action = action
+        if view.toolTip != toolTip { view.toolTip = toolTip }
+    }
 }
